@@ -14,6 +14,11 @@ defmodule LazypockWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  pipeline :auth do
+    plug(:accepts, ["json"])
+    plug(Lazypock.Auth.Plug)
+  end
+
   scope "/", LazypockWeb do
     pipe_through(:browser)
 
@@ -27,8 +32,23 @@ defmodule LazypockWeb.Router do
     # Health check
     get("/health", HealthController, :index)
 
-    # Dynamic collection routes — must be LAST
-    # Matches: GET /api/posts, GET /api/posts/:id, POST /api/posts, etc.
+    # Superuser auth (no auth required)
+    get("/superusers/check", SuperUserController, :check)
+    post("/superusers/setup", SuperUserController, :setup)
+    post("/superusers/login", SuperUserController, :login)
+  end
+
+  # Authenticated API routes
+  scope "/api", LazypockWeb do
+    pipe_through(:auth)
+
+    get("/superusers/me", SuperUserController, :me)
+  end
+
+  # Dynamic collection routes — must be LAST
+  scope "/api", LazypockWeb do
+    pipe_through(:auth)
+
     get("/:collection", DynamicController, :list)
     get("/:collection/:id", DynamicController, :show)
     post("/:collection", DynamicController, :create)

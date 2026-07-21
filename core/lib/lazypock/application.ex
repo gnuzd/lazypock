@@ -13,16 +13,17 @@ defmodule Lazypock.Application do
       {DNSCluster, query: Application.get_env(:lazypock, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Lazypock.PubSub},
       Lazypock.Collections.Registry,
-      # Start a worker by calling: Lazypock.Worker.start_link(arg)
-      # {Lazypock.Worker, arg},
-      # Start to serve requests, typically the last entry
       LazypockWeb.Endpoint
     ]
 
-    # See https://elixir.hexdocs.pm/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Lazypock.Supervisor]
-    Supervisor.start_link(children, opts)
+    result = Supervisor.start_link(children, opts)
+
+    # Boot-time setup: create _superusers table + auto-create from env
+    Lazypock.Auth.Setup.ensure_superusers_table!()
+    Lazypock.Auth.Setup.create_from_env!()
+
+    result
   end
 
   # Tell Phoenix to update the endpoint configuration
