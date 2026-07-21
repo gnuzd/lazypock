@@ -8,12 +8,12 @@ defmodule Lazypock.Files.Adapter do
   """
 
   @type file_meta :: %{
-    required(:path) => String.t(),
-    required(:size) => non_neg_integer(),
-    required(:mime_type) => String.t(),
-    optional(:width) => non_neg_integer(),
-    optional(:height) => non_neg_integer()
-  }
+          required(:path) => String.t(),
+          required(:size) => non_neg_integer(),
+          required(:mime_type) => String.t(),
+          optional(:width) => non_neg_integer(),
+          optional(:height) => non_neg_integer()
+        }
 
   @doc """
   Stores a file and returns metadata.
@@ -36,11 +36,18 @@ defmodule Lazypock.Files.Adapter do
   @callback delete(map()) :: :ok | {:error, term()}
 
   @doc """
-  Returns the configured adapter module based on app env.
+  Returns the configured adapter module.
+  
+  Checks env var `LAZYPOCK_FILE_STORAGE` first, then app config.
+  Defaults to local adapter.
   """
   def get_adapter do
-    case Application.get_env(:lazypock, :file_storage)[:adapter] do
-      :s3 -> Lazypock.Files.Adapters.S3
+    adapter =
+      System.get_env("LAZYPOCK_FILE_STORAGE") ||
+        (Application.get_env(:lazypock, :file_storage)[:adapter] |> to_string())
+
+    case adapter do
+      "s3" -> Lazypock.Files.Adapters.S3
       _ -> Lazypock.Files.Adapters.Local
     end
   end

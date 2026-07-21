@@ -11,22 +11,26 @@ defmodule Lazypock.Files.Store do
   Ensures the `_files` table exists on boot.
   """
   def ensure_files_table! do
-    Ecto.Adapters.SQL.query!(Repo, """
-    CREATE TABLE IF NOT EXISTS _files (
-      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      filename        TEXT NOT NULL,
-      extension       TEXT NOT NULL DEFAULT '',
-      mime_type       TEXT NOT NULL DEFAULT 'application/octet-stream',
-      size            BIGINT NOT NULL DEFAULT 0,
-      storage_path    TEXT NOT NULL,
-      storage_backend TEXT NOT NULL DEFAULT 'local',
-      collection_name TEXT DEFAULT '',
-      record_id       TEXT DEFAULT '',
-      field_name      TEXT DEFAULT '',
-      inserted_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE TABLE IF NOT EXISTS _files (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        filename        TEXT NOT NULL,
+        extension       TEXT NOT NULL DEFAULT '',
+        mime_type       TEXT NOT NULL DEFAULT 'application/octet-stream',
+        size            BIGINT NOT NULL DEFAULT 0,
+        storage_path    TEXT NOT NULL,
+        storage_backend TEXT NOT NULL DEFAULT 'local',
+        collection_name TEXT DEFAULT '',
+        record_id       TEXT DEFAULT '',
+        field_name      TEXT DEFAULT '',
+        inserted_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+      """,
+      []
     )
-    """, [])
   end
 
   @doc """
@@ -87,8 +91,7 @@ defmodule Lazypock.Files.Store do
         mod = adapter_module(adapter)
         mod.delete(file_record)
 
-        Ecto.Adapters.SQL.query!(Repo,
-          "DELETE FROM _files WHERE id = $1", [file_record["id"]])
+        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [file_record["id"]])
         :ok
 
       {:error, reason} ->
@@ -104,14 +107,16 @@ defmodule Lazypock.Files.Store do
         ext = Path.extname(filename)
         mime = content_type || meta[:mime_type]
 
-        {:ok, %{rows: [[id]]}} = Ecto.Adapters.SQL.query(Repo,
-          """
-          INSERT INTO _files (filename, extension, mime_type, size, storage_path, storage_backend)
-          VALUES ($1, $2, $3, $4, $5, $6)
-          RETURNING id
-          """,
-          [filename, ext, mime, meta[:size], meta[:path], "local"]
-        )
+        {:ok, %{rows: [[id]]}} =
+          Ecto.Adapters.SQL.query(
+            Repo,
+            """
+            INSERT INTO _files (filename, extension, mime_type, size, storage_path, storage_backend)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+            """,
+            [filename, ext, mime, meta[:size], meta[:path], "local"]
+          )
 
         get(id)
 

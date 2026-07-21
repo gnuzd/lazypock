@@ -22,11 +22,12 @@ defmodule Lazypock.Files.Adapters.Local do
 
     case File.write(storage_path, binary) do
       :ok ->
-        {:ok, %{
-          path: Path.join(date_path, "#{uuid}#{ext}"),
-          size: byte_size(binary),
-          mime_type: mime_type(ext)
-        }}
+        {:ok,
+         %{
+           path: Path.join(date_path, "#{uuid}#{ext}"),
+           size: byte_size(binary),
+           mime_type: mime_type(ext)
+         }}
 
       {:error, reason} ->
         {:error, reason}
@@ -59,6 +60,7 @@ defmodule Lazypock.Files.Adapters.Local do
 
   defp base_path do
     Application.get_env(:lazypock, :file_storage)[:path] ||
+      System.get_env("LAZYPOCK_FILE_STORAGE_PATH") ||
       Path.join(Application.app_dir(:lazypock, "priv"), "uploads")
   end
 

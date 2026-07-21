@@ -43,7 +43,10 @@ defmodule LazypockWeb.FileController do
           {:ok, binary} ->
             conn
             |> put_resp_header("content-type", file_record["mime_type"])
-            |> put_resp_header("content-disposition", ~s(inline; filename="#{file_record["filename"]}"))
+            |> put_resp_header(
+              "content-disposition",
+              ~s(inline; filename="#{file_record["filename"]}")
+            )
             |> send_resp(200, binary)
 
           {:error, reason} ->

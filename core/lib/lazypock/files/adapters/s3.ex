@@ -15,7 +15,8 @@ defmodule Lazypock.Files.Adapters.S3 do
 
   @impl true
   def store(_binary, _filename, _opts) do
-    {:error, "S3 adapter not yet implemented — use local adapter or configure file_storage adapter"}
+    {:error,
+     "S3 adapter not yet implemented — use local adapter or configure file_storage adapter"}
   end
 
   @impl true
