@@ -22,36 +22,42 @@ defmodule LazypockWeb.DynamicController do
   alias Lazypock.Schemas.GenericRecord
   alias Lazypock.Schemas.FilterCompiler
   alias LazypockWeb.DynamicView
+  alias Lazypock.Rules.Enforcer
 
   # ── List (GET /api/:collection) ─────────────────────
 
   def list(conn, %{"collection" => name} = params) do
-    with {:ok, collection} <- Registry.get(name) do
+    user = conn.assigns[:current_superuser]
+
+    with {:ok, collection} <- Registry.get(name),
+         {:ok, {rule_where, rule_params}} <- Enforcer.authorize_list(name, user) do
       page = max(1, String.to_integer(params["page"] || "1"))
       per_page = max(1, min(200, String.to_integer(params["perPage"] || "30")))
       offset = (page - 1) * per_page
 
-      # Build filtered query
-      {where_clause, where_params} = build_filter(params["filter"])
+      # Build filtered query — merge rule WHERE with user filter WHERE
+      {filter_where, filter_params} = build_filter(params["filter"])
       order_clause = build_sort(params["sort"], collection)
 
-      # Count total (for pagination)
+      # Combine WHERE clauses: user_filter AND rule
+      combined_where = combine_wheres(filter_where, rule_where)
+      combined_params = filter_params ++ rule_params
+
       total =
         if params["skipTotal"] == "true" do
           0
         else
-          GenericRecord.count_where(name, where_clause, where_params)
+          GenericRecord.count_where(name, combined_where, combined_params)
         end
 
-      # Fetch records
       records =
         GenericRecord.all_where(
           name,
-          where_clause <>
+          combined_where <>
             " " <>
             order_clause <>
-            " LIMIT $#{length(where_params) + 1} OFFSET $#{length(where_params) + 2}",
-          where_params ++ [per_page, offset]
+            " LIMIT $#{length(combined_params) + 1} OFFSET $#{length(combined_params) + 2}",
+          combined_params ++ [per_page, offset]
         )
 
       items = DynamicView.format_items(records, name)
@@ -65,23 +71,32 @@ defmodule LazypockWeb.DynamicController do
   # ── Show (GET /api/:collection/:id) ─────────────────
 
   def show(conn, %{"collection" => name, "id" => id}) do
-    with {:ok, _collection} <- Registry.get(name) do
-      record = GenericRecord.get(name, id)
+    user = conn.assigns[:current_superuser]
 
-      if record do
-        conn |> json(DynamicView.format_item(record, name))
-      else
+    with {:ok, _collection} <- Registry.get(name),
+         record when not is_nil(record) <- GenericRecord.get(name, id),
+         :ok <- Enforcer.authorize_view(name, user, record) do
+      conn |> json(DynamicView.format_item(record, name))
+    else
+      nil ->
         conn
         |> put_status(404)
         |> json(error_response(404, "The requested resource wasn't found."))
-      end
+
+      {:error, reason} ->
+        conn
+        |> put_status(403)
+        |> json(error_response(403, reason))
     end
   end
 
   # ── Create (POST /api/:collection) ──────────────────
 
   def create(conn, %{"collection" => name, "data" => attrs}) do
-    with {:ok, _collection} <- Registry.get(name) do
+    user = conn.assigns[:current_superuser]
+
+    with {:ok, _collection} <- Registry.get(name),
+         :ok <- Enforcer.authorize_create(name, user, attrs) do
       case GenericRecord.insert(name, attrs) do
         {:ok, record} ->
           conn
@@ -93,40 +108,58 @@ defmodule LazypockWeb.DynamicController do
           |> put_status(400)
           |> json(error_response(400, reason))
       end
+    else
+      {:error, reason} ->
+        conn
+        |> put_status(403)
+        |> json(error_response(403, reason))
     end
   end
 
   # ── Update (PATCH /api/:collection/:id) ─────────────
 
   def update(conn, %{"collection" => name, "id" => id} = params) do
-    with {:ok, _collection} <- Registry.get(name) do
-      attrs = params["data"] || params
+    user = conn.assigns[:current_superuser]
 
-      case GenericRecord.update(name, id, attrs) do
-        nil ->
-          conn
-          |> put_status(404)
-          |> json(error_response(404, "The requested resource wasn't found."))
+    with {:ok, _collection} <- Registry.get(name),
+         record when not is_nil(record) <- GenericRecord.get(name, id),
+         :ok <- Enforcer.authorize_update(name, user, record),
+         attrs = params["data"] || params,
+         updated_record when not is_nil(updated_record) <- GenericRecord.update(name, id, attrs) do
+      conn |> json(DynamicView.format_item(updated_record, name))
+    else
+      nil ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "The requested resource wasn't found."))
 
-        record ->
-          conn |> json(DynamicView.format_item(record, name))
-      end
+      {:error, reason} ->
+        conn
+        |> put_status(403)
+        |> json(error_response(403, reason))
     end
   end
 
   # ── Delete (DELETE /api/:collection/:id) ────────────
 
   def delete(conn, %{"collection" => name, "id" => id}) do
-    with {:ok, _collection} <- Registry.get(name) do
-      case GenericRecord.delete(name, id) do
-        :ok ->
-          conn |> put_status(204) |> json(nil)
+    user = conn.assigns[:current_superuser]
 
-        {:error, reason} ->
-          conn
-          |> put_status(400)
-          |> json(error_response(400, reason))
-      end
+    with {:ok, _collection} <- Registry.get(name),
+         record when not is_nil(record) <- GenericRecord.get(name, id),
+         :ok <- Enforcer.authorize_delete(name, user, record),
+         :ok <- GenericRecord.delete(name, id) do
+      conn |> put_status(204) |> json(nil)
+    else
+      nil ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "The requested resource wasn't found."))
+
+      {:error, reason} ->
+        conn
+        |> put_status(403)
+        |> json(error_response(403, reason))
     end
   end
 
@@ -160,4 +193,9 @@ defmodule LazypockWeb.DynamicController do
   defp error_response(code, message) do
     %{"code" => code, "message" => message, "data" => %{}}
   end
+
+  defp combine_wheres("", ""), do: ""
+  defp combine_wheres("", sql), do: sql
+  defp combine_wheres(sql, ""), do: sql
+  defp combine_wheres(left, right), do: "(#{left}) AND (#{right})"
 end
