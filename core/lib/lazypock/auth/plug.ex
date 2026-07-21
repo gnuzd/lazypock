@@ -20,7 +20,7 @@ defmodule Lazypock.Auth.Plug do
       {:ok, token} ->
         case Lazypock.Auth.Token.verify_token(token) do
           {:ok, claims} ->
-            superuser = Lazypock.Repo.get(Lazypock.Auth.SuperUser, claims["sub"])
+            superuser = Lazypock.Repo.get(Lazypock.Auth.SuperUser, claims["id"])
 
             if superuser do
               conn
@@ -48,8 +48,8 @@ defmodule Lazypock.Auth.Plug do
 
   defp get_token(conn) do
     case get_req_header(conn, "authorization") do
-      [ "Bearer " <> token | _ ] -> {:ok, token}
-      [ "bearer " <> token | _ ] -> {:ok, token}
+      ["Bearer " <> token | _] -> {:ok, token}
+      ["bearer " <> token | _] -> {:ok, token}
       _ -> :none
     end
   end

@@ -15,15 +15,19 @@ defmodule Lazypock.Auth.Setup do
   Called during application startup.
   """
   def ensure_superusers_table! do
-    Ecto.Adapters.SQL.query!(Repo, """
-    CREATE TABLE IF NOT EXISTS _superusers (
-      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      email         TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      inserted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE TABLE IF NOT EXISTS _superusers (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email         TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        inserted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+      """,
+      []
     )
-    """, [])
   end
 
   @doc """
@@ -68,12 +72,14 @@ defmodule Lazypock.Auth.Setup do
     else
       password_hash = Bcrypt.hash_pwd_salt(password)
 
-      case Ecto.Adapters.SQL.query(Repo,
-        "INSERT INTO _superusers (email, password_hash) VALUES ($1, $2) RETURNING id, email, inserted_at, updated_at",
-        [email, password_hash]
-      ) do
+      case Ecto.Adapters.SQL.query(
+             Repo,
+             "INSERT INTO _superusers (email, password_hash) VALUES ($1, $2) RETURNING id, email, inserted_at, updated_at",
+             [email, password_hash]
+           ) do
         {:ok, %{rows: [[id, email, inserted_at, updated_at]]}} ->
           now = DateTime.utc_now()
+
           superuser = %SuperUser{
             id: id,
             email: email,
@@ -81,6 +87,7 @@ defmodule Lazypock.Auth.Setup do
             inserted_at: inserted_at || now,
             updated_at: updated_at || now
           }
+
           {:ok, superuser}
 
         {:error, err} ->
@@ -107,7 +114,8 @@ defmodule Lazypock.Auth.Setup do
   end
 
   defp insert_superuser!(email, password_hash) do
-    Ecto.Adapters.SQL.query!(Repo,
+    Ecto.Adapters.SQL.query!(
+      Repo,
       "INSERT INTO _superusers (email, password_hash) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING",
       [email, password_hash]
     )

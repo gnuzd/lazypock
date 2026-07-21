@@ -9,7 +9,8 @@ defmodule Lazypock.Auth.Token do
 
   alias LazypockWeb.Endpoint
 
-  @access_token_ttl 7 * 24 * 60 * 60  # 7 days in seconds
+  # 7 days in seconds
+  @access_token_ttl 7 * 24 * 60 * 60
 
   @doc """
   Generates a signed access token for a superuser.
