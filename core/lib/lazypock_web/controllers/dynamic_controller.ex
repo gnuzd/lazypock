@@ -24,6 +24,7 @@ defmodule LazypockWeb.DynamicController do
   alias LazypockWeb.DynamicView
   alias Lazypock.Rules.Enforcer
   alias Lazypock.Realtime.Broadcaster
+  alias Lazypock.Files.Store
 
   # ── List (GET /api/:collection) ─────────────────────
 
@@ -153,6 +154,7 @@ defmodule LazypockWeb.DynamicController do
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_delete(name, user, record),
          :ok <- GenericRecord.delete(name, id) do
+          Store.delete_by_record(name, id)
           Broadcaster.broadcast_delete(name, id)
           conn |> put_status(204) |> json(nil)
     else
