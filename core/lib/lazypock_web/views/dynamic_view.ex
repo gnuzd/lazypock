@@ -40,7 +40,8 @@ defmodule LazypockWeb.DynamicView do
   @doc """
   Builds a paginated response matching PocketBase format.
   """
-  @spec paginated_response([map()], non_neg_integer(), non_neg_integer(), non_neg_integer()) :: map()
+  @spec paginated_response([map()], non_neg_integer(), non_neg_integer(), non_neg_integer()) ::
+          map()
   def paginated_response(items, total, page, per_page) do
     total_pages = if per_page > 0, do: ceil(total / per_page), else: 0
 
@@ -61,10 +62,17 @@ defmodule LazypockWeb.DynamicView do
 
   defp format_timestamp(record, db_key, api_key) do
     case Map.get(record, db_key) do
-      nil -> Map.put(record, api_key, nil)
-      %DateTime{} = dt -> record |> Map.put(api_key, DateTime.to_iso8601(dt)) |> Map.delete(db_key)
-      value when is_binary(value) -> record |> Map.put(api_key, value) |> Map.delete(db_key)
-      _ -> record |> Map.put(api_key, nil) |> Map.delete(db_key)
+      nil ->
+        Map.put(record, api_key, nil)
+
+      %DateTime{} = dt ->
+        record |> Map.put(api_key, DateTime.to_iso8601(dt)) |> Map.delete(db_key)
+
+      value when is_binary(value) ->
+        record |> Map.put(api_key, value) |> Map.delete(db_key)
+
+      _ ->
+        record |> Map.put(api_key, nil) |> Map.delete(db_key)
     end
   end
 end

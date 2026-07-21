@@ -33,7 +33,7 @@ defmodule LazypockWeb.DynamicController do
 
       # Build filtered query
       {where_clause, where_params} = build_filter(params["filter"])
-      {order_clause} = build_sort(params["sort"], collection)
+      order_clause = build_sort(params["sort"], collection)
 
       # Count total (for pagination)
       total =
@@ -47,7 +47,10 @@ defmodule LazypockWeb.DynamicController do
       records =
         GenericRecord.all_where(
           name,
-          where_clause <> " " <> order_clause <> " LIMIT $#{length(where_params) + 1} OFFSET $#{length(where_params) + 2}",
+          where_clause <>
+            " " <>
+            order_clause <>
+            " LIMIT $#{length(where_params) + 1} OFFSET $#{length(where_params) + 2}",
           where_params ++ [per_page, offset]
         )
 
@@ -68,7 +71,9 @@ defmodule LazypockWeb.DynamicController do
       if record do
         conn |> json(DynamicView.format_item(record, name))
       else
-        conn |> put_status(404) |> json(error_response(404, "The requested resource wasn't found."))
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "The requested resource wasn't found."))
       end
     end
   end
@@ -128,6 +133,7 @@ defmodule LazypockWeb.DynamicController do
   # ── Private helpers ─────────────────────────────────
 
   defp build_filter(nil), do: {"", []}
+
   defp build_filter(filter_str) when is_binary(filter_str) do
     case FilterCompiler.compile(filter_str) do
       {:ok, {sql_clause, params}} -> {sql_clause, params}
@@ -135,7 +141,8 @@ defmodule LazypockWeb.DynamicController do
     end
   end
 
-  defp build_sort(nil, _collection), do: {"ORDER BY \"created_at\" DESC"}
+  defp build_sort(nil, _collection), do: "ORDER BY \"created_at\" DESC"
+
   defp build_sort(sort_str, _collection) when is_binary(sort_str) do
     clauses =
       sort_str
@@ -147,7 +154,7 @@ defmodule LazypockWeb.DynamicController do
       end)
       |> Enum.join(", ")
 
-    {"ORDER BY #{clauses}"}
+    "ORDER BY #{clauses}"
   end
 
   defp error_response(code, message) do

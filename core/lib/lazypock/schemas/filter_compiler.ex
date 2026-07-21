@@ -4,7 +4,6 @@ defmodule Lazypock.Schemas.FilterCompiler do
   with parameterized values.
   """
 
-  # Operators ordered longest-first to avoid prefix matching
 
   @doc """
   Compiles a PocketBase filter string into a SQL WHERE clause with parameters.
@@ -72,8 +71,11 @@ defmodule Lazypock.Schemas.FilterCompiler do
           _ -> {:ok, left, rest}
         end
 
-      {:ok, ast, rest} -> {:ok, ast, rest}
-      error -> error
+      {:ok, ast, rest} ->
+        {:ok, ast, rest}
+
+      error ->
+        error
     end
   end
 
@@ -85,8 +87,11 @@ defmodule Lazypock.Schemas.FilterCompiler do
           _ -> {:ok, left, rest}
         end
 
-      {:ok, ast, rest} -> {:ok, ast, rest}
-      error -> error
+      {:ok, ast, rest} ->
+        {:ok, ast, rest}
+
+      error ->
+        error
     end
   end
 
@@ -111,8 +116,11 @@ defmodule Lazypock.Schemas.FilterCompiler do
             :error
         end
 
-      {:ok, ast, rest} -> {:ok, ast, rest}
-      error -> error
+      {:ok, ast, rest} ->
+        {:ok, ast, rest}
+
+      error ->
+        error
     end
   end
 
@@ -135,16 +143,27 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   defp classify(token) do
     cond do
-      token in ~w(true True TRUE) -> {:literal, true}
-      token in ~w(false False FALSE) -> {:literal, false}
-      token in ~w(null Null NULL) -> {:literal, nil}
+      token in ~w(true True TRUE) ->
+        {:literal, true}
+
+      token in ~w(false False FALSE) ->
+        {:literal, false}
+
+      token in ~w(null Null NULL) ->
+        {:literal, nil}
+
       String.starts_with?(token, "'") and String.ends_with?(token, "'") ->
         {:literal, String.slice(token, 1, String.length(token) - 2)}
+
       String.match?(token, ~r/^\d+(\.\d+)?$/) ->
-        val = if String.contains?(token, "."), do: Decimal.new(token), else: String.to_integer(token)
+        val =
+          if String.contains?(token, "."), do: Decimal.new(token), else: String.to_integer(token)
+
         {:literal, val}
+
       String.match?(token, ~r/^[a-zA-Z_][a-zA-Z0-9_@]*$/) ->
         {:field, token}
+
       true ->
         :error
     end
@@ -152,13 +171,21 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   defp classify_literal(token) do
     cond do
-      token in ~w(true True TRUE) -> true
-      token in ~w(false False FALSE) -> false
-      token in ~w(null Null NULL) -> nil
+      token in ~w(true True TRUE) ->
+        true
+
+      token in ~w(false False FALSE) ->
+        false
+
+      token in ~w(null Null NULL) ->
+        nil
+
       String.starts_with?(token, "'") and String.ends_with?(token, "'") ->
         String.slice(token, 1, String.length(token) - 2)
+
       String.match?(token, ~r/^\d+(\.\d+)?$/) ->
         if String.contains?(token, "."), do: Decimal.new(token), else: String.to_integer(token)
+
       true ->
         token
     end
@@ -203,6 +230,9 @@ defmodule Lazypock.Schemas.FilterCompiler do
   defp emit_simple({:field, name}) do
     {~s["#{name}"], []}
   end
+
+  # Catch-all: if we somehow get an unexpected AST node, treat it as a no-op
+  defp emit_simple(_ast), do: {"", []}
 
   defp emit_one(ast, idx) do
     {sql, params} = emit(ast, idx)
