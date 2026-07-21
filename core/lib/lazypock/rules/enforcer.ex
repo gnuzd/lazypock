@@ -27,14 +27,23 @@ defmodule Lazypock.Rules.Enforcer do
   @doc """
   Returns SQL WHERE clause for list queries based on listRule.
   """
-  @spec authorize_list(String.t(), map() | nil) :: {:ok, {String.t(), [term()]}} | {:error, String.t()}
+  @spec authorize_list(String.t(), map() | nil) ::
+          {:ok, {String.t(), [term()]}} | {:error, String.t()}
   def authorize_list(collection_name, user) do
-    rule = get_rule(collection_name, "listRule")
-    if rule == "" do
+    # Check manageRule first — admin bypass
+    manage_rule = get_rule(collection_name, "manageRule")
+
+    if manage_rule != "" and passes_rule?(manage_rule, user, nil, collection_name) do
       {:ok, {"", []}}
     else
-      resolved = resolve_user_tokens(rule, user)
-      FilterCompiler.compile(resolved)
+      rule = get_rule(collection_name, "listRule")
+
+      if rule == "" do
+        {:ok, {"", []}}
+      else
+        resolved = resolve_user_tokens(rule, user)
+        FilterCompiler.compile(resolved)
+      end
     end
   end
 
@@ -73,7 +82,8 @@ defmodule Lazypock.Rules.Enforcer do
   @doc """
   Authorizes a mutation against a record/attrs.
   """
-  @spec authorize_mutation(String.t(), String.t(), map() | nil, map() | nil) :: :ok | {:error, String.t()}
+  @spec authorize_mutation(String.t(), String.t(), map() | nil, map() | nil) ::
+          :ok | {:error, String.t()}
   def authorize_mutation(collection_name, rule_key, user, record_or_attrs) do
     # Check manageRule first
     manage_rule = get_rule(collection_name, "manageRule")
@@ -142,6 +152,7 @@ defmodule Lazypock.Rules.Enforcer do
     # We can check by running a simple SELECT with no FROM
     {:ok, %{rows: rows}} =
       Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{sql}", params)
+
     length(rows) > 0
   end
 
@@ -151,11 +162,14 @@ defmodule Lazypock.Rules.Enforcer do
 
     if record_id do
       table = TypeMapper.quote_ident(collection_name)
+
       {:ok, %{rows: rows}} =
-        Ecto.Adapters.SQL.query(Repo,
+        Ecto.Adapters.SQL.query(
+          Repo,
           "SELECT 1 FROM #{table} WHERE id = $#{length(params) + 1} AND (#{sql}) LIMIT 1",
           params ++ [record_id]
         )
+
       length(rows) > 0
     else
       # No id yet (create action) — check what we can
@@ -163,12 +177,25 @@ defmodule Lazypock.Rules.Enforcer do
     end
   end
 
-  defp eval_without_db(sql, params, _record) do
+  defp eval_without_db(sql, params, record) do
     if String.contains?(sql, ~s(")) do
-      # Rule references record fields that can't be checked pre-insert
-      # This is a limitation — in PocketBase, create rules can reference
-      # the new record's fields, but we check them against the input attrs
-      true
+      # Rule references record fields — resolve them against the input attrs
+      resolved = Enum.reduce(record, sql, fn {key, val}, acc ->
+        key_str = if is_atom(key), do: Atom.to_string(key), else: key
+        val_str = cond do
+          is_nil(val) -> "null"
+          is_boolean(val) -> String.downcase(to_string(val))
+          is_binary(val) -> ~s('#{escape_quote(val)}')
+          true -> to_string(val)
+        end
+        String.replace(acc, ~s("#{key_str}"), val_str)
+      end)
+
+      # Now run SELECT 1 WHERE with resolved values
+      case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{resolved}", []) do
+        {:ok, %{rows: rows}} when rows != [] -> true
+        _ -> false
+      end
     else
       # Pure auth check — run a SELECT 1 to evaluate
       case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{sql}", params) do
