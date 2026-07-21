@@ -1,7 +1,10 @@
 defmodule Lazypock.Hooks.Registry do
   @moduledoc """
-  Auto-discovers hook modules in `priv/hooks/` at boot and maps them
-  to collection names. Supports hot-reload via `reload!/0`.
+  Auto-discovers hook modules at boot and maps them to collection names.
+
+  Hook `.ex` files in `priv/hooks/` are compiled via `elixirc_paths` in mix.exs,
+  producing `.beam` files that ship with the release. This means hooks work
+  in production WITHOUT needing the Elixir compiler.
   """
 
   require Logger
@@ -18,21 +21,32 @@ defmodule Lazypock.Hooks.Registry do
   end
 
   @doc """
-  Scans `priv/hooks/` directory and registers all hook modules.
-  Called at application boot.
+  Scans ebin directories for beam files and registers any lifecycle hook modules.
+  Called at application boot. Works in both dev and production releases.
   """
   @spec discover!() :: :ok
   def discover! do
-    hooks_dir = hooks_path()
+    beam_paths()
+    |> Enum.each(fn path ->
+      try do
+        basename = Path.basename(path, ".beam")
+        mod_name = basename |> String.trim_leading("Elixir.") |> String.split(".") |> Module.concat()
 
-    if File.dir?(hooks_dir) do
-      hooks_dir
-      |> Path.join("*.ex")
-      |> Path.wildcard()
-      |> Enum.each(fn file ->
-        compile_and_register(file)
-      end)
-    end
+        case Code.ensure_loaded(mod_name) do
+          {:module, ^mod_name} ->
+            if function_exported?(mod_name, :__collection__, 0) do
+              collection = mod_name.__collection__()
+              register(collection, mod_name)
+              Logger.info("Registered hook #{inspect(mod_name)} for '#{collection}'")
+            end
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end)
 
     :ok
   end
@@ -47,48 +61,14 @@ defmodule Lazypock.Hooks.Registry do
     :ok
   end
 
-  @doc """
-  Hot-reloads all hooks without restarting the app.
-  """
-  @spec reload!() :: :ok
-  def reload! do
-    :ok
-  end
+  defp beam_paths do
+    # Find the app's own ebin directory
+    app_dir = Application.app_dir(:lazypock, "ebin")
 
-  defp compile_and_register(file) do
-    case Code.compile_file(file) do
-      [{module, _binary} | _] ->
-        collection =
-          if function_exported?(module, :__collection__, 0) do
-            module.__collection__()
-          end
-
-        if collection do
-          register(collection, module)
-          Logger.info("Registered hook #{inspect(module)} for '#{collection}'")
-        else
-          Logger.warning("Hook #{Path.basename(file)} missing @collection")
-        end
-
-      _ ->
-        Logger.warning("Failed to compile hook: #{Path.basename(file)}")
-    end
-  rescue
-    e -> Logger.warning("Error loading hook #{Path.basename(file)}: #{Exception.message(e)}")
-  end
-
-  defp hooks_path do
-    cond do
-      path = Application.get_env(:lazypock, :hooks_path) ->
-        path
-
-      File.dir?("priv/hooks") ->
-        # Running from project root (dev) — priv/hooks exists
-        Path.join(File.cwd!(), "priv/hooks")
-
-      true ->
-        # Running from _build or release — use app dir
-        Path.join(Application.app_dir(:lazypock, "priv"), "hooks")
+    if File.dir?(app_dir) do
+      Path.wildcard(Path.join(app_dir, "*.beam"))
+    else
+      []
     end
   end
 end
