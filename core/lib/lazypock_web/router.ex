@@ -20,8 +20,20 @@ defmodule LazypockWeb.Router do
     get "/", PageController, :home
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", LazypockWeb do
-  #   pipe_through :api
-  # end
+  # API routes
+  scope "/api", LazypockWeb do
+    pipe_through :api
+
+    # Health check
+    get "/health", HealthController, :index
+
+    # Dynamic collection routes — must be LAST
+    # Matches: GET /api/posts, GET /api/posts/:id, POST /api/posts, etc.
+    get "/:collection", DynamicController, :list
+    get "/:collection/:id", DynamicController, :show
+    post "/:collection", DynamicController, :create
+    patch "/:collection/:id", DynamicController, :update
+    put "/:collection/:id", DynamicController, :update
+    delete "/:collection/:id", DynamicController, :delete
+  end
 end
