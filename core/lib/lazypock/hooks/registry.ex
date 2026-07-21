@@ -56,26 +56,25 @@ defmodule Lazypock.Hooks.Registry do
   end
 
   defp compile_and_register(file) do
-    try do
-      {:module, module, _, _} = Code.compile_file(file)
+    case Code.compile_file(file) do
+      [{module, _binary} | _] ->
+        collection =
+          if function_exported?(module, :__collection__, 0) do
+            module.__collection__()
+          end
 
-      case module.__info__(:attributes)[:collection] do
-        [collection] when is_binary(collection) ->
+        if collection do
           register(collection, module)
           Logger.info("Registered hook #{inspect(module)} for '#{collection}'")
-
-        _ ->
-          Logger.warning("Hook #{Path.basename(file)} missing @collection attribute")
-      end
-    catch
-      {:module, module, _, _} ->
-        case module.__info__(:attributes)[:collection] do
-          [collection] when is_binary(collection) ->
-            register(collection, module)
+        else
+          Logger.warning("Hook #{Path.basename(file)} missing @collection")
         end
-    rescue
-      e -> Logger.warning("Error loading hook #{Path.basename(file)}: #{Exception.message(e)}")
+
+      _ ->
+        Logger.warning("Failed to compile hook: #{Path.basename(file)}")
     end
+  rescue
+    e -> Logger.warning("Error loading hook #{Path.basename(file)}: #{Exception.message(e)}")
   end
 
   defp hooks_path do
@@ -83,11 +82,12 @@ defmodule Lazypock.Hooks.Registry do
       path = Application.get_env(:lazypock, :hooks_path) ->
         path
 
-      Mix.env() == :dev ->
-        # In development, the project root is 2 levels up from _build
-        Path.join([File.cwd!(), "priv", "hooks"])
+      File.dir?("priv/hooks") ->
+        # Running from project root (dev) — priv/hooks exists
+        Path.join(File.cwd!(), "priv/hooks")
 
       true ->
+        # Running from _build or release — use app dir
         Path.join(Application.app_dir(:lazypock, "priv"), "hooks")
     end
   end

@@ -97,6 +97,7 @@ defmodule Lazypock.Hooks.Dispatcher do
 
   defp run_file_hooks(:on_create, collection_name, attrs, context) do
     modules = Registry.get(collection_name)
+
     Enum.reduce_while(modules, {:ok, attrs}, fn module, {:ok, current_attrs} ->
       case module.on_create(current_attrs, context) do
         {:ok, modified} -> {:cont, {:ok, modified}}

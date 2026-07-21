@@ -19,10 +19,10 @@ defmodule Lazypock.Hooks.Lifecycle do
   """
 
   @type context :: %{
-    optional(:conn) => term(),
-    optional(:user) => map() | nil,
-    optional(:collection) => map()
-  }
+          optional(:conn) => term(),
+          optional(:user) => map() | nil,
+          optional(:collection) => map()
+        }
 
   @doc """
   Called before a record is created.
@@ -64,9 +64,12 @@ defmodule Lazypock.Hooks.Lifecycle do
   @callback validate(map(), context()) :: :ok | {:error, keyword()}
 
   @optional_callbacks [
-    on_create: 2, after_create: 2,
-    on_update: 3, after_update: 3,
-    on_delete: 2, after_delete: 2,
+    on_create: 2,
+    after_create: 2,
+    on_update: 3,
+    after_update: 3,
+    on_delete: 2,
+    after_delete: 2,
     validate: 2
   ]
 
@@ -75,7 +78,9 @@ defmodule Lazypock.Hooks.Lifecycle do
 
     quote do
       @behaviour Lazypock.Hooks.Lifecycle
-      @collection unquote(collection)
+
+      @doc false
+      def __collection__, do: unquote(collection)
 
       def on_create(record, _ctx), do: {:ok, record}
       def after_create(_record, _ctx), do: :ok
@@ -85,9 +90,12 @@ defmodule Lazypock.Hooks.Lifecycle do
       def after_delete(_record, _ctx), do: :ok
       def validate(_record, _ctx), do: :ok
 
-      defoverridable on_create: 2, after_create: 2,
-                     on_update: 3, after_update: 3,
-                     on_delete: 2, after_delete: 2,
+      defoverridable on_create: 2,
+                     after_create: 2,
+                     on_update: 3,
+                     after_update: 3,
+                     on_delete: 2,
+                     after_delete: 2,
                      validate: 2
     end
   end

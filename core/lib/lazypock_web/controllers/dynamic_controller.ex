@@ -133,8 +133,8 @@ defmodule LazypockWeb.DynamicController do
          :ok <- Enforcer.authorize_update(name, user, record),
          attrs = params["data"] || params,
          updated_record when not is_nil(updated_record) <- GenericRecord.update(name, id, attrs) do
-          Broadcaster.broadcast_update(name, updated_record)
-          conn |> json(DynamicView.format_item(updated_record, name))
+      Broadcaster.broadcast_update(name, updated_record)
+      conn |> json(DynamicView.format_item(updated_record, name))
     else
       nil ->
         conn
@@ -157,9 +157,9 @@ defmodule LazypockWeb.DynamicController do
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_delete(name, user, record),
          :ok <- GenericRecord.delete(name, id) do
-          Store.delete_by_record(name, id)
-          Broadcaster.broadcast_delete(name, id)
-          conn |> put_status(204) |> json(nil)
+      Store.delete_by_record(name, id)
+      Broadcaster.broadcast_delete(name, id)
+      conn |> put_status(204) |> json(nil)
     else
       nil ->
         conn
