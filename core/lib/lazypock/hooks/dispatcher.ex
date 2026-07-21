@@ -10,6 +10,8 @@ defmodule Lazypock.Hooks.Dispatcher do
     3. Database operation
     4. Layer 1 Declarative hooks (after) — fire-and-forget
     5. Layer 2 File-based hooks (after) — fire-and-forget
+
+  All functions require a context map with at least `:collection_name`.
   """
 
   alias Lazypock.Hooks.Registry
@@ -17,7 +19,7 @@ defmodule Lazypock.Hooks.Dispatcher do
   @doc """
   Runs pre-create hooks. Returns `{:ok, modified_attrs}` or `{:error, reason}`.
   """
-  def dispatch_create(attrs, context \\ %{}) do
+  def dispatch_create(attrs, context) do
     collection_name = context.collection_name
 
     pipeline = [
@@ -31,7 +33,7 @@ defmodule Lazypock.Hooks.Dispatcher do
   @doc """
   Runs after-create hooks (fire-and-forget).
   """
-  def dispatch_after_create(record, context \\ %{}) do
+  def dispatch_after_create(record, context) do
     collection_name = context.collection_name
 
     Task.start(fn ->
@@ -45,10 +47,11 @@ defmodule Lazypock.Hooks.Dispatcher do
   @doc """
   Runs pre-update hooks. Returns `{:ok, modified_attrs}` or `{:error, reason}`.
   """
-  def dispatch_update(old_record, new_attrs, context \\ %{}) do
+  def dispatch_update(old_record, new_attrs, context) do
     collection_name = context.collection_name
 
     pipeline = [
+      &run_declarative_hooks(:onUpdate, collection_name, &1, &2),
       &run_file_hooks(:on_update, collection_name, &1, &2)
     ]
 
@@ -58,11 +61,13 @@ defmodule Lazypock.Hooks.Dispatcher do
   @doc """
   Runs pre-delete hooks. Returns `:ok` or `{:error, reason}`.
   """
-  @spec dispatch_delete(map(), term()) :: :ok | {:error, term()}
-  def dispatch_delete(record, context \\ %{}) do
+  def dispatch_delete(record, context) do
     collection_name = context.collection_name
 
-    # For delete, hooks just return :ok or {:error, reason}
+    # Declarative hooks first
+    run_declarative_hooks(:onDelete, collection_name, record, context)
+
+    # File-based hooks
     modules = Registry.get(collection_name)
 
     Enum.reduce_while(modules, :ok, fn module, _acc ->
@@ -71,6 +76,24 @@ defmodule Lazypock.Hooks.Dispatcher do
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+  end
+
+  @doc """
+  Runs after-delete hooks (fire-and-forget).
+  """
+  def dispatch_after_delete(record, context) do
+    collection_name = context.collection_name
+
+    Task.start(fn ->
+      run_declarative_hooks(:afterDelete, collection_name, record, context)
+
+      Registry.get(collection_name)
+      |> Enum.each(fn module ->
+        module.after_delete(record, context)
+      end)
+    end)
+
+    :ok
   end
 
   # ── Pipeline runner ─────────────────────────────────
@@ -125,4 +148,6 @@ defmodule Lazypock.Hooks.Dispatcher do
       end
     end)
   end
+
+  # after_update not yet wired in the controller — add when needed
 end

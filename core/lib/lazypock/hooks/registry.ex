@@ -30,7 +30,9 @@ defmodule Lazypock.Hooks.Registry do
     |> Enum.each(fn path ->
       try do
         basename = Path.basename(path, ".beam")
-        mod_name = basename |> String.trim_leading("Elixir.") |> String.split(".") |> Module.concat()
+
+        mod_name =
+          basename |> String.trim_leading("Elixir.") |> String.split(".") |> Module.concat()
 
         case Code.ensure_loaded(mod_name) do
           {:module, ^mod_name} ->

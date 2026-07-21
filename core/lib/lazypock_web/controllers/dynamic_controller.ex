@@ -105,6 +105,7 @@ defmodule LazypockWeb.DynamicController do
       case GenericRecord.insert(name, enriched_attrs) do
         {:ok, record} ->
           Broadcaster.broadcast_create(name, record)
+          Hooks.dispatch_after_create(record, context)
 
           conn
           |> put_status(201)
@@ -127,12 +128,14 @@ defmodule LazypockWeb.DynamicController do
 
   def update(conn, %{"collection" => name, "id" => id} = params) do
     user = conn.assigns[:current_superuser]
+    context = %{collection_name: name, user: user, conn: conn}
 
     with {:ok, _collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_update(name, user, record),
          attrs = params["data"] || params,
-         updated_record when not is_nil(updated_record) <- GenericRecord.update(name, id, attrs) do
+         {:ok, enriched_attrs} <- Hooks.dispatch_update(record, attrs, context),
+         updated_record when not is_nil(updated_record) <- GenericRecord.update(name, id, enriched_attrs) do
       Broadcaster.broadcast_update(name, updated_record)
       conn |> json(DynamicView.format_item(updated_record, name))
     else
@@ -152,13 +155,16 @@ defmodule LazypockWeb.DynamicController do
 
   def delete(conn, %{"collection" => name, "id" => id}) do
     user = conn.assigns[:current_superuser]
+    context = %{collection_name: name, user: user, conn: conn}
 
     with {:ok, _collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_delete(name, user, record),
+         :ok <- Hooks.dispatch_delete(record, context),
          :ok <- GenericRecord.delete(name, id) do
       Store.delete_by_record(name, id)
       Broadcaster.broadcast_delete(name, id)
+      Hooks.dispatch_after_delete(record, context)
       conn |> put_status(204) |> json(nil)
     else
       nil ->
