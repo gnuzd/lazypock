@@ -23,6 +23,9 @@ defmodule Lazypock.Application do
     Lazypock.Auth.Setup.ensure_superusers_table!()
     Lazypock.Auth.Setup.create_from_env!()
 
+    # Create _files table for file storage
+    Lazypock.Files.Store.ensure_files_table!()
+
     result
   end
 

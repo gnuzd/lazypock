@@ -1,1 +1,3 @@
 .DS_Store
+core/priv/uploads/*
+!core/priv/uploads/.gitkeep

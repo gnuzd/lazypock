@@ -43,6 +43,11 @@ defmodule LazypockWeb.Router do
     pipe_through(:auth)
 
     get("/superusers/me", SuperUserController, :me)
+
+    # File routes — must be BEFORE dynamic :collection routes
+    post("/files", FileController, :upload)
+    get("/files/:id", FileController, :show)
+    delete("/files/:id", FileController, :delete)
   end
 
   # Dynamic collection routes — must be LAST
