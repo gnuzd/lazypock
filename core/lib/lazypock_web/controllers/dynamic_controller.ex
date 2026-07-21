@@ -25,6 +25,7 @@ defmodule LazypockWeb.DynamicController do
   alias Lazypock.Rules.Enforcer
   alias Lazypock.Realtime.Broadcaster
   alias Lazypock.Files.Store
+  alias Lazypock.Hooks.Dispatcher, as: Hooks
 
   # ── List (GET /api/:collection) ─────────────────────
 
@@ -96,10 +97,12 @@ defmodule LazypockWeb.DynamicController do
 
   def create(conn, %{"collection" => name, "data" => attrs}) do
     user = conn.assigns[:current_superuser]
+    context = %{collection_name: name, user: user, conn: conn}
 
     with {:ok, _collection} <- Registry.get(name),
-         :ok <- Enforcer.authorize_create(name, user, attrs) do
-      case GenericRecord.insert(name, attrs) do
+         :ok <- Enforcer.authorize_create(name, user, attrs),
+         {:ok, enriched_attrs} <- Hooks.dispatch_create(attrs, context) do
+      case GenericRecord.insert(name, enriched_attrs) do
         {:ok, record} ->
           Broadcaster.broadcast_create(name, record)
 
