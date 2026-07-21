@@ -156,6 +156,24 @@ defmodule Lazypock.Schemas.GenericRecord do
   end
 
   @doc """
+  Returns the count of records matching a WHERE clause.
+  """
+  @spec count_where(String.t(), String.t(), [term()]) :: non_neg_integer()
+  def count_where(collection_name, where_clause \\ "", params \\ []) do
+    query = "SELECT COUNT(*) as cnt FROM #{TypeMapper.quote_ident(collection_name)}"
+
+    query =
+      if where_clause != "" and where_clause != nil,
+        do: query <> " WHERE " <> where_clause,
+        else: query
+
+    case Ecto.Adapters.SQL.query(Repo, query, params) do
+      {:ok, %{rows: [[count]]}} -> count
+      {:error, _} -> 0
+    end
+  end
+
+  @doc """
   Returns the count of records in a collection.
   """
   @spec count(String.t()) :: non_neg_integer()
