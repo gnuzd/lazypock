@@ -41,7 +41,7 @@ defmodule Lazypock.Files.Adapters.Local do
 
   @impl true
   def get(file_record) do
-    full_path = Path.join(base_path(), file_record.storage_path)
+    full_path = Path.join(base_path(), file_record["storage_path"])
 
     case File.read(full_path) do
       {:ok, binary} -> {:ok, binary}
@@ -51,7 +51,7 @@ defmodule Lazypock.Files.Adapters.Local do
 
   @impl true
   def delete(file_record) do
-    full_path = Path.join(base_path(), file_record.storage_path)
+    full_path = Path.join(base_path(), file_record["storage_path"])
     File.rm(full_path)
     # Try to clean up empty parent dirs (ignore errors)
     clean_empty_dirs(Path.dirname(full_path))
@@ -60,7 +60,6 @@ defmodule Lazypock.Files.Adapters.Local do
 
   defp base_path do
     Application.get_env(:lazypock, :file_storage)[:path] ||
-      System.get_env("LAZYPOCK_FILE_STORAGE_PATH") ||
       Path.join(Application.app_dir(:lazypock, "priv"), "uploads")
   end
 

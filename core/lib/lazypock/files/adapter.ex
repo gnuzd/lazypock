@@ -5,6 +5,9 @@ defmodule Lazypock.Files.Adapter do
   Implementations:
     - Lazypock.Files.Adapters.Local   (default, files on disk)
     - Lazypock.Files.Adapters.S3      (AWS S3 / Cloudflare R2 compatible)
+
+  Default is always local, zero config. S3 can be configured later
+  via Admin UI (stored in _settings table in Phase 8).
   """
 
   @type file_meta :: %{
@@ -15,40 +18,15 @@ defmodule Lazypock.Files.Adapter do
           optional(:height) => non_neg_integer()
         }
 
-  @doc """
-  Stores a file and returns metadata.
-  """
   @callback store(binary(), String.t(), keyword()) :: {:ok, file_meta()} | {:error, term()}
-
-  @doc """
-  Returns the full local path or signed URL for a stored file.
-  """
   @callback url(map()) :: String.t()
-
-  @doc """
-  Returns the file binary.
-  """
   @callback get(map()) :: {:ok, binary()} | {:error, term()}
-
-  @doc """
-  Deletes a stored file.
-  """
   @callback delete(map()) :: :ok | {:error, term()}
 
   @doc """
-  Returns the configured adapter module.
-  
-  Checks env var `LAZYPOCK_FILE_STORAGE` first, then app config.
-  Defaults to local adapter.
+  Returns the adapter for a given backend name from _files.storage_backend.
+  Always defaults to local adapter.
   """
-  def get_adapter do
-    adapter =
-      System.get_env("LAZYPOCK_FILE_STORAGE") ||
-        (Application.get_env(:lazypock, :file_storage)[:adapter] |> to_string())
-
-    case adapter do
-      "s3" -> Lazypock.Files.Adapters.S3
-      _ -> Lazypock.Files.Adapters.Local
-    end
-  end
+  def for_backend("s3"), do: Lazypock.Files.Adapters.S3
+  def for_backend(_), do: Lazypock.Files.Adapters.Local
 end
