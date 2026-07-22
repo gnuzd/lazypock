@@ -1,13 +1,12 @@
 defmodule LazypockWeb.Router do
   use LazypockWeb, :router
 
-  pipeline :browser do
-    plug(:accepts, ["html"])
+  # Serve the Svelte SPA admin UI (static files)
+  # In production: priv/static/admin/ is built by the Svelte project
+  # In dev: the Svelte dev server proxies to avoid CORS issues
+  pipeline :spa do
+    plug(:accepts, ["html", "json"])
     plug(:fetch_session)
-    plug(:fetch_live_flash)
-    plug(:put_root_layout, html: {LazypockWeb.Layouts, :root})
-    plug(:protect_from_forgery)
-    plug(:put_secure_browser_headers)
   end
 
   pipeline :api do
@@ -19,17 +18,17 @@ defmodule LazypockWeb.Router do
     plug(Lazypock.Auth.Plug)
   end
 
-  scope "/", LazypockWeb do
-    pipe_through(:browser)
+  # Admin SPA — catch-all for /_/*
+  scope "/_", LazypockWeb do
+    pipe_through(:spa)
 
-    get("/", PageController, :home)
+    get("/*path", AdminSpaController, :index)
   end
 
-  # API routes
+  # Health check (no auth)
   scope "/api", LazypockWeb do
     pipe_through(:api)
 
-    # Health check
     get("/health", HealthController, :index)
 
     # Superuser auth (no auth required)
@@ -43,6 +42,13 @@ defmodule LazypockWeb.Router do
     pipe_through(:auth)
 
     get("/superusers/me", SuperUserController, :me)
+
+    # Collection management
+    get("/collections", CollectionController, :list)
+    post("/collections", CollectionController, :create)
+    get("/collections/:id", CollectionController, :show)
+    patch("/collections/:id", CollectionController, :update)
+    delete("/collections/:id", CollectionController, :delete)
 
     # File routes — must be BEFORE dynamic :collection routes
     post("/files", FileController, :upload)

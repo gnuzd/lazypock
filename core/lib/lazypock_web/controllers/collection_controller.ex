@@ -1,0 +1,100 @@
+defmodule LazypockWeb.CollectionController do
+  use LazypockWeb, :controller
+
+  alias Lazypock.Collections.Registry, as: CollectionRegistry
+  alias Lazypock.Schema.DDL
+
+  # List all collections
+  def list(conn, _params) do
+    collections = CollectionRegistry.list()
+    json(conn, %{items: Enum.map(collections, &collection_json/1)})
+  end
+
+  # Create a new collection
+  def create(conn, %{"name" => name} = params) do
+    type = params["type"] || "base"
+    fields = params["fields"] || []
+
+    case DDL.create_collection(name, type: type, fields: fields) do
+      {:ok, collection} ->
+        conn
+        |> put_status(201)
+        |> json(collection_json(collection))
+
+      {:error, reason} ->
+        conn
+        |> put_status(400)
+        |> json(%{error: reason})
+    end
+  end
+
+  # Get a single collection
+  def show(conn, %{"id" => id}) do
+    case CollectionRegistry.get(id) do
+      {:ok, collection} ->
+        json(conn, collection_json(collection))
+
+      {:error, :not_found} ->
+        conn |> put_status(404) |> json(%{error: "Collection not found"})
+    end
+  end
+
+  # Update a collection
+  def update(conn, %{"id" => id} = params) do
+    opts =
+      []
+      |> maybe_put(:name, params["name"])
+      |> maybe_put(:type, params["type"])
+      |> maybe_put(:fields, params["fields"])
+
+    case DDL.update_collection(id, opts) do
+      {:ok, collection} ->
+        json(conn, collection_json(collection))
+
+      {:error, reason} ->
+        conn |> put_status(400) |> json(%{error: reason})
+    end
+  end
+
+  # Delete a collection
+  def delete(conn, %{"id" => id}) do
+    case DDL.drop_collection(id) do
+      :ok ->
+        conn |> put_status(204) |> json(%{ok: true})
+
+      {:error, reason} ->
+        conn |> put_status(400) |> json(%{error: reason})
+    end
+  end
+
+  defp collection_json(collection) do
+    %{
+      id: collection.id,
+      name: collection.name,
+      type: collection.type,
+      schema: collection.schema,
+      fields:
+        Enum.map(collection.fields || [], fn f ->
+          %{
+            id: f.id,
+            name: f.name,
+            type: f.type,
+            required: f.required,
+            unique: f.unique,
+            options: f.options,
+            indexed: f.indexed,
+            hidden: f.hidden,
+            system: f.system,
+            sort_order: f.sort_order
+          }
+        end),
+      rules: collection.rules,
+      options: collection.options,
+      created: collection.inserted_at,
+      updated: collection.updated_at
+    }
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+end

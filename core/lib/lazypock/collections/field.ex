@@ -26,7 +26,7 @@ defmodule Lazypock.Collections.Field do
           sort_order: integer()
         }
 
-  @valid_types ~w(text number bool email url date select multi_select file multi_file json relation editor password)
+  @valid_types ~w(text number bool email url date datetime select multi_select file multi_file json relation editor password geo)
 
   @primary_key {:id, :binary_id, autogenerate: true}
   schema "_fields" do

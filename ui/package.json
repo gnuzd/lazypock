@@ -1,0 +1,15 @@
+{
+  "name": "lazypock-admin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "svelte": "^5.56.7",
+    "vite": "^8.1.5"
+  }
+}
