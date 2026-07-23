@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { Lock, Unlock } from '@lucide/svelte';
+
 	let {
 		label = 'Rule',
 		value = $bindable<string | null>(null),
@@ -36,30 +38,32 @@
 </script>
 
 <div
-	class="relative min-h-[50px] rule-field"
+	class="relative min-h-[62px] rule-field rounded-field bg-base-100 border border-base-300 overflow-hidden"
+	class:locked={value === null}
 >
-	<label for="rule-{name}" class="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-base-content/60">
+	<!-- Label (on top of overlay; clicks pass through only when locked so overlay gets them) -->
+	<label for="rule-{name}" class="relative z-[1] flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-base-content/60" class:pointer-events-none={value === null}>
 		<span>{label}</span>
 		<span
-			class="ml-1 transition-all duration-(--animation-speed)"
-			class:opacity-100={value !== null}
-			class:opacity-0={value === null}
+			class="transition-all duration-150"
+			class:opacity-100={value === null}
+			class:opacity-0={value !== null}
 		>(Superusers only)</span>
 	</label>
 
 	{#if value === null}
-		<!-- Locked state -->
+		<!-- Locked state: click anywhere to unlock (label stays above) -->
 		<button
 			type="button"
-			class="absolute inset-0 z-10 flex items-center justify-end gap-2 px-3 text-xs font-medium text-success border-2 border-base-300 rounded-field bg-base-200 cursor-pointer hover:border-base-400 transition-colors"
+			class="group absolute inset-0 z-10 flex items-end justify-end gap-2 pb-2.5 px-3 text-xs font-medium text-success bg-base-200 border-base-300 rounded-field cursor-pointer hover:border-base-400 transition-colors disabled:cursor-not-allowed"
 			{disabled}
 			onclick={unlock}
 		>
-			<span class="opacity-0 -translate-x-0.5 group-hover:opacity-100 group-hover:translate-x-0 transition-all">Unlock and set custom rule</span>
-			<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+			<span class="opacity-0 -translate-x-0.5 transition-all duration-150 group-hover:opacity-100 group-hover:translate-x-0">Unlock and set custom rule</span>
+			<Unlock size={18} />
 		</button>
 	{:else}
-		<!-- Unlocked state -->
+		<!-- Unlocked state: input + lock button -->
 		<div class="flex items-stretch">
 			<div class="flex-1 min-w-0" class:focused>
 				<input
@@ -75,11 +79,11 @@
 			</div>
 			<button
 				type="button"
-				class="flex items-center gap-1 px-2 text-xs font-medium text-base-content/60 border border-base-300 border-t-0 border-r-0 rounded-bl-field rounded-tr-field cursor-pointer hover:text-success transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+				class="flex items-center gap-1 px-2.5 text-xs font-medium text-base-content/60 bg-base-200/60 border border-base-300 border-t-0 border-r-0 cursor-pointer hover:text-success transition-colors disabled:cursor-not-allowed disabled:opacity-50"
 				{disabled}
 				onclick={lock}
 			>
-				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+				<Lock size={14} />
 				<span class="hidden sm:inline">Set superusers only</span>
 			</button>
 		</div>

@@ -49,7 +49,7 @@
 		tabindex="-1"
 	>
 		<!-- Header / summary row -->
-		<div class="flex items-center gap-2 p-1">
+		<div class="flex items-center gap-2 p-1.5">
 			<div
 				class="flex items-center justify-center w-6 h-full cursor-grab text-base-content/40 hover:text-base-content"
 				draggable="true"
@@ -177,28 +177,28 @@
 			<div class="border-t border-base-300 p-3 space-y-3 text-sm" transition:slide={{ duration: 150 }}>
 				{#if field.type === 'text'}
 					<div class="grid grid-cols-2 gap-3">
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-min">Min length</label>
 							<input type="number" id="field-{fieldIndex}-min" step="1" min="0" placeholder="No min limit" class="input input-sm w-full"
 								value={(field.min as number) || ''}
 								oninput={(e) => { const v = (e.target as HTMLInputElement).value; if (v.length > 1 && v[0] == '0') return; field.min = parseInt(v, 10); }}
 							/>
 						</div>
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-max">Max length</label>
 							<input type="number" id="field-{fieldIndex}-max" step="1" min={(field.min as number) || 0} placeholder="Default 5000" class="input input-sm w-full"
 								value={(field.max as number) || ''}
 								oninput={(e) => { const v = (e.target as HTMLInputElement).value; if (v.length > 1 && v[0] == '0') return; field.max = parseInt(v, 10); }}
 							/>
 						</div>
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-pattern">Validation pattern</label>
 							<input type="text" id="field-{fieldIndex}-pattern" placeholder="e.g. ^[a-z0-9]+$" class="input input-sm w-full"
 								value={(field.pattern as string) || ''}
 								oninput={(e) => field.pattern = (e.target as HTMLInputElement).value}
 							/>
 						</div>
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-autogenerate">Autogenerate pattern</label>
 							<input type="text" id="field-{fieldIndex}-autogenerate" placeholder="e.g. [a-z0-9]{30}" class="input input-sm w-full"
 								value={(field.autogeneratePattern as string) || ''}
@@ -208,14 +208,14 @@
 					</div>
 				{:else if field.type === 'number'}
 					<div class="grid grid-cols-2 gap-3">
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-min">Min</label>
 							<input type="number" id="field-{fieldIndex}-min" class="input input-sm w-full"
 								value={typeof field.min === 'number' ? field.min : ''}
 								oninput={(e) => { const v = (e.target as HTMLInputElement).value; if (!v) { field.min = null; return; } field.min = Number(v); }}
 							/>
 						</div>
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-max">Max</label>
 							<input type="number" id="field-{fieldIndex}-max" min={(field.min as number) || undefined} class="input input-sm w-full"
 								value={typeof field.max === 'number' ? field.max : ''}
@@ -225,14 +225,14 @@
 					</div>
 				{:else if field.type === 'email'}
 					<div class="grid grid-cols-2 gap-3">
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-except">Except domains</label>
 							<input type="text" id="field-{fieldIndex}-except" disabled={!!(field.onlyDomains as string[])?.length} class="input input-sm w-full"
 								value={(field.exceptDomains as string[])?.join(', ') || ''}
 								onchange={(e) => field.exceptDomains = ((e.target as HTMLInputElement).value).split(',').map(s => s.trim()).filter(Boolean)}
 							/>
 						</div>
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-only">Only domains</label>
 							<input type="text" id="field-{fieldIndex}-only" disabled={!!(field.exceptDomains as string[])?.length} class="input input-sm w-full"
 								value={(field.onlyDomains as string[])?.join(', ') || ''}
@@ -242,14 +242,14 @@
 					</div>
 				{:else if field.type === 'date'}
 					<div class="grid grid-cols-2 gap-3">
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-minDate">Min date</label>
 							<input type="datetime-local" id="field-{fieldIndex}-minDate" step="1" class="input input-sm w-full"
 								value={(field.min as string) || ''}
 								onchange={(e) => field.min = (e.target as HTMLInputElement).value}
 							/>
 						</div>
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxDate">Max date</label>
 							<input type="datetime-local" id="field-{fieldIndex}-maxDate" step="1" class="input input-sm w-full"
 								value={(field.max as string) || ''}
@@ -258,7 +258,7 @@
 						</div>
 					</div>
 				{:else if field.type === 'select'}
-					<div class="field" hidden={(field.maxSelect as number) < 2}>
+					<div class="bg-base-200/40 p-1.5 rounded-field" hidden={(field.maxSelect as number) < 2}>
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxSelect">Max select</label>
 						<input type="number" id="field-{fieldIndex}-maxSelect" step="1" min="2" max={(field.values as string[])?.length || 2} placeholder="Default to single" class="input input-sm w-full"
 							value={(field.maxSelect as number) || ''}
@@ -266,7 +266,7 @@
 						/>
 					</div>
 				{:else if field.type === 'json'}
-					<div class="field">
+					<div class="bg-base-200/40 p-1.5 rounded-field">
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxSize">Max size (bytes)</label>
 						<input type="number" id="field-{fieldIndex}-maxSize" step="1" min="0" placeholder="Default ~1MB" class="input input-sm w-full"
 							value={(field.maxSize as number) || ''}
@@ -275,28 +275,28 @@
 					</div>
 				{:else if field.type === 'file'}
 					<div class="grid grid-cols-2 gap-3">
-						<div class="field col-span-2">
+						<div class="col-span-2 bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-mimeTypes">Allowed mime types</label>
 							<input type="text" id="field-{fieldIndex}-mimeTypes" placeholder="No restriction" class="input input-sm w-full"
 								value={(field.mimeTypes as string[])?.join(', ') || ''}
 								onchange={(e) => field.mimeTypes = ((e.target as HTMLInputElement).value).split(',').map(s => s.trim()).filter(Boolean)}
 							/>
 						</div>
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-thumbs">Thumb sizes</label>
 							<input type="text" id="field-{fieldIndex}-thumbs" placeholder="e.g. 50x50, 480x720" class="input input-sm w-full"
 								value={(field.thumbs as string[])?.join(', ') || ''}
 								onchange={(e) => field.thumbs = ((e.target as HTMLInputElement).value).split(',').map(s => s.trim()).filter(Boolean)}
 							/>
 						</div>
-						<div class="field">
+						<div class="bg-base-200/40 p-1.5 rounded-field">
 							<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxSize">Max size (bytes)</label>
 							<input type="number" id="field-{fieldIndex}-maxSize" step="1" min="0" placeholder="~5MB default" class="input input-sm w-full"
 								value={(field.maxSize as number) || ''}
 								oninput={(e) => { const v = (e.target as HTMLInputElement).value; if (v.length > 1 && v[0] == '0') return; field.maxSize = parseInt(v, 10); }}
 							/>
 						</div>
-						<div class="field flex items-center gap-2 mt-1">
+						<div class="bg-base-200/40 p-1.5 rounded-field flex items-center gap-2 mt-1">
 							<input type="checkbox" class="checkbox checkbox-sm" id="field-{fieldIndex}-protected"
 								checked={!!field.protected} onchange={(e) => field.protected = (e.target as HTMLInputElement).checked}
 							/>
@@ -304,21 +304,21 @@
 						</div>
 					</div>
 				{:else if field.type === 'relation'}
-					<div class="field" hidden={(field.maxSelect as number) < 2}>
+					<div class="bg-base-200/40 p-1.5 rounded-field" hidden={(field.maxSelect as number) < 2}>
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-minSelect">Min select</label>
 						<input type="number" id="field-{fieldIndex}-minSelect" step="1" min="0" placeholder="No min limit" class="input input-sm w-full"
 							value={(field.minSelect as number) || ''}
 							onchange={(e) => field.minSelect = parseInt((e.target as HTMLInputElement).value, 10)}
 						/>
 					</div>
-					<div class="field" hidden={(field.maxSelect as number) < 2}>
+					<div class="bg-base-200/40 p-1.5 rounded-field" hidden={(field.maxSelect as number) < 2}>
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxSelect">Max select</label>
 						<input type="number" id="field-{fieldIndex}-maxSelect" step="1" min={(field.minSelect as number) || 2} placeholder="Default to single" class="input input-sm w-full"
 							value={(field.maxSelect as number) || ''}
 							onchange={(e) => { const v = parseInt((e.target as HTMLInputElement).value, 10); field.maxSelect = v > 1 ? v : 1; }}
 						/>
 					</div>
-					<div class="field">
+					<div class="bg-base-200/40 p-1.5 rounded-field">
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-cascade">Cascade delete</label>
 						<select class="select select-sm w-full" id="field-{fieldIndex}-cascade"
 							value={field.cascadeDelete ? 'true' : 'false'}
@@ -331,7 +331,7 @@
 				{/if}
 
 				<!-- Help text for all types -->
-				<div class="field">
+				<div class="bg-base-200/40 p-1.5 rounded-field">
 					<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-help">Help text</label>
 					<input type="text" id="field-{fieldIndex}-help" class="input input-sm w-full"
 						value={(field.help as string) || ''}
