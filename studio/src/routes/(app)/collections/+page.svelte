@@ -36,13 +36,46 @@
 		} catch {
 			// ignore
 		}
+
+		// Subscribe to admin:collections for collection CRUD events
+		client.realtime.subscribe('admin:collections', (e) => {
+			if (e.event === 'collection_change') {
+				// Reload the collection list on any admin change
+				client.listCollections('page=1&perPage=200').then((res) => {
+					collections = res?.items || [];
+				});
+			}
+		});
 	});
+
+	/** Track which collection topic we're subscribed to for record events */
+	let subscribedRecordTopic = $state('');
 
 	function selectCollection(name: string) {
 		activeName = name;
 		history.replaceState(null, '', '?collection=' + encodeURIComponent(name));
 		loadCollection(name);
 	}
+
+	/** Subscribe to record events when active collection changes */
+	$effect(() => {
+		if (!activeName) return;
+
+		// Unsubscribe from previous topic
+		if (subscribedRecordTopic) {
+			client.realtime.unsubscribe(subscribedRecordTopic);
+		}
+
+		const topic = 'collection:' + activeName;
+		subscribedRecordTopic = topic;
+
+		client.realtime.subscribe(topic, (e) => {
+			if (e.event === 'record_change') {
+				// Reload records for the active collection
+				loadCollection(activeName);
+			}
+		});
+	});
 
 	async function loadCollection(name: string) {
 		loading = true;
@@ -246,9 +279,7 @@
 				deleteRule,
 			};
 			const coll = await client.createCollection(payload);
-			// reload sidebar list
-			const result = await client.listCollections('page=1&perPage=200');
-			collections = result?.items || [];
+			// The admin:collections realtime subscription will auto-refresh the sidebar
 			showNewCollection = false;
 			if (coll?.name) {
 				selectCollection(coll.name as string);

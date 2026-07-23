@@ -1,11 +1,12 @@
 <script lang="ts">
 	import Button from '$lib/components/Button.svelte';
-	import { client } from '$lib/client';
+	import { client, disconnectRealtime } from '$lib/client';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 
 	function logout() {
+		disconnectRealtime();
 		client.logout();
 		window.location.href = base + '/login';
 	}

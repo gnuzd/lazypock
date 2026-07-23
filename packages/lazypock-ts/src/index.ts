@@ -19,8 +19,9 @@ import {
 	type ListResult,
 	type RequestOptions,
 } from "./types";
+import { RealtimeService, wsUrlFromBaseUrl } from "./realtime";
 
-export { AuthStore, ApiError };
+export { AuthStore, ApiError, RealtimeService, wsUrlFromBaseUrl };
 export type {
 	StorageAdapter,
 	AuthModel,
@@ -36,11 +37,14 @@ export interface LazypockClientOptions {
 	storage?: StorageAdapter;
 	/** Explicit auth store instance (for sharing across modules) */
 	authStore?: AuthStore;
+	/** Real-time service for Phoenix Channel WebSocket subscriptions */
+	realtime?: RealtimeService;
 }
 
 export class LazypockClient {
 	readonly http: HttpClient;
 	readonly authStore: AuthStore;
+	readonly realtime: RealtimeService;
 	private collectionCache = new Map<string, CollectionService>();
 
 	constructor(options: LazypockClientOptions) {
@@ -48,10 +52,11 @@ export class LazypockClient {
 		this.authStore =
 			options.authStore ?? new AuthStore(options.storage ?? memoryStorage);
 		this.http = new HttpClient(baseUrl, this.authStore);
+		this.realtime = options.realtime ?? new RealtimeService();
 	}
 
 	/** Get or create a typed collection service */
-	collection<T = ApiRecord>(name: string): CollectionService {
+	collection(name: string): CollectionService {
 		let svc = this.collectionCache.get(name);
 		if (!svc) {
 			svc = new CollectionService(this.http, name);

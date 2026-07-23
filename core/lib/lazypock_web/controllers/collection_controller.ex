@@ -3,6 +3,7 @@ defmodule LazypockWeb.CollectionController do
 
   alias Lazypock.Collections.Registry, as: CollectionRegistry
   alias Lazypock.Schema.DDL
+  alias Lazypock.Realtime.Broadcaster
 
   # List all collections
   def list(conn, _params) do
@@ -17,6 +18,7 @@ defmodule LazypockWeb.CollectionController do
 
     case DDL.create_collection(name, type: type, fields: fields) do
       {:ok, collection} ->
+        Broadcaster.broadcast_collection_event("create", collection_json(collection))
         conn
         |> put_status(201)
         |> json(collection_json(collection))
@@ -53,6 +55,7 @@ defmodule LazypockWeb.CollectionController do
 
     case DDL.update_collection(id, opts) do
       {:ok, collection} ->
+        Broadcaster.broadcast_collection_event("update", collection_json(collection))
         json(conn, collection_json(collection))
 
       {:error, reason} ->
@@ -64,6 +67,7 @@ defmodule LazypockWeb.CollectionController do
   def delete(conn, %{"id" => id}) do
     case DDL.drop_collection(id) do
       :ok ->
+        Broadcaster.broadcast_collection_event("delete", %{id: id})
         conn |> put_status(204) |> json(%{ok: true})
 
       {:error, reason} ->

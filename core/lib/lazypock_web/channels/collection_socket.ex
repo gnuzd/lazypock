@@ -15,6 +15,7 @@ defmodule LazypockWeb.CollectionSocket do
   alias Lazypock.Auth.Token
 
   channel "collection:*", LazypockWeb.CollectionChannel
+  channel "admin:*", LazypockWeb.AdminChannel
 
   @impl true
   def connect(params, socket, _connect_info) do

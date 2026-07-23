@@ -1,12 +1,12 @@
 <script lang="ts">
-	import '$lib/styles/app.css';
-	import { Toaster } from 'svelte-sonner';
+import '$lib/styles/app.css';
+import { Toaster } from 'svelte-sonner';
 
-	import favicon from '$lib/assets/favicon.svg';
-	import { onMount } from 'svelte';
-	import { client } from '$lib/client';
-	import { base } from '$app/paths';
-	import { browser } from '$app/environment';
+import favicon from '$lib/assets/favicon.svg';
+import { onMount } from 'svelte';
+import { client, connectRealtime, disconnectRealtime } from '$lib/client';
+import { base } from '$app/paths';
+import { browser } from '$app/environment';
 
 	let { children } = $props();
 
@@ -19,6 +19,9 @@
 		const isLoginPage = path === base + '/login';
 
 		if (client.authStore.isValid) {
+			// Connect realtime WebSocket
+			connectRealtime();
+
 			if (
 				path.startsWith(base + '/collections') ||
 				path.startsWith(base + '/logs') ||

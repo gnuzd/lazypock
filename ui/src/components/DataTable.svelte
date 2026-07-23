@@ -1,5 +1,12 @@
 <script>
-  let { columns = [], rows = [], onrowclick } = $props();
+  let {
+    columns = [],
+    rows = [],
+    onrowclick,
+    emptyLabel = "",
+    emptyActionLabel = "",
+    onemptyaction
+  } = $props();
 </script>
 
 <div class="table-wrapper">
@@ -12,19 +19,32 @@
       </tr>
     </thead>
     <tbody>
-      {#each rows as row}
+      {#if rows.length === 0}
         <tr>
-          {#each columns as col}
-            <td
-              class={col.class}
-              role={onrowclick ? "button" : undefined}
-              onclick={onrowclick ? () => onrowclick(row) : undefined}
-            >
-              {col.render ? col.render(row) : row[col.key]}
-            </td>
-          {/each}
+          <td class="empty-cell" colspan={columns.length}>
+            {#if emptyLabel}
+              <span class="empty-label">{emptyLabel}</span>
+            {/if}
+            {#if emptyActionLabel && onemptyaction}
+              <button class="btn btn-primary btn-xs" onclick={onemptyaction}>{emptyActionLabel}</button>
+            {/if}
+          </td>
         </tr>
-      {/each}
+      {:else}
+        {#each rows as row}
+          <tr>
+            {#each columns as col}
+              <td
+                class={col.class}
+                role={onrowclick ? "button" : undefined}
+                onclick={onrowclick ? () => onrowclick(row) : undefined}
+              >
+                {col.render ? col.render(row) : row[col.key]}
+              </td>
+            {/each}
+          </tr>
+        {/each}
+      {/if}
     </tbody>
   </table>
 </div>
@@ -70,5 +90,15 @@
   }
   .table :global(tbody tr:last-child td) {
     border-bottom: none;
+  }
+  .empty-cell {
+    text-align: center;
+    padding: 32px 16px !important;
+    opacity: 0.5;
+  }
+  .empty-label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: var(--font-size-sm);
   }
 </style>
