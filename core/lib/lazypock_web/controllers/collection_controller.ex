@@ -19,6 +19,7 @@ defmodule LazypockWeb.CollectionController do
     case DDL.create_collection(name, type: type, fields: fields) do
       {:ok, collection} ->
         Broadcaster.broadcast_collection_event("create", collection_json(collection))
+
         conn
         |> put_status(201)
         |> json(collection_json(collection))

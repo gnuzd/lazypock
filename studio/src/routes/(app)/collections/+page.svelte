@@ -12,6 +12,7 @@
 	import RuleField from '$lib/components/RuleField.svelte';
 	import { slugify } from '$lib/fieldTypes';
 	import type { FieldDefinition } from '$lib/fieldTypes';
+	import RecordForm from '$lib/components/RecordForm.svelte';
 
 	let collections = $state<Record<string, unknown>[]>([]);
 	let collection = $state<Record<string, unknown> | null>(null);
@@ -19,6 +20,13 @@
 	let loading = $state(false);
 	let activeName = $state('');
 	let search = $state('');
+
+	// ── Record CRUD state ──
+	let showRecordPane = $state(false);
+	let recordData = $state<Record<string, unknown>>({});
+	let editingRecordId = $state<string | null>(null);
+	let recordSaving = $state(false);
+	let recordError = $state('');
 
 	let filtered = $derived.by(() => {
 		if (!search) return collections;
@@ -291,6 +299,59 @@
 		}
 	}
 
+	// ── Record CRUD ──
+
+	function newRecord() {
+		editingRecordId = null;
+		recordData = {};
+		recordError = '';
+		showRecordPane = true;
+	}
+
+	function editRecord(row: Record<string, unknown>) {
+		editingRecordId = (row.id as string) ?? null;
+		recordData = { ...row };
+		recordError = '';
+		showRecordPane = true;
+	}
+
+	async function saveRecord() {
+		if (recordSaving || !collection) return;
+		recordSaving = true;
+		recordError = '';
+		const collName = collection.name as string;
+		try {
+			if (editingRecordId) {
+				await client.updateRecord(collName, editingRecordId, recordData);
+			} else {
+				await client.createRecord(collName, recordData);
+			}
+			showRecordPane = false;
+			loadCollection(collName);
+		} catch (e) {
+			recordError = (e as Error).message || 'Failed to save record';
+		} finally {
+			recordSaving = false;
+		}
+	}
+
+	async function deleteRecord() {
+		if (!collection || !editingRecordId || recordSaving) return;
+		if (!confirm('Delete this record? This action cannot be undone.')) return;
+		recordSaving = true;
+		recordError = '';
+		const collName = collection.name as string;
+		try {
+			await client.deleteRecord(collName, editingRecordId);
+			showRecordPane = false;
+			loadCollection(collName);
+		} catch (e) {
+			recordError = (e as Error).message || 'Failed to delete record';
+		} finally {
+			recordSaving = false;
+		}
+	}
+
 	setSidebar(headerContent, bodyContent, footerContent);
 </script>
 
@@ -339,7 +400,7 @@
 			<span class="text-xs opacity-30">/</span>
 			<span class="font-medium">{(collection.name as string) ?? '...'}</span>
 		</nav>
-		<button class="btn btn-primary btn-sm">+ New Record</button>
+		<button class="btn btn-primary btn-sm" onclick={newRecord}>+ New Record</button>
 	</div>
 
 	<!-- Table -->
@@ -348,7 +409,47 @@
 		{rows}
 		emptyLabel="No records yet. Create your first record to get started."
 		emptyActionLabel="+ New Record"
+		onemptyaction={newRecord}
+		onrowclick={(row) => editRecord(row)}
 	/>
+
+	<!-- Record create/edit SidePane -->
+	<SidePane bind:show={showRecordPane} title={editingRecordId ? 'Edit Record' : 'New Record'}>
+		<div class="flex flex-col min-h-0 h-full">
+			<div class="flex-1 overflow-y-auto p-4">
+				<RecordForm
+					fields={((collection?.schema ?? []) as Record<string, unknown>[])}
+					bind:data={recordData}
+					disabled={recordSaving}
+				/>
+			</div>
+
+			{#if recordError}
+				<div class="shrink-0 px-4 py-2 text-xs text-error bg-error/10 border-t border-base-300">{recordError}</div>
+			{/if}
+
+			<div class="shrink-0 flex items-center gap-2 px-4 py-3 border-t border-base-300">
+				<button type="button" class="btn btn-ghost mr-auto" onclick={() => showRecordPane = false}>Close</button>
+				{#if editingRecordId}
+					<button
+						type="button"
+						class="btn btn-error btn-sm"
+						disabled={recordSaving}
+						onclick={deleteRecord}
+					>Delete</button>
+				{/if}
+				<button
+					type="button"
+					class="btn btn-primary"
+					class:loading={recordSaving}
+					disabled={!Object.keys(recordData).length || recordSaving}
+					onclick={saveRecord}
+				>
+					{editingRecordId ? 'Update' : 'Create'}
+				</button>
+			</div>
+		</div>
+	</SidePane>
 {/if}
 
 <!-- New Collection SidePane -->
