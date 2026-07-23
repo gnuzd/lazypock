@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { slide } from 'svelte/transition';
 	import Dropdown from '$lib/components/Dropdown.svelte';
-	import { Folder } from '@lucide/svelte';
+	import { Folder, Settings } from '@lucide/svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import SidePane from '$lib/components/SidePane.svelte';
@@ -123,8 +123,9 @@
 		return cols;
 	});
 
-	// ── New Collection form ──
-	let showNewCollection = $state(false);
+	// ── New/Edit Collection form ──
+	let showCollectionPane = $state(false);
+	let editingCollectionId = $state<string | null>(null);
 	let newName = $state('');
 	let newType = $state('base');
 	let typeOpen = $state(false);
@@ -249,6 +250,7 @@
 
 	function newCollection() {
 		// Reset form state
+		editingCollectionId = null;
 		newName = '';
 		newType = 'base';
 		newFields = [];
@@ -260,7 +262,26 @@
 		createRule = null;
 		updateRule = null;
 		deleteRule = null;
-		showNewCollection = true;
+		showCollectionPane = true;
+	}
+
+	function editCollection(coll: Record<string, unknown>) {
+		editingCollectionId = (coll.id as string) ?? null;
+		newName = (coll.name as string) ?? '';
+		newType = (coll.type as string) ?? 'base';
+		newFields = (((coll.fields as Record<string, unknown>[]) ?? []).map((f) => ({
+			...f,
+			id: (f.id as string) ?? crypto.randomUUID()
+		})) as unknown) as FieldDefinition[];
+		newIndexes = [];
+		activeTab = 'Fields';
+		error = '';
+		listRule = (coll.rules as Record<string, unknown>)?.['listRule'] as string | null ?? null;
+		viewRule = (coll.rules as Record<string, unknown>)?.['viewRule'] as string | null ?? null;
+		createRule = (coll.rules as Record<string, unknown>)?.['createRule'] as string | null ?? null;
+		updateRule = (coll.rules as Record<string, unknown>)?.['updateRule'] as string | null ?? null;
+		deleteRule = (coll.rules as Record<string, unknown>)?.['deleteRule'] as string | null ?? null;
+		showCollectionPane = true;
 	}
 
 	async function handleSave() {
@@ -286,14 +307,23 @@
 				updateRule,
 				deleteRule,
 			};
-			const coll = await client.createCollection(payload);
-			// The admin:collections realtime subscription will auto-refresh the sidebar
-			showNewCollection = false;
-			if (coll?.name) {
-				selectCollection(coll.name as string);
+			if (editingCollectionId) {
+				await client.updateCollection(editingCollectionId, payload);
+				// Navigate to the (possibly renamed) collection
+				if (newName.trim() !== activeName) {
+					selectCollection(newName.trim());
+				} else {
+					loadCollection(newName.trim());
+				}
+			} else {
+				const created = await client.createCollection(payload);
+				if (created?.name) {
+					selectCollection(created.name as string);
+				}
 			}
+			showCollectionPane = false;
 		} catch (e) {
-			error = (e as Error).message || 'Failed to create collection';
+			error = (e as Error).message || (editingCollectionId ? 'Failed to save collection' : 'Failed to create collection');
 		} finally {
 			saving = false;
 		}
@@ -369,16 +399,27 @@
 		<div class="p-4 text-center opacity-40 text-sm">No collections</div>
 	{:else}
 		{#each filtered as coll (coll.id)}
-			<button
+			<div
 				class="flex items-center gap-2 w-[calc(100%-12px)] mx-1.5 px-3 py-1.5 border-none rounded-field text-sm text-base-content cursor-pointer text-left transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
 				class:bg-base-200={coll.name === activeName}
 				class:font-medium={coll.name === activeName}
+				role="button"
+				tabindex="0"
 				onclick={() => selectCollection(coll.name as string)}
+				onkeydown={(e) => { if (e.key === 'Enter') selectCollection(coll.name as string); }}
 			>
 				<Folder class="w-4 h-4 opacity-60 shrink-0" />
-				<span class="truncate">{coll.name as string}</span>
-				<span class="ml-auto text-xs opacity-40">{(coll.schema as unknown[])?.length ?? 0}</span>
-			</button>
+				<span class="truncate flex-1">{coll.name as string}</span>
+				<span class="text-xs opacity-40 mr-1">{(coll.schema as unknown[])?.length ?? 0}</span>
+				<button
+					type="button"
+					class="p-0.5 rounded cursor-pointer opacity-30 hover:opacity-100 transition-opacity border-none bg-transparent text-base-content"
+					onclick={(e) => { e.stopPropagation(); editCollection(coll); }}
+					title="Edit collection"
+				>
+					<Settings class="w-3.5 h-3.5" />
+				</button>
+			</div>
 		{/each}
 	{/if}
 {/snippet}
@@ -452,8 +493,8 @@
 	</SidePane>
 {/if}
 
-<!-- New Collection SidePane -->
-<SidePane bind:show={showNewCollection} title="New Collection">
+<!-- New/Edit Collection SidePane -->
+<SidePane bind:show={showCollectionPane} title={editingCollectionId ? 'Edit Collection' : 'New Collection'}>
 	<div class="flex flex-col min-h-0 h-full">
 		<!-- Header: Name + Type row -->
 		<div class="shrink-0 p-4 pb-3">
@@ -612,7 +653,7 @@
 
 		<!-- Footer -->
 		<div class="shrink-0 flex items-center gap-2 px-4 py-3 border-t border-base-300">
-			<button type="button" class="btn btn-ghost mr-auto" onclick={() => showNewCollection = false}>Close</button>
+			<button type="button" class="btn btn-ghost mr-auto" onclick={() => showCollectionPane = false}>Close</button>
 			{#if error}
 				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-error"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
 			{/if}
@@ -623,7 +664,7 @@
 				disabled={!newName.trim() || saving}
 				onclick={handleSave}
 			>
-				Create
+				{editingCollectionId ? 'Save' : 'Create'}
 			</button>
 		</div>
 	</div>
