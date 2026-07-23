@@ -18,7 +18,7 @@ defmodule LazypockWeb.DynamicView do
       record
       |> Map.put("collectionId", collection.id)
       |> Map.put("collectionName", collection.name)
-      |> format_timestamps()
+      |> rename_timestamps()
     end)
   end
 
@@ -34,7 +34,7 @@ defmodule LazypockWeb.DynamicView do
     record
     |> Map.put("collectionId", collection.id)
     |> Map.put("collectionName", collection.name)
-    |> format_timestamps()
+    |> rename_timestamps()
   end
 
   @doc """
@@ -54,25 +54,16 @@ defmodule LazypockWeb.DynamicView do
     }
   end
 
-  defp format_timestamps(record) do
+  defp rename_timestamps(record) do
     record
-    |> format_timestamp("created_at", "created")
-    |> format_timestamp("updated_at", "updated")
+    |> maybe_rename("created_at", "created")
+    |> maybe_rename("updated_at", "updated")
   end
 
-  defp format_timestamp(record, db_key, api_key) do
-    case Map.get(record, db_key) do
-      nil ->
-        Map.put(record, api_key, nil)
-
-      %DateTime{} = dt ->
-        record |> Map.put(api_key, DateTime.to_iso8601(dt)) |> Map.delete(db_key)
-
-      value when is_binary(value) ->
-        record |> Map.put(api_key, value) |> Map.delete(db_key)
-
-      _ ->
-        record |> Map.put(api_key, nil) |> Map.delete(db_key)
+  defp maybe_rename(record, old_key, new_key) do
+    case Map.fetch(record, old_key) do
+      {:ok, value} -> record |> Map.put(new_key, value) |> Map.delete(old_key)
+      :error -> record
     end
   end
 end

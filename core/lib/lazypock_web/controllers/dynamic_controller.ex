@@ -144,7 +144,11 @@ defmodule LazypockWeb.DynamicController do
          attrs = sanitize_attrs(raw_attrs, collection),
          {:ok, enriched_attrs} <- Hooks.dispatch_update(record, attrs, context),
          updated_record when not is_nil(updated_record) <-
-           GenericRecord.update(name, id, Map.drop(enriched_attrs, ["id", "created_at", "updated_at", "collectionName"])) do
+           GenericRecord.update(
+             name,
+             id,
+             Map.drop(enriched_attrs, ["id", "created_at", "updated_at", "collectionName"])
+           ) do
       Broadcaster.broadcast_update(name, updated_record)
       conn |> json(DynamicView.format_item(updated_record, name))
     else
@@ -232,7 +236,7 @@ defmodule LazypockWeb.DynamicController do
       |> Map.new()
 
     non_text_types = MapSet.new(["number", "bool", "date", "datetime"])
-    system_fields = MapSet.new(["id", "created_at", "updated_at", "collectionName"])
+    system_fields = MapSet.new(["id", "created_at", "updated_at", "collectionName", "collection"])
 
     attrs
     |> Map.drop(MapSet.to_list(system_fields))
