@@ -184,42 +184,64 @@ defmodule Lazypock.Schema.DDL do
         Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
         if new_name != old_name do
-          Ecto.Adapters.SQL.query!(Repo,
-            "ALTER TABLE #{TypeMapper.quote_ident(old_name)} RENAME TO #{TypeMapper.quote_ident(new_name)}", [])
+          Ecto.Adapters.SQL.query!(
+            Repo,
+            "ALTER TABLE #{TypeMapper.quote_ident(old_name)} RENAME TO #{TypeMapper.quote_ident(new_name)}",
+            []
+          )
+
           Repo.update_all(
             from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
-            set: [name: new_name])
+            set: [name: new_name]
+          )
         end
 
         if type do
           Repo.update_all(
             from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
-            set: [type: type])
+            set: [type: type]
+          )
         end
 
-        existing_fields = Repo.all(from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id))
+        existing_fields =
+          Repo.all(
+            from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
+          )
+
         existing_names = MapSet.new(existing_fields, & &1.name)
         incoming_names = MapSet.new(fields, & &1["name"])
 
         # Remove deleted fields
         for f <- existing_fields, not MapSet.member?(incoming_names, f.name) do
-          Ecto.Adapters.SQL.query!(Repo,
-            "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE", [])
+          Ecto.Adapters.SQL.query!(
+            Repo,
+            "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
+            []
+          )
+
           Repo.delete_all(
-            from(fld in Lazypock.Collections.Field, where: fld.collection_id == ^collection.id and fld.name == ^f.name))
+            from(fld in Lazypock.Collections.Field,
+              where: fld.collection_id == ^collection.id and fld.name == ^f.name
+            )
+          )
         end
 
         # Add new fields
         for f <- fields, not MapSet.member?(existing_names, f["name"]) do
           :ok = validate_field_name!(f["name"])
           :ok = validate_field_type(f["type"])
-          sql = "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(f["name"])} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
+
+          sql =
+            "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(f["name"])} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
+
           Ecto.Adapters.SQL.query!(Repo, sql, [])
           if f["indexed"], do: create_index(new_name, f["name"])
           create_field_metadata_entry!(collection.id, f)
         end
 
-        collection_refresh = Repo.get!(Lazypock.Collections.Collection, collection.id) |> Repo.preload(:fields)
+        collection_refresh =
+          Repo.get!(Lazypock.Collections.Collection, collection.id) |> Repo.preload(:fields)
+
         update_collection_schema!(collection_refresh)
         collection_refresh
       end)
@@ -228,8 +250,12 @@ defmodule Lazypock.Schema.DDL do
       {:ok, collection} ->
         Phoenix.PubSub.broadcast(Lazypock.PubSub, "schema", {:collection_updated, collection})
         {:ok, collection}
-      {:error, reason} -> {:error, reason}
-      other -> other
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        other
     end
   end
 
@@ -341,11 +367,16 @@ defmodule Lazypock.Schema.DDL do
     ts =
       "created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
 
+    all_cols =
+      if columns == [] do
+        "#{pk},\n      #{ts}"
+      else
+        "#{pk},\n      #{Enum.join(columns, ",\n      ")},\n      #{ts}"
+      end
+
     """
     CREATE TABLE #{TypeMapper.quote_ident(name)} (
-      #{pk},
-      #{Enum.join(columns, ",\n      ")},
-      #{ts}
+      #{all_cols}
     )
     """
   end

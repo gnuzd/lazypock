@@ -1,0 +1,488 @@
+/* ── Form Inputs / Fields (PocketBase exact) ──────────── */
+
+.field {
+	position: relative;
+	display: block;
+	outline: 0;
+	width: 100%;
+	min-width: 0;
+	border-radius: var(--radius-field);
+	background: var(--input-color);
+	transition: background var(--animation-speed);
+}
+.field:not(.addon) > :first-child:not(.btn) {
+	border-top-left-radius: inherit;
+	border-top-right-radius: inherit;
+}
+.field:not(.addon) > :last-child:not(.btn) {
+	border-bottom-left-radius: inherit;
+	border-bottom-right-radius: inherit;
+}
+
+/* Field label */
+.field label {
+	display: flex;
+	width: 100%;
+	gap: 5px;
+	line-height: 1;
+	align-items: center;
+	align-self: center;
+	min-height: 24px;
+	padding: 9px var(--input-padding) 1px;
+	font-weight: bold;
+	white-space: normal;
+	color: var(--color-base-hint);
+	font-size: var(--font-size-sm);
+	transition: color var(--animation-speed);
+}
+.field label i {
+	font-size: 1em;
+	padding: 0;
+}
+
+/* Required indicator */
+.field.required label::after,
+label.required::after,
+.required > label::after,
+label:has(~ [required])::after {
+	vertical-align: top;
+	content: "*";
+	color: var(--color-error);
+	font-size: 0.75em;
+	line-height: 1;
+	margin: -5px 0 0 -2px;
+}
+
+/* Disabled field */
+.field.disabled label,
+label.disabled,
+.disabled > label,
+label:has(~ [disabled])::after {
+	color: var(--color-base-disabled);
+}
+
+/* Addon field */
+.field.addon {
+	display: inline-flex;
+	align-items: center;
+	width: auto;
+	flex-shrink: 0;
+	color: var(--color-base-hint);
+}
+.field.addon::after {
+	content: none;
+	display: none;
+}
+
+/* Focus state */
+.field:focus-within:not(.addon) {
+	background: var(--input-focus-color);
+}
+.field:focus-within:not(.addon) label {
+	color: var(--color-base-content);
+}
+
+/* ── Input base ── */
+.field input,
+.field textarea,
+.field select,
+.field .input {
+	display: inline-block;
+	vertical-align: top;
+	outline: 0;
+	border: 0;
+	margin: 0;
+	width: 100%;
+	background: none;
+	font-weight: normal;
+	line-height: 1;
+	letter-spacing: inherit;
+	padding: 10px var(--input-padding);
+	color: var(--color-base-content);
+	font-size: var(--font-size-base);
+	font-family: var(--font-sans);
+	align-self: stretch;
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-base-600) transparent;
+}
+.field input::placeholder,
+.field textarea::placeholder,
+.field .input::placeholder {
+	user-select: none;
+	color: var(--color-base-disabled);
+	font-weight: inherit;
+	font-family: inherit;
+}
+.field input:focus,
+.field input:focus-visible,
+.field input:focus-within,
+.field textarea:focus,
+.field textarea:focus-visible,
+.field textarea:focus-within,
+.field .input:focus,
+.field .input:focus-visible,
+.field .input:focus-within {
+	outline: 0;
+}
+.field input:autofill {
+	background: none;
+	-webkit-text-fill-color: var(--color-base-content);
+	box-shadow: 0 0 0 50px var(--input-color) inset;
+	transition: box-shadow var(--animation-speed);
+}
+.field input:focus:autofill {
+	box-shadow: 0 0 0 50px var(--input-focus-color) inset;
+}
+.field input.readonly,
+.field input[readonly] {
+	cursor: default;
+	color: var(--color-base-hint);
+}
+.field input.disabled,
+.field input[disabled] {
+	cursor: default;
+	color: var(--color-base-disabled);
+}
+.field input:only-child {
+	height: 100%;
+}
+
+/* ── Textarea ── */
+.field textarea {
+	padding-top: 8px;
+	padding-bottom: 9px;
+	line-height: 1.5;
+	resize: vertical;
+	min-height: 38px;
+	max-height: 300px;
+}
+
+/* ── Fields container (horizontal) ── */
+.fields {
+	display: flex;
+	width: 100%;
+	align-items: stretch;
+}
+.fields .field:not(:first-child) {
+	border-top-left-radius: 0;
+	border-bottom-left-radius: 0;
+}
+.fields .field:not(:last-child) {
+	border-top-right-radius: 0;
+	border-bottom-right-radius: 0;
+}
+.fields .delimiter {
+	width: 1px;
+	flex-shrink: 0;
+	min-height: 0;
+	background: var(--input-focus-color);
+}
+.fields .addon {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 0 var(--input-padding);
+}
+.fields .addon:has(+ .field) {
+	padding-right: 0;
+}
+.fields .field + .addon {
+	padding-left: 0;
+}
+.fields .addon:has(+ .field:focus-within),
+.fields .field:focus-within + .addon {
+	background: var(--input-focus-color);
+}
+.fields.error .delimiter {
+	background: color-mix(in srgb, var(--color-error), var(--color-base-100) 70%);
+}
+
+/* ── Field content ── */
+.field-content {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	padding: 3px;
+	gap: 3px;
+	margin-top: 4px;
+}
+
+/* ── Rule field ── */
+.field.rule-field {
+	margin-bottom: 10px;
+	min-height: 54px;
+}
+.field.rule-field .input::placeholder {
+	color: var(--color-base-hint);
+	opacity: 0.6;
+}
+.field.rule-field .superusers-label {
+	font-weight: normal;
+	opacity: 0.6;
+	font-size: 0.85em;
+}
+.field.rule-field.locked label {
+	pointer-events: none;
+}
+.field.rule-field .locked-overlay {
+	position: absolute;
+	z-index: 1;
+	left: 0;
+	top: 0;
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	justify-content: flex-end;
+	width: 100%;
+	height: 100%;
+	cursor: pointer;
+	user-select: none;
+	font-weight: bold;
+	font-size: var(--font-size-sm);
+	color: var(--color-success);
+	padding: 5px var(--spacing-sm);
+	border-radius: var(--radius-field);
+	background: var(--color-base-200);
+	border: 2px solid var(--color-base-300);
+	transition: border-color var(--animation-speed);
+}
+.field.rule-field .locked-overlay .txt {
+	opacity: 0;
+	transform: translateX(3px);
+	transition:
+		opacity var(--animation-speed),
+		transform var(--animation-speed);
+}
+.field.rule-field .locked-overlay i {
+	font-size: 1.4em;
+}
+.field.rule-field .locked-overlay:hover,
+.field.rule-field .locked-overlay:focus-visible {
+	border-color: var(--color-base-400);
+}
+.field.rule-field .locked-overlay:hover .txt {
+	opacity: 1;
+	transform: translateX(0);
+}
+
+/* ── Field help text ── */
+.field-help {
+	display: block;
+	width: 100%;
+	margin: 7px 0 0;
+	font-size: var(--font-size-sm);
+	line-height: var(--line-height-sm);
+	color: var(--color-base-hint);
+}
+.field-help.error {
+	color: var(--color-error);
+}
+.field-help code {
+	font-size: 0.9em;
+	line-height: 1.4;
+}
+.field-help p {
+	margin: 5px 0;
+}
+
+/* ── Field (input wrapper - not .field) ── */
+.form-field {
+	margin-bottom: 0;
+}
+.form-field + .form-field {
+	margin-top: 10px;
+}
+.form-field label {
+	display: block;
+	font-size: var(--font-size-sm);
+	font-weight: 500;
+	color: var(--color-base-content);
+	opacity: 0.7;
+	margin-bottom: 4px;
+}
+
+/* ── Inline input (no background on the field wrapper) ── */
+.input:not(.field input):not(.field textarea):not(.field select) {
+	display: block;
+	width: 100%;
+	outline: 0;
+	border: 0;
+	margin: 0;
+	padding: 10px var(--input-padding);
+	color: var(--color-base-content);
+	font-size: var(--font-size-base);
+	font-family: var(--font-sans);
+	font-weight: normal;
+	line-height: 1;
+	background: var(--input-color);
+	border-radius: var(--radius-field);
+	transition: background var(--animation-speed);
+}
+.input:not(.field input):not(.field textarea):not(.field select)::placeholder {
+	user-select: none;
+	color: var(--color-base-disabled);
+}
+.input:not(.field input):not(.field textarea):not(.field select):focus,
+.input:not(.field input):not(.field textarea):not(.field select):focus-visible {
+	outline: 0;
+	background: var(--input-focus-color);
+}
+.input-sm {
+	padding: 8px 10px;
+	font-size: var(--font-size-sm);
+	min-height: var(--btn-height-sm);
+}
+
+/* ── Custom checkboxes (PocketBase exact) ────────────────── */
+.field:has(input[type="checkbox"]),
+.field:has(input[type="radio"]) {
+	--checkboxSize: 20px;
+	--checkbox-active-color: var(--color-success);
+	--checkbox-border-color: var(--color-base-400);
+	--checkbox-border-focus-color: var(--color-base-500);
+
+	display: flex;
+	gap: 10px;
+	text-align: left;
+	align-items: center;
+	padding: 0;
+	background: none;
+}
+.field:has(input[type="checkbox"]):focus-visible,
+.field:has(input[type="checkbox"]):focus-within,
+.field:has(input[type="radio"]):focus-visible,
+.field:has(input[type="radio"]):focus-within {
+	background: none;
+}
+.field:has(input[type="checkbox"])::after,
+.field:has(input[type="radio"])::after {
+	content: none;
+	display: none;
+}
+.field:has(input[type="checkbox"]) input,
+.field:has(input[type="radio"]) input {
+	position: absolute;
+	height: 1px;
+	width: 1px;
+	opacity: 0;
+}
+.field:has(input[type="checkbox"]) label,
+.field:has(input[type="radio"]) label {
+	margin: 0;
+	padding: 0 0 0 calc(var(--checkboxSize) + 7px);
+	width: auto;
+	background: none;
+	user-select: none;
+	cursor: pointer;
+	font-weight: normal;
+	color: var(--color-base-content);
+	font-size: var(--font-size-base);
+	line-height: var(--line-height-sm);
+	min-height: var(--checkboxSize);
+	position: relative;
+}
+.field:has(input[type="checkbox"]) label::before {
+	content: "";
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: var(--checkboxSize);
+	height: var(--checkboxSize);
+	border-radius: var(--radius-field);
+	background: var(--color-base-100);
+	border: 2px solid var(--checkbox-border-color);
+	transition:
+		border-color var(--animation-speed),
+		box-shadow var(--animation-speed),
+		background var(--animation-speed);
+}
+.field:has(input[type="checkbox"]) label::after {
+	content: "\eb7a";
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	position: absolute;
+	z-index: 1;
+	left: 0;
+	top: 0;
+	width: var(--checkboxSize);
+	height: var(--checkboxSize);
+	text-align: center;
+	font-size: 1.15rem;
+	font-weight: normal;
+	font-family: var(--font-icon);
+	color: var(--checkbox-active-color);
+	transform: translateY(2px);
+	opacity: 0;
+	transition:
+		transform var(--animation-speed),
+		opacity var(--animation-speed);
+}
+.field:has(input[type="checkbox"]) input:focus-visible ~ label,
+.field:has(input[type="checkbox"]) label:hover,
+.field:has(input[type="checkbox"]) label:focus-within {
+	background: none;
+	--checkbox-border-color: var(--checkbox-border-focus-color);
+}
+.field:has(input[type="checkbox"]) input:checked ~ label {
+	--checkbox-border-color: var(--checkbox-active-color);
+}
+.field:has(input[type="checkbox"]) input:checked ~ label::after {
+	opacity: 1;
+	transform: scale(1);
+}
+.field:has(input[type="checkbox"]) input:checked:focus-visible ~ label::before,
+.field:has(input[type="checkbox"]) input:checked ~ label:hover::before,
+.field:has(input[type="checkbox"]) input:checked ~ label:focus-within::before {
+	box-shadow: 0px 0px 0px 3px
+		color-mix(in srgb, var(--checkbox-active-color), transparent 85%);
+}
+.field:has(input[type="checkbox"]) input.sm ~ label {
+	padding: 0 0 0 calc(16px + 7px);
+	font-size: var(--font-size-sm);
+	min-height: 16px;
+}
+.field:has(input[type="checkbox"]) input.sm ~ label::before {
+	width: 16px;
+	height: 16px;
+}
+.field:has(input[type="checkbox"]) input.sm ~ label::after {
+	width: 16px;
+	height: 16px;
+	font-size: 0.9rem;
+	transform: translateY(0);
+}
+
+/* ── Error state ── */
+.field.error,
+.error .field {
+	color: var(--color-error);
+	--input-color: color-mix(
+		in srgb,
+		var(--color-error),
+		var(--color-base-100) 80%
+	);
+	--input-focus-color: color-mix(
+		in srgb,
+		var(--color-error),
+		var(--color-base-100) 75%
+	);
+	--input-border-color: color-mix(
+		in srgb,
+		var(--color-error),
+		var(--color-base-100) 70%
+	);
+}
+.field.error label,
+.field.error input,
+.field.error textarea,
+.field.error select,
+.field.error .input,
+.error .field label,
+.error .field input,
+.error .field textarea,
+.error .field select,
+.error .field .input {
+	color: var(--color-error) !important;
+}

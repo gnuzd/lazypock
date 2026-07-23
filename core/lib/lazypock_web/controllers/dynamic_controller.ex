@@ -68,6 +68,11 @@ defmodule LazypockWeb.DynamicController do
       conn
       |> put_resp_header("x-total-count", to_string(total))
       |> json(DynamicView.paginated_response(items, total, page, per_page))
+    else
+      {:error, reason} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, reason))
     end
   end
 
@@ -95,7 +100,8 @@ defmodule LazypockWeb.DynamicController do
 
   # ── Create (POST /api/:collection) ──────────────────
 
-  def create(conn, %{"collection" => name, "data" => attrs}) do
+  def create(conn, %{"collection" => name} = params) do
+    attrs = Map.get(params, "data") || Map.drop(params, ["collection"])
     user = conn.assigns[:current_superuser]
     context = %{collection_name: name, user: user, conn: conn}
 
@@ -135,7 +141,8 @@ defmodule LazypockWeb.DynamicController do
          :ok <- Enforcer.authorize_update(name, user, record),
          attrs = params["data"] || params,
          {:ok, enriched_attrs} <- Hooks.dispatch_update(record, attrs, context),
-         updated_record when not is_nil(updated_record) <- GenericRecord.update(name, id, enriched_attrs) do
+         updated_record when not is_nil(updated_record) <-
+           GenericRecord.update(name, id, enriched_attrs) do
       Broadcaster.broadcast_update(name, updated_record)
       conn |> json(DynamicView.format_item(updated_record, name))
     else

@@ -29,13 +29,17 @@ defmodule LazypockWeb.CollectionController do
   end
 
   # Get a single collection
-  def show(conn, %{"id" => id}) do
-    case CollectionRegistry.get(id) do
+  def show(conn, %{"id" => name_or_id}) do
+    case CollectionRegistry.get(name_or_id) do
       {:ok, collection} ->
         json(conn, collection_json(collection))
 
       {:error, :not_found} ->
-        conn |> put_status(404) |> json(%{error: "Collection not found"})
+        # Fallback: try lookup by UUID across all collections
+        case Enum.find(CollectionRegistry.list(), &(&1.id == name_or_id)) do
+          nil -> conn |> put_status(404) |> json(%{error: "Collection not found"})
+          collection -> json(conn, collection_json(collection))
+        end
     end
   end
 

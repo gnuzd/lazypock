@@ -1,0 +1,157 @@
+/* ── Accordion (PocketBase exact) ─────────────────────── */
+
+.accordion {
+	--siblingSpacing: var(--spacing-sm);
+	--contentPadding: var(--spacing-sm);
+
+	position: relative;
+	display: block;
+	width: 100%;
+	color: var(--color-base-content);
+	border-radius: var(--radius-field);
+	background: var(--color-base-200);
+	border: 1px solid var(--color-base-400);
+	transition:
+		border var(--animation-speed),
+		border-radius var(--animation-speed),
+		box-shadow var(--animation-speed),
+		margin var(--animation-speed);
+}
+.accordion summary {
+	position: relative;
+	display: flex;
+	gap: 10px;
+	width: 100%;
+	align-items: center;
+	min-height: var(--btn-height-lg);
+	cursor: pointer;
+	padding: 10px var(--spacing-sm);
+	padding-right: calc(var(--spacing-sm) + 30px);
+	background: var(--color-base-100);
+	border-radius: var(--radius-field);
+	user-select: none;
+	transition:
+		background var(--animation-speed),
+		border var(--animation-speed),
+		border-radius var(--animation-speed);
+}
+.accordion summary::marker {
+	content: "";
+	display: none;
+}
+.accordion summary::before {
+	position: absolute;
+	right: calc(var(--spacing-sm) - 3px);
+	top: 50%;
+	margin-top: -10px;
+	width: 20px;
+	height: 20px;
+	line-height: 20px;
+	align-content: center;
+	content: "\EA4E";
+	display: block;
+	flex-shrink: 0;
+	font-size: 1.3rem;
+	font-weight: normal;
+	font-family: var(--font-icon);
+	color: var(--color-base-hint);
+	transition: color var(--animation-speed);
+}
+.accordion summary:not([tabindex="-1"]):hover,
+.accordion summary:not([tabindex="-1"]):focus-visible {
+	outline: 0;
+	background: var(--color-base-200);
+}
+.accordion summary:not([tabindex="-1"]):hover::before,
+.accordion summary:not([tabindex="-1"]):focus-visible::before {
+	color: var(--color-base-content);
+}
+.accordion summary[tabindex="-1"] {
+	outline: 0;
+	cursor: default;
+	user-select: auto;
+	padding-right: var(--spacing-sm);
+}
+.accordion summary[tabindex="-1"]::before {
+	content: none;
+	display: none;
+}
+.accordion::details-content {
+	height: 0;
+	overflow: clip;
+	padding: 0 var(--contentPadding);
+	background: var(--color-base-100);
+	border-bottom-left-radius: var(--radius-field);
+	border-bottom-right-radius: var(--radius-field);
+	transition:
+		border var(--animation-speed-slow) step-end,
+		height var(--animation-speed-slow),
+		padding var(--animation-speed-slow),
+		content-visibility var(--animation-speed-slow),
+		overflow var(--animation-speed-slow) step-start;
+	transition-behavior: allow-discrete;
+}
+.accordion:has(+ .accordion) {
+	border-bottom-left-radius: 0;
+	border-bottom-right-radius: 0;
+}
+.accordion:has(+ .accordion) summary {
+	border-bottom-left-radius: 0;
+	border-bottom-right-radius: 0;
+}
+.accordion:not([open]):has(+ .accordion[open]) {
+	border-bottom-left-radius: var(--radius-field);
+	border-bottom-right-radius: var(--radius-field);
+	border-bottom-width: 1px;
+}
+.accordion:not([open]):has(+ .accordion[open]) summary {
+	border-bottom-left-radius: var(--radius-field);
+	border-bottom-right-radius: var(--radius-field);
+}
+.accordion + .accordion {
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
+	border-top-width: 0;
+}
+.accordion + .accordion summary {
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
+}
+.accordion + .accordion[open] {
+	margin-top: var(--siblingSpacing);
+}
+.accordion[open] {
+	border-width: 1px;
+	border-radius: var(--radius-field);
+	box-shadow: var(--shadow);
+}
+.accordion[open] summary {
+	background: var(--color-base-200);
+	border-radius: var(--radius-field) var(--radius-field) 0 0;
+}
+.accordion[open] summary::before {
+	content: "\EA78";
+}
+.accordion[open]::details-content {
+	border-top: 1px solid var(--color-base-400);
+	padding-top: var(--contentPadding);
+	padding-bottom: var(--contentPadding);
+	height: auto;
+	overflow: visible;
+	transition:
+		height var(--animation-speed-slow),
+		padding var(--animation-speed-slow),
+		content-visibility var(--animation-speed-slow),
+		overflow var(--animation-speed-slow) step-end;
+	transition-behavior: allow-discrete;
+}
+.accordion[open] + .accordion {
+	border-top-width: 1px;
+	margin-top: var(--siblingSpacing);
+	border-top-left-radius: var(--radius-field);
+	border-top-right-radius: var(--radius-field);
+}
+.accordion[open] + .accordion summary {
+	border-top-left-radius: var(--radius-field);
+	border-top-right-radius: var(--radius-field);
+}

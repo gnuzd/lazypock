@@ -1,0 +1,179 @@
+/* ── Modal (PocketBase exact) ─────────────────────────── */
+
+.modal {
+	position: fixed;
+	z-index: 1000;
+	display: none;
+	flex-direction: column;
+	width: 620px;
+	max-width: 100%;
+	height: 100%;
+	border: 0;
+	outline: 0;
+	margin: 0;
+	top: 0;
+	right: 0;
+	opacity: 0;
+	word-break: break-word;
+	color: var(--color-base-content);
+	background: var(--color-base-100);
+	transform: translateX(30px);
+	backface-visibility: hidden;
+	transition-property: opacity, transform, width, display;
+	transition-duration: var(--animation-speed-slow);
+	transition-behavior: allow-discrete;
+	box-shadow: -1px 0px 5px 0 rgba(34, 36, 36, 0.1);
+	overscroll-behavior: none;
+}
+.modal[data-modal-state="open"],
+.modal.open {
+	display: flex;
+	opacity: 1;
+	transform: translateX(0);
+}
+@starting-style {
+	.modal[data-modal-state="open"],
+	.modal.open {
+		opacity: 0;
+		transform: translateX(30px);
+	}
+}
+
+/* overlays */
+.modal::before {
+	content: "";
+	display: block;
+	position: fixed;
+	z-index: -2;
+	left: -100vw;
+	top: -100vh;
+	width: 200vw;
+	height: 200vh;
+	background: var(--modal-overlay);
+}
+.modal::after {
+	content: "";
+	display: block;
+	position: absolute;
+	z-index: -1;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	border-radius: inherit;
+	background: inherit;
+}
+
+.modal .modal-header,
+.modal .modal-content,
+.modal .modal-footer {
+	outline: 0;
+	padding: var(--spacing);
+}
+.modal .modal-header,
+.modal .modal-footer {
+	display: flex;
+	align-items: center;
+	width: 100%;
+	gap: var(--spacing-sm);
+	padding-top: calc(var(--spacing) - 10px);
+	padding-bottom: calc(var(--spacing) - 10px);
+}
+.modal .modal-footer {
+	margin-top: auto;
+	border-top: 1px solid var(--color-base-300);
+}
+.modal .modal-content {
+	position: relative;
+	flex-grow: 1;
+	overflow: auto;
+	scrollbar-width: thin;
+}
+.modal .modal-content > :first-child {
+	margin-top: 0;
+}
+.modal .modal-content > :last-child {
+	margin-bottom: 0;
+}
+.modal .modal-header:not(.isolated) ~ .modal-content {
+	padding-top: 5px;
+}
+.modal .modal-header.isolated {
+	background: var(--color-base-200);
+	border-bottom: 1px solid var(--color-base-300);
+}
+.modal .modal-title {
+	align-content: center;
+	font-size: var(--font-size-base);
+	font-weight: 600;
+}
+
+/* sizes */
+.modal.sm {
+	width: 480px;
+}
+.modal.lg {
+	width: 880px;
+}
+.modal.full {
+	width: 100%;
+}
+
+/* Content scroll shadows */
+.modal-content {
+	--topShadowOffset: calc(var(--spacing) + 1px);
+	--bottomShadowOffset: calc(var(--spacing) + 1px);
+	min-height: 92px;
+	container-type: scroll-state;
+}
+.modal-content::before,
+.modal-content::after {
+	content: "";
+	position: sticky;
+	display: block;
+	left: 0;
+	z-index: 9;
+	width: auto;
+	height: 1px;
+	margin-left: calc(-1 * var(--spacing));
+	margin-right: calc(-1 * var(--spacing));
+	pointer-events: none;
+	opacity: 0;
+}
+.modal-content::before {
+	top: calc(100% + var(--bottomShadowOffset));
+	margin-bottom: calc(-1 * var(--bottomShadowOffset));
+	margin-top: var(--bottomShadowOffset);
+	box-shadow: 0px -2px 8px 1px rgba(34, 36, 36, 0.15);
+}
+@container scroll-state(scrollable: bottom) {
+	.modal-content::before {
+		opacity: 1;
+		transition: opacity var(--animation-speed);
+	}
+}
+.modal-content::after {
+	top: auto;
+	bottom: calc(100% + var(--topShadowOffset));
+	margin-top: calc(-1 * var(--topShadowOffset));
+	margin-bottom: var(--topShadowOffset);
+	box-shadow: 0px 2px 8px 1px rgba(34, 36, 36, 0.15);
+}
+@container scroll-state(scrollable: top) {
+	.modal-content::after {
+		opacity: 1;
+		transition: opacity var(--animation-speed);
+	}
+}
+.modal-header:not(.isolated) ~ .modal-content::after {
+	--topShadowOffset: 6px;
+}
+
+/* Tabs header in modal */
+.modal-header .tabs-header {
+	width: auto;
+	flex-grow: 1;
+}
+.modal-header .tabs-header .tab-item {
+	font-size: var(--font-size-lg);
+}

@@ -1,0 +1,19 @@
+/* ── Master import ────────────────────────────────────── */
+/* Import order matters — tokens → reset → components */
+
+@import "./fonts.css";
+@import "./vars.css";
+@import "./base.css";
+@import "./layout.css";
+@import "./button.css";
+@import "./form.css";
+@import "./table.css";
+@import "./sidebar.css";
+@import "./modal.css";
+@import "./tabs.css";
+@import "./grid.css";
+@import "./accordion.css";
+@import "./dropdown.css";
+@import "./toast.css";
+@import "./badge.css";
+@import "./breadcrumb.css";

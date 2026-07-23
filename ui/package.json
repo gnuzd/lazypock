@@ -10,6 +10,10 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "svelte": "^5.56.7",
-    "vite": "^8.1.5"
+    "vite": "^6.4.3"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.25.0",
+    "ts-pattern": "^5.9.0"
   }
 }

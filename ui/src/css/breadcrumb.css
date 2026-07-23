@@ -1,0 +1,22 @@
+/* ── Breadcrumbs ───────────────────────────────────────── */
+
+.breadcrumbs {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: var(--font-size-sm);
+}
+
+.breadcrumbs-item {
+	color: var(--color-base-content);
+	opacity: 0.5;
+}
+.breadcrumbs-item:last-child {
+	opacity: 1;
+	font-weight: 500;
+}
+
+.breadcrumbs-separator {
+	opacity: 0.3;
+	font-size: var(--font-size-xs);
+}
