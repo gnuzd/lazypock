@@ -340,7 +340,15 @@
 
 	function editRecord(row: Record<string, unknown>) {
 		editingRecordId = (row.id as string) ?? null;
-		recordData = { ...row };
+		// Copy only schema fields, skip system fields
+		const schemaFields = (collection?.schema as Record<string, unknown>[]) ?? [];
+		recordData = {};
+		for (const f of schemaFields) {
+			const name = f.name as string;
+			if (name in row) {
+				recordData[name] = row[name];
+			}
+		}
 		recordError = '';
 		showRecordPane = true;
 	}
@@ -350,11 +358,28 @@
 		recordSaving = true;
 		recordError = '';
 		const collName = collection.name as string;
+		// Strip system fields and convert empty strings to null for non-text types
+		const schemaFields = (collection?.schema as Record<string, unknown>[]) ?? [];
+		const systemFields = new Set(['id', 'created_at', 'updated_at', 'collectionName']);
+		const nonTextTypes = new Set(['number', 'bool', 'date', 'datetime']);
+		const cleaned: Record<string, unknown> = {};
+		for (const key of Object.keys(recordData)) {
+			if (systemFields.has(key)) continue;
+			const fieldDef = schemaFields.find((f) => f.name === key);
+			const type = (fieldDef?.type as string) ?? '';
+			const val = recordData[key];
+			// Convert empty strings to null for numeric/temporal types
+			if (val === '' && nonTextTypes.has(type)) {
+				cleaned[key] = null;
+			} else {
+				cleaned[key] = val;
+			}
+		}
 		try {
 			if (editingRecordId) {
-				await client.updateRecord(collName, editingRecordId, recordData);
+				await client.updateRecord(collName, editingRecordId, cleaned);
 			} else {
-				await client.createRecord(collName, recordData);
+				await client.createRecord(collName, cleaned);
 			}
 			showRecordPane = false;
 			loadCollection(collName);

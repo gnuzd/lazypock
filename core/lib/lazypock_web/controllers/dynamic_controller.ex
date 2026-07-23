@@ -101,14 +101,15 @@ defmodule LazypockWeb.DynamicController do
   # ── Create (POST /api/:collection) ──────────────────
 
   def create(conn, %{"collection" => name} = params) do
-    attrs = Map.get(params, "data") || Map.drop(params, ["collection"])
     user = conn.assigns[:current_superuser]
     context = %{collection_name: name, user: user, conn: conn}
 
-    with {:ok, _collection} <- Registry.get(name),
+    with {:ok, collection} <- Registry.get(name),
+         raw_attrs = Map.get(params, "data") || Map.drop(params, ["collection"]),
+         attrs = sanitize_attrs(raw_attrs, collection),
          :ok <- Enforcer.authorize_create(name, user, attrs),
          {:ok, enriched_attrs} <- Hooks.dispatch_create(attrs, context) do
-      case GenericRecord.insert(name, enriched_attrs) do
+      case GenericRecord.insert(name, Map.drop(enriched_attrs, ["id"])) do
         {:ok, record} ->
           Broadcaster.broadcast_create(name, record)
           Hooks.dispatch_after_create(record, context)
@@ -136,13 +137,14 @@ defmodule LazypockWeb.DynamicController do
     user = conn.assigns[:current_superuser]
     context = %{collection_name: name, user: user, conn: conn}
 
-    with {:ok, _collection} <- Registry.get(name),
+    with {:ok, collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_update(name, user, record),
-         attrs = params["data"] || params,
+         raw_attrs = params["data"] || params,
+         attrs = sanitize_attrs(raw_attrs, collection),
          {:ok, enriched_attrs} <- Hooks.dispatch_update(record, attrs, context),
          updated_record when not is_nil(updated_record) <-
-           GenericRecord.update(name, id, enriched_attrs) do
+           GenericRecord.update(name, id, Map.drop(enriched_attrs, ["id", "created_at", "updated_at", "collectionName"])) do
       Broadcaster.broadcast_update(name, updated_record)
       conn |> json(DynamicView.format_item(updated_record, name))
     else
@@ -221,4 +223,31 @@ defmodule LazypockWeb.DynamicController do
   defp combine_wheres("", sql), do: sql
   defp combine_wheres(sql, ""), do: sql
   defp combine_wheres(left, right), do: "(#{left}) AND (#{right})"
+
+  # Strip system fields and coerce empty strings to nil for non-text types
+  defp sanitize_attrs(attrs, collection) do
+    field_types =
+      (collection.fields || [])
+      |> Enum.map(fn f -> {f.name, f.type} end)
+      |> Map.new()
+
+    non_text_types = MapSet.new(["number", "bool", "date", "datetime"])
+    system_fields = MapSet.new(["id", "created_at", "updated_at", "collectionName"])
+
+    attrs
+    |> Map.drop(MapSet.to_list(system_fields))
+    |> Enum.map(fn {key, value} ->
+      type = Map.get(field_types, key, "text")
+
+      coerced =
+        if value == "" and MapSet.member?(non_text_types, type) do
+          nil
+        else
+          value
+        end
+
+      {key, coerced}
+    end)
+    |> Map.new()
+  end
 end
