@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
-	import { fly, slide } from 'svelte/transition';
+	import { slide } from 'svelte/transition';
 	import Dropdown from '$lib/components/Dropdown.svelte';
 	import { Folder } from '@lucide/svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
@@ -144,28 +144,36 @@
 		const el = fieldsListEl;
 		if (!el) return;
 
-		function getIndex(node: Node): number {
+		/** Get where to insert: index in the array (e.g. 0 = before first, length = after last). */
+		function getInsertIndex(clientY: number): number {
 			const _el = el as HTMLElement;
 			const items = [..._el.children].filter((c) => c.hasAttribute('data-sortable-child'));
-			const child = closestChild(_el, node);
-			return child ? items.indexOf(child) : -1;
+			for (let i = 0; i < items.length; i++) {
+				const rect = items[i].getBoundingClientRect();
+				const mid = rect.top + rect.height / 2;
+				if (clientY < mid) return i;
+			}
+			return items.length;
 		}
 
 		function onDragStart(e: DragEvent) {
+			const _el = el as HTMLElement;
+			const items = [..._el.children].filter((c) => c.hasAttribute('data-sortable-child'));
 			e.dataTransfer!.setData('text/plain', '');
 			e.dataTransfer!.effectAllowed = 'move';
-			dragIndex = getIndex(e.target as Node);
-		}
-		function onDragEnter(e: DragEvent) {
-			dropIndex = getIndex(e.target as Node);
-		}
-		function onDragLeave() {
-			dropIndex = null;
+			const child = closestChild(_el, e.target as Node);
+			dragIndex = child ? items.indexOf(child) : -1;
 		}
 		function onDragOver(e: DragEvent) {
 			e.preventDefault();
 			e.dataTransfer!.dropEffect = 'move';
-			dropIndex = getIndex(e.target as Node);
+			dropIndex = getInsertIndex(e.clientY);
+		}
+		function onDragLeave(e: DragEvent) {
+			// Only clear when actually leaving the container, not between children
+			if (!e.relatedTarget || !(el as HTMLElement).contains(e.relatedTarget as Node)) {
+				dropIndex = null;
+			}
 		}
 		function onDrop() {
 			if (dragIndex == null || dropIndex == null || dragIndex === dropIndex) {
@@ -183,19 +191,18 @@
 			dropIndex = null;
 		}
 
-		el.addEventListener('dragstart', onDragStart);
-		el.addEventListener('dragenter', onDragEnter);
-		el.addEventListener('dragleave', onDragLeave);
-		el.addEventListener('dragover', onDragOver);
-		el.addEventListener('drop', onDrop);
-		el.addEventListener('dragend', reset);
+		const _el = el as HTMLElement;
+		_el.addEventListener('dragstart', onDragStart);
+		_el.addEventListener('dragover', onDragOver);
+		_el.addEventListener('dragleave', onDragLeave);
+		_el.addEventListener('drop', onDrop);
+		_el.addEventListener('dragend', reset);
 		return () => {
-			el.removeEventListener('dragstart', onDragStart);
-			el.removeEventListener('dragenter', onDragEnter);
-			el.removeEventListener('dragleave', onDragLeave);
-			el.removeEventListener('dragover', onDragOver);
-			el.removeEventListener('drop', onDrop);
-			el.removeEventListener('dragend', reset);
+			_el.removeEventListener('dragstart', onDragStart);
+			_el.removeEventListener('dragover', onDragOver);
+			_el.removeEventListener('dragleave', onDragLeave);
+			_el.removeEventListener('drop', onDrop);
+			_el.removeEventListener('dragend', reset);
 		};
 	});
 
@@ -382,17 +389,17 @@
 			{#if activeTab === 'Fields'}
 				<!-- Fields list with drag-reorder -->
 				<div class="space-y-1" bind:this={fieldsListEl}>
-					{#if dropIndex != null && dragIndex != null}
-						<div class="h-1 bg-primary rounded-field transition-all duration-150" style="margin-bottom: -4px;"></div>
-					{/if}
 					{#each newFields as field, i (field)}
+						{#if dropIndex === i}
+							<div class="h-1 bg-primary rounded-field" transition:slide={{ duration: 100 }}></div>
+						{/if}
 						<div data-sortable-child class:opacity-40={dragIndex === i}>
 							<FieldSettings field={newFields[i]} fieldIndex={i} collections={collections} />
 						</div>
-						{#if dropIndex === i + 1}
-							<div class="h-1 bg-primary rounded-field transition-all -mt-2 mb-1" transition:slide={{ duration: 100 }}></div>
-						{/if}
 					{/each}
+					{#if dropIndex === newFields.length}
+						<div class="h-1 bg-primary rounded-field" transition:slide={{ duration: 100 }}></div>
+					{/if}
 				</div>
 
 				{#if newFields.length === 0}
