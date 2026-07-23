@@ -24,7 +24,7 @@
 	{/if}
 
 	{#if footer}
-		<div class="p-sm border-t border-base-300">
+		<div class="p-3 border-t border-base-300">
 			{@render footer()}
 		</div>
 	{/if}
