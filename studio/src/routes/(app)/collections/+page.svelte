@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
-import Dropdown from '$lib/components/Dropdown.svelte';
-import { Folder } from '@lucide/svelte';
+	import { fly, slide } from 'svelte/transition';
+	import Dropdown from '$lib/components/Dropdown.svelte';
+	import { Folder } from '@lucide/svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import SidePane from '$lib/components/SidePane.svelte';
-import FieldSettings from '$lib/components/FieldSettings.svelte';
+	import FieldSettings from '$lib/components/FieldSettings.svelte';
 	import NewFieldButton from '$lib/components/NewFieldButton.svelte';
 	import RuleField from '$lib/components/RuleField.svelte';
 	import { slugify } from '$lib/fieldTypes';
@@ -92,6 +93,8 @@ import FieldSettings from '$lib/components/FieldSettings.svelte';
 	let saving = $state(false);
 	let error = $state('');
 	let fieldsListEl = $state<HTMLDivElement | undefined>(undefined);
+	let dragIndex = $state<number | null>(null);
+	let dropIndex = $state<number | null>(null);
 	let listRule = $state<string | null>(null);
 	let viewRule = $state<string | null>(null);
 	let createRule = $state<string | null>(null);
@@ -138,51 +141,61 @@ import FieldSettings from '$lib/components/FieldSettings.svelte';
 	}
 
 	$effect(() => {
-		const _el = fieldsListEl;
-		if (!_el) return;
-		const el: HTMLElement = _el;
+		const el = fieldsListEl;
+		if (!el) return;
 
-		function clearDrag() {
-			el.querySelectorAll('[data-dragstart]').forEach((n) => (n as HTMLElement).dataset.dragstart = 'false');
-			el.querySelectorAll('[data-dragover]').forEach((n) => (n as HTMLElement).dataset.dragover = 'false');
+		function getIndex(node: Node): number {
+			const _el = el as HTMLElement;
+			const items = [..._el.children].filter((c) => c.hasAttribute('data-sortable-child'));
+			const child = closestChild(_el, node);
+			return child ? items.indexOf(child) : -1;
 		}
+
 		function onDragStart(e: DragEvent) {
 			e.dataTransfer!.setData('text/plain', '');
 			e.dataTransfer!.effectAllowed = 'move';
-			const child = closestChild(el, e.target as Node);
-			if (child) child.dataset.dragstart = 'true';
+			dragIndex = getIndex(e.target as Node);
 		}
 		function onDragEnter(e: DragEvent) {
-			el.querySelectorAll('[data-dragover]').forEach((n) => (n as HTMLElement).dataset.dragover = 'false');
-			const child = closestChild(el, e.target as Node);
-			if (child) child.dataset.dragover = 'true';
+			dropIndex = getIndex(e.target as Node);
 		}
-		function prevent(e: Event) { e.preventDefault(); }
-		function onDrop(e: DragEvent) {
-			const from = el.querySelector('[data-dragstart]') as HTMLElement | null;
-			const to = closestChild(el, e.target as Node);
-			const items = [...el.children].filter((c) => c.hasAttribute('data-sortable-child'));
-			clearDrag();
-			if (!from || !to || to === from) return;
-			const fromIndex = items.indexOf(from);
-			const toIndex = items.indexOf(to);
-			if (fromIndex === -1 || toIndex === -1) return;
+		function onDragLeave() {
+			dropIndex = null;
+		}
+		function onDragOver(e: DragEvent) {
+			e.preventDefault();
+			e.dataTransfer!.dropEffect = 'move';
+			dropIndex = getIndex(e.target as Node);
+		}
+		function onDrop() {
+			if (dragIndex == null || dropIndex == null || dragIndex === dropIndex) {
+				reset();
+				return;
+			}
 			const clone = [...newFields];
-			const [moved] = clone.splice(fromIndex, 1);
-			clone.splice(toIndex, 0, moved);
+			const [moved] = clone.splice(dragIndex, 1);
+			clone.splice(dropIndex, 0, moved);
 			newFields = clone;
+			reset();
 		}
+		function reset() {
+			dragIndex = null;
+			dropIndex = null;
+		}
+
 		el.addEventListener('dragstart', onDragStart);
 		el.addEventListener('dragenter', onDragEnter);
-		el.addEventListener('dragend', clearDrag);
-		el.addEventListener('dragover', prevent);
+		el.addEventListener('dragleave', onDragLeave);
+		el.addEventListener('dragover', onDragOver);
 		el.addEventListener('drop', onDrop);
+		el.addEventListener('dragend', reset);
 		return () => {
 			el.removeEventListener('dragstart', onDragStart);
 			el.removeEventListener('dragenter', onDragEnter);
-			el.removeEventListener('dragend', clearDrag);
-			el.removeEventListener('dragover', prevent);
+			el.removeEventListener('dragleave', onDragLeave);
+			el.removeEventListener('dragover', onDragOver);
 			el.removeEventListener('drop', onDrop);
+			el.removeEventListener('dragend', reset);
 		};
 	});
 
@@ -369,10 +382,16 @@ import FieldSettings from '$lib/components/FieldSettings.svelte';
 			{#if activeTab === 'Fields'}
 				<!-- Fields list with drag-reorder -->
 				<div class="space-y-1" bind:this={fieldsListEl}>
+					{#if dropIndex != null && dragIndex != null}
+						<div class="h-1 bg-primary rounded-field transition-all duration-150" style="margin-bottom: -4px;"></div>
+					{/if}
 					{#each newFields as field, i (field)}
-						<div data-sortable-child>
+						<div data-sortable-child class:opacity-40={dragIndex === i}>
 							<FieldSettings field={newFields[i]} fieldIndex={i} collections={collections} />
 						</div>
+						{#if dropIndex === i + 1}
+							<div class="h-1 bg-primary rounded-field transition-all -mt-2 mb-1" transition:slide={{ duration: 100 }}></div>
+						{/if}
 					{/each}
 				</div>
 
@@ -472,9 +491,8 @@ import FieldSettings from '$lib/components/FieldSettings.svelte';
 </SidePane>
 
 <style>
-	/* svelte-ignore css_unused_selector */
-	[data-sortable-child][data-dragover='true'] > :first-child {
-		border-color: var(--color-primary) !important;
-		box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 30%, transparent);
+	/* sortable children need pointer-events to catch drag enter/leave */
+	[data-sortable-child] {
+		pointer-events: auto;
 	}
 </style>
