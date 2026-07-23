@@ -38,7 +38,7 @@
 					<button class="btn btn-ghost btn-sm px-2" onclick={close}>✕</button>
 				</div>
 			{/if}
-			<div class="flex-1 overflow-auto p-4">
+			<div class="flex-1 overflow-auto">
 				{@render children?.()}
 			</div>
 		</div>

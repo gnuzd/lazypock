@@ -41,8 +41,8 @@
 	class="relative min-h-[62px] rule-field rounded-field bg-base-100 border border-base-300 overflow-hidden"
 	class:locked={value === null}
 >
-	<!-- Label (on top of overlay; clicks pass through only when locked so overlay gets them) -->
-	<label for="rule-{name}" class="relative z-[1] flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-base-content/60" class:pointer-events-none={value === null}>
+	<!-- Label sits ABOVE the overlay so it's always visible; pointer-events:none passes clicks through -->
+	<label for="rule-{name}" class="relative z-10 flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-base-content/60" class:pointer-events-none={value === null}>
 		<span>{label}</span>
 		<span
 			class="transition-all duration-150"
@@ -55,7 +55,7 @@
 		<!-- Locked state: click anywhere to unlock (label stays above) -->
 		<button
 			type="button"
-			class="group absolute inset-0 z-10 flex items-end justify-end gap-2 pb-2.5 px-3 text-xs font-medium text-success bg-base-200 border-base-300 rounded-field cursor-pointer hover:border-base-400 transition-colors disabled:cursor-not-allowed"
+			class="group absolute inset-0 z-0 flex items-end justify-end gap-2 pb-2.5 px-3 text-xs font-medium text-success bg-base-200 border-base-300 rounded-field cursor-pointer hover:border-base-400 transition-colors disabled:cursor-not-allowed"
 			{disabled}
 			onclick={unlock}
 		>

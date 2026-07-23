@@ -323,9 +323,9 @@
 <!-- New Collection SidePane -->
 <SidePane bind:show={showNewCollection} title="New Collection">
 	<div class="flex flex-col min-h-0 h-full">
-		<!-- Header fields -->
-		<div class="shrink-0 p-4 pb-2 border-b border-base-300">
-			<div class="flex gap-0 mb-2">
+		<!-- Header: Name + Type row -->
+		<div class="shrink-0 p-4 pb-3">
+			<div class="flex gap-0">
 				<div class="field flex-1 min-w-0">
 					<label for="coll-name" class="block text-xs font-medium text-base-content/70 mb-1">Name</label>
 					<input
@@ -368,24 +368,24 @@
 					</div>
 				</Dropdown>
 			</div>
-
-			<!-- Tabs -->
-			<nav class="flex gap-0 border-b border-base-300 -mx-4 px-4">
-				<button
-					type="button"
-					class="px-3 py-2 text-sm border-b-2 transition-colors cursor-pointer {activeTab === 'Fields' ? 'border-primary text-primary' : 'border-transparent text-base-content/60'}"
-					onclick={() => activeTab = 'Fields'}
-				>Fields</button>
-				<button
-					type="button"
-					class="px-3 py-2 text-sm border-b-2 transition-colors cursor-pointer {activeTab === 'API rules' ? 'border-primary text-primary' : 'border-transparent text-base-content/60'}"
-					onclick={() => activeTab = 'API rules'}
-				>API rules</button>
-			</nav>
 		</div>
 
+		<!-- Header: Tabs (separate section with bottom border) -->
+		<nav class="shrink-0 flex gap-0 border-b border-base-300 px-4">
+			<button
+				type="button"
+				class="px-3 py-2 text-sm border-b-2 transition-colors cursor-pointer {activeTab === 'Fields' ? 'border-primary text-primary' : 'border-transparent text-base-content/60'}"
+				onclick={() => activeTab = 'Fields'}
+			>Fields</button>
+			<button
+				type="button"
+				class="px-3 py-2 text-sm border-b-2 transition-colors cursor-pointer {activeTab === 'API rules' ? 'border-primary text-primary' : 'border-transparent text-base-content/60'}"
+				onclick={() => activeTab = 'API rules'}
+			>API rules</button>
+		</nav>
+
 		<!-- Tab content -->
-		<div class="flex-1 overflow-y-auto p-4">
+			<div class="flex-1 overflow-y-auto p-4">
 			{#if activeTab === 'Fields'}
 				<!-- Fields list with drag-reorder -->
 				<div class="space-y-1" bind:this={fieldsListEl}>
