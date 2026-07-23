@@ -280,6 +280,7 @@ label:has(~ [disabled])::after {
 .field-help code {
 	font-size: 0.9em;
 	line-height: 1.4;
+	font-family: var(--font-mono);
 }
 .field-help p {
 	margin: 5px 0;
