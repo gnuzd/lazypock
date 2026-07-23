@@ -1,0 +1,69 @@
+@import 'tailwindcss';
+@import './button.css';
+@theme {
+	--color-*: initial;
+
+	--color-base-100: oklch(96.8% 0.006 82.1);
+	--color-base-200: oklch(94.2% 0.009 80.5);
+	--color-base-300: oklch(91.5% 0.009 82.5);
+	--color-base-content: oklch(38% 0 0);
+
+	--color-primary: oklch(25% 0.047 243.7);
+	--color-primary-content: oklch(96.8% 0.006 82.1);
+
+	--color-secondary: oklch(51.3% 0.191 27.4);
+	--color-secondary-content: oklch(100% 0 0);
+
+	--color-accent: oklch(68.5% 0.13 83.2);
+	--color-accent-content: oklch(20% 0 0);
+
+	--color-neutral: oklch(20% 0 0);
+	--color-neutral-content: oklch(100% 0 0);
+
+	/* --- Semantic Alerts --- */
+	--color-success: oklch(48% 0.065 145);
+	--color-warning: oklch(69% 0.16 80);
+	--color-error: oklch(45% 0.14 28);
+	--color-info: oklch(56% 0.11 258);
+
+	/* --- Structural/Component Shapes --- */
+	--radius-selector: 0px;
+	--radius-field: 6px;
+	--radius-box: 8px;
+	--border: 1px;
+
+	/* --font-sans: 'Noto Sans JP', -apple-system, BlinkMacSystemFont, sans-serif; */
+	/* --font-serif: 'Noto Serif JP', 'Hiragino Mincho ProN', Georgia, serif; */
+
+	--leading-base: 1.8;
+	--tracking-normal: 0.04em;
+}
+
+/* ── Base layer ── */
+@layer base {
+	*,
+	::after,
+	::before {
+		border-color: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+	}
+}
+
+html,
+body {
+	@apply text-base-content;
+	height: 100%;
+}
+
+input {
+	@apply outline-none;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	@apply font-serif;
+}
+
