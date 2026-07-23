@@ -44,31 +44,29 @@
 	}
 </script>
 
-<div class="space-y-3">
+<div class="record-form">
 	{#each fields.filter((f) => !f.system) as field (field.name as string)}
 		{@const options = (field.options ?? {}) as Record<string, unknown>}
 		{@const type = field.type as string}
 		{@const name = field.name as string}
 		{@const required = !!field.required}
 
+		<!-- ═══ BOOLEAN ═══ -->
 		{#if type === 'bool'}
-			<label class="flex items-center gap-2 cursor-pointer">
+			<label class="field field-bool" class:required>
 				<input
 					type="checkbox"
 					checked={!!data[name]}
 					disabled={disabled}
 					onchange={(e) => update(name, (e.target as HTMLInputElement).checked)}
-					class="checkbox checkbox-sm"
 				/>
-				<span class="text-sm text-base-content/80">{name}</span>
+				<span class="check-label">{name}</span>
 			</label>
 
+		<!-- ═══ JSON / GEO ═══ -->
 		{:else if type === 'json' || type === 'geo'}
-			<div class="field">
-				<label for="f_{name}" class="block text-xs font-medium text-base-content/70 mb-1">
-					{name}
-					{#if required}<span class="text-error"> *</span>{/if}
-				</label>
+			<div class="field" class:required>
+				<label for="f_{name}">{name}</label>
 				<textarea
 					id="f_{name}"
 					disabled={disabled}
@@ -81,25 +79,21 @@
 						}
 					}}
 					rows="4"
-					class="input input-sm w-full font-mono"
 					placeholder={'{}'}
 				></textarea>
-				<p class="text-xs opacity-40 mt-0.5">Valid JSON</p>
+				<span class="field-help">Valid JSON</span>
 			</div>
 
+		<!-- ═══ SELECT ═══ -->
 		{:else if type === 'select'}
 			{@const choices = ((options.choices ?? options.values) as string[]) || []}
-			<div class="field">
-				<label for="f_{name}" class="block text-xs font-medium text-base-content/70 mb-1">
-					{name}
-					{#if required}<span class="text-error"> *</span>{/if}
-				</label>
+			<div class="field" class:required>
+				<label for="f_{name}">{name}</label>
 				<select
 					id="f_{name}"
 					disabled={disabled}
 					value={(data[name] as string) ?? ''}
 					onchange={(e) => update(name, (e.target as HTMLSelectElement).value)}
-					class="input input-sm w-full"
 				>
 					<option value="">—</option>
 					{#each choices as choice (choice)}
@@ -108,23 +102,19 @@
 				</select>
 			</div>
 
+		<!-- ═══ MULTI_SELECT ═══ -->
 		{:else if type === 'multi_select'}
 			{@const choices = ((options.choices ?? options.values) as string[]) || []}
 			{@const selected = (data[name] as string[]) || []}
-			<div class="field">
-				<label class="block text-xs font-medium text-base-content/70 mb-1">
-					{name}
-					{#if required}<span class="text-error"> *</span>{/if}
-				</label>
-				<div class="flex flex-wrap gap-1.5">
+			<div class="field" class:required>
+				<label>{name}</label>
+				<div class="multi-select-chips">
 					{#each choices as choice (choice)}
 						<button
 							type="button"
 							disabled={disabled}
-							class="px-2 py-1 text-xs rounded-full border cursor-pointer transition-colors
-								{selected.includes(choice)
-									? 'bg-primary text-primary-content border-primary'
-									: 'bg-base-200 border-base-300 text-base-content/70'}"
+							class="chip"
+							class:selected={selected.includes(choice)}
 							onclick={() => {
 								if (selected.includes(choice)) {
 									update(name, selected.filter((s) => s !== choice));
@@ -139,75 +129,62 @@
 				</div>
 			</div>
 
+		<!-- ═══ FILE ═══ -->
 		{:else if type === 'file' || type === 'multi_file'}
-			<div class="field">
-				<label for="f_{name}" class="block text-xs font-medium text-base-content/70 mb-1">
-					{name}
-					{#if required}<span class="text-error"> *</span>{/if}
-				</label>
-				<div class="flex items-center gap-2">
-					{#if data[name]}
-						<span class="text-xs truncate max-w-32 opacity-60">{String(data[name])}</span>
+			<div class="field" class:required>
+				<label>{name}</label>
+				{#if data[name]}
+					<div class="file-row">
+						<span class="file-name">{String(data[name])}</span>
 						<button
 							type="button"
 							disabled={disabled}
-							class="text-xs text-error cursor-pointer"
+							class="btn-text danger"
 							onclick={() => update(name, null)}
-						>
-							Remove
-						</button>
-					{:else}
-						<span class="text-xs opacity-40">File upload (drag & drop or click)</span>
-					{/if}
-				</div>
+						>Remove</button>
+					</div>
+				{:else}
+					<div class="file-placeholder">
+						<span>Upload file</span>
+					</div>
+				{/if}
+				<span class="field-help">File upload (drag & drop or click)</span>
 			</div>
 
+		<!-- ═══ RELATION ═══ -->
 		{:else if type === 'relation'}
-			<div class="field">
-				<label for="f_{name}" class="block text-xs font-medium text-base-content/70 mb-1">
-					{name}
-					{#if required}<span class="text-error"> *</span>{/if}
-				</label>
+			<div class="field" class:required>
+				<label for="f_{name}">{name}</label>
 				<input
 					id="f_{name}"
 					type="text"
 					disabled={disabled}
 					value={(data[name] as string) ?? ''}
 					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
-					class="input input-sm w-full"
 					placeholder="Related record ID"
 				/>
-				<p class="text-xs opacity-40 mt-0.5">Related record ID{options.maxSelect && (options.maxSelect as number) > 1 ? 's (comma-separated)' : ''}</p>
+				<span class="field-help">Related record ID{options.maxSelect && (options.maxSelect as number) > 1 ? 's (comma-separated)' : ''}</span>
 			</div>
 
+		<!-- ═══ TEXT / NUMBER / EMAIL / URL / DATE / DATETIME / PASSWORD ═══ -->
 		{:else if isTextInput(field)}
 			{@const isMulti = type === 'editor' || type === 'text'}
 			{@const attrs = options as Record<string, unknown>}
 			{@const min = attrs.min as number | undefined}
 			{@const max = attrs.max as number | undefined}
 
-			{#if isMulti}
-				<div class="field">
-					<label for="f_{name}" class="block text-xs font-medium text-base-content/70 mb-1">
-						{name}
-						{#if required}<span class="text-error"> *</span>{/if}
-					</label>
+			<div class="field" class:required>
+				<label for="f_{name}">{name}</label>
+				{#if isMulti}
 					<textarea
 						id="f_{name}"
 						disabled={disabled}
 						value={(data[name] as string) ?? ''}
 						oninput={(e: Event) => update(name, (e.target as HTMLTextAreaElement).value)}
 						rows="4"
-						class="input input-sm w-full"
 						placeholder={name}
 					></textarea>
-				</div>
-			{:else}
-				<div class="field">
-					<label for="f_{name}" class="block text-xs font-medium text-base-content/70 mb-1">
-						{name}
-						{#if required}<span class="text-error"> *</span>{/if}
-					</label>
+				{:else}
 					<input
 						id="f_{name}"
 						type={getInputType(field)}
@@ -215,14 +192,304 @@
 						disabled={disabled}
 						value={(data[name] as string) ?? ''}
 						oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
-						class="input input-sm w-full"
 						placeholder={name}
 					/>
-					{#if min != null || max != null}
-						<p class="text-xs opacity-40 mt-0.5">Min: {min ?? '—'}, Max: {max ?? '—'}</p>
-					{/if}
-				</div>
-			{/if}
+				{/if}
+				{#if min != null || max != null}
+					<span class="field-help">Min: {min ?? '—'}, Max: {max ?? '—'}</span>
+				{/if}
+			</div>
 		{/if}
 	{/each}
 </div>
+
+<style>
+	/* ── Container ── */
+	.record-form {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	/* ── Field wrapper ── */
+	.field {
+		position: relative;
+		display: block;
+		outline: 0;
+		width: 100%;
+		min-width: 0;
+		border-radius: var(--radius-field);
+		background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
+		transition: background var(--animation-speed, 0.2s);
+	}
+
+	.field:focus-within {
+		background: color-mix(in oklab, var(--color-base-content) 12%, var(--color-base-100));
+	}
+
+	.field.required label::after {
+		vertical-align: top;
+		content: '*';
+		color: var(--color-error);
+		font-size: 0.75em;
+		line-height: 1;
+		margin: -5px 0 0 -2px;
+	}
+
+	/* ── Label ── */
+	label {
+		display: flex;
+		width: 100%;
+		gap: 5px;
+		line-height: 1;
+		align-items: center;
+		align-self: center;
+		min-height: 24px;
+		padding: 9px 12px 1px;
+		font-weight: bold;
+		white-space: normal;
+		color: var(--color-base-content);
+		opacity: 0.7;
+		font-size: 0.875rem;
+		transition: color var(--animation-speed, 0.2s);
+	}
+
+	.field:focus-within label {
+		opacity: 1;
+		color: var(--color-base-content);
+	}
+
+	/* ── Input / Textarea / Select ── */
+	.field input,
+	.field textarea,
+	.field select {
+		display: inline-block;
+		vertical-align: top;
+		outline: 0;
+		border: 0;
+		margin: 0;
+		width: 100%;
+		background: none;
+		font-weight: normal;
+		line-height: 1;
+		letter-spacing: inherit;
+		padding: 10px 12px;
+		color: var(--color-base-content);
+		font-size: 0.9375rem;
+		font-family: system-ui, sans-serif;
+		align-self: stretch;
+	}
+
+	.field input::placeholder,
+	.field textarea::placeholder {
+		user-select: none;
+		color: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+		font-weight: inherit;
+		font-family: inherit;
+	}
+
+	.field input:focus,
+	.field textarea:focus,
+	.field select:focus {
+		outline: 0;
+	}
+
+	/* Remove number input spinners */
+	input[type='number']::-webkit-outer-spin-button,
+	input[type='number']::-webkit-inner-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
+	input[type='number'] {
+		-moz-appearance: textfield;
+	}
+
+	/* Textarea */
+	.field textarea {
+		padding-top: 8px;
+		padding-bottom: 9px;
+		line-height: 1.5;
+		resize: vertical;
+		min-height: 38px;
+		max-height: 300px;
+	}
+
+	/* Select */
+	.field select {
+		cursor: pointer;
+		appearance: none;
+		-webkit-appearance: none;
+		padding-right: 28px;
+		background-image: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+		background-repeat: no-repeat;
+		background-position: right 8px center;
+		background-size: 16px;
+	}
+
+	/* ── Help text ── */
+	.field-help {
+		display: block;
+		width: 100%;
+		margin: 3px 0 0;
+		font-size: 0.875rem;
+		line-height: 1.4;
+		color: var(--color-base-content);
+		opacity: 0.7;
+		padding: 0 12px 8px;
+	}
+
+	/* ── BOOL: custom checkbox ── */
+	.field-bool {
+		--checkboxSize: 20px;
+		display: flex;
+		gap: 10px;
+		align-items: center;
+		padding: 0;
+		background: none;
+		cursor: pointer;
+		min-height: 38px;
+	}
+
+	.field-bool:focus-within {
+		background: none;
+	}
+
+	.field-bool input {
+		position: absolute;
+		height: 1px;
+		width: 1px;
+		opacity: 0;
+	}
+
+	.check-label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 0;
+		padding: 0 0 0 calc(var(--checkboxSize) + 7px);
+		width: auto;
+		background: none;
+		user-select: none;
+		cursor: pointer;
+		font-weight: normal;
+		color: var(--color-base-content);
+		font-size: 0.9375rem;
+		line-height: 1.4;
+		min-height: var(--checkboxSize);
+		position: relative;
+		opacity: 1;
+	}
+
+	.check-label::before {
+		content: '';
+		display: block;
+		position: absolute;
+		left: 0;
+		top: 0;
+		width: var(--checkboxSize);
+		height: var(--checkboxSize);
+		border-radius: var(--radius-field);
+		background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
+		border: 2px solid color-mix(in oklab, var(--color-base-content) 20%, transparent);
+		transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+		box-sizing: border-box;
+	}
+
+	.check-label::after {
+		content: '';
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		position: absolute;
+		z-index: 1;
+		left: 0;
+		top: 0;
+		width: var(--checkboxSize);
+		height: var(--checkboxSize);
+		text-align: center;
+		font-size: 1.15rem;
+		font-weight: normal;
+		color: var(--color-success);
+		opacity: 0;
+		transition: transform 0.15s, opacity 0.15s;
+		box-sizing: border-box;
+	}
+
+	input:checked ~ .check-label::after {
+		content: '✓';
+		opacity: 1;
+		transform: scale(1);
+	}
+
+	input:checked ~ .check-label::before {
+		border-color: var(--color-success);
+		background: color-mix(in oklab, var(--color-success) 15%, var(--color-base-100));
+	}
+
+	/* ── MULTI_SELECT chips ── */
+	.multi-select-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+		padding: 6px 12px 8px;
+	}
+
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		padding: 4px 10px;
+		font-size: 0.8125rem;
+		border-radius: 999px;
+		border: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
+		background: color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100));
+		color: var(--color-base-content);
+		cursor: pointer;
+		transition: background 0.15s, border-color 0.15s;
+		outline: 0;
+	}
+
+	.chip.selected {
+		background: color-mix(in oklab, var(--color-primary) 20%, var(--color-base-100));
+		border-color: var(--color-primary);
+		color: var(--color-primary);
+	}
+
+	.chip:hover {
+		background: color-mix(in oklab, var(--color-primary) 10%, var(--color-base-100));
+	}
+
+	/* ── FILE ── */
+	.file-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 12px;
+	}
+
+	.file-name {
+		font-size: 0.875rem;
+		opacity: 0.6;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 180px;
+	}
+
+	.btn-text {
+		background: none;
+		border: none;
+		cursor: pointer;
+		font-size: 0.8125rem;
+		padding: 2px 4px;
+		outline: 0;
+	}
+	.btn-text.danger {
+		color: var(--color-error);
+	}
+
+	.file-placeholder {
+		padding: 8px 12px;
+		font-size: 0.875rem;
+		opacity: 0.4;
+	}
+</style>
