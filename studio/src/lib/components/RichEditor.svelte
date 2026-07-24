@@ -95,9 +95,8 @@
 
 <style>
 	.rich-editor {
-		border-radius: var(--radius-field);
+		min-height: 150px;
 		overflow: hidden;
-		border: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
 	}
 
 	.rich-editor.disabled {
@@ -109,9 +108,9 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 2px;
-		padding: 4px 6px;
-		background: color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100));
-		border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
+		padding: 4px 12px;
+		background: color-mix(in oklab, var(--color-base-content) 4%, transparent);
+		border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
 	}
 
 	.toolbar-btn {
@@ -149,14 +148,22 @@
 	}
 
 	:global(.editor-content) {
-		padding: 12px;
+		padding: 10px 12px;
 		min-height: 150px;
 		max-height: 400px;
 		overflow-y: auto;
 		font-size: 0.9375rem;
 		line-height: 1.6;
-		outline: none;
 		color: var(--color-base-content);
+	}
+
+	:global(.editor-content:focus),
+	:global(.editor-content:focus-visible),
+	:global(.ProseMirror),
+	:global(.ProseMirror:focus),
+	:global(.ProseMirror:focus-visible) {
+		outline: none;
+		box-shadow: none;
 	}
 
 	:global(.editor-content p) {

@@ -212,8 +212,8 @@
 
 		<!-- ═══ EDITOR (rich text) ═══ -->
 		{:else if type === 'editor'}
-			<div class="field" class:required>
-				<label for="f_{name}">{name}</label>
+			<div class="field field-editor" class:required>
+				<label>{name}</label>
 				<RichEditor bind:value={data[name]} {disabled} />
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
@@ -313,6 +313,30 @@
 	.field:focus-within label {
 		opacity: 1;
 		color: var(--color-base-content);
+	}
+
+	/* ── Editor field: seamless integration with the RichEditor ── */
+	.field-editor {
+		background: none;
+		padding: 0;
+		border: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
+		border-radius: var(--radius-field);
+		overflow: hidden;
+	}
+
+	.field-editor label {
+		padding: 8px 12px 0;
+		opacity: 1;
+		color: var(--color-base-content);
+		font-weight: 600;
+	}
+
+	.field-editor .field-error {
+		padding: 4px 12px 8px;
+	}
+
+	.field-editor:focus-within {
+		background: none;
 	}
 
 	/* ── Disabled state ── */
