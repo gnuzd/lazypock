@@ -470,14 +470,7 @@
 				<Folder class="w-4 h-4 opacity-60 shrink-0" />
 				<span class="truncate flex-1">{coll.name as string}</span>
 				<span class="text-xs opacity-40 mr-1">{(coll.schema as unknown[])?.length ?? 0}</span>
-				<button
-					type="button"
-					class="p-0.5 rounded cursor-pointer opacity-30 hover:opacity-100 transition-opacity border-none bg-transparent text-base-content"
-					onclick={(e) => { e.stopPropagation(); editCollection(coll); }}
-					title="Edit collection"
-				>
-					<Settings class="w-3.5 h-3.5" />
-				</button>
+
 			</div>
 		{/each}
 	{/if}
@@ -494,11 +487,20 @@
 	</div>
 {:else if collection}
 	<!-- Breadcrumb -->
+	<!-- Breadcrumb -->
 	<div class="flex items-center justify-between pb-3 mb-3 border-b border-base-300">
 		<nav class="flex items-center gap-1 text-sm">
 			<span class="text-base-content/50">Collections</span>
 			<span class="text-xs opacity-30">/</span>
 			<span class="font-medium">{(collection.name as string) ?? '...'}</span>
+			<button
+				type="button"
+				class="p-0.5 ml-1 rounded cursor-pointer opacity-40 hover:opacity-100 transition-opacity border-none bg-transparent text-base-content"
+				onclick={() => editCollection(collection!)}
+				title="Edit collection"
+			>
+				<Settings class="w-3.5 h-3.5" />
+			</button>
 		</nav>
 		<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
 	</div>
