@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { slide } from 'svelte/transition';
 	import Dropdown from '$lib/components/Dropdown.svelte';
-	import { Folder, Settings } from '@lucide/svelte';
+	import { Folder, Plus, Settings } from '@lucide/svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import SidePane from '$lib/components/SidePane.svelte';
@@ -16,6 +16,7 @@
 	import { buildRecordSchema, cleanRecordData, collectionSchema } from '$lib/validation';
 	import type { z } from 'zod';
 	import { goto } from '$app/navigation';
+	import Button from '$lib/components/Button.svelte';
 	let collections = $state<Record<string, unknown>[]>([]);
 	let collection = $state<Record<string, unknown> | null>(null);
 	let rows = $state<Record<string, unknown>[]>([]);
@@ -483,7 +484,7 @@
 {/snippet}
 
 {#snippet footerContent()}
-	<button class="btn btn-primary btn-full p-3" onclick={newCollection}>+ New Collection</button>
+	<Button class="btn-primary btn-full" onclick={newCollection}><Plus size={18} /> New Collection</Button>
 {/snippet}
 
 <!-- Main content -->
@@ -499,7 +500,7 @@
 			<span class="text-xs opacity-30">/</span>
 			<span class="font-medium">{(collection.name as string) ?? '...'}</span>
 		</nav>
-		<button class="btn btn-primary btn-sm" onclick={newRecord}>+ New Record</button>
+		<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
 	</div>
 
 	<!-- Table -->
