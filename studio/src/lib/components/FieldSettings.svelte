@@ -403,7 +403,8 @@
 	.option-input {
 		flex: 1;
 		width: 100%;
-		padding: 8px 10px;
+		padding: 3px 10px;
+		min-height: 28px;
 		font-size: 0.875rem;
 		line-height: 1.5;
 		border-radius: var(--radius-field);
@@ -411,6 +412,7 @@
 		background: color-mix(in oklab, var(--color-base-content) 6%, transparent);
 		color: var(--color-base-content);
 		outline: none;
+		box-sizing: border-box;
 	}
 
 	.option-input:focus {
