@@ -247,7 +247,7 @@
 								<div class="flex items-center gap-1">
 									<input
 										type="text"
-										class="flex-1 input input-xs w-full"
+										class="option-input"
 										value={val}
 										placeholder="Option value"
 										oninput={(e) => {
@@ -260,7 +260,7 @@
 									/>
 									<button
 										type="button"
-										class="text-error/60 hover:text-error p-0.5 leading-none text-sm cursor-pointer border-none bg-transparent"
+										class="del-opt-btn"
 										onclick={() => {
 											const newOpts = { ...opts };
 											newOpts.values = values.filter((_: string, j: number) => j !== i);
@@ -398,3 +398,46 @@
 		{/if}
 	</div>
 {/if}
+
+<style>
+	.option-input {
+		flex: 1;
+		width: 100%;
+		padding: 8px 10px;
+		font-size: 0.875rem;
+		line-height: 1.5;
+		border-radius: var(--radius-field);
+		border: none;
+		background: color-mix(in oklab, var(--color-base-content) 6%, transparent);
+		color: var(--color-base-content);
+		outline: none;
+	}
+
+	.option-input:focus {
+		background: color-mix(in oklab, var(--color-base-content) 10%, transparent);
+	}
+
+	.del-opt-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 30px;
+		height: 30px;
+		border-radius: var(--radius-field);
+		cursor: pointer;
+		border: none;
+		background: none;
+		color: var(--color-error);
+		opacity: 0.6;
+		font-size: 1.2rem;
+		line-height: 1;
+		padding: 0;
+		transition: opacity 0.15s, background 0.15s;
+		flex-shrink: 0;
+	}
+
+	.del-opt-btn:hover {
+		opacity: 1;
+		background: color-mix(in oklab, var(--color-error) 10%, transparent);
+	}
+</style>
