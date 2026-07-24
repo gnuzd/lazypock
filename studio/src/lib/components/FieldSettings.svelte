@@ -247,7 +247,8 @@
 								<div class="flex items-center gap-1">
 									<input
 										type="text"
-										class="option-input"
+										class="flex-1"
+										style="min-height:28px;padding:3px 10px;font-size:0.875rem;border-radius:var(--radius-field);border:none;background:color-mix(in oklab,var(--color-base-content) 6%,transparent);color:var(--color-base-content);outline:none;box-sizing:border-box;"
 										value={val}
 										placeholder="Option value"
 										oninput={(e) => {
@@ -398,24 +399,3 @@
 		{/if}
 	</div>
 {/if}
-
-<style>
-	.option-input {
-		flex: 1;
-		width: 100%;
-		padding: 3px 10px;
-		min-height: 28px;
-		font-size: 0.875rem;
-		line-height: 1.5;
-		border-radius: var(--radius-field);
-		border: none;
-		background: color-mix(in oklab, var(--color-base-content) 6%, transparent);
-		color: var(--color-base-content);
-		outline: none;
-		box-sizing: border-box;
-	}
-
-	.option-input:focus {
-		background: color-mix(in oklab, var(--color-base-content) 10%, transparent);
-	}
-</style>
