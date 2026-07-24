@@ -226,6 +226,28 @@ defmodule Lazypock.Schema.DDL do
           )
         end
 
+        # Update existing fields (options, required, hidden, etc.)
+        for f <- fields, MapSet.member?(existing_names, f["name"]) do
+          existing = Enum.find(existing_fields, &(&1.name == f["name"]))
+
+          if existing do
+            Repo.update_all(
+              from(fld in Lazypock.Collections.Field,
+                where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
+              ),
+              set: %{
+                required: Map.get(f, "required", false),
+                unique: Map.get(f, "unique", false),
+                hidden: Map.get(f, "hidden", false),
+                system: Map.get(f, "system", false),
+                options: Map.get(f, "options", %{}),
+                indexed: Map.get(f, "indexed", false),
+                sort_order: Map.get(f, "sort_order", 0)
+              }
+            )
+          end
+        end
+
         # Add new fields
         for f <- fields, not MapSet.member?(existing_names, f["name"]) do
           :ok = validate_field_name!(f["name"])
