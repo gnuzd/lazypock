@@ -11,13 +11,19 @@
 		onremove?: () => void;
 	} = $props();
 
+	// Need writable local state because #each variables are read-only,
+	// so we can't bind:value directly to <Input>
 	let local = $state(value);
 
-	// Notify parent when user edits
+	// Sync parent value changes (e.g. reorder) into local
 	$effect(() => {
-		const v = local;
-		if (v !== value) {
-			onchange?.(v);
+		local = value;
+	});
+
+	// Push local edits to parent — skip when value matches (avoids mount loop)
+	$effect(() => {
+		if (local !== value) {
+			onchange?.(local);
 		}
 	});
 </script>
@@ -28,7 +34,7 @@
 	</div>
 	<button
 		type="button"
-		class="btn btn-ghost btn-sm btn-circle text-error/60 hover:text-error"
+		class="btn btn-ghost px-0 text-error/60 hover:text-error aspect-square"
 		onclick={onremove}
 	>×</button>
 </div>
