@@ -1,5 +1,7 @@
 <script lang="ts">
-	let {
+	import Button from '$lib/components/Button.svelte';
+
+let {
 		columns,
 		rows,
 		onrowclick,
@@ -33,7 +35,7 @@
 							<span class="block mb-2 text-sm">{emptyLabel}</span>
 						{/if}
 						{#if emptyActionLabel && onemptyaction}
-							<button class="btn btn-primary btn-sm" onclick={onemptyaction}>{emptyActionLabel}</button>
+							<Button class="btn-primary btn-sm" onclick={onemptyaction}>{emptyActionLabel}</Button>
 						{/if}
 					</td>
 				</tr>
