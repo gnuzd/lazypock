@@ -18,7 +18,7 @@ defmodule LazypockWeb.SuperUserController do
         |> json(%{
           "token" => jwt,
           "superuser" => %{
-            "id" => superuser.id,
+            "id" => Ecto.UUID.cast!(superuser.id),
             "email" => superuser.email
           }
         })
