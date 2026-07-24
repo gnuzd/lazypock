@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	let {
 		name = '',
@@ -11,87 +11,80 @@
 		disabled?: boolean;
 	} = $props();
 
+	let el = $state<HTMLTextAreaElement>();
 	let loaded = $state(false);
 	let id = $derived('editor_' + name);
-	let editorEl = $state<HTMLDivElement>();
 
 	onMount(async () => {
-		await import('trix');
-		await import('trix/dist/trix.css');
-		loaded = true;
-	});
+		const tinymce = (await import('tinymce/tinymce')).default;
 
-	function handleTrixChange() {
-		const el = editorEl?.querySelector('trix-editor');
-		if (el) {
-			value = (el as unknown as { editor: { getDocument: () => { toString: () => string } } }).editor.getDocument().toString();
-		}
-	}
+		// Load default skin inline
+		await import('tinymce/themes/silver');
+		await import('tinymce/icons/default');
+		await import('tinymce/skins/ui/oxide/skin.css');
+
+		// Load plugins
+		await import('tinymce/plugins/autoresize');
+		await import('tinymce/plugins/link');
+		await import('tinymce/plugins/lists');
+		await import('tinymce/plugins/table');
+		await import('tinymce/plugins/code');
+
+		loaded = true;
+
+		// Wait for element to be in DOM
+		await tick();
+
+		if (!el) return;
+
+		tinymce.init({
+			target: el,
+			menubar: false,
+			statusbar: false,
+			plugins: ['autoresize', 'link', 'lists', 'table', 'code'],
+			toolbar:
+				'bold italic underline strikethrough | ' +
+				'bullist numlist | ' +
+				'blockquote code | ' +
+				'link table | ' +
+				'removeformat',
+			skin: false,
+			content_css: false,
+			branding: false,
+			promotion: false,
+			elementpath: false,
+			convert_urls: false,
+			relative_urls: false,
+			remove_script_host: false,
+			autoresize_bottom_margin: 0,
+			min_height: 150,
+			max_height: 400,
+			placeholder: '',
+			setup: (ed: any) => {
+				if (value) ed.setContent(String(value));
+				ed.on('change', () => {
+					value = ed.getContent();
+				});
+			},
+		});
+	});
 </script>
 
 {#if loaded}
-		<div class="rich-editor" class:disabled>
-			<input type="hidden" id={id} {name} bind:value />
-			<div bind:this={editorEl}>
-				<trix-toolbar for={id}></trix-toolbar>
-				<trix-editor
-					input={id}
-					ontrix-change={handleTrixChange}
-					contenteditable={!disabled ? 'true' : undefined}
-				></trix-editor>
-			</div>
-		</div>
-	{:else}
-		<textarea
-			class="rich-editor"
-			class:disabled
-			value={String(value ?? '')}
-			rows="6"
-			disabled
-		></textarea>
-	{/if}
+	<textarea bind:this={el} id={id} class="rich-editor" disabled={disabled}></textarea>
+{:else}
+	<textarea
+		class="rich-editor"
+		disabled
+		value={String(value ?? '')}
+		rows="6"
+	></textarea>
+{/if}
 
 <style>
 	.rich-editor {
 		border-radius: var(--radius-field);
-		overflow: hidden;
-	}
-	.rich-editor.disabled {
-		opacity: 0.5;
-		pointer-events: none;
-	}
-	:global(trix-toolbar) {
-		background: color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100));
-		border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
-		padding: 2px;
-	}
-	:global(trix-editor) {
 		min-height: 150px;
 		max-height: 400px;
-		overflow-y: auto;
-		padding: 10px 12px;
-		font-size: 0.9375rem;
-		line-height: 1.6;
-		border: none;
-		background: transparent;
-		color: var(--color-base-content);
-	}
-	:global(trix-editor:focus) {
-		outline: none;
-	}
-	:global(trix-editor h1) {
-		font-size: 1.25rem;
-	}
-	:global(trix-editor blockquote) {
-		border-left: 3px solid color-mix(in oklab, var(--color-base-content) 20%, transparent);
-		padding-left: 10px;
-		margin: 8px 0;
-	}
-	:global(trix-editor pre) {
-		background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
-		border-radius: 4px;
-		padding: 8px;
-		font-family: 'SF Mono', 'Fira Code', monospace;
-		font-size: 0.8125rem;
 	}
 </style>
