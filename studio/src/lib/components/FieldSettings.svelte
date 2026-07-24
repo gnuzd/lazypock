@@ -274,6 +274,7 @@
 						</div>
 					</div>
 
+					{#if ((field.options as Record<string, unknown>)?.maxSelect as number || 1) > 1}
 					<div class="bg-base-200/40 p-1.5 rounded-field">
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxSelect">Max select</label>
 						<input type="number" id="field-{fieldIndex}-maxSelect" step="1" min="2" placeholder="Defaults to 10" class="input input-sm w-full"
@@ -285,6 +286,7 @@
 							}}
 						/>
 					</div>
+					{/if}
 				{:else if field.type === 'json'}
 					<div class="bg-base-200/40 p-1.5 rounded-field">
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxSize">Max size (bytes)</label>
