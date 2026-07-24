@@ -4,7 +4,7 @@ import { Toaster } from 'svelte-sonner';
 
 import favicon from '$lib/assets/favicon.svg';
 import { onMount } from 'svelte';
-import { client, connectRealtime, disconnectRealtime } from '$lib/client';
+import { client, connectRealtime } from '$lib/client';
 import { base } from '$app/paths';
 import { browser } from '$app/environment';
 
@@ -18,23 +18,29 @@ import { browser } from '$app/environment';
 		const path = window.location.pathname;
 		const isLoginPage = path === base + '/login';
 
-		if (client.authStore.isValid) {
-			// Connect realtime WebSocket
-			connectRealtime();
-
-			if (
-				path.startsWith(base + '/collections') ||
-				path.startsWith(base + '/logs') ||
-				path.startsWith(base + '/settings')
-			) {
-				return;
-			}
+		if (client.authStore.isValid && !isLoginPage) {
+			// Verify the token is actually valid before redirecting
 			try {
+				await client.me();
+				// Token is good — connect realtime and stay
+				connectRealtime();
+
+				if (
+					path.startsWith(base + '/collections') ||
+					path.startsWith(base + '/logs') ||
+					path.startsWith(base + '/settings')
+				) {
+					return;
+				}
 				const result = await client.listCollections('page=1&perPage=200');
 				const name = result?.items?.[0]?.name ?? '';
 				window.location.href = base + '/collections?collection=' + name;
 			} catch {
-				window.location.href = base + '/collections';
+				// Token is stale — clear it and show login
+				client.authStore.clear();
+				if (!isLoginPage) {
+					window.location.href = base + '/login';
+				}
 			}
 		} else if (!isLoginPage) {
 			window.location.href = base + '/login';
