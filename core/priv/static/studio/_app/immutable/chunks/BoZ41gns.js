@@ -1,0 +1,1 @@
+import{Z as e}from"./D8X-vPcH.js";import"./BfLmRPfK.js";var t=e({current:void 0}),n=e({current:void 0}),r=e({current:void 0});function i(e,i,a){t.current=e,n.current=i,r.current=a}function a(){return{get header(){return t.current},get body(){return n.current},get footer(){return r.current}}}export{i as n,a as t};

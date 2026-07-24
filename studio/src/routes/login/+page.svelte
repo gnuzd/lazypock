@@ -19,7 +19,7 @@
 	onMount(async () => {
 		try {
 			const res = await client.checkSuperuser();
-			needsSetup = res?.hasSuperuser === false;
+			needsSetup = res?.has_superuser === false;
 		} catch {
 			// If the check fails, assume login mode
 		} finally {
