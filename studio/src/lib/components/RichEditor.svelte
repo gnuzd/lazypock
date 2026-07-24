@@ -3,7 +3,7 @@
 
 	let {
 		name = '',
-		value = $bindable(''),
+		value = $bindable(),
 		disabled = false,
 	}: {
 		name?: string;
