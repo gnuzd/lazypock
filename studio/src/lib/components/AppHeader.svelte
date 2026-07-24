@@ -14,10 +14,10 @@
 	function navClass(path: string): string {
 		const active = page.url.pathname.endsWith(path);
 		return (
-			'text-sm font-medium btn-sm' +
+			'text-sm font-medium btn-sm ' +
 			(active
-				? ' bg-primary-content/10'
-				: ' hover:bg-primary-content/10')
+				? 'bg-primary-content/10'
+				: 'hover:bg-primary-content/10')
 		);
 	}
 
@@ -38,7 +38,7 @@
 		<Button class={navClass('/settings')} onclick={() => _goto('/settings')}>Settings</Button>
 	</nav>
 	<div class="ml-auto">
-		<Button class="btn-ghost btn-sm text-primary-content" onclick={logout}>Logout</Button>
+		<Button class="text-sm font-medium btn-sm hover:bg-primary-content/10" onclick={logout}>Logout</Button>
 	</div>
 </header>
 

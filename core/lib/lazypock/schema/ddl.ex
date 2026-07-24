@@ -226,30 +226,34 @@ defmodule Lazypock.Schema.DDL do
           )
         end
 
-        # Update existing fields (options, required, hidden, etc.)
-        for f <- fields, MapSet.member?(existing_names, f["name"]) do
-          existing = Enum.find(existing_fields, &(&1.name == f["name"]))
+        # Update existing fields with new options/properties
+        # Derive sort_order from array position so drag-reorder works
+        fields_with_sort =
+          fields
+          |> Enum.with_index()
+          |> Enum.map(fn {f, idx} ->
+            Map.put(f, "sort_order", idx)
+          end)
 
-          if existing do
-			Repo.update_all(
-				from(fld in Lazypock.Collections.Field,
-					where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
-				),
-				set: [
-					required: Map.get(f, "required", false),
-					unique: Map.get(f, "unique", false),
-					hidden: Map.get(f, "hidden", false),
-					system: Map.get(f, "system", false),
-					options: Map.get(f, "options", %{}),
-					indexed: Map.get(f, "indexed", false),
-					sort_order: Map.get(f, "sort_order", 0)
-				]
-			)
-          end
+        for f <- fields_with_sort, MapSet.member?(existing_names, f["name"]) do
+          Repo.update_all(
+            from(fld in Lazypock.Collections.Field,
+              where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
+            ),
+            set: [
+              required: Map.get(f, "required", false),
+              unique: Map.get(f, "unique", false),
+              hidden: Map.get(f, "hidden", false),
+              system: Map.get(f, "system", false),
+              options: Map.get(f, "options", %{}),
+              indexed: Map.get(f, "indexed", false),
+              sort_order: f["sort_order"]
+            ]
+          )
         end
 
-        # Add new fields
-        for f <- fields, not MapSet.member?(existing_names, f["name"]) do
+        # Add new fields (also derive sort_order from position)
+        for f <- fields_with_sort, not MapSet.member?(existing_names, f["name"]) do
           :ok = validate_field_name!(f["name"])
           :ok = validate_field_type(f["type"])
 

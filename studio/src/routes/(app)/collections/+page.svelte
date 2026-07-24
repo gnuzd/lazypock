@@ -491,9 +491,8 @@
 	</div>
 {:else if collection}
 	<!-- Breadcrumb -->
-	<!-- Breadcrumb -->
-	<div class="flex items-center justify-between pb-3 mb-3 border-b border-base-300">
-		<nav class="flex items-center gap-1 text-sm">
+	<div class="flex items-center justify-between pb-3 mb-3">
+		<nav class="flex items-center gap-1">
 			<span class="text-base-content/50">Collections</span>
 			<span class="text-xs opacity-30">/</span>
 			<span class="font-medium">{(collection.name as string) ?? '...'}</span>

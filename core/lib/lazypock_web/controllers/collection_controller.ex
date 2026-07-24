@@ -119,13 +119,16 @@ defmodule LazypockWeb.CollectionController do
       updated: collection.updated_at
     }
   end
+
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   # Resolve a collection name from either a UUID or a name string
   defp resolve_collection_name(id_or_name) do
     case CollectionRegistry.get(id_or_name) do
-      {:ok, collection} -> collection.name
+      {:ok, collection} ->
+        collection.name
+
       {:error, :not_found} ->
         # Fallback: try lookup by UUID across all collections
         case Enum.find(CollectionRegistry.list(), &(&1.id == id_or_name)) do
