@@ -106,35 +106,48 @@
 					<option value="update">Update</option>
 					<option value="create/update">Create/Update</option>
 				</select>
-			{:else if field.type === 'select'}
-				<input
-					type="text"
-					class="input input-sm max-w-[150px] text-xs"
-					placeholder="Add choices*"
-					value={(field.values as string[])?.join(' • ') || ''}
-					onclick={() => { field._showChoices = true; field._choicesInput = (field.values as string[])?.join('\n') || ''; }}
-					readonly
-				/>
-				{#if field._showChoices}
-					<!-- svelte-ignore a11y_click_events_have_key_events -->
-					<div class="absolute top-full left-0 z-10 min-w-[260px] bg-base-100 border border-base-300 rounded-field shadow-lg p-2" onclick={(e) => e.stopPropagation()}>
-						<div class="text-xs opacity-60 mb-1">New-line separated choices:</div>
-						<textarea
-							class="input w-full min-h-[60px] text-xs"
-							bind:value={field._choicesInput}
-							oninput={() => {
-								field.values = ((field._choicesInput as string) || '').split('\n').filter((v: string) => v.trim());
-								if ((field.maxSelect as number) > (field.values as string[]).length) {
-									field.maxSelect = (field.values as string[]).length;
-								}
-							}}
-							onblur={() => { setTimeout(() => field._showChoices = false, 200); }}
-						></textarea>
+			{:else if field.type === 'select' || field.type === 'multi_select'}
+				<div class="flex items-center gap-1">
+					<button type="button" class="btn btn-ghost btn-sm px-1.5 text-xs" onclick={() => {
+						const opts = (field.options as Record<string, unknown>) || {};
+						const vals = (opts.values as string[]) || [];
+						field.options = { ...opts, values: [...vals, ''] };
+					}} title="Add option">+</button>
+					<div class="flex gap-1 flex-wrap max-w-[200px]">
+						{#each ((field.options as Record<string, unknown>)?.values as string[]) || [] as opt, i (i)}
+							<div class="flex items-center gap-0.5 bg-base-200 rounded px-1.5 py-0.5 text-xs">
+								<input
+									type="text"
+									class="w-14 bg-transparent border-none outline-none text-xs p-0"
+									value={opt}
+									placeholder="val"
+									oninput={(e) => {
+										const opts = { ...(field.options as Record<string, unknown>) };
+										const vals = [...((opts.values as string[]) || [])];
+										vals[i] = (e.target as HTMLInputElement).value;
+										opts.values = vals;
+										field.options = opts;
+									}}
+									onpointerdown={(e) => e.stopPropagation()}
+								/>
+								<button type="button" class="text-error/60 hover:text-error p-0 leading-none text-xs"
+									onclick={() => {
+										const opts = { ...(field.options as Record<string, unknown>) };
+										const vals = ((opts.values as string[]) || []).filter((_: string, j: number) => j !== i);
+										opts.values = vals;
+										field.options = opts;
+									}}>×</button>
+							</div>
+						{/each}
 					</div>
-				{/if}
+				</div>
 				<select class="select select-sm max-w-[80px] text-xs"
-					value={(field.maxSelect as number) > 1 ? 'multiple' : 'single'}
-					onchange={(e) => { field.maxSelect = (e.target as HTMLSelectElement).value === 'multiple' ? ((field.values as string[])?.length || 2) : 1; }}
+					value={((field.options as Record<string, unknown>)?.maxSelect as number || 1) > 1 ? 'multiple' : 'single'}
+					onchange={(e) => {
+						const opts = { ...(field.options as Record<string, unknown>) };
+						opts.maxSelect = (e.target as HTMLSelectElement).value === 'multiple' ? 10 : 1;
+						field.options = opts;
+					}}
 				>
 					<option value="single">Single</option>
 					<option value="multiple">Multiple</option>
@@ -257,12 +270,16 @@
 							/>
 						</div>
 					</div>
-				{:else if field.type === 'select'}
-					<div class="bg-base-200/40 p-1.5 rounded-field" hidden={(field.maxSelect as number) < 2}>
+				{:else if field.type === 'select' || field.type === 'multi_select'}
+					<div class="bg-base-200/40 p-1.5 rounded-field" hidden={((field.options as Record<string, unknown>)?.maxSelect as number) < 2}>
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxSelect">Max select</label>
-						<input type="number" id="field-{fieldIndex}-maxSelect" step="1" min="2" max={(field.values as string[])?.length || 2} placeholder="Default to single" class="input input-sm w-full"
-							value={(field.maxSelect as number) || ''}
-							onchange={(e) => { const v = parseInt((e.target as HTMLInputElement).value, 10); field.maxSelect = v > 1 ? v : 1; }}
+						<input type="number" id="field-{fieldIndex}-maxSelect" step="1" min="2" placeholder="Default to single" class="input input-sm w-full"
+							value={((field.options as Record<string, unknown>)?.maxSelect as number) || ''}
+							onchange={(e) => {
+								const opts = { ...(field.options as Record<string, unknown>) };
+								opts.maxSelect = Math.max(2, parseInt((e.target as HTMLInputElement).value, 10));
+								field.options = opts;
+							}}
 						/>
 					</div>
 				{:else if field.type === 'json'}

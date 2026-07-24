@@ -2,7 +2,8 @@
 	let {
 		fields,
 		data = $bindable({}),
-		disabled = false
+		disabled = false,
+		errors = {}
 	}: {
 		/** Collection schema fields (as returned from backend) */
 		fields: Record<string, unknown>[];
@@ -10,21 +11,16 @@
 		data: Record<string, unknown>;
 		/** Disable all inputs (e.g. during save) */
 		disabled?: boolean;
+		/** Per-field error messages */
+		errors?: Record<string, string>;
 	} = $props();
 
-	const RAW_TYPES = new Set([
-		'text',
-		'number',
-		'email',
-		'url',
-		'date',
-		'datetime',
-		'editor',
-		'password'
+	const TEXT_INPUT_TYPES = new Set([
+		'text', 'number', 'email', 'url', 'editor', 'password'
 	]);
 
 	function isTextInput(f: Record<string, unknown>): boolean {
-		return RAW_TYPES.has(f.type as string);
+		return TEXT_INPUT_TYPES.has(f.type as string);
 	}
 
 	function getInputType(f: Record<string, unknown>): string {
@@ -33,7 +29,6 @@
 		if (t === 'email') return 'email';
 		if (t === 'url') return 'url';
 		if (t === 'password') return 'password';
-		if (t === 'date' || t === 'datetime') return 'datetime-local';
 		return 'text';
 	}
 
@@ -50,6 +45,7 @@
 		{@const type = field.type as string}
 		{@const name = field.name as string}
 		{@const required = !!field.required}
+		{@const choices = ((options?.values as string[]) || [])}
 
 		<!-- ═══ BOOLEAN ═══ -->
 		{#if type === 'bool'}
@@ -81,53 +77,94 @@
 					rows="4"
 					placeholder={'{}'}
 				></textarea>
-				<span class="field-help">Valid JSON</span>
+					<span class="field-help">Valid JSON</span>
+				{#if errors[name]}
+					<span class="field-error">{errors[name]}</span>
+				{/if}
 			</div>
 
-		<!-- ═══ SELECT ═══ -->
-		{:else if type === 'select'}
-			{@const choices = ((options.choices ?? options.values) as string[]) || []}
+		<!-- ═══ DATE ═══ -->
+		{:else if type === 'date'}
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
-				<select
+				<input
 					id="f_{name}"
+					type="date"
 					disabled={disabled}
 					value={(data[name] as string) ?? ''}
-					onchange={(e) => update(name, (e.target as HTMLSelectElement).value)}
-				>
-					<option value="">—</option>
-					{#each choices as choice (choice)}
-						<option value={choice}>{choice}</option>
-					{/each}
-				</select>
+					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
+					placeholder="YYYY-MM-DD"
+				/>
+				{#if errors[name]}
+					<span class="field-error">{errors[name]}</span>
+				{/if}
 			</div>
 
-		<!-- ═══ MULTI_SELECT ═══ -->
-		{:else if type === 'multi_select'}
-			{@const choices = ((options.choices ?? options.values) as string[]) || []}
-			{@const selected = (data[name] as string[]) || []}
+		<!-- ═══ DATETIME ═══ -->
+		{:else if type === 'datetime' || type === 'autodate'}
 			<div class="field" class:required>
-				<label>{name}</label>
-				<div class="multi-select-chips">
-					{#each choices as choice (choice)}
-						<button
-							type="button"
-							disabled={disabled}
-							class="chip"
-							class:selected={selected.includes(choice)}
-							onclick={() => {
-								if (selected.includes(choice)) {
-									update(name, selected.filter((s) => s !== choice));
-								} else {
-									update(name, [...selected, choice]);
-								}
-							}}
-						>
-							{choice}
-						</button>
-					{/each}
-				</div>
+				<label for="f_{name}">{name}</label>
+				<input
+					id="f_{name}"
+					type="datetime-local"
+					disabled={disabled}
+					value={(data[name] as string) ?? ''}
+					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
+				/>
+				{#if errors[name]}
+					<span class="field-error">{errors[name]}</span>
+				{/if}
 			</div>
+
+		<!-- ═══ SELECT (single if maxSelect <= 1, multi otherwise) ═══ -->
+		{:else if type === 'select'}
+			{@const maxSelect = ((options?.maxSelect as number) || 1)}
+			{#if maxSelect > 1}
+				{@const selected = (data[name] as string[]) || []}
+				<div class="field" class:required>
+					<label>{name}</label>
+					<div class="multi-select-chips">
+						{#each choices as choice (choice)}
+							<button
+								type="button"
+								disabled={disabled}
+								class="chip"
+								class:selected={selected.includes(choice)}
+								onclick={() => {
+									if (selected.includes(choice)) {
+										update(name, selected.filter((s) => s !== choice));
+									} else {
+										update(name, [...selected, choice]);
+									}
+								}}
+							>
+								{choice}
+							</button>
+						{/each}
+					</div>
+				{#if errors[name]}
+					<span class="field-error">{errors[name]}</span>
+				{/if}
+			</div>
+			{:else}
+				<div class="field" class:required>
+					<label for="f_{name}">{name}</label>
+					<select
+							id="f_{name}"
+							disabled={disabled}
+							value={(data[name] as string) ?? ''}
+							onchange={(e) => update(name, (e.target as HTMLSelectElement).value)}
+					>
+						<option value="">—</option>
+						{#each choices as choice (choice)}
+							<option value={choice}>{choice}</option>
+						{/each}
+					</select>
+					{#if errors[name]}
+						<span class="field-error">{errors[name]}</span>
+					{/if}
+				</div>
+			{/if}
 
 		<!-- ═══ FILE ═══ -->
 		{:else if type === 'file' || type === 'multi_file'}
@@ -149,7 +186,10 @@
 					</div>
 				{/if}
 				<span class="field-help">File upload (drag & drop or click)</span>
-			</div>
+			{#if errors[name]}
+				<span class="field-error">{errors[name]}</span>
+			{/if}
+		</div>
 
 		<!-- ═══ RELATION ═══ -->
 		{:else if type === 'relation'}
@@ -164,14 +204,16 @@
 					placeholder="Related record ID"
 				/>
 				<span class="field-help">Related record ID{options.maxSelect && (options.maxSelect as number) > 1 ? 's (comma-separated)' : ''}</span>
-			</div>
+			{#if errors[name]}
+				<span class="field-error">{errors[name]}</span>
+			{/if}
+		</div>
 
-		<!-- ═══ TEXT / NUMBER / EMAIL / URL / DATE / DATETIME / PASSWORD ═══ -->
+		<!-- ═══ TEXT / NUMBER / EMAIL / URL / EDITOR / PASSWORD ═══ -->
 		{:else if isTextInput(field)}
 			{@const isMulti = type === 'editor' || type === 'text'}
-			{@const attrs = options as Record<string, unknown>}
-			{@const min = attrs.min as number | undefined}
-			{@const max = attrs.max as number | undefined}
+			{@const min = options?.min as number | undefined}
+			{@const max = options?.max as number | undefined}
 
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
@@ -197,6 +239,9 @@
 				{/if}
 				{#if min != null || max != null}
 					<span class="field-help">Min: {min ?? '—'}, Max: {max ?? '—'}</span>
+				{/if}
+				{#if errors[name]}
+					<span class="field-error">{errors[name]}</span>
 				{/if}
 			</div>
 		{/if}
@@ -257,6 +302,21 @@
 	.field:focus-within label {
 		opacity: 1;
 		color: var(--color-base-content);
+	}
+
+	/* ── Disabled state ── */
+	.field:has(input:disabled),
+	.field:has(textarea:disabled),
+	.field:has(select:disabled) {
+		opacity: 0.5;
+		pointer-events: none;
+	}
+
+	input:disabled,
+	textarea:disabled,
+	select:disabled {
+		cursor: default;
+		color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
 	}
 
 	/* ── Input / Textarea / Select ── */
@@ -335,6 +395,17 @@
 		line-height: 1.4;
 		color: var(--color-base-content);
 		opacity: 0.7;
+		padding: 0 12px 8px;
+	}
+
+	/* ── Field error text ── */
+	.field-error {
+		display: block;
+		width: 100%;
+		margin: 2px 0 0;
+		font-size: 0.8125rem;
+		line-height: 1.3;
+		color: var(--color-error);
 		padding: 0 12px 8px;
 	}
 
