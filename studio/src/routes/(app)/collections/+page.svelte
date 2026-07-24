@@ -495,7 +495,7 @@
 			<span class="font-medium">{(collection.name as string) ?? '...'}</span>
 			<button
 				type="button"
-				class="p-0.5 ml-1 rounded cursor-pointer opacity-40 hover:opacity-100 transition-opacity border-none bg-transparent text-base-content"
+				class="p-0.5 ml-2 rounded cursor-pointer opacity-40 hover:opacity-100 transition-opacity border-none bg-transparent text-base-content"
 				onclick={() => editCollection(collection!)}
 				title="Edit collection"
 			>
