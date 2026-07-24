@@ -1,4 +1,6 @@
 <script lang="ts">
+	import RichEditor from '$lib/components/RichEditor.svelte';
+
 	let {
 		fields,
 		data = $bindable({}),
@@ -16,7 +18,7 @@
 	} = $props();
 
 	const TEXT_INPUT_TYPES = new Set([
-		'text', 'number', 'email', 'url', 'editor', 'password'
+		'text', 'number', 'email', 'url', 'password'
 	]);
 
 	function isTextInput(f: Record<string, unknown>): boolean {
@@ -34,7 +36,6 @@
 
 	function update(fieldName: string, value: unknown) {
 		data[fieldName] = value;
-		// Trigger reactivity for $bindable
 		data = { ...data };
 	}
 </script>
@@ -116,7 +117,7 @@
 				{/if}
 			</div>
 
-		<!-- ═══ SELECT (single if maxSelect <= 1, multi otherwise) ═══ -->
+		<!-- ═══ SELECT ═══ -->
 		{:else if type === 'select'}
 			{@const maxSelect = ((options?.maxSelect as number) || 1)}
 			{#if maxSelect > 1}
@@ -209,9 +210,19 @@
 			{/if}
 		</div>
 
-		<!-- ═══ TEXT / NUMBER / EMAIL / URL / EDITOR / PASSWORD ═══ -->
+		<!-- ═══ EDITOR (rich text) ═══ -->
+		{:else if type === 'editor'}
+			<div class="field" class:required>
+				<label for="f_{name}">{name}</label>
+				<RichEditor {name} bind:value={data[name]} {disabled} />
+				{#if errors[name]}
+					<span class="field-error">{errors[name]}</span>
+				{/if}
+			</div>
+
+		<!-- ═══ TEXT / NUMBER / EMAIL / URL / PASSWORD ═══ -->
 		{:else if isTextInput(field)}
-			{@const isMulti = type === 'editor' || type === 'text'}
+			{@const isMulti = type === 'text'}
 			{@const min = options?.min as number | undefined}
 			{@const max = options?.max as number | undefined}
 

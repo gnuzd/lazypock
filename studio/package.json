@@ -39,6 +39,8 @@
 		"@sveltejs/adapter-static": "^3.0.10",
 		"lazypock": "file:../packages/lazypock-ts",
 		"svelte-sonner": "^1.1.1",
-		"ts-pattern": "^5.9.0"
+		"trix": "^2.1.19",
+		"ts-pattern": "^5.9.0",
+		"zod": "^4.4.3"
 	}
 }
