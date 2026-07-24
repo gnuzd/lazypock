@@ -260,7 +260,7 @@
 									/>
 									<button
 										type="button"
-										class="del-opt-btn"
+										class="btn btn-ghost btn-sm px-1 text-error/60 hover:text-error"
 										onclick={() => {
 											const newOpts = { ...opts };
 											newOpts.values = values.filter((_: string, j: number) => j !== i);
@@ -415,29 +415,5 @@
 
 	.option-input:focus {
 		background: color-mix(in oklab, var(--color-base-content) 10%, transparent);
-	}
-
-	.del-opt-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 30px;
-		height: 30px;
-		border-radius: var(--radius-field);
-		cursor: pointer;
-		border: none;
-		background: none;
-		color: var(--color-error);
-		opacity: 0.6;
-		font-size: 1.2rem;
-		line-height: 1;
-		padding: 0;
-		transition: opacity 0.15s, background 0.15s;
-		flex-shrink: 0;
-	}
-
-	.del-opt-btn:hover {
-		opacity: 1;
-		background: color-mix(in oklab, var(--color-error) 10%, transparent);
 	}
 </style>
