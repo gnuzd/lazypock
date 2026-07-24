@@ -3,8 +3,9 @@
 // Implements the Phoenix Channels protocol over WebSocket
 // to subscribe to collection realtime updates.
 //
-// The backend CollectionSocket uses the path /socket and
-// authenticates via a `token` query parameter (JWT).
+// Protocol: Phoenix V1 JSON Serializer (object-based messages).
+// Sends messages as JSON objects with {topic, event, payload, ref, join_ref}.
+// Receives messages as JSON objects with {topic, event, payload, ref}.
 
 interface RealtimeEvent {
 	event: string;
@@ -18,7 +19,7 @@ interface SubEntry {
 }
 
 export type RealtimeConnectOpts = {
-	/** WebSocket URL (e.g. ws://localhost:4000/socket) */
+	/** WebSocket URL (e.g. ws://localhost:4000/socket/websocket) */
 	url: string;
 	/** Auth token to pass as query param */
 	token?: string;
@@ -26,15 +27,15 @@ export type RealtimeConnectOpts = {
 
 /**
  * Derive a WebSocket URL from an HTTP base URL.
- * http://localhost:4000/api → ws://localhost:4000/socket
+ * http://localhost:4000/api → ws://localhost:4000/socket/websocket
  */
 export function wsUrlFromBaseUrl(baseUrl: string): string {
 	try {
 		const url = new URL(baseUrl);
 		const protocol = url.protocol === "https:" ? "wss:" : "ws:";
-		return `${protocol}//${url.host}/socket`;
+		return `${protocol}//${url.host}/socket/websocket`;
 	} catch {
-		return `${baseUrl.replace(/^http/, "ws").replace(/\/api$/, "")}/socket`;
+		return `${baseUrl.replace(/^http/, "ws").replace(/\/api$/, "")}/socket/websocket`;
 	}
 }
 
@@ -124,6 +125,7 @@ export class RealtimeService {
 		}
 
 		this.ws = new WebSocket(url);
+
 		this.ws.onopen = () => {
 			this.reconnectAttempt = 0;
 			this.resubscribeAll();
@@ -146,40 +148,34 @@ export class RealtimeService {
 	}
 
 	private handleMessage(data: string): void {
-		let parsed: unknown[];
+		let parsed: Record<string, unknown>;
 		try {
-			parsed = JSON.parse(data) as unknown[];
+			parsed = JSON.parse(data) as Record<string, unknown>;
 		} catch {
 			return;
 		}
-		if (!Array.isArray(parsed) || parsed.length < 4) return;
+		if (typeof parsed !== "object" || !parsed.topic || !parsed.event) return;
 
-		const [, , topic, event, payload] = parsed as [
-			string | null,
-			string | null,
-			string,
-			string,
-			Record<string, unknown>,
-		];
+		const topic = parsed.topic as string;
+		const event = parsed.event as string;
+		const payload = (parsed.payload as Record<string, unknown>) || {};
 
-		// Ignore phx_reply (join/heartbeat responses)
+		// Handle phx_reply (join/heartbeat responses)
 		if (event === "phx_reply") return;
 
-		// Relay incoming events to subscribers
-		if (event === "record_change") {
-			const subs = this.subscriptions.get(topic);
-			if (subs) {
-				const e: RealtimeEvent = {
-					event,
-					topic,
-					payload: payload as Record<string, unknown>,
-				};
-				for (const s of subs) {
-					try {
-						s.callback(e);
-					} catch {
-						// swallow callback errors
-					}
+		// Relay incoming events to all subscribers of this topic
+		const subs = this.subscriptions.get(topic);
+		if (subs) {
+			const e: RealtimeEvent = {
+				event,
+				topic,
+				payload: payload as Record<string, unknown>,
+			};
+			for (const s of subs) {
+				try {
+					s.callback(e);
+				} catch {
+					// swallow callback errors
 				}
 			}
 		}
@@ -187,7 +183,13 @@ export class RealtimeService {
 
 	private joinTopic(topic: string): void {
 		const ref = this.nextRef();
-		const msg = JSON.stringify([null, ref, topic, "phx_join", {}]);
+		// Phoenix V1 JSON Serializer expects a JSON object, not an array
+		const msg = JSON.stringify({
+			topic: topic,
+			event: "phx_join",
+			payload: {},
+			ref: ref,
+		});
 		this.ws?.send(msg);
 	}
 
@@ -205,7 +207,13 @@ export class RealtimeService {
 		this.heartbeatInterval = setInterval(() => {
 			if (this.ws?.readyState === WebSocket.OPEN) {
 				const ref = this.nextRef();
-				const msg = JSON.stringify([null, ref, "phoenix", "heartbeat", {}]);
+				// Phoenix V1 JSON Serializer expects a JSON object
+				const msg = JSON.stringify({
+					topic: "phoenix",
+					event: "heartbeat",
+					payload: {},
+					ref: ref,
+				});
 				this.ws.send(msg);
 			}
 		}, 30_000);

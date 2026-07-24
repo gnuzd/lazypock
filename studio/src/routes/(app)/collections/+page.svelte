@@ -13,7 +13,9 @@
 	import { slugify } from '$lib/fieldTypes';
 	import type { FieldDefinition } from '$lib/fieldTypes';
 	import RecordForm from '$lib/components/RecordForm.svelte';
-
+	import { buildRecordSchema, cleanRecordData, collectionSchema } from '$lib/validation';
+	import type { z } from 'zod';
+	import { goto } from '$app/navigation';
 	let collections = $state<Record<string, unknown>[]>([]);
 	let collection = $state<Record<string, unknown> | null>(null);
 	let rows = $state<Record<string, unknown>[]>([]);
@@ -27,6 +29,7 @@
 	let editingRecordId = $state<string | null>(null);
 	let recordSaving = $state(false);
 	let recordError = $state('');
+	let recordFieldErrors = $state<Record<string, string>>({});
 
 	let filtered = $derived.by(() => {
 		if (!search) return collections;
@@ -45,10 +48,10 @@
 			// ignore
 		}
 
-		// Subscribe to admin:collections for collection CRUD events
-		client.realtime.subscribe('admin:collections', (e) => {
-			if (e.event === 'collection_change') {
-				// Reload the collection list on any admin change
+		// Subscribe to collections topic for collection CRUD events
+		client.realtime.subscribe('collections', (e) => {
+			if (e.event === 'create' || e.event === 'update' || e.event === 'delete') {
+				// Reload the collection list on any collection change
 				client.listCollections('page=1&perPage=200').then((res) => {
 					collections = res?.items || [];
 				});
@@ -61,9 +64,15 @@
 
 	function selectCollection(name: string) {
 		activeName = name;
-		history.replaceState(null, '', '?collection=' + encodeURIComponent(name));
 		loadCollection(name);
 	}
+
+	/** Sync URL param when active collection changes (without full navigation) */
+	$effect(() => {
+		if (!activeName) return;
+		const url = '?collection=' + encodeURIComponent(activeName);
+		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+	});
 
 	/** Subscribe to record events when active collection changes */
 	$effect(() => {
@@ -285,38 +294,47 @@
 	}
 
 	async function handleSave() {
-		if (!newName.trim() || saving) return;
+		if (saving) return;
+
+		// Build payload
+		const payload: Record<string, unknown> = {
+			name: newName.trim(),
+			type: newType,
+			fields: newFields.filter(f => !f['@toDelete']).map(f => {
+				const clean = { ...f };
+				delete clean.__focus;
+				delete clean['@toDelete'];
+				delete clean._showChoices;
+				delete clean._choicesInput;
+				return clean;
+			}),
+			listRule,
+			viewRule,
+			createRule,
+			updateRule,
+			deleteRule,
+		};
+
+		// Validate with zod
+		const result = collectionSchema.safeParse(payload);
+		if (!result.success) {
+			error = result.error.issues[0]?.message || 'Invalid form data';
+			return;
+		}
+
 		saving = true;
 		error = '';
 		try {
-			const payload: Record<string, unknown> = {
-				name: newName.trim(),
-				type: newType,
-				fields: newFields.filter(f => !f['@toDelete']).map(f => {
-					const clean = { ...f };
-					delete clean.__focus;
-					delete clean['@toDelete'];
-					delete clean._showChoices;
-					delete clean._choicesInput;
-					return clean;
-				}),
-				indexes: newIndexes.filter(Boolean),
-				listRule,
-				viewRule,
-				createRule,
-				updateRule,
-				deleteRule,
-			};
 			if (editingCollectionId) {
-				await client.updateCollection(editingCollectionId, payload);
+				await client.updateCollection(editingCollectionId, result.data as unknown as Record<string, unknown>);
 				// Navigate to the (possibly renamed) collection
-				if (newName.trim() !== activeName) {
-					selectCollection(newName.trim());
+				if (result.data.name !== activeName) {
+					selectCollection(result.data.name);
 				} else {
-					loadCollection(newName.trim());
+					loadCollection(result.data.name);
 				}
 			} else {
-				const created = await client.createCollection(payload);
+				const created = await client.createCollection(result.data as unknown as Record<string, unknown>);
 				if (created?.name) {
 					selectCollection(created.name as string);
 				}
@@ -329,12 +347,25 @@
 		}
 	}
 
+	// ── Dynamic record schema from collection fields ──
+	let recordSchema = $state<z.ZodObject<Record<string, z.ZodTypeAny>> | null>(null);
+
+	$effect(() => {
+		if (!collection) {
+			recordSchema = null;
+			return;
+		}
+		const schemaFields = (collection.schema as Record<string, unknown>[]) ?? [];
+		recordSchema = buildRecordSchema(schemaFields).schema;
+	});
+
 	// ── Record CRUD ──
 
 	function newRecord() {
 		editingRecordId = null;
 		recordData = {};
 		recordError = '';
+		recordFieldErrors = {};
 		showRecordPane = true;
 	}
 
@@ -350,31 +381,33 @@
 			}
 		}
 		recordError = '';
+		recordFieldErrors = {};
 		showRecordPane = true;
 	}
 
 	async function saveRecord() {
-		if (recordSaving || !collection) return;
+		if (recordSaving || !collection || !recordSchema) return;
+
+		// Validate with zod
+		const result = recordSchema.safeParse(recordData);
+		if (!result.success) {
+			const fieldErrs: Record<string, string> = {};
+			for (const issue of result.error.issues) {
+				const fieldName = issue.path.join('.');
+				if (!fieldErrs[fieldName]) {
+					fieldErrs[fieldName] = issue.message;
+				}
+			}
+			recordFieldErrors = fieldErrs;
+			return;
+		}
+
+		recordFieldErrors = {};
 		recordSaving = true;
 		recordError = '';
 		const collName = collection.name as string;
-		// Strip system fields and convert empty strings to null for non-text types
 		const schemaFields = (collection?.schema as Record<string, unknown>[]) ?? [];
-		const systemFields = new Set(['id', 'created_at', 'updated_at', 'collectionName']);
-		const nonTextTypes = new Set(['number', 'bool', 'date', 'datetime']);
-		const cleaned: Record<string, unknown> = {};
-		for (const key of Object.keys(recordData)) {
-			if (systemFields.has(key)) continue;
-			const fieldDef = schemaFields.find((f) => f.name === key);
-			const type = (fieldDef?.type as string) ?? '';
-			const val = recordData[key];
-			// Convert empty strings to null for numeric/temporal types
-			if (val === '' && nonTextTypes.has(type)) {
-				cleaned[key] = null;
-			} else {
-				cleaned[key] = val;
-			}
-		}
+		const cleaned = cleanRecordData(result.data as Record<string, unknown>, schemaFields);
 		try {
 			if (editingRecordId) {
 				await client.updateRecord(collName, editingRecordId, cleaned);
@@ -483,12 +516,13 @@
 	<SidePane bind:show={showRecordPane} title={editingRecordId ? 'Edit Record' : 'New Record'}>
 		<div class="flex flex-col min-h-0 h-full">
 			<div class="flex-1 overflow-y-auto p-4">
-				<RecordForm
-					fields={((collection?.schema ?? []) as Record<string, unknown>[])}
-					bind:data={recordData}
-					disabled={recordSaving}
-				/>
-			</div>
+					<RecordForm
+						fields={((collection?.schema ?? []) as Record<string, unknown>[])}
+						bind:data={recordData}
+						disabled={recordSaving}
+						errors={recordFieldErrors}
+					/>
+				</div>
 
 			{#if recordError}
 				<div class="shrink-0 px-4 py-2 text-xs text-error bg-error/10 border-t border-base-300">{recordError}</div>
