@@ -122,8 +122,10 @@
 		const cols: { key: string; label: string; render: (r: Record<string, unknown>) => string }[] = [
 			{ key: 'id', label: 'ID', render: (r) => ((r.id as string)?.slice(0, 8) ?? '') + '...' }
 		];
-		for (const field of (collection?.schema as Record<string, unknown>[]) ?? []) {
-			const f = field;
+		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
+			.filter((f) => !f.system)
+			.sort((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0));
+		for (const f of fields) {
 			cols.push({
 				key: f.name as string,
 				label: f.name as string,
