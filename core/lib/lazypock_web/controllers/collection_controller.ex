@@ -97,7 +97,9 @@ defmodule LazypockWeb.CollectionController do
       type: collection.type,
       schema: collection.schema,
       fields:
-        Enum.map(collection.fields || [], fn f ->
+        (collection.fields || [])
+        |> Enum.sort_by(& &1.sort_order, :asc)
+        |> Enum.map(fn f ->
           %{
             id: f.id,
             name: f.name,

@@ -281,10 +281,12 @@
 		editingCollectionId = (coll.id as string) ?? null;
 		newName = (coll.name as string) ?? '';
 		newType = (coll.type as string) ?? 'base';
-		newFields = (((coll.fields as Record<string, unknown>[]) ?? []).map((f) => ({
-			...f,
-			id: (f.id as string) ?? crypto.randomUUID()
-		})) as unknown) as FieldDefinition[];
+		newFields = (((coll.fields as Record<string, unknown>[]) ?? [])
+			.map((f) => ({
+				...f,
+				id: (f.id as string) ?? crypto.randomUUID()
+			}))
+			.sort((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0))) as unknown as FieldDefinition[];
 		newIndexes = [];
 		activeTab = 'Fields';
 		error = '';
@@ -522,7 +524,9 @@
 		<div class="flex flex-col min-h-0 h-full">
 			<div class="flex-1 overflow-y-auto p-4">
 					<RecordForm
-						fields={((collection?.schema ?? []) as Record<string, unknown>[])}
+						fields={(((collection?.fields ?? []) as Record<string, unknown>[])
+							.filter((f) => !f.system && !f.hidden)
+							.sort((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)))}
 						bind:data={recordData}
 						disabled={recordSaving}
 						errors={recordFieldErrors}
