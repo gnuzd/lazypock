@@ -37,9 +37,18 @@
 	},
 	"dependencies": {
 		"@sveltejs/adapter-static": "^3.0.10",
+		"@tiptap/core": "^3.28.0",
+		"@tiptap/extension-link": "^3.28.0",
+		"@tiptap/extension-placeholder": "^3.28.0",
+		"@tiptap/extension-table": "^3.28.0",
+		"@tiptap/extension-table-cell": "^3.28.0",
+		"@tiptap/extension-table-header": "^3.28.0",
+		"@tiptap/extension-table-row": "^3.28.0",
+		"@tiptap/pm": "^3.28.0",
+		"@tiptap/starter-kit": "^3.28.0",
 		"lazypock": "file:../packages/lazypock-ts",
 		"svelte-sonner": "^1.1.1",
-		"tinymce": "6.8.6",
+		"svelte-tiptap": "^3.0.1",
 		"ts-pattern": "^5.9.0",
 		"zod": "^4.4.3"
 	}
