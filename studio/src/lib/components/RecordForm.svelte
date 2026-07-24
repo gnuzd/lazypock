@@ -1,5 +1,6 @@
 <script lang="ts">
 	import RichEditor from '$lib/components/RichEditor.svelte';
+	import SelectField from '$lib/components/SelectField.svelte';
 
 	let {
 		fields,
@@ -118,54 +119,20 @@
 			</div>
 
 		<!-- ═══ SELECT ═══ -->
-		{:else if type === 'select'}
+		{:else if type === 'select' || type === 'multi_select'}
 			{@const maxSelect = ((options?.maxSelect as number) || 1)}
-			{#if maxSelect > 1}
-				{@const selected = (data[name] as string[]) || []}
-				<div class="field" class:required>
-					<label>{name}</label>
-					<div class="multi-select-chips">
-						{#each choices as choice (choice)}
-							<button
-								type="button"
-								disabled={disabled}
-								class="chip"
-								class:selected={selected.includes(choice)}
-								onclick={() => {
-									if (selected.includes(choice)) {
-										update(name, selected.filter((s) => s !== choice));
-									} else {
-										update(name, [...selected, choice]);
-									}
-								}}
-							>
-								{choice}
-							</button>
-						{/each}
-					</div>
+			<div class="field" class:required>
+				<label>{name}</label>
+				<SelectField
+					choices={choices}
+					maxSelect={maxSelect}
+					bind:value={data[name]}
+					disabled={disabled}
+				/>
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
 				{/if}
 			</div>
-			{:else}
-				<div class="field" class:required>
-					<label for="f_{name}">{name}</label>
-					<select
-							id="f_{name}"
-							disabled={disabled}
-							value={(data[name] as string) ?? ''}
-							onchange={(e) => update(name, (e.target as HTMLSelectElement).value)}
-					>
-						<option value="">—</option>
-						{#each choices as choice (choice)}
-							<option value={choice}>{choice}</option>
-						{/each}
-					</select>
-					{#if errors[name]}
-						<span class="field-error">{errors[name]}</span>
-					{/if}
-				</div>
-			{/if}
 
 		<!-- ═══ FILE ═══ -->
 		{:else if type === 'file' || type === 'multi_file'}
@@ -341,23 +308,20 @@
 
 	/* ── Disabled state ── */
 	.field:has(input:disabled),
-	.field:has(textarea:disabled),
-	.field:has(select:disabled) {
+	.field:has(textarea:disabled) {
 		opacity: 0.5;
 		pointer-events: none;
 	}
 
 	input:disabled,
-	textarea:disabled,
-	select:disabled {
+	textarea:disabled {
 		cursor: default;
 		color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
 	}
 
 	/* ── Input / Textarea / Select ── */
 	.field input,
-	.field textarea,
-	.field select {
+	.field textarea {
 		display: inline-block;
 		vertical-align: top;
 		outline: 0;
@@ -384,8 +348,7 @@
 	}
 
 	.field input:focus,
-	.field textarea:focus,
-	.field select:focus {
+	.field textarea:focus {
 		outline: 0;
 	}
 
@@ -409,17 +372,7 @@
 		max-height: 300px;
 	}
 
-	/* Select */
-	.field select {
-		cursor: pointer;
-		appearance: none;
-		-webkit-appearance: none;
-		padding-right: 28px;
-		background-image: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-		background-repeat: no-repeat;
-		background-position: right 8px center;
-		background-size: 16px;
-	}
+
 
 	/* ── Help text ── */
 	.field-help {
@@ -532,37 +485,7 @@
 		background: color-mix(in oklab, var(--color-success) 15%, var(--color-base-100));
 	}
 
-	/* ── MULTI_SELECT chips ── */
-	.multi-select-chips {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 4px;
-		padding: 6px 12px 8px;
-	}
 
-	.chip {
-		display: inline-flex;
-		align-items: center;
-		padding: 4px 10px;
-		font-size: 0.8125rem;
-		border-radius: 999px;
-		border: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
-		background: color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100));
-		color: var(--color-base-content);
-		cursor: pointer;
-		transition: background 0.15s, border-color 0.15s;
-		outline: 0;
-	}
-
-	.chip.selected {
-		background: color-mix(in oklab, var(--color-primary) 20%, var(--color-base-100));
-		border-color: var(--color-primary);
-		color: var(--color-primary);
-	}
-
-	.chip:hover {
-		background: color-mix(in oklab, var(--color-primary) 10%, var(--color-base-100));
-	}
 
 	/* ── FILE ── */
 	.file-row {

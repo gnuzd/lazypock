@@ -471,9 +471,16 @@
 				onclick={() => selectCollection(coll.name as string)}
 				onkeydown={(e) => { if (e.key === 'Enter') selectCollection(coll.name as string); }}
 			>
+				{#if coll.system}
+				<svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="color:var(--color-warning)"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+			{:else}
 				<Folder class="w-4 h-4 opacity-60 shrink-0" />
-				<span class="truncate flex-1">{coll.name as string}</span>
-				<span class="text-xs opacity-40 mr-1">{(coll.schema as unknown[])?.length ?? 0}</span>
+			{/if}
+			<span class="truncate flex-1">{coll.name as string}</span>
+			{#if coll.system}
+				<span class="text-[10px] px-1 py-0.5 rounded bg-warning/20 text-warning font-medium">system</span>
+			{/if}
+			<span class="text-xs opacity-40 mr-1">{(coll.schema as unknown[])?.length ?? 0}</span>
 
 			</div>
 		{/each}

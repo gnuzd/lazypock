@@ -180,96 +180,102 @@ defmodule Lazypock.Schema.DDL do
     result =
       Repo.transaction(fn ->
         {:ok, collection} = get_collection(old_name)
-        lock_key = :erlang.phash2({:update_collection, old_name})
-        Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
-        if new_name != old_name do
-          Ecto.Adapters.SQL.query!(
-            Repo,
-            "ALTER TABLE #{TypeMapper.quote_ident(old_name)} RENAME TO #{TypeMapper.quote_ident(new_name)}",
-            []
-          )
+        # System collections cannot be renamed
+        if collection.system and new_name != old_name do
+          {:error, "Cannot rename system collection '#{old_name}'"}
+        else
+          lock_key = :erlang.phash2({:update_collection, old_name})
+          Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
-          Repo.update_all(
-            from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
-            set: [name: new_name]
-          )
-        end
-
-        if type do
-          Repo.update_all(
-            from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
-            set: [type: type]
-          )
-        end
-
-        existing_fields =
-          Repo.all(
-            from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
-          )
-
-        existing_names = MapSet.new(existing_fields, & &1.name)
-        incoming_names = MapSet.new(fields, & &1["name"])
-
-        # Remove deleted fields
-        for f <- existing_fields, not MapSet.member?(incoming_names, f.name) do
-          Ecto.Adapters.SQL.query!(
-            Repo,
-            "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
-            []
-          )
-
-          Repo.delete_all(
-            from(fld in Lazypock.Collections.Field,
-              where: fld.collection_id == ^collection.id and fld.name == ^f.name
+          if new_name != old_name do
+            Ecto.Adapters.SQL.query!(
+              Repo,
+              "ALTER TABLE #{TypeMapper.quote_ident(old_name)} RENAME TO #{TypeMapper.quote_ident(new_name)}",
+              []
             )
-          )
+
+            Repo.update_all(
+              from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
+              set: [name: new_name]
+            )
+          end
+
+          if type do
+            Repo.update_all(
+              from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
+              set: [type: type]
+            )
+          end
+
+          existing_fields =
+            Repo.all(
+              from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
+            )
+
+          existing_names = MapSet.new(existing_fields, & &1.name)
+          incoming_names = MapSet.new(fields, & &1["name"])
+
+          # Remove deleted fields
+          for f <- existing_fields, not MapSet.member?(incoming_names, f.name) do
+            Ecto.Adapters.SQL.query!(
+              Repo,
+              "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
+              []
+            )
+
+            Repo.delete_all(
+              from(fld in Lazypock.Collections.Field,
+                where: fld.collection_id == ^collection.id and fld.name == ^f.name
+              )
+            )
+          end
+
+          # Update existing fields with new options/properties
+          # Derive sort_order from array position so drag-reorder works
+          fields_with_sort =
+            fields
+            |> Enum.with_index()
+            |> Enum.map(fn {f, idx} ->
+              Map.put(f, "sort_order", idx)
+            end)
+
+          for f <- fields_with_sort, MapSet.member?(existing_names, f["name"]) do
+            Repo.update_all(
+              from(fld in Lazypock.Collections.Field,
+                where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
+              ),
+              set: [
+                required: Map.get(f, "required", false),
+                unique: Map.get(f, "unique", false),
+                hidden: Map.get(f, "hidden", false),
+                system: Map.get(f, "system", false),
+                options: Map.get(f, "options", %{}),
+                indexed: Map.get(f, "indexed", false),
+                sort_order: f["sort_order"]
+              ]
+            )
+          end
+
+          # Add new fields (also derive sort_order from position)
+          for f <- fields_with_sort, not MapSet.member?(existing_names, f["name"]) do
+            :ok = validate_field_name!(f["name"])
+            :ok = validate_field_type(f["type"])
+
+            sql =
+              "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(f["name"])} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
+
+            Ecto.Adapters.SQL.query!(Repo, sql, [])
+            if f["indexed"], do: create_index(new_name, f["name"])
+            create_field_metadata_entry!(collection.id, f)
+          end
+
+          collection_refresh =
+            Repo.get!(Lazypock.Collections.Collection, collection.id) |> Repo.preload(:fields)
+
+          update_collection_schema!(collection_refresh)
+          collection_refresh
         end
-
-        # Update existing fields with new options/properties
-        # Derive sort_order from array position so drag-reorder works
-        fields_with_sort =
-          fields
-          |> Enum.with_index()
-          |> Enum.map(fn {f, idx} ->
-            Map.put(f, "sort_order", idx)
-          end)
-
-        for f <- fields_with_sort, MapSet.member?(existing_names, f["name"]) do
-          Repo.update_all(
-            from(fld in Lazypock.Collections.Field,
-              where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
-            ),
-            set: [
-              required: Map.get(f, "required", false),
-              unique: Map.get(f, "unique", false),
-              hidden: Map.get(f, "hidden", false),
-              system: Map.get(f, "system", false),
-              options: Map.get(f, "options", %{}),
-              indexed: Map.get(f, "indexed", false),
-              sort_order: f["sort_order"]
-            ]
-          )
-        end
-
-        # Add new fields (also derive sort_order from position)
-        for f <- fields_with_sort, not MapSet.member?(existing_names, f["name"]) do
-          :ok = validate_field_name!(f["name"])
-          :ok = validate_field_type(f["type"])
-
-          sql =
-            "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(f["name"])} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
-
-          Ecto.Adapters.SQL.query!(Repo, sql, [])
-          if f["indexed"], do: create_index(new_name, f["name"])
-          create_field_metadata_entry!(collection.id, f)
-        end
-
-        collection_refresh =
-          Repo.get!(Lazypock.Collections.Collection, collection.id) |> Repo.preload(:fields)
-
-        update_collection_schema!(collection_refresh)
-        collection_refresh
       end)
 
     case result do
@@ -301,17 +307,22 @@ defmodule Lazypock.Schema.DDL do
   defp do_drop(collection) do
     result =
       Repo.transaction(fn ->
-        if collection.managed do
-          Ecto.Adapters.SQL.query!(
-            Repo,
-            "DROP TABLE IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
-            []
-          )
+        cond do
+          collection.system ->
+            {:error, "Cannot delete system collection '#{collection.name}'"}
 
-          Repo.delete!(collection)
-          :ok
-        else
-          {:error, :not_managed}
+          collection.managed ->
+            Ecto.Adapters.SQL.query!(
+              Repo,
+              "DROP TABLE IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
+              []
+            )
+
+            Repo.delete!(collection)
+            :ok
+
+          true ->
+            {:error, :not_managed}
         end
       end)
 

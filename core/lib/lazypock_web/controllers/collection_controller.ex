@@ -95,6 +95,7 @@ defmodule LazypockWeb.CollectionController do
       id: collection.id,
       name: collection.name,
       type: collection.type,
+      system: Map.get(collection, :system, false),
       schema: collection.schema,
       fields:
         (collection.fields || [])
