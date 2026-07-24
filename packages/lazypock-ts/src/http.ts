@@ -46,12 +46,22 @@ export class HttpClient {
 
 		if (res.status === 204) return null;
 
-		const data = (await res.json()) as Record<string, unknown>;
+		// Safely parse JSON — some errored responses may have empty or non-JSON bodies
+		let bodyText = "";
+		let data: Record<string, unknown> = {};
+		try {
+			bodyText = await res.text();
+			if (bodyText) {
+				data = JSON.parse(bodyText) as Record<string, unknown>;
+			}
+		} catch {
+			// Not JSON — keep data as empty object
+		}
 
 		if (!res.ok) {
 			throw new ApiError(
 				(typeof data.message === "string" ? data.message : res.statusText) ||
-					"Request failed",
+					`Request failed with status ${res.status}`,
 				data,
 				res.status,
 			);
