@@ -214,7 +214,7 @@
 		{:else if type === 'editor'}
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
-				<RichEditor {name} bind:value={data[name]} {disabled} />
+				<RichEditor bind:value={data[name]} {disabled} />
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
 				{/if}
