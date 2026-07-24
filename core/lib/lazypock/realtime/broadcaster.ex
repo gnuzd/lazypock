@@ -50,14 +50,10 @@ defmodule Lazypock.Realtime.Broadcaster do
 
   @doc """
   Broadcasts a collection CRUD event (create/update/delete) for admin purposes.
+  Topic: "collections", event name is the action itself.
   """
   def broadcast_collection_event(action, collection_json) do
-    payload = %{
-      action: action,
-      record: collection_json
-    }
-
-    Endpoint.broadcast!("admin:collections", "collection_change", payload)
+    Endpoint.broadcast!("collections", action, collection_json)
   end
 
   defp format_record(record, collection_name) do

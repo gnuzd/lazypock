@@ -7,7 +7,7 @@ defmodule LazypockWeb.AdminSpaController do
   In dev, you run vite dev server separately.
   """
   def index(conn, _params) do
-    path = Path.join(:code.priv_dir(:lazypock), "static/admin/index.html")
+    path = Path.join(:code.priv_dir(:lazypock), "static/studio/index.html")
 
     if File.exists?(path) do
       conn

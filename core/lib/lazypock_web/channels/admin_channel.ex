@@ -3,13 +3,13 @@ defmodule LazypockWeb.AdminChannel do
   Phoenix Channel for admin-level realtime events.
 
   Topics:
-    `admin:collections` — collection CRUD (create/update/delete) events
+    `collections` — collection CRUD (create/update/delete) events
   """
 
   use Phoenix.Channel
 
   @impl true
-  def join("admin:collections", _payload, socket) do
+  def join("collections", _payload, socket) do
     # Require authenticated superuser
     case socket.assigns[:current_user] do
       %{"role" => "superuser"} ->
@@ -24,7 +24,7 @@ defmodule LazypockWeb.AdminChannel do
   end
 
   @impl true
-  def join("admin:" <> _rest, _payload, _socket) do
-    {:error, %{reason: "Unknown admin topic."}}
+  def join(_topic, _payload, _socket) do
+    {:error, %{reason: "Unknown topic."}}
   end
 end

@@ -48,31 +48,45 @@ defmodule LazypockWeb.CollectionController do
 
   # Update a collection
   def update(conn, %{"id" => id} = params) do
-    opts =
-      []
-      |> maybe_put(:name, params["name"])
-      |> maybe_put(:type, params["type"])
-      |> maybe_put(:fields, params["fields"])
+    coll_name = resolve_collection_name(id)
 
-    case DDL.update_collection(id, opts) do
-      {:ok, collection} ->
-        Broadcaster.broadcast_collection_event("update", collection_json(collection))
-        json(conn, collection_json(collection))
+    cond do
+      is_nil(coll_name) ->
+        conn |> put_status(404) |> json(%{error: "Collection not found"})
 
-      {:error, reason} ->
-        conn |> put_status(400) |> json(%{error: reason})
+      true ->
+        opts =
+          []
+          |> maybe_put(:name, params["name"])
+          |> maybe_put(:type, params["type"])
+          |> maybe_put(:fields, params["fields"])
+
+        case DDL.update_collection(coll_name, opts) do
+          {:ok, collection} ->
+            Broadcaster.broadcast_collection_event("update", collection_json(collection))
+            json(conn, collection_json(collection))
+
+          {:error, reason} ->
+            conn |> put_status(400) |> json(%{error: reason})
+        end
     end
   end
 
   # Delete a collection
   def delete(conn, %{"id" => id}) do
-    case DDL.drop_collection(id) do
-      :ok ->
-        Broadcaster.broadcast_collection_event("delete", %{id: id})
-        conn |> put_status(204) |> json(%{ok: true})
+    coll_name = resolve_collection_name(id)
 
-      {:error, reason} ->
-        conn |> put_status(400) |> json(%{error: reason})
+    if is_nil(coll_name) do
+      conn |> put_status(404) |> json(%{error: "Collection not found"})
+    else
+      case DDL.drop_collection(coll_name) do
+        :ok ->
+          Broadcaster.broadcast_collection_event("delete", %{id: id})
+          conn |> put_status(204) |> json(%{ok: true})
+
+        {:error, reason} ->
+          conn |> put_status(400) |> json(%{error: reason})
+      end
     end
   end
 
@@ -103,7 +117,19 @@ defmodule LazypockWeb.CollectionController do
       updated: collection.updated_at
     }
   end
-
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  # Resolve a collection name from either a UUID or a name string
+  defp resolve_collection_name(id_or_name) do
+    case CollectionRegistry.get(id_or_name) do
+      {:ok, collection} -> collection.name
+      {:error, :not_found} ->
+        # Fallback: try lookup by UUID across all collections
+        case Enum.find(CollectionRegistry.list(), &(&1.id == id_or_name)) do
+          nil -> nil
+          collection -> collection.name
+        end
+    end
+  end
 end

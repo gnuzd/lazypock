@@ -6,20 +6,37 @@
 	import { toast } from 'svelte-sonner';
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
+	import { loginSchema } from '$lib/validation';
 
-	let email = $state('');
-	let password = $state('');
+	let formData = $state({ email: '', password: '' });
 	let loading = $state(false);
+	let fieldErrors = $state<Record<string, string>>({});
 
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
+
+		// Validate with zod
+		const result = loginSchema.safeParse(formData);
+		if (!result.success) {
+			const errs: Record<string, string> = {};
+			for (const issue of result.error.issues) {
+				const fieldName = issue.path.join('.');
+				if (!errs[fieldName]) {
+					errs[fieldName] = issue.message;
+				}
+			}
+			fieldErrors = errs;
+			return;
+		}
+
+		fieldErrors = {};
 		loading = true;
 
 		try {
-			await client.login(email, password);
+			await client.login(result.data.email, result.data.password);
 			await client.me();
-			const result = await client.listCollections('page=1&perPage=200');
-			const name = result?.items?.[0]?.name ?? '';
+			const res = await client.listCollections('page=1&perPage=200');
+			const name = res?.items?.[0]?.name ?? '';
 			if (browser) window.location.href = base + '/collections?collection=' + name;
 		} catch (err) {
 			toast.error((err as { message?: string }).message || 'Login failed');
@@ -40,7 +57,8 @@
 			type="email"
 			label="Email"
 			placeholder="superuser@example.com"
-			bind:value={email}
+			bind:value={formData.email}
+			error={fieldErrors.email}
 			required
 		/>
 
@@ -49,7 +67,8 @@
 			type="password"
 			label="Password"
 			placeholder="password"
-			bind:value={password}
+			bind:value={formData.password}
+			error={fieldErrors.password}
 			required
 		/>
 

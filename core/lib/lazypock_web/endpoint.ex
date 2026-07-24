@@ -13,7 +13,14 @@ defmodule LazypockWeb.Endpoint do
     websocket: true,
     longpoll: false
 
-  # Serve static files (including the SPA)
+  # Serve SvelteKit SPA built assets (under /_ base path)
+  plug Plug.Static,
+    at: "/_",
+    from: {:lazypock, "priv/static/studio"},
+    gzip: not code_reloading?,
+    raise_on_missing_only: code_reloading?
+
+  # Serve global static files
   plug Plug.Static,
     at: "/",
     from: :lazypock,

@@ -2,7 +2,7 @@
 
 /* ── Button base ── */
 .btn {
-	@apply inline-flex items-center justify-center gap-2 outline-none border-0 m-0 shrink-0 cursor-pointer select-none text-center no-underline leading-none font-bold rounded-[var(--radius-field)] transition-[color,background] duration-200 px-6 min-h-[38px] text-[0.9375rem];
+	@apply inline-flex items-center justify-center gap-2 outline-none border-0 m-0 shrink-0 cursor-pointer select-none text-center no-underline leading-none font-bold rounded-[var(--radius-field)] transition-[color,background] duration-200 px-4 min-h-[38px] text-[0.9375rem];
 }
 .btn:disabled,
 .btn.disabled {

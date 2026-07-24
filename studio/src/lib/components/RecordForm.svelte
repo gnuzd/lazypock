@@ -317,15 +317,15 @@
 
 	/* ── Editor field: seamless integration with the RichEditor ── */
 	.field-editor {
-		background: none;
-		padding: 0;
-		border: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
+		background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
+		padding: 0 0 8px;
+		border: none;
 		border-radius: var(--radius-field);
 		overflow: hidden;
 	}
 
 	.field-editor label {
-		padding: 8px 12px 0;
+		padding: 8px 12px 6px;
 		opacity: 1;
 		color: var(--color-base-content);
 		font-weight: 600;
@@ -336,7 +336,7 @@
 	}
 
 	.field-editor:focus-within {
-		background: none;
+		background: color-mix(in oklab, var(--color-base-content) 12%, var(--color-base-100));
 	}
 
 	/* ── Disabled state ── */
