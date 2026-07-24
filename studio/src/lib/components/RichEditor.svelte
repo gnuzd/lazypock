@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount } from 'svelte';
 
 	let {
 		name = '',
@@ -16,40 +16,37 @@
 	let id = $derived('editor_' + name);
 
 	onMount(async () => {
-		const tinymce = (await import('tinymce/tinymce')).default;
-
-		// Load default skin inline
-		await import('tinymce/themes/silver');
-		await import('tinymce/icons/default');
-		await import('tinymce/skins/ui/oxide/skin.css');
-
-		// Load plugins
-		await import('tinymce/plugins/autoresize');
-		await import('tinymce/plugins/link');
-		await import('tinymce/plugins/lists');
-		await import('tinymce/plugins/table');
-		await import('tinymce/plugins/code');
+		// Load TinyMCE from CDN (match PocketBase v6.8.6)
+		if (!window.tinymce) {
+			await new Promise<void>((resolve, reject) => {
+				const script = document.createElement('script');
+				script.src = 'https://cdn.jsdelivr.net/npm/tinymce@6.8.6/tinymce.min.js';
+				script.onload = () => resolve();
+				script.onerror = () => reject(new Error('Failed to load TinyMCE'));
+				document.head.appendChild(script);
+			});
+		}
 
 		loaded = true;
 
-		// Wait for element to be in DOM
-		await tick();
+		// Wait for textarea to be in DOM
+		await new Promise(requestAnimationFrame);
 
 		if (!el) return;
 
-		tinymce.init({
+		window.tinymce.init({
 			target: el,
 			menubar: false,
 			statusbar: false,
-			plugins: ['autoresize', 'link', 'lists', 'table', 'code'],
+			plugins: [
+				'autolink', 'autoresize', 'code', 'link', 'lists', 'table', 'wordcount',
+			],
 			toolbar:
 				'bold italic underline strikethrough | ' +
 				'bullist numlist | ' +
 				'blockquote code | ' +
 				'link table | ' +
 				'removeformat',
-			skin: false,
-			content_css: false,
 			branding: false,
 			promotion: false,
 			elementpath: false,
@@ -59,7 +56,7 @@
 			autoresize_bottom_margin: 0,
 			min_height: 150,
 			max_height: 400,
-			placeholder: '',
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			setup: (ed: any) => {
 				if (value) ed.setContent(String(value));
 				ed.on('change', () => {

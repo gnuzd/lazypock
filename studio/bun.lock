@@ -8,7 +8,7 @@
         "@sveltejs/adapter-static": "^3.0.10",
         "lazypock": "file:../packages/lazypock-ts",
         "svelte-sonner": "^1.1.1",
-        "tinymce": "^8.8.1",
+        "tinymce": "6.8.6",
         "ts-pattern": "^5.9.0",
         "zod": "^4.4.3",
       },
@@ -427,7 +427,7 @@
 
     "tinyglobby": ["tinyglobby@0.2.17", "", { "dependencies": { "fdir": "^6.5.0", "picomatch": "^4.0.4" } }, "sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g=="],
 
-    "tinymce": ["tinymce@8.8.1", "", {}, "sha512-hPOMOsF0PyMNu3ExjbqUidxHUUjmcIJp1k0e8Q45q0WwW93alxunysYPpEJ2Q2PoAYsDiRCWOowJhW6Rx0xZRw=="],
+    "tinymce": ["tinymce@6.8.6", "", {}, "sha512-++XYEs8lKWvZxDCjrr8Baiw7KiikraZ5JkLMg6EdnUVNKJui0IsrAADj5MsyUeFkcEryfn2jd3p09H7REvewyg=="],
 
     "totalist": ["totalist@3.0.1", "", {}, "sha512-sf4i37nQ2LBx4m3wB74y+ubopq6W/dIzXg0FDGjsYnZHVa1Da8FH853wlL2gtUhg+xJXjfk3kUZS3BRoQeoQBQ=="],
 
