@@ -35,7 +35,7 @@ let {
 							<span class="block mb-2 text-sm">{emptyLabel}</span>
 						{/if}
 						{#if emptyActionLabel && onemptyaction}
-							<Button class="btn-primary btn-sm" onclick={onemptyaction}>{emptyActionLabel}</Button>
+							<Button class="btn-primary" onclick={onemptyaction}>{emptyActionLabel}</Button>
 						{/if}
 					</td>
 				</tr>
