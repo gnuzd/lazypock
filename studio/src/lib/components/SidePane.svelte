@@ -5,11 +5,13 @@
 		show = $bindable(false),
 		title = '',
 		closable = true,
+		headerExtra,
 		children
 	}: {
 		show: boolean;
 		title?: string;
 		closable?: boolean;
+		headerExtra?: import('svelte').Snippet;
 		children?: import('svelte').Snippet;
 	} = $props();
 
@@ -37,9 +39,12 @@
 			{#if title}
 				<div class="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
 					<h2 class="font-semibold">{title}</h2>
-					{#if closable}
-						<button class="btn btn-ghost btn-sm px-2" onclick={close}>✕</button>
-					{/if}
+					<div class="flex items-center gap-1">
+						{@render headerExtra?.()}
+						{#if closable}
+							<button class="btn btn-ghost btn-sm px-2" onclick={close}>✕</button>
+						{/if}
+					</div>
 				</div>
 			{/if}
 			<div class="flex-1 overflow-auto">
