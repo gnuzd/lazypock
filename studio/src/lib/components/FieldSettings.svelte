@@ -262,15 +262,15 @@
 									}}
 								/>
 							{/each}
-							<button
+							<Button
 								type="button"
-								class="text-xs text-primary/70 hover:text-primary cursor-pointer border-none bg-transparent text-left p-0"
+                class='btn-sm text-xs w-fit px-1 font-medium'
 								onclick={() => {
 									const newOpts = { ...opts };
 									newOpts.values = [...values, ''];
 									field.options = newOpts;
 								}}
-							>+ Add option</button>
+							>+ Add option</Button>
 						</div>
 					</div>
 
