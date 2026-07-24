@@ -375,11 +375,11 @@
 					</label>
 				{/if}
 				<label class="flex items-center gap-1 cursor-pointer">
-					<input type="checkbox" class="checkbox checkbox-sm" id="field-{fieldIndex}-presentable" checked={!!field.presentable} onchange={(e) => field.presentable = (e.target as HTMLInputElement).checked} disabled={!!field.hidden} />
+					<input type="checkbox" class="checkbox checkbox-sm" id="field-{fieldIndex}-presentable" checked={!!field.presentable} onchange={(e) => { field.presentable = (e.target as HTMLInputElement).checked; if (field.presentable) field.hidden = false; }} disabled={!!field.hidden} />
 					Presentable
 				</label>
 				<label class="flex items-center gap-1 cursor-pointer">
-					<input type="checkbox" class="checkbox checkbox-sm" id="field-{fieldIndex}-hidden" checked={!!field.hidden} onchange={(e) => field.hidden = (e.target as HTMLInputElement).checked} />
+					<input type="checkbox" class="checkbox checkbox-sm" id="field-{fieldIndex}-hidden" checked={!!field.hidden} onchange={(e) => { field.hidden = (e.target as HTMLInputElement).checked; if (field.hidden) field.presentable = false; }} />
 					Hidden
 				</label>
 				<div class="ml-auto">
