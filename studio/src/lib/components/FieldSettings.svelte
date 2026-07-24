@@ -107,40 +107,6 @@
 					<option value="create/update">Create/Update</option>
 				</select>
 			{:else if field.type === 'select' || field.type === 'multi_select'}
-				<div class="flex items-center gap-1">
-					<button type="button" class="btn btn-ghost btn-sm px-1.5 text-xs" onclick={() => {
-						const opts = (field.options as Record<string, unknown>) || {};
-						const vals = (opts.values as string[]) || [];
-						field.options = { ...opts, values: [...vals, ''] };
-					}} title="Add option">+</button>
-					<div class="flex gap-1 flex-wrap max-w-[200px]">
-						{#each ((field.options as Record<string, unknown>)?.values as string[]) || [] as opt, i (i)}
-							<div class="flex items-center gap-0.5 bg-base-200 rounded px-1.5 py-0.5 text-xs">
-								<input
-									type="text"
-									class="w-14 bg-transparent border-none outline-none text-xs p-0"
-									value={opt}
-									placeholder="val"
-									oninput={(e) => {
-										const opts = { ...(field.options as Record<string, unknown>) };
-										const vals = [...((opts.values as string[]) || [])];
-										vals[i] = (e.target as HTMLInputElement).value;
-										opts.values = vals;
-										field.options = opts;
-									}}
-									onpointerdown={(e) => e.stopPropagation()}
-								/>
-								<button type="button" class="text-error/60 hover:text-error p-0 leading-none text-xs"
-									onclick={() => {
-										const opts = { ...(field.options as Record<string, unknown>) };
-										const vals = ((opts.values as string[]) || []).filter((_: string, j: number) => j !== i);
-										opts.values = vals;
-										field.options = opts;
-									}}>×</button>
-							</div>
-						{/each}
-					</div>
-				</div>
 				<select class="select select-sm max-w-[80px] text-xs"
 					value={((field.options as Record<string, unknown>)?.maxSelect as number || 1) > 1 ? 'multiple' : 'single'}
 					onchange={(e) => {
@@ -271,14 +237,58 @@
 						</div>
 					</div>
 				{:else if field.type === 'select' || field.type === 'multi_select'}
-					<div class="bg-base-200/40 p-1.5 rounded-field" hidden={((field.options as Record<string, unknown>)?.maxSelect as number) < 2}>
+					{@const opts = (field.options as Record<string, unknown>) || {}}
+					{@const values = (opts.values as string[]) || []}
+
+					<div class="bg-base-200/40 p-1.5 rounded-field">
+						<label class="text-xs font-medium text-base-content/70 block mb-1">Options</label>
+						<div class="flex flex-col gap-1">
+							{#each values as val, i (i)}
+								<div class="flex items-center gap-1">
+									<input
+										type="text"
+										class="flex-1 input input-xs w-full"
+										value={val}
+										placeholder="Option value"
+										oninput={(e) => {
+											const newOpts = { ...opts };
+											const newVals = [...values];
+											newVals[i] = (e.target as HTMLInputElement).value;
+											newOpts.values = newVals;
+											field.options = newOpts;
+										}}
+									/>
+									<button
+										type="button"
+										class="text-error/60 hover:text-error p-0.5 leading-none text-sm cursor-pointer border-none bg-transparent"
+										onclick={() => {
+											const newOpts = { ...opts };
+											newOpts.values = values.filter((_: string, j: number) => j !== i);
+											field.options = newOpts;
+										}}
+									>×</button>
+								</div>
+							{/each}
+							<button
+								type="button"
+								class="text-xs text-primary/70 hover:text-primary cursor-pointer border-none bg-transparent text-left p-0"
+								onclick={() => {
+									const newOpts = { ...opts };
+									newOpts.values = [...values, ''];
+									field.options = newOpts;
+								}}
+							>+ Add option</button>
+						</div>
+					</div>
+
+					<div class="bg-base-200/40 p-1.5 rounded-field">
 						<label class="text-xs font-medium text-base-content/70 block mb-1" for="field-{fieldIndex}-maxSelect">Max select</label>
-						<input type="number" id="field-{fieldIndex}-maxSelect" step="1" min="2" placeholder="Default to single" class="input input-sm w-full"
+						<input type="number" id="field-{fieldIndex}-maxSelect" step="1" min="2" placeholder="Defaults to 10" class="input input-sm w-full"
 							value={((field.options as Record<string, unknown>)?.maxSelect as number) || ''}
 							onchange={(e) => {
-								const opts = { ...(field.options as Record<string, unknown>) };
-								opts.maxSelect = Math.max(2, parseInt((e.target as HTMLInputElement).value, 10));
-								field.options = opts;
+								const newOpts = { ...(field.options as Record<string, unknown>) };
+								newOpts.maxSelect = Math.max(2, parseInt((e.target as HTMLInputElement).value, 10));
+								field.options = newOpts;
 							}}
 						/>
 					</div>
