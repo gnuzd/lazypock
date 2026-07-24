@@ -1,6 +1,5 @@
 <script lang="ts">
-	import 'trix';
-	import 'trix/dist/trix.css';
+	import { onMount } from 'svelte';
 
 	let {
 		name = '',
@@ -12,8 +11,15 @@
 		disabled?: boolean;
 	} = $props();
 
+	let loaded = $state(false);
 	let id = $derived('editor_' + name);
 	let editorEl = $state<HTMLDivElement>();
+
+	onMount(async () => {
+		await import('trix');
+		await import('trix/dist/trix.css');
+		loaded = true;
+	});
 
 	function handleTrixChange() {
 		const el = editorEl?.querySelector('trix-editor');
@@ -23,17 +29,27 @@
 	}
 </script>
 
-<div class="rich-editor" class:disabled>
-	<input type="hidden" id={id} {name} bind:value />
-	<div bind:this={editorEl}>
-		<trix-toolbar for={id}></trix-toolbar>
-		<trix-editor
-			input={id}
-			ontrix-change={handleTrixChange}
-			contenteditable={!disabled ? 'true' : undefined}
-		></trix-editor>
-	</div>
-</div>
+{#if loaded}
+		<div class="rich-editor" class:disabled>
+			<input type="hidden" id={id} {name} bind:value />
+			<div bind:this={editorEl}>
+				<trix-toolbar for={id}></trix-toolbar>
+				<trix-editor
+					input={id}
+					ontrix-change={handleTrixChange}
+					contenteditable={!disabled ? 'true' : undefined}
+				></trix-editor>
+			</div>
+		</div>
+	{:else}
+		<textarea
+			class="rich-editor"
+			class:disabled
+			value={String(value ?? '')}
+			rows="6"
+			disabled
+		></textarea>
+	{/if}
 
 <style>
 	.rich-editor {
