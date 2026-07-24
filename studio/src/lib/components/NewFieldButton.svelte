@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { addableFieldTypes, fieldTypes, createField, type FieldDefinition } from '$lib/fieldTypes';
 	import Dropdown from '$lib/components/Dropdown.svelte';
+	import Button from '$lib/components/Button.svelte';
 
 	let {
 		fields = $bindable<FieldDefinition[]>([]),
@@ -24,13 +25,10 @@
 
 <Dropdown bind:show={open} class="my-2">
 	{#snippet trigger()}
-		<button
-			type="button"
-			class="btn w-full flex items-center justify-center gap-2 border-2 border-current bg-transparent text-base-content rounded-field cursor-pointer min-h-[var(--btn-height)] py-1.5 font-bold hover:bg-base-200 transition-[background] duration-(--animation-speed)"
-		>
+		<Button class="w-full flex items-center justify-center gap-2 border-2 border-current bg-transparent text-base-content" onclick={() => open = !open}>
 			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
 			<span>New field</span>
-		</button>
+		</Button>
 	{/snippet}
 
 	<div class="flex flex-row flex-wrap gap-0 p-1.5 min-w-[300px]">

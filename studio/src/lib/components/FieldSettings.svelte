@@ -6,6 +6,8 @@
 		Settings, Trash2, GripVertical
 	} from '@lucide/svelte';
 	import { slugify } from '$lib/fieldTypes';
+	import OptionRow from './OptionRow.svelte';
+	import Button from './Button.svelte';
 
 	const typeIcons: Record<string, typeof FileText> = {
 		text: FileText,
@@ -244,31 +246,21 @@
 						<label class="text-xs font-medium text-base-content/70 block mb-1">Options</label>
 						<div class="flex flex-col gap-1">
 							{#each values as val, i (i)}
-								<div class="flex items-center gap-1">
-									<input
-										type="text"
-										class="flex-1"
-										style="min-height:28px;padding:3px 10px;font-size:0.875rem;border-radius:var(--radius-field);border:none;background:color-mix(in oklab,var(--color-base-content) 6%,transparent);color:var(--color-base-content);outline:none;box-sizing:border-box;"
-										value={val}
-										placeholder="Option value"
-										oninput={(e) => {
-											const newOpts = { ...opts };
-											const newVals = [...values];
-											newVals[i] = (e.target as HTMLInputElement).value;
-											newOpts.values = newVals;
-											field.options = newOpts;
-										}}
-									/>
-									<button
-										type="button"
-										class="btn btn-ghost btn-sm px-1 text-error/60 hover:text-error"
-										onclick={() => {
-											const newOpts = { ...opts };
-											newOpts.values = values.filter((_: string, j: number) => j !== i);
-											field.options = newOpts;
-										}}
-									>×</button>
-								</div>
+								<OptionRow
+									value={val}
+									onchange={(v) => {
+										const newOpts = { ...opts };
+										const newVals = [...values];
+										newVals[i] = v;
+										newOpts.values = newVals;
+										field.options = newOpts;
+									}}
+									onremove={() => {
+										const newOpts = { ...opts };
+										newOpts.values = values.filter((_: string, j: number) => j !== i);
+										field.options = newOpts;
+									}}
+								/>
 							{/each}
 							<button
 								type="button"
@@ -391,9 +383,9 @@
 					Hidden
 				</label>
 				<div class="ml-auto">
-					<button type="button" class="btn btn-ghost btn-sm text-error px-1" title="Delete field" onclick={() => field['@toDelete'] = true}>
-						<Trash2 size={14} />
-					</button>
+					<Button class="btn-ghost btn-sm btn-circle text-error hover:text-error" onclick={() => field['@toDelete'] = true}>
+						<Trash2 size={16} />
+					</Button>
 				</div>
 			</div>
 		{/if}
