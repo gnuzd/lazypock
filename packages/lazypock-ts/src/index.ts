@@ -67,6 +67,23 @@ export class LazypockClient {
 
 	// ── Auth ──
 
+	async checkSuperuser(): Promise<{ hasSuperuser: boolean } | null> {
+		return this.http.get<{ hasSuperuser: boolean }>("/superusers/check");
+	}
+
+	async setup(
+		email: string,
+		password: string,
+	): Promise<({ token: string } & Record<string, unknown>) | null> {
+		const data = await this.http.post<
+			{ token: string } & Record<string, unknown>
+		>("/superusers/setup", { email, password });
+		if (data) {
+			this.authStore.set(data.token, null);
+		}
+		return data;
+	}
+
 	async login(
 		email: string,
 		password: string,
