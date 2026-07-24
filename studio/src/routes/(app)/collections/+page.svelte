@@ -519,7 +519,7 @@
 	/>
 
 	<!-- Record create/edit SidePane -->
-	<SidePane bind:show={showRecordPane} title={editingRecordId ? 'Edit Record' : 'New Record'}>
+	<SidePane bind:show={showRecordPane} title={editingRecordId ? 'Edit Record' : 'New Record'} closable={false}>
 		<div class="flex flex-col min-h-0 h-full">
 			<div class="flex-1 overflow-y-auto p-4">
 					<RecordForm
@@ -537,24 +537,39 @@
 			{/if}
 
 			<div class="shrink-0 flex items-center gap-2 px-4 py-3 border-t border-base-300">
-				<button type="button" class="btn btn-ghost mr-auto" onclick={() => showRecordPane = false}>Close</button>
+				<Button class="btn-ghost mr-auto" onclick={() => showRecordPane = false}>Close</Button>
 				{#if editingRecordId}
-					<button
-						type="button"
-						class="btn btn-error btn-sm"
-						disabled={recordSaving}
-						onclick={deleteRecord}
-					>Delete</button>
+					<div class="relative dropdown dropdown-top dropdown-end">
+						<button
+							type="button"
+							class="btn btn-ghost btn-sm px-2"
+							tabindex="0"
+							role="button"
+						>
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+						</button>
+						<ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-field z-10 shadow-lg border border-base-300 p-1 min-w-[140px]">
+							<li>
+								<button
+									type="button"
+									class="text-error flex items-center gap-2 px-3 py-1.5 text-sm w-full rounded-field cursor-pointer border-none bg-transparent hover:bg-error/10"
+									onclick={deleteRecord}
+								>
+									<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+									Delete
+								</button>
+							</li>
+						</ul>
+					</div>
 				{/if}
-				<button
-					type="button"
-					class="btn btn-primary"
-					class:loading={recordSaving}
+				<Button
+					class="btn-primary"
+					loading={recordSaving}
 					disabled={!Object.keys(recordData).length || recordSaving}
 					onclick={saveRecord}
 				>
 					{editingRecordId ? 'Update' : 'Create'}
-				</button>
+				</Button>
 			</div>
 		</div>
 	</SidePane>

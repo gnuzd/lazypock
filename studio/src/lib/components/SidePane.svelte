@@ -4,10 +4,12 @@
 	let {
 		show = $bindable(false),
 		title = '',
+		closable = true,
 		children
 	}: {
 		show: boolean;
 		title?: string;
+		closable?: boolean;
 		children?: import('svelte').Snippet;
 	} = $props();
 
@@ -35,7 +37,9 @@
 			{#if title}
 				<div class="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
 					<h2 class="font-semibold">{title}</h2>
-					<button class="btn btn-ghost btn-sm px-2" onclick={close}>✕</button>
+					{#if closable}
+						<button class="btn btn-ghost btn-sm px-2" onclick={close}>✕</button>
+					{/if}
 				</div>
 			{/if}
 			<div class="flex-1 overflow-auto">
