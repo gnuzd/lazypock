@@ -522,28 +522,26 @@
 	<SidePane bind:show={showRecordPane} title={editingRecordId ? 'Edit Record' : 'New Record'} closable={false}>
 		{#snippet headerExtra()}
 			{#if editingRecordId}
-				<div class="dropdown dropdown-end">
-					<button
-						type="button"
-						class="btn btn-ghost btn-sm px-2"
-						tabindex="0"
-						role="button"
-					>
-						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-					</button>
-					<ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-field z-10 shadow-lg border border-base-300 p-1 min-w-[140px]">
-						<li>
-							<button
-								type="button"
-								class="text-error flex items-center gap-2 px-3 py-1.5 text-sm w-full rounded-field cursor-pointer border-none bg-transparent hover:bg-error/10"
-								onclick={deleteRecord}
-							>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-								Delete
-							</button>
-						</li>
-					</ul>
-				</div>
+				<Dropdown>
+					{#snippet trigger()}
+						<button
+							type="button"
+							class="btn btn-ghost btn-sm px-2"
+						>
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+						</button>
+					{/snippet}
+					<div class="p-1 min-w-[140px]">
+						<button
+							type="button"
+							class="text-error flex items-center gap-2 px-3 py-1.5 text-sm w-full rounded-field cursor-pointer border-none bg-transparent hover:bg-error/10"
+							onclick={deleteRecord}
+						>
+							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+							Delete
+						</button>
+					</div>
+				</Dropdown>
 			{/if}
 		{/snippet}
 		<div class="flex flex-col min-h-0 h-full">
