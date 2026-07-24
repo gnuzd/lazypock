@@ -23,6 +23,7 @@
 	let loading = $state(false);
 	let activeName = $state('');
 	let search = $state('');
+	let showSystem = $state(false);
 
 	// ── Record CRUD state ──
 	let showRecordPane = $state(false);
@@ -461,29 +462,50 @@
 	{#if filtered.length === 0}
 		<div class="p-4 text-center opacity-40 text-sm">No collections</div>
 	{:else}
-		{#each filtered as coll (coll.id)}
-			<div
-				class="flex items-center gap-2 w-[calc(100%-12px)] mx-1.5 px-3 py-1.5 border-none rounded-field text-sm text-base-content cursor-pointer text-left transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
-				class:bg-base-200={coll.name === activeName}
-				class:font-medium={coll.name === activeName}
-				role="button"
-				tabindex="0"
-				onclick={() => selectCollection(coll.name as string)}
-				onkeydown={(e) => { if (e.key === 'Enter') selectCollection(coll.name as string); }}
-			>
-				{#if coll.system}
-				<svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="color:var(--color-warning)"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-			{:else}
-				<Folder class="w-4 h-4 opacity-60 shrink-0" />
-			{/if}
-			<span class="truncate flex-1">{coll.name as string}</span>
-			{#if coll.system}
-				<span class="text-[10px] px-1 py-0.5 rounded bg-warning/20 text-warning font-medium">system</span>
-			{/if}
-			<span class="text-xs opacity-40 mr-1">{(coll.schema as unknown[])?.length ?? 0}</span>
+		{@const userCollections = filtered.filter((c) => !c.system)}
+		{@const systemCollections = filtered.filter((c) => c.system)}
 
+		{#if userCollections.length > 0}
+			{#each userCollections as coll (coll.id)}
+				<div
+					class="flex items-center gap-2 w-[calc(100%-12px)] mx-1.5 px-3 py-1.5 border-none rounded-field text-sm text-base-content cursor-pointer text-left transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
+					class:bg-base-200={coll.name === activeName}
+					class:font-medium={coll.name === activeName}
+					role="button"
+					tabindex="0"
+					onclick={() => selectCollection(coll.name as string)}
+					onkeydown={(e) => { if (e.key === 'Enter') selectCollection(coll.name as string); }}
+				>
+					<Folder class="w-4 h-4 opacity-60 shrink-0" />
+					<span class="truncate flex-1">{coll.name as string}</span>
+					<span class="text-xs opacity-40 mr-1">{(coll.schema as unknown[])?.length ?? 0}</span>
+				</div>
+			{/each}
+		{/if}
+
+		{#if systemCollections.length > 0}
+			<div class="flex items-center gap-2 w-[calc(100%-12px)] mx-1.5 px-3 py-1.5 text-xs font-medium text-base-content/50 cursor-pointer select-none" onclick={() => showSystem = !showSystem} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') showSystem = !showSystem; }}>
+				<svg class="w-3 h-3 transition-transform duration-150" class:rotate-90={showSystem} fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+				<span>System ({systemCollections.length})</span>
 			</div>
-		{/each}
+			{#if showSystem}
+				{#each systemCollections as coll (coll.id)}
+					<div
+						class="flex items-center gap-2 w-[calc(100%-12px)] mx-1.5 px-3 py-1.5 border-none rounded-field text-sm text-base-content cursor-pointer text-left transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
+						class:bg-base-200={coll.name === activeName}
+						class:font-medium={coll.name === activeName}
+						role="button"
+						tabindex="0"
+						onclick={() => selectCollection(coll.name as string)}
+						onkeydown={(e) => { if (e.key === 'Enter') selectCollection(coll.name as string); }}
+					>
+						<svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="color:var(--color-warning)"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+						<span class="truncate flex-1">{coll.name as string}</span>
+						<span class="text-[10px] px-1 py-0.5 rounded bg-warning/20 text-warning font-medium">system</span>
+					</div>
+				{/each}
+			{/if}
+		{/if}
 	{/if}
 {/snippet}
 

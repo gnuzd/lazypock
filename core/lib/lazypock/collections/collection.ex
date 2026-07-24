@@ -15,8 +15,8 @@ defmodule Lazypock.Collections.Collection do
   @doc "_superusers collection (auth): admin superusers"
   def system_superusers, do: "_superusers"
 
-  @doc "_externalAuths collection (base): OAuth2 external auth links"
-  def system_external_auths, do: "_externalAuths"
+  @doc "_external_auths collection (base): OAuth2 external auth links"
+  def system_external_auths, do: "_external_auths"
 
   @doc "_mfas collection (base): multi-factor authentication records"
   def system_mfas, do: "_mfas"
@@ -24,19 +24,24 @@ defmodule Lazypock.Collections.Collection do
   @doc "_otps collection (base): one-time password tokens"
   def system_otps, do: "_otps"
 
-  @doc "_authOrigins collection (base): auth origin fingerprints"
-  def system_auth_origins, do: "_authOrigins"
+  @doc "_auth_origins collection (base): auth origin fingerprints"
+  def system_auth_origins, do: "_auth_origins"
+
+  @doc "users collection (auth): default user accounts"
+  def system_users, do: "users"
 
   @doc """
   Returns all known system collection names.
   """
-  def system_names, do: [
-    system_superusers(),
-    system_external_auths(),
-    system_mfas(),
-    system_otps(),
-    system_auth_origins()
-  ]
+  def system_names,
+    do: [
+      system_superusers(),
+      system_external_auths(),
+      system_mfas(),
+      system_otps(),
+      system_auth_origins(),
+      system_users()
+    ]
 
   @doc """
   Returns true if the given collection name is a built-in system collection.
