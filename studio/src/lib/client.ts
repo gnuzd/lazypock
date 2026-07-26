@@ -12,12 +12,12 @@ export function connectRealtime(): void {
 	// (the Vite/SvelteKit dev server can't reliably proxy WebSocket upgrades).
 	// In production, the socket is served from the same origin.
 	const host = window.location.hostname;
-	const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+	const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
 	const port = dev ? 4000 : window.location.port;
 	const wsUrl = `${protocol}://${host}:${port}/socket/websocket`;
 	client.realtime.connect({
 		url: wsUrl,
-		token: client.authStore.token || undefined,
+		token: client.authStore.token || undefined
 	});
 }
 
