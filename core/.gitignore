@@ -35,3 +35,6 @@ lazypock-*.tar
 npm-debug.log
 /assets/node_modules/
 
+
+# Burrito build output
+/burrito_out/
