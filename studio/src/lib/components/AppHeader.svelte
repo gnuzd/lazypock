@@ -22,6 +22,7 @@
 	}
 
   function _goto(path:string) {
+    // eslint-disable-next-line svelte/no-navigation-without-resolve
     goto(base + path)
   }
 </script>

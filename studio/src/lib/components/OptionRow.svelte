@@ -13,6 +13,7 @@
 
 	// Need writable local state because #each variables are read-only,
 	// so we can't bind:value directly to <Input>
+	// eslint-disable-next-line svelte/prefer-writable-derived
 	let local = $state(value);
 
 	// Sync parent value changes (e.g. reorder) into local
