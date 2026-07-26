@@ -228,7 +228,9 @@ defmodule LazypockWeb.DynamicController do
   defp combine_wheres(sql, ""), do: sql
   defp combine_wheres(left, right), do: "(#{left}) AND (#{right})"
 
-  # Strip system fields and coerce empty strings to nil for non-text types
+  # Strip system fields, coerce empty strings to nil for non-text types,
+  # and bcrypt-hash password fields automatically.
+  # Empty password values are dropped entirely (keep existing on update).
   defp sanitize_attrs(attrs, collection) do
     field_types =
       (collection.fields || [])
@@ -240,18 +242,26 @@ defmodule LazypockWeb.DynamicController do
 
     attrs
     |> Map.drop(MapSet.to_list(system_fields))
-    |> Enum.map(fn {key, value} ->
+    |> Enum.reduce(%{}, fn {key, value}, acc ->
       type = Map.get(field_types, key, "text")
 
-      coerced =
-        if value == "" and MapSet.member?(non_text_types, type) do
-          nil
-        else
-          value
-        end
+      cond do
+        # Empty password on update → skip entirely (keep existing)
+        type == "password" and value == "" ->
+          acc
 
-      {key, coerced}
+        # Password with value → bcrypt hash
+        type == "password" and is_binary(value) ->
+          Map.put(acc, key, Bcrypt.hash_pwd_salt(value))
+
+        # Empty string for non-text type → nil
+        value == "" and MapSet.member?(non_text_types, type) ->
+          Map.put(acc, key, nil)
+
+        # Everything else as-is
+        true ->
+          Map.put(acc, key, value)
+      end
     end)
-    |> Map.new()
   end
 end

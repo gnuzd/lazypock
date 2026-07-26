@@ -4,6 +4,7 @@
 	import Link from '@tiptap/extension-link';
 	import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 	import Placeholder from '@tiptap/extension-placeholder';
+	import { Markdown } from '@tiptap/markdown';
 	import { EditorContent, createEditor } from 'svelte-tiptap';
 	import type { Editor } from 'svelte-tiptap';
 
@@ -15,7 +16,7 @@
 		const edStore = createEditor({
 			extensions: [
 				StarterKit.configure({
-					heading: { levels: [1, 2, 3] },
+					heading: { levels: [1, 2, 3] }
 				}),
 				Link.configure({ openOnClick: false }),
 				Table.configure({ resizable: true }),
@@ -23,12 +24,17 @@
 				TableCell,
 				TableHeader,
 				Placeholder.configure({ placeholder: 'Write something…' }),
+				Markdown.configure({
+					indentation: { style: 'space', size: 2 },
+					markedOptions: { gfm: true }
+				})
 			],
+			contentType: 'markdown',
 			content: String(value ?? ''),
 			editable: !disabled,
-			onUpdate: ({ editor: ed }: { editor: { getHTML: () => string } }) => {
-				value = ed.getHTML();
-			},
+			onUpdate: ({ editor: ed }) => {
+				value = (ed as unknown as { getMarkdown: () => string }).getMarkdown();
+			}
 		});
 
 		const unsub = edStore.subscribe((ed) => {
@@ -57,8 +63,14 @@
 	});
 
 	$effect(() => {
-		if (editor && value !== editor.getHTML()) {
-			editor.commands.setContent(String(value ?? ''));
+		if (!editor) return;
+		const ed = editor as unknown as {
+			getMarkdown: () => string;
+			commands: { setContent: (content: string, opts?: { contentType?: string }) => void };
+		};
+		const md: string | undefined = ed.getMarkdown();
+		if (md !== undefined && value !== md) {
+			ed.commands.setContent(String(value ?? ''), { contentType: 'markdown' });
 		}
 	});
 </script>
@@ -66,22 +78,80 @@
 <div class="rich-editor" class:disabled>
 	{#if editor}
 		<div class="toolbar">
-			<button type="button" class="toolbar-btn" class:active={isActive('bold')} onclick={() => exec('toggleBold')} title="Bold"><b>B</b></button>
-			<button type="button" class="toolbar-btn" class:active={isActive('italic')} onclick={() => exec('toggleItalic')} title="Italic"><i>I</i></button>
-			<button type="button" class="toolbar-btn" class:active={isActive('underline')} onclick={() => exec('toggleUnderline')} title="Underline"><u>U</u></button>
-			<button type="button" class="toolbar-btn" class:active={isActive('strike')} onclick={() => exec('toggleStrike')} title="Strikethrough"><s>S</s></button>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('bold')}
+				onclick={() => exec('toggleBold')}
+				title="Bold"><b>B</b></button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('italic')}
+				onclick={() => exec('toggleItalic')}
+				title="Italic"><i>I</i></button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('underline')}
+				onclick={() => exec('toggleUnderline')}
+				title="Underline"><u>U</u></button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('strike')}
+				onclick={() => exec('toggleStrike')}
+				title="Strikethrough"><s>S</s></button
+			>
 
 			<span class="sep"></span>
 
-			<button type="button" class="toolbar-btn" class:active={isActive('bulletList')} onclick={() => exec('toggleBulletList')} title="Bullet list">•</button>
-			<button type="button" class="toolbar-btn" class:active={isActive('orderedList')} onclick={() => exec('toggleOrderedList')} title="Numbered list">1.</button>
-			<button type="button" class="toolbar-btn" class:active={isActive('blockquote')} onclick={() => exec('toggleBlockquote')} title="Blockquote">"</button>
-			<button type="button" class="toolbar-btn" class:active={isActive('codeBlock')} onclick={() => exec('toggleCodeBlock')} title="Code block">&lt;/&gt;</button>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('bulletList')}
+				onclick={() => exec('toggleBulletList')}
+				title="Bullet list">•</button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('orderedList')}
+				onclick={() => exec('toggleOrderedList')}
+				title="Numbered list">1.</button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('blockquote')}
+				onclick={() => exec('toggleBlockquote')}
+				title="Blockquote">"</button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('codeBlock')}
+				onclick={() => exec('toggleCodeBlock')}
+				title="Code block">&lt;/&gt;</button
+			>
 
 			<span class="sep"></span>
 
-			<button type="button" class="toolbar-btn" onclick={() => exec('setLink', { href: prompt('Link URL:') })} title="Link">🔗</button>
-			<button type="button" class="toolbar-btn" onclick={() => exec('insertTable', { rows: 3, cols: 3, withHeaderRow: true })} title="Insert table">⊞</button>
+			<button
+				type="button"
+				class="toolbar-btn"
+				onclick={() => exec('setLink', { href: prompt('Link URL:') })}
+				title="Link">🔗</button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				onclick={() => exec('insertTable', { rows: 3, cols: 3, withHeaderRow: true })}
+				title="Insert table">⊞</button
+			>
 
 			<span class="sep"></span>
 
@@ -178,9 +248,18 @@
 		height: 0;
 	}
 
-	:global(.editor-content h1) { font-size: 1.4rem; margin: 0.5rem 0 0.25rem; }
-	:global(.editor-content h2) { font-size: 1.2rem; margin: 0.4rem 0 0.2rem; }
-	:global(.editor-content h3) { font-size: 1.1rem; margin: 0.3rem 0 0.15rem; }
+	:global(.editor-content h1) {
+		font-size: 1.4rem;
+		margin: 0.5rem 0 0.25rem;
+	}
+	:global(.editor-content h2) {
+		font-size: 1.2rem;
+		margin: 0.4rem 0 0.2rem;
+	}
+	:global(.editor-content h3) {
+		font-size: 1.1rem;
+		margin: 0.3rem 0 0.15rem;
+	}
 
 	:global(.editor-content blockquote) {
 		border-left: 3px solid color-mix(in oklab, var(--color-base-content) 20%, transparent);
@@ -204,7 +283,10 @@
 		font-size: 0.85em;
 	}
 
-	:global(.editor-content ul), :global(.editor-content ol) { padding-left: 1.5rem; }
+	:global(.editor-content ul),
+	:global(.editor-content ol) {
+		padding-left: 1.5rem;
+	}
 
 	:global(.editor-content table) {
 		border-collapse: collapse;
@@ -212,7 +294,8 @@
 		margin: 8px 0;
 	}
 
-	:global(.editor-content th), :global(.editor-content td) {
+	:global(.editor-content th),
+	:global(.editor-content td) {
 		border: 1px solid color-mix(in oklab, var(--color-base-content) 20%, transparent);
 		padding: 6px 10px;
 		text-align: left;

@@ -19,6 +19,7 @@ defmodule LazypockWeb.DynamicView do
       |> Map.put("collectionId", collection.id)
       |> Map.put("collectionName", collection.name)
       |> rename_timestamps()
+      |> strip_password_fields(collection)
     end)
   end
 
@@ -35,6 +36,7 @@ defmodule LazypockWeb.DynamicView do
     |> Map.put("collectionId", collection.id)
     |> Map.put("collectionName", collection.name)
     |> rename_timestamps()
+    |> strip_password_fields(collection)
   end
 
   @doc """
@@ -58,6 +60,16 @@ defmodule LazypockWeb.DynamicView do
     record
     |> maybe_rename("created_at", "created")
     |> maybe_rename("updated_at", "updated")
+  end
+
+  # Strips password fields from API responses (security + PocketBase compat).
+  defp strip_password_fields(record, collection) do
+    password_fields =
+      (collection.fields || [])
+      |> Enum.filter(fn f -> f.type == "password" end)
+      |> Enum.map(fn f -> f.name end)
+
+    Map.drop(record, password_fields)
   end
 
   defp maybe_rename(record, old_key, new_key) do

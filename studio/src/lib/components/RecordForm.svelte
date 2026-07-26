@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { slide } from 'svelte/transition';
 	import RichEditor from '$lib/components/RichEditor.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
 
@@ -6,7 +7,11 @@
 		fields,
 		data = $bindable({}),
 		disabled = false,
-		errors = {}
+		errors = {},
+		editing = false,
+		passwordSaving = $bindable(false),
+		passwordError = $bindable(''),
+		onPasswordSave
 	}: {
 		/** Collection schema fields (as returned from backend) */
 		fields: Record<string, unknown>[];
@@ -16,11 +21,17 @@
 		disabled?: boolean;
 		/** Per-field error messages */
 		errors?: Record<string, string>;
+		/** True if editing existing record */
+		editing?: boolean;
+		/** True while password is being saved */
+		passwordSaving?: boolean;
+		/** Error message for password save */
+		passwordError?: string;
+		/** Called when user saves password in edit mode */
+		onPasswordSave?: (password: string) => void;
 	} = $props();
 
-	const TEXT_INPUT_TYPES = new Set([
-		'text', 'number', 'email', 'url', 'password'
-	]);
+	const TEXT_INPUT_TYPES = new Set(['text', 'number', 'email', 'url', 'password']);
 
 	function isTextInput(f: Record<string, unknown>): boolean {
 		return TEXT_INPUT_TYPES.has(f.type as string);
@@ -35,6 +46,11 @@
 		return 'text';
 	}
 
+	// ── Password management state ──
+	let editPwOpen = $state(false);
+	let newPassword = $state('');
+	let confirmPassword = $state('');
+
 	function update(fieldName: string, value: unknown) {
 		data[fieldName] = value;
 		data = { ...data };
@@ -42,12 +58,12 @@
 </script>
 
 <div class="record-form">
-	{#each fields.filter((f) => !f.system) as field (field.name as string)}
+	{#each fields.filter((f) => f.type !== 'autodate' && f.name !== 'id' && f.type !== 'password') as field (field.name as string)}
 		{@const options = (field.options ?? {}) as Record<string, unknown>}
 		{@const type = field.type as string}
 		{@const name = field.name as string}
 		{@const required = !!field.required}
-		{@const choices = ((options?.values as string[]) || [])}
+		{@const choices = (options?.values as string[]) || []}
 
 		<!-- ═══ BOOLEAN ═══ -->
 		{#if type === 'bool'}
@@ -55,19 +71,19 @@
 				<input
 					type="checkbox"
 					checked={!!data[name]}
-					disabled={disabled}
+					{disabled}
 					onchange={(e) => update(name, (e.target as HTMLInputElement).checked)}
 				/>
 				<span class="check-label">{name}</span>
 			</label>
 
-		<!-- ═══ JSON / GEO ═══ -->
+			<!-- ═══ JSON / GEO ═══ -->
 		{:else if type === 'json' || type === 'geo'}
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
 				<textarea
 					id="f_{name}"
-					disabled={disabled}
+					{disabled}
 					value={data[name] != null ? JSON.stringify(data[name], null, 2) : ''}
 					onchange={(e) => {
 						try {
@@ -77,22 +93,21 @@
 						}
 					}}
 					rows="4"
-					placeholder={'{}'}
-				></textarea>
-					<span class="field-help">Valid JSON</span>
+					placeholder={'{}'}></textarea>
+				<span class="field-help">Valid JSON</span>
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
 				{/if}
 			</div>
 
-		<!-- ═══ DATE ═══ -->
+			<!-- ═══ DATE ═══ -->
 		{:else if type === 'date'}
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
 				<input
 					id="f_{name}"
 					type="date"
-					disabled={disabled}
+					{disabled}
 					value={(data[name] as string) ?? ''}
 					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
 					placeholder="YYYY-MM-DD"
@@ -102,14 +117,14 @@
 				{/if}
 			</div>
 
-		<!-- ═══ DATETIME ═══ -->
+			<!-- ═══ DATETIME ═══ -->
 		{:else if type === 'datetime' || type === 'autodate'}
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
 				<input
 					id="f_{name}"
 					type="datetime-local"
-					disabled={disabled}
+					{disabled}
 					value={(data[name] as string) ?? ''}
 					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
 				/>
@@ -118,23 +133,18 @@
 				{/if}
 			</div>
 
-		<!-- ═══ SELECT ═══ -->
+			<!-- ═══ SELECT ═══ -->
 		{:else if type === 'select' || type === 'multi_select'}
-			{@const maxSelect = ((options?.maxSelect as number) || 1)}
+			{@const maxSelect = (options?.maxSelect as number) || 1}
 			<div class="field" class:required>
 				<label>{name}</label>
-				<SelectField
-					choices={choices}
-					maxSelect={maxSelect}
-					bind:value={data[name]}
-					disabled={disabled}
-				/>
+				<SelectField {choices} {maxSelect} bind:value={data[name]} {disabled} />
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
 				{/if}
 			</div>
 
-		<!-- ═══ FILE ═══ -->
+			<!-- ═══ FILE ═══ -->
 		{:else if type === 'file' || type === 'multi_file'}
 			<div class="field" class:required>
 				<label>{name}</label>
@@ -143,10 +153,10 @@
 						<span class="file-name">{String(data[name])}</span>
 						<button
 							type="button"
-							disabled={disabled}
+							{disabled}
 							class="btn-text danger"
-							onclick={() => update(name, null)}
-						>Remove</button>
+							onclick={() => update(name, null)}>Remove</button
+						>
 					</div>
 				{:else}
 					<div class="file-placeholder">
@@ -154,30 +164,34 @@
 					</div>
 				{/if}
 				<span class="field-help">File upload (drag & drop or click)</span>
-			{#if errors[name]}
-				<span class="field-error">{errors[name]}</span>
-			{/if}
-		</div>
+				{#if errors[name]}
+					<span class="field-error">{errors[name]}</span>
+				{/if}
+			</div>
 
-		<!-- ═══ RELATION ═══ -->
+			<!-- ═══ RELATION ═══ -->
 		{:else if type === 'relation'}
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
 				<input
 					id="f_{name}"
 					type="text"
-					disabled={disabled}
+					{disabled}
 					value={(data[name] as string) ?? ''}
 					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
 					placeholder="Related record ID"
 				/>
-				<span class="field-help">Related record ID{options.maxSelect && (options.maxSelect as number) > 1 ? 's (comma-separated)' : ''}</span>
-			{#if errors[name]}
-				<span class="field-error">{errors[name]}</span>
-			{/if}
-		</div>
+				<span class="field-help"
+					>Related record ID{options.maxSelect && (options.maxSelect as number) > 1
+						? 's (comma-separated)'
+						: ''}</span
+				>
+				{#if errors[name]}
+					<span class="field-error">{errors[name]}</span>
+				{/if}
+			</div>
 
-		<!-- ═══ EDITOR (rich text) ═══ -->
+			<!-- ═══ EDITOR (rich text) ═══ -->
 		{:else if type === 'editor'}
 			<div class="field field-editor" class:required>
 				<label>{name}</label>
@@ -187,9 +201,9 @@
 				{/if}
 			</div>
 
-		<!-- ═══ TEXT / NUMBER / EMAIL / URL / PASSWORD ═══ -->
+			<!-- ═══ TEXT / NUMBER / EMAIL / URL ═══ -->
 		{:else if isTextInput(field)}
-			{@const isMulti = type === 'text'}
+			{@const isMulti = type === 'text' && !!field.multiline}
 			{@const min = options?.min as number | undefined}
 			{@const max = options?.max as number | undefined}
 
@@ -198,18 +212,17 @@
 				{#if isMulti}
 					<textarea
 						id="f_{name}"
-						disabled={disabled}
+						{disabled}
 						value={(data[name] as string) ?? ''}
 						oninput={(e: Event) => update(name, (e.target as HTMLTextAreaElement).value)}
 						rows="4"
-						placeholder={name}
-					></textarea>
+						placeholder={name}></textarea>
 				{:else}
 					<input
 						id="f_{name}"
 						type={getInputType(field)}
-						required={required}
-						disabled={disabled}
+						{required}
+						{disabled}
 						value={(data[name] as string) ?? ''}
 						oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
 						placeholder={name}
@@ -223,6 +236,98 @@
 				{/if}
 			</div>
 		{/if}
+	{/each}
+
+	<!-- ═══ PASSWORD SECTION (separate from main fields) ═══ -->
+	{#each fields.filter((f) => f.type === 'password') as field (field.name as string)}
+		{@const name = field.name as string}
+		<div class="field">
+			<label for="pw_{name}">Password</label>
+
+			{#if editing}
+				{#if !editPwOpen}
+					<button
+						type="button"
+						class="btn btn-ghost w-full text-left font-normal"
+						style="padding: 10px 12px; font-size: 0.9375rem"
+						onclick={() => (editPwOpen = true)}
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							class="mr-2 inline"
+							><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path
+								d="M7 11V7a5 5 0 0 1 10 0v4"
+							/></svg
+						>
+						Change password
+					</button>
+				{:else}
+					<div transition:slide>
+						<input
+							id="pw_{name}"
+							type="password"
+							disabled={passwordSaving}
+							bind:value={newPassword}
+							placeholder="New password"
+						/>
+						<input
+							id="pw_{name}_confirm"
+							type="password"
+							disabled={passwordSaving}
+							bind:value={confirmPassword}
+							placeholder="Confirm password"
+						/>
+						<div class="flex items-center gap-2 px-0 pt-1 pb-1">
+							<button
+								type="button"
+								class="btn btn-ghost btn-sm"
+								onclick={() => {
+									editPwOpen = false;
+									newPassword = '';
+									confirmPassword = '';
+								}}
+								disabled={passwordSaving}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								class="btn btn-primary btn-sm"
+								onclick={() => onPasswordSave?.(newPassword)}
+								disabled={passwordSaving ||
+									!newPassword ||
+									!confirmPassword ||
+									newPassword !== confirmPassword}
+							>
+								{passwordSaving ? 'Saving...' : 'Save Password'}
+							</button>
+						</div>
+					</div>
+				{/if}
+			{:else}
+				<input
+					id="pw_{name}"
+					type="password"
+					disabled={disabled || passwordSaving}
+					value={(data[name] as string) ?? ''}
+					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
+					placeholder="Password"
+				/>
+			{/if}
+
+			{#if passwordError}
+				<span class="field-error">{passwordError}</span>
+			{:else if editing && editPwOpen && confirmPassword && newPassword !== confirmPassword}
+				<span class="field-error">Passwords do not match</span>
+			{/if}
+		</div>
 	{/each}
 </div>
 
@@ -372,8 +477,6 @@
 		max-height: 300px;
 	}
 
-
-
 	/* ── Help text ── */
 	.field-help {
 		display: block;
@@ -450,7 +553,10 @@
 		border-radius: var(--radius-field);
 		background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
 		border: 2px solid color-mix(in oklab, var(--color-base-content) 20%, transparent);
-		transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+		transition:
+			border-color 0.2s,
+			box-shadow 0.2s,
+			background 0.2s;
 		box-sizing: border-box;
 	}
 
@@ -470,7 +576,9 @@
 		font-weight: normal;
 		color: var(--color-success);
 		opacity: 0;
-		transition: transform 0.15s, opacity 0.15s;
+		transition:
+			transform 0.15s,
+			opacity 0.15s;
 		box-sizing: border-box;
 	}
 
@@ -484,8 +592,6 @@
 		border-color: var(--color-success);
 		background: color-mix(in oklab, var(--color-success) 15%, var(--color-base-100));
 	}
-
-
 
 	/* ── FILE ── */
 	.file-row {

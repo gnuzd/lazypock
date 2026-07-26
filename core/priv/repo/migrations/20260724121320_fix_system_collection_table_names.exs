@@ -30,22 +30,22 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
 
     # Ensure system collections are registered
     execute """
-      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, inserted_at, updated_at)
+      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_externalAuths', 'base', true, false, '[]', '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_externalAuths')
     """
     execute """
-      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, inserted_at, updated_at)
+      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_mfas', 'base', true, false, '[]', '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_mfas')
     """
     execute """
-      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, inserted_at, updated_at)
+      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_otps', 'base', true, false, '[]', '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_otps')
     """
     execute """
-      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, inserted_at, updated_at)
+      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_authOrigins', 'base', true, false, '[]', '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_authOrigins')
     """

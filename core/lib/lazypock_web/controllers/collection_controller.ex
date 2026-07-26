@@ -116,7 +116,7 @@ defmodule LazypockWeb.CollectionController do
         end),
       rules: collection.rules,
       options: collection.options,
-      created: collection.inserted_at,
+      created: collection.created_at,
       updated: collection.updated_at
     }
   end

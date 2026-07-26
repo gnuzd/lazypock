@@ -43,7 +43,7 @@ defmodule Lazypock.Collections.Field do
     field(:system, :boolean, default: false)
     field(:sort_order, :integer, default: 0)
 
-    timestamps()
+    timestamps(inserted_at: :created_at, type: :utc_datetime)
   end
 
   @doc false

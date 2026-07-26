@@ -11,7 +11,8 @@ defmodule Lazypock.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      releases: releases()
     ]
   end
 
@@ -30,6 +31,22 @@ defmodule Lazypock.MixProject do
       preferred_envs: [precommit: :test]
     ]
   end
+
+  def releases do
+  [
+    lazypock: [
+      steps: [:assemble, &Burrito.wrap/1],
+      burrito: [
+        targets: [
+          # macos: [os: :darwin, cpu: :x86_64],
+          macos_silicon: [os: :darwin, cpu: :aarch64],
+          # linux: [os: :linux, cpu: :x86_64],
+          # windows: [os: :windows, cpu: :x86_64]
+        ]
+      ]
+    ]
+  ]
+end
 
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
@@ -53,7 +70,8 @@ defmodule Lazypock.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
-      {:bcrypt_elixir, "~> 3.0"}
+      {:bcrypt_elixir, "~> 3.0"},
+      {:burrito, "~> 1.0"}
     ]
   end
 
@@ -70,14 +88,14 @@ defmodule Lazypock.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": fn _ ->
-        IO.puts("Svelte UI: cd ui && npm install")
+        IO.puts("Svelte UI: cd studio && npm install")
       end,
       "assets.build": ["compile", "ui.build"],
-      "ui.build": fn _ ->
-        {_, 0} = System.cmd("npm", ["run", "build"], cd: "../ui", into: IO.binstream())
+      "studio.build": fn _ ->
+        {_, 0} = System.cmd("npm", ["run", "build"], cd: "../studio", into: IO.binstream())
       end,
       "assets.deploy": [
-        "ui.build",
+        "studio.build",
         "phx.digest"
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]

@@ -76,7 +76,7 @@ defmodule Lazypock.Collections.Collection do
 
     has_many(:fields, Lazypock.Collections.Field, foreign_key: :collection_id)
 
-    timestamps()
+    timestamps(inserted_at: :created_at, type: :utc_datetime)
   end
 
   @doc false

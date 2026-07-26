@@ -41,6 +41,7 @@
 		"@tiptap/extension-link": "^3.28.0",
 		"@tiptap/extension-placeholder": "^3.28.0",
 		"@tiptap/extension-table": "^3.28.0",
+		"@tiptap/markdown": "^3.29.0",
 		"@tiptap/pm": "^3.28.0",
 		"@tiptap/starter-kit": "^3.28.0",
 		"lazypock": "file:../packages/lazypock-ts",

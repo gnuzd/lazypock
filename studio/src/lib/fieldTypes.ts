@@ -27,13 +27,11 @@ export const fieldTypes: Record<string, { icon: string; label: string }> = {
 	file: { icon: 'ri-image-line', label: 'File' },
 	relation: { icon: 'ri-mind-map', label: 'Relation' },
 	geoPoint: { icon: 'ri-map-pin-2-line', label: 'Geo Point' },
-	password: { icon: 'ri-lock-password-line', label: 'Password' },
+	password: { icon: 'ri-lock-password-line', label: 'Password' }
 };
 
 // Types that appear in the "Add Field" dropdown
-export const addableFieldTypes = Object.keys(fieldTypes).filter(
-	(t) => t !== 'password',
-);
+export const addableFieldTypes = Object.keys(fieldTypes).filter((t) => t !== 'password');
 
 /** Generate a unique field name based on type */
 export function getUniqueFieldName(fields: FieldDefinition[], type: string): string {
@@ -43,9 +41,7 @@ export function getUniqueFieldName(fields: FieldDefinition[], type: string): str
 
 	function hasName(name: string) {
 		if (!fields) return false;
-		return fields.some(
-			(f) => f.name && f.name.toLowerCase() === name.toLowerCase(),
-		);
+		return fields.some((f) => f.name && f.name.toLowerCase() === name.toLowerCase());
 	}
 
 	while (hasName(result)) {
@@ -77,6 +73,6 @@ export function createField(type: string, fields: FieldDefinition[]): FieldDefin
 		presentable: false,
 		unique: false,
 		indexed: false,
-		__focus: true,
+		__focus: true
 	};
 }

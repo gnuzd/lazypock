@@ -10,14 +10,16 @@ export const loginSchema = z.object({
 
 export type LoginData = z.infer<typeof loginSchema>;
 
-export const setupSchema = z.object({
-	email: z.string().email('Invalid email address'),
-	password: z.string().min(8, 'Password must be at least 8 characters'),
-	confirmPassword: z.string().min(1, 'Please confirm your password')
-}).refine((data) => data.password === data.confirmPassword, {
-	message: 'Passwords do not match',
-	path: ['confirmPassword']
-});
+export const setupSchema = z
+	.object({
+		email: z.string().email('Invalid email address'),
+		password: z.string().min(8, 'Password must be at least 8 characters'),
+		confirmPassword: z.string().min(1, 'Please confirm your password')
+	})
+	.refine((data) => data.password === data.confirmPassword, {
+		message: 'Passwords do not match',
+		path: ['confirmPassword']
+	});
 
 export type SetupData = z.infer<typeof setupSchema>;
 
@@ -65,8 +67,10 @@ export function buildRecordSchema(fields: Record<string, unknown>[]) {
 
 	const fieldsMap: Record<string, string> = {};
 
+	// Skip auto-managed fields — set by backend automatically
 	for (const f of fields) {
-		if ((f as FieldDefinition).system) continue;
+		if ((f as FieldDefinition).type === 'autodate') continue;
+		if ((f as FieldDefinition).name === 'id') continue;
 		const name = f.name as string;
 		const type = f.type as string;
 		const required = !!(f as FieldDefinition).required;
@@ -78,10 +82,7 @@ export function buildRecordSchema(fields: Record<string, unknown>[]) {
 				if (required) {
 					// Accept number or string-that-converts, require non-null after transform
 					shape[name] = z
-						.union([
-							z.number(),
-							z.string().transform((v) => (v === '' ? undefined : Number(v)))
-						])
+						.union([z.number(), z.string().transform((v) => (v === '' ? undefined : Number(v)))])
 						.pipe(z.union([z.number(), z.undefined()]))
 						.refine((v) => v !== undefined, { message: 'Required' });
 				} else {
@@ -101,12 +102,7 @@ export function buildRecordSchema(fields: Record<string, unknown>[]) {
 				if (required) {
 					shape[name] = z.string().email('Invalid email').min(1, 'Required');
 				} else {
-					shape[name] = z
-						.string()
-						.email('Invalid email')
-						.nullable()
-						.optional()
-						.or(z.literal(''));
+					shape[name] = z.string().email('Invalid email').nullable().optional().or(z.literal(''));
 				}
 				break;
 
@@ -114,12 +110,7 @@ export function buildRecordSchema(fields: Record<string, unknown>[]) {
 				if (required) {
 					shape[name] = z.string().url('Invalid URL').min(1, 'Required');
 				} else {
-					shape[name] = z
-						.string()
-						.url('Invalid URL')
-						.nullable()
-						.optional()
-						.or(z.literal(''));
+					shape[name] = z.string().url('Invalid URL').nullable().optional().or(z.literal(''));
 				}
 				break;
 
@@ -153,9 +144,7 @@ export function buildRecordSchema(fields: Record<string, unknown>[]) {
 
 			case 'multi_select':
 				if (required) {
-					shape[name] = z
-						.array(z.string())
-						.min(1, 'Required');
+					shape[name] = z.array(z.string()).min(1, 'Required');
 				} else {
 					shape[name] = z.array(z.string()).optional();
 				}
@@ -171,7 +160,11 @@ export function buildRecordSchema(fields: Record<string, unknown>[]) {
 
 			default:
 				// text, editor, password, file
-				if (required) {
+				if (type === 'password') {
+					// Password is always optional in form (empty = keep existing on update)
+					// Backend auto-hashes and enforces on create
+					shape[name] = z.string().nullable().optional();
+				} else if (required) {
 					shape[name] = z.string().min(1, 'Required');
 				} else {
 					shape[name] = z.string().nullable().optional();
@@ -200,7 +193,10 @@ export function cleanRecordData(
 		const type = (fieldDef?.type as string) ?? 'text';
 		const val = data[key];
 
-		if (val === '' && NON_TEXT_TYPES.has(type)) {
+		if (val === '' && type === 'password') {
+			// Empty password = keep existing (skip entirely)
+			continue;
+		} else if (val === '' && NON_TEXT_TYPES.has(type)) {
 			cleaned[key] = null;
 		} else {
 			cleaned[key] = val;

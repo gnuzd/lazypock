@@ -34,7 +34,7 @@
 	</div>
 	<button
 		type="button"
-		class="btn btn-ghost px-0 text-error/60 hover:text-error aspect-square"
-		onclick={onremove}
-	>×</button>
+		class="btn btn-ghost aspect-square px-0 text-error/60 hover:text-error"
+		onclick={onremove}>×</button
+	>
 </div>

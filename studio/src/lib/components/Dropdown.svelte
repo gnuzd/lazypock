@@ -8,7 +8,7 @@
 		trigger,
 		children
 	}: {
-		show: boolean;
+		show?: boolean;
 		class?: string;
 		align?: 'left' | 'right';
 		trigger?: import('svelte').Snippet;
@@ -63,13 +63,13 @@
 </script>
 
 <div bind:this={wrapper} class="relative {className}">
-	<div onclick={() => show = !show} role="button" tabindex="-1">
+	<div onclick={() => (show = !show)} role="button" tabindex="-1">
 		{@render trigger?.()}
 	</div>
 
 	{#if show}
 		<div
-			class="absolute z-50 bg-base-100 border-2 border-primary rounded-field shadow-lg"
+			class="absolute z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
 			style={menuStyle}
 			transition:fly={{ y: -6, duration: 120 }}
 		>

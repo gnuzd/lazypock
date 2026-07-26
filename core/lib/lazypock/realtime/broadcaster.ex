@@ -59,6 +59,8 @@ defmodule Lazypock.Realtime.Broadcaster do
   defp format_record(record, collection_name) do
     record
     |> Map.put("collectionName", collection_name)
+    |> Map.put("created", Map.get(record, "created_at"))
+    |> Map.put("updated", Map.get(record, "updated_at"))
     |> Map.drop(["created_at", "updated_at"])
   end
 end

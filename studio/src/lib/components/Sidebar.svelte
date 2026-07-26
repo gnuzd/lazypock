@@ -10,9 +10,11 @@
 	} = $props();
 </script>
 
-<aside class="w-(--sidebar-width) flex flex-col border-r border-base-300 bg-base-100 shrink-0 overflow-hidden">
+<aside
+	class="flex w-(--sidebar-width) shrink-0 flex-col overflow-hidden border-r border-base-300 bg-base-100"
+>
 	{#if header}
-		<div class="p-2 border-b border-base-300">
+		<div class="border-b border-base-300 p-2">
 			{@render header()}
 		</div>
 	{/if}
@@ -24,7 +26,7 @@
 	{/if}
 
 	{#if footer}
-		<div class="p-3 border-t border-base-300">
+		<div class="border-t border-base-300 p-3">
 			{@render footer()}
 		</div>
 	{/if}

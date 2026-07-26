@@ -26,7 +26,7 @@ defmodule Lazypock.Files.Store do
         collection_name TEXT DEFAULT '',
         record_id       TEXT DEFAULT '',
         field_name      TEXT DEFAULT '',
-        inserted_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
       )
       """,
@@ -91,7 +91,8 @@ defmodule Lazypock.Files.Store do
   """
   def delete_by_record(collection_name, record_id) do
     {:ok, %{rows: rows}} =
-      Ecto.Adapters.SQL.query(Repo,
+      Ecto.Adapters.SQL.query(
+        Repo,
         "SELECT storage_backend, storage_path FROM _files WHERE collection_name = $1 AND record_id = $2",
         [collection_name, to_string(record_id)]
       )
@@ -103,7 +104,8 @@ defmodule Lazypock.Files.Store do
     end)
 
     # Delete metadata
-    Ecto.Adapters.SQL.query!(Repo,
+    Ecto.Adapters.SQL.query!(
+      Repo,
       "DELETE FROM _files WHERE collection_name = $1 AND record_id = $2",
       [collection_name, to_string(record_id)]
     )

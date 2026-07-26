@@ -13,7 +13,7 @@ defmodule Lazypock.Auth.SuperUser do
   schema "_superusers" do
     field(:email, :string)
     field(:password_hash, :string)
-    timestamps()
+    timestamps(inserted_at: :created_at, type: :utc_datetime)
   end
 
   def changeset(struct, attrs \\ %{}) do

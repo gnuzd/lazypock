@@ -3,7 +3,7 @@
 		choices = [] as string[],
 		maxSelect = 1,
 		value = $bindable(),
-		disabled = false,
+		disabled = false
 	}: {
 		choices: string[];
 		maxSelect: number;
@@ -12,8 +12,10 @@
 	} = $props();
 
 	const isMulti = maxSelect > 1;
-	const selected = $derived(isMulti ? ((value as string[]) || []) : [(value as string) || '']);
-	const filtered = $derived(choices.filter((c) => !search || c.toLowerCase().includes(search.toLowerCase())));
+	const selected = $derived(isMulti ? (value as string[]) || [] : [(value as string) || '']);
+	const filtered = $derived(
+		choices.filter((c) => !search || c.toLowerCase().includes(search.toLowerCase()))
+	);
 
 	let search = $state('');
 	let open = $state(false);
@@ -66,7 +68,9 @@
 		onclick={toggle}
 		role="button"
 		tabindex="0"
-		onkeydown={(e) => { if (e.key === 'Enter') toggle(); }}
+		onkeydown={(e) => {
+			if (e.key === 'Enter') toggle();
+		}}
 	>
 		{#if isMulti}
 			{#if selected.length > 0}
@@ -84,7 +88,16 @@
 		{:else}
 			<span class:select-placeholder={!selected[0]}>{selected[0] || 'Select...'}</span>
 		{/if}
-		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="select-chevron" class:open><polyline points="6 9 12 15 18 9"/></svg>
+		<svg
+			width="14"
+			height="14"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			class="select-chevron"
+			class:open><polyline points="6 9 12 15 18 9" /></svg
+		>
 	</div>
 	{#if open}
 		<div class="select-dropdown">
@@ -93,7 +106,11 @@
 				{#each filtered as choice (choice)}
 					<label class="select-option" class:selected={selected.includes(choice)}>
 						{#if isMulti}
-							<input type="checkbox" checked={selected.includes(choice)} onchange={() => selectOption(choice)} />
+							<input
+								type="checkbox"
+								checked={selected.includes(choice)}
+								onchange={() => selectOption(choice)}
+							/>
 						{/if}
 						<span>{choice}</span>
 					</label>
@@ -181,7 +198,7 @@
 		background: var(--color-base-100);
 		border: 2px solid var(--color-primary);
 		border-radius: var(--radius-field);
-		box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 		overflow: hidden;
 	}
 	.select-search {
@@ -221,7 +238,7 @@
 		color: var(--color-primary);
 		font-weight: 500;
 	}
-	.select-option input[type="checkbox"] {
+	.select-option input[type='checkbox'] {
 		accent-color: var(--color-primary);
 	}
 	.select-no-results {

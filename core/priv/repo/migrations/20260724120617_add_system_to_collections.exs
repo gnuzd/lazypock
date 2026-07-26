@@ -23,7 +23,7 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _externalAuths (collection_ref, provider, provider_id)"
 
     execute """
-      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, inserted_at, updated_at)
+      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_externalAuths', 'base', true, false, '[]',
         '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_externalAuths')
@@ -41,7 +41,7 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
     execute "CREATE INDEX IF NOT EXISTS idx_mfas_collection_ref_record_ref ON _mfas (collection_ref, record_ref)"
 
     execute """
-      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, inserted_at, updated_at)
+      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_mfas', 'base', true, false, '[]',
         '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_mfas')
@@ -60,7 +60,7 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
     execute "CREATE INDEX IF NOT EXISTS idx_otps_collection_ref_record_ref ON _otps (collection_ref, record_ref)"
 
     execute """
-      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, inserted_at, updated_at)
+      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_otps', 'base', true, false, '[]',
         '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_otps')
@@ -78,7 +78,7 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_origins_unique_pairs ON _authOrigins (collection_ref, record_ref, fingerprint)"
 
     execute """
-      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, inserted_at, updated_at)
+      INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_authOrigins', 'base', true, false, '[]',
         '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_authOrigins')

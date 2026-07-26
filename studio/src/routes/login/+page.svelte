@@ -93,14 +93,14 @@
 	}
 </script>
 
-<div class="flex items-center justify-center min-h-screen">
+<div class="flex min-h-screen items-center justify-center">
 	{#if checking}
 		<div class="text-sm text-base-content/40">Checking...</div>
 	{:else if needsSetup}
-		<form class="w-full max-w-md p-[30px] flex flex-col gap-3" onsubmit={handleSetup}>
-			<div class="text-center mb-3">
-				<h1 class="text-[22px] font-semibold mt-2.5">Lazypock Setup</h1>
-				<p class="text-sm text-base-content/60 mt-1">Create the first superuser account</p>
+		<form class="flex w-full max-w-md flex-col gap-3 p-[30px]" onsubmit={handleSetup}>
+			<div class="mb-3 text-center">
+				<h1 class="mt-2.5 text-[22px] font-semibold">Lazypock Setup</h1>
+				<p class="mt-1 text-sm text-base-content/60">Create the first superuser account</p>
 			</div>
 
 			<Input
@@ -138,9 +138,9 @@
 			</Button>
 		</form>
 	{:else}
-		<form class="w-full max-w-md p-[30px] flex flex-col gap-3" onsubmit={handleLogin}>
-			<div class="text-center mb-3">
-				<h1 class="text-[22px] font-semibold mt-2.5">Lazypock</h1>
+		<form class="flex w-full max-w-md flex-col gap-3 p-[30px]" onsubmit={handleLogin}>
+			<div class="mb-3 text-center">
+				<h1 class="mt-2.5 text-[22px] font-semibold">Lazypock</h1>
 			</div>
 
 			<Input

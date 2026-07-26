@@ -8,6 +8,7 @@
 	import DataTable from '$lib/components/DataTable.svelte';
 	import SidePane from '$lib/components/SidePane.svelte';
 	import FieldSettings from '$lib/components/FieldSettings.svelte';
+	import IndexesModal from '$lib/components/IndexesModal.svelte';
 	import NewFieldButton from '$lib/components/NewFieldButton.svelte';
 	import RuleField from '$lib/components/RuleField.svelte';
 	import { slugify } from '$lib/fieldTypes';
@@ -24,7 +25,7 @@
 	let activeName = $state('');
 	let search = $state('');
 	let showSystem = $state(false);
-
+	let showIndexesModal = $state(false);
 	// ── Record CRUD state ──
 	let showRecordPane = $state(false);
 	let recordData = $state<Record<string, unknown>>({});
@@ -32,6 +33,9 @@
 	let recordSaving = $state(false);
 	let recordError = $state('');
 	let recordFieldErrors = $state<Record<string, string>>({});
+	// ── Password change state (edit mode only) ──
+	let passwordSaving = $state(false);
+	let passwordError = $state('');
 
 	let filtered = $derived.by(() => {
 		if (!search) return collections;
@@ -73,6 +77,7 @@
 	$effect(() => {
 		if (!activeName) return;
 		const url = '?collection=' + encodeURIComponent(activeName);
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
 		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
 	});
 
@@ -124,8 +129,8 @@
 			{ key: 'id', label: 'ID', render: (r) => ((r.id as string)?.slice(0, 8) ?? '') + '...' }
 		];
 		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
-			.filter((f) => !f.system)
-			.sort((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0));
+			.filter((f) => !f.hidden)
+			.toSorted((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0));
 		for (const f of fields) {
 			cols.push({
 				key: f.name as string,
@@ -160,11 +165,11 @@
 	const collectionTypes = [
 		{ value: 'base', label: 'Base collection' },
 		{ value: 'view', label: 'View collection' },
-		{ value: 'auth', label: 'Auth collection' },
+		{ value: 'auth', label: 'Auth collection' }
 	];
 
 	function getTypeLabel(val: string) {
-		return collectionTypes.find(t => t.value === val)?.label ?? val;
+		return collectionTypes.find((t) => t.value === val)?.label ?? val;
 	}
 
 	function handleNameInput(e: Event) {
@@ -282,20 +287,22 @@
 		editingCollectionId = (coll.id as string) ?? null;
 		newName = (coll.name as string) ?? '';
 		newType = (coll.type as string) ?? 'base';
-		newFields = (((coll.fields as Record<string, unknown>[]) ?? [])
+		newFields = ((coll.fields as Record<string, unknown>[]) ?? [])
 			.map((f) => ({
 				...f,
 				id: (f.id as string) ?? crypto.randomUUID()
 			}))
-			.sort((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0))) as unknown as FieldDefinition[];
+			.sort(
+				(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
+			) as unknown as FieldDefinition[];
 		newIndexes = [];
 		activeTab = 'Fields';
 		error = '';
-		listRule = (coll.rules as Record<string, unknown>)?.['listRule'] as string | null ?? null;
-		viewRule = (coll.rules as Record<string, unknown>)?.['viewRule'] as string | null ?? null;
-		createRule = (coll.rules as Record<string, unknown>)?.['createRule'] as string | null ?? null;
-		updateRule = (coll.rules as Record<string, unknown>)?.['updateRule'] as string | null ?? null;
-		deleteRule = (coll.rules as Record<string, unknown>)?.['deleteRule'] as string | null ?? null;
+		listRule = ((coll.rules as Record<string, unknown>)?.['listRule'] as string | null) ?? null;
+		viewRule = ((coll.rules as Record<string, unknown>)?.['viewRule'] as string | null) ?? null;
+		createRule = ((coll.rules as Record<string, unknown>)?.['createRule'] as string | null) ?? null;
+		updateRule = ((coll.rules as Record<string, unknown>)?.['updateRule'] as string | null) ?? null;
+		deleteRule = ((coll.rules as Record<string, unknown>)?.['deleteRule'] as string | null) ?? null;
 		showCollectionPane = true;
 	}
 
@@ -306,19 +313,21 @@
 		const payload: Record<string, unknown> = {
 			name: newName.trim(),
 			type: newType,
-			fields: newFields.filter(f => !f['@toDelete']).map(f => {
-				const clean = { ...f };
-				delete clean.__focus;
-				delete clean['@toDelete'];
-				delete clean._showChoices;
-				delete clean._choicesInput;
-				return clean;
-			}),
+			fields: newFields
+				.filter((f) => !f['@toDelete'])
+				.map((f) => {
+					const clean = { ...f };
+					delete clean.__focus;
+					delete clean['@toDelete'];
+					delete clean._showChoices;
+					delete clean._choicesInput;
+					return clean;
+				}),
 			listRule,
 			viewRule,
 			createRule,
 			updateRule,
-			deleteRule,
+			deleteRule
 		};
 
 		// Validate with zod
@@ -332,7 +341,10 @@
 		error = '';
 		try {
 			if (editingCollectionId) {
-				await client.updateCollection(editingCollectionId, result.data as unknown as Record<string, unknown>);
+				await client.updateCollection(
+					editingCollectionId,
+					result.data as unknown as Record<string, unknown>
+				);
 				// Navigate to the (possibly renamed) collection
 				if (result.data.name !== activeName) {
 					selectCollection(result.data.name);
@@ -340,14 +352,18 @@
 					loadCollection(result.data.name);
 				}
 			} else {
-				const created = await client.createCollection(result.data as unknown as Record<string, unknown>);
+				const created = await client.createCollection(
+					result.data as unknown as Record<string, unknown>
+				);
 				if (created?.name) {
 					selectCollection(created.name as string);
 				}
 			}
 			showCollectionPane = false;
 		} catch (e) {
-			error = (e as Error).message || (editingCollectionId ? 'Failed to save collection' : 'Failed to create collection');
+			error =
+				(e as Error).message ||
+				(editingCollectionId ? 'Failed to save collection' : 'Failed to create collection');
 		} finally {
 			saving = false;
 		}
@@ -361,7 +377,7 @@
 			recordSchema = null;
 			return;
 		}
-		const schemaFields = (collection.schema as Record<string, unknown>[]) ?? [];
+		const schemaFields = (collection.fields as Record<string, unknown>[]) ?? [];
 		recordSchema = buildRecordSchema(schemaFields).schema;
 	});
 
@@ -377,10 +393,11 @@
 
 	function editRecord(row: Record<string, unknown>) {
 		editingRecordId = (row.id as string) ?? null;
-		// Copy only schema fields, skip system fields
-		const schemaFields = (collection?.schema as Record<string, unknown>[]) ?? [];
+		// Copy from live fields — skip password fields
+		const schemaFields = (collection?.fields as Record<string, unknown>[]) ?? [];
 		recordData = {};
 		for (const f of schemaFields) {
+			if (f.type === 'password') continue;
 			const name = f.name as string;
 			if (name in row) {
 				recordData[name] = row[name];
@@ -412,7 +429,7 @@
 		recordSaving = true;
 		recordError = '';
 		const collName = collection.name as string;
-		const schemaFields = (collection?.schema as Record<string, unknown>[]) ?? [];
+		const schemaFields = (collection?.fields as Record<string, unknown>[]) ?? [];
 		const cleaned = cleanRecordData(result.data as Record<string, unknown>, schemaFields);
 		try {
 			if (editingRecordId) {
@@ -426,6 +443,29 @@
 			recordError = (e as Error).message || 'Failed to save record';
 		} finally {
 			recordSaving = false;
+		}
+	}
+
+	async function savePassword(password: string) {
+		if (!collection || !editingRecordId) return;
+		passwordSaving = true;
+		passwordError = '';
+		try {
+			// Find the password fields (e.g. password_hash)
+			const schemaFields = (collection?.fields as Record<string, unknown>[]) ?? [];
+			const pwFields = schemaFields.filter((f) => f.type === 'password');
+			const payload: Record<string, string> = {};
+			for (const f of pwFields) {
+				payload[f.name as string] = password;
+			}
+			await client.updateRecord(collection.name as string, editingRecordId, payload);
+			passwordSaving = false;
+			passwordError = '';
+			loadCollection(collection.name as string);
+		} catch (e) {
+			passwordError = (e as Error).message || 'Failed to save password';
+		} finally {
+			passwordSaving = false;
 		}
 	}
 
@@ -450,17 +490,12 @@
 </script>
 
 {#snippet headerContent()}
-	<input
-		type="text"
-		class="input input-sm w-full"
-		placeholder="Search..."
-		bind:value={search}
-	/>
+	<input type="text" class="input input-sm w-full" placeholder="Search..." bind:value={search} />
 {/snippet}
 
 {#snippet bodyContent()}
 	{#if filtered.length === 0}
-		<div class="p-4 text-center opacity-40 text-sm">No collections</div>
+		<div class="p-4 text-center text-sm opacity-40">No collections</div>
 	{:else}
 		{@const userCollections = filtered.filter((c) => !c.system)}
 		{@const systemCollections = filtered.filter((c) => c.system)}
@@ -468,40 +503,69 @@
 		{#if userCollections.length > 0}
 			{#each userCollections as coll (coll.id)}
 				<div
-					class="flex items-center gap-2 w-[calc(100%-12px)] mx-1.5 px-3 py-1.5 border-none rounded-field text-sm text-base-content cursor-pointer text-left transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
+					class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
 					class:bg-base-200={coll.name === activeName}
 					class:font-medium={coll.name === activeName}
 					role="button"
 					tabindex="0"
 					onclick={() => selectCollection(coll.name as string)}
-					onkeydown={(e) => { if (e.key === 'Enter') selectCollection(coll.name as string); }}
+					onkeydown={(e) => {
+						if (e.key === 'Enter') selectCollection(coll.name as string);
+					}}
 				>
-					<Folder class="w-4 h-4 opacity-60 shrink-0" />
-					<span class="truncate flex-1">{coll.name as string}</span>
-					<span class="text-xs opacity-40 mr-1">{(coll.schema as unknown[])?.length ?? 0}</span>
+					<Folder class="h-4 w-4 shrink-0 opacity-60" />
+					<span class="flex-1 truncate">{coll.name as string}</span>
+					<span class="mr-1 text-xs opacity-40">{(coll.schema as unknown[])?.length ?? 0}</span>
 				</div>
 			{/each}
 		{/if}
 
 		{#if systemCollections.length > 0}
-			<div class="flex items-center gap-2 w-[calc(100%-12px)] mx-1.5 px-3 py-1.5 text-xs font-medium text-base-content/50 cursor-pointer select-none" onclick={() => showSystem = !showSystem} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter') showSystem = !showSystem; }}>
-				<svg class="w-3 h-3 transition-transform duration-150" class:rotate-90={showSystem} fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+			<div
+				class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 px-3 py-1.5 text-xs font-medium text-base-content/50 select-none"
+				onclick={() => (showSystem = !showSystem)}
+				role="button"
+				tabindex="0"
+				onkeydown={(e) => {
+					if (e.key === 'Enter') showSystem = !showSystem;
+				}}
+			>
+				<svg
+					class="h-3 w-3 transition-transform duration-150"
+					class:rotate-90={showSystem}
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="2"><polyline points="9 18 15 12 9 6" /></svg
+				>
 				<span>System ({systemCollections.length})</span>
 			</div>
 			{#if showSystem}
 				{#each systemCollections as coll (coll.id)}
 					<div
-						class="flex items-center gap-2 w-[calc(100%-12px)] mx-1.5 px-3 py-1.5 border-none rounded-field text-sm text-base-content cursor-pointer text-left transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
+						class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
 						class:bg-base-200={coll.name === activeName}
 						class:font-medium={coll.name === activeName}
 						role="button"
 						tabindex="0"
 						onclick={() => selectCollection(coll.name as string)}
-						onkeydown={(e) => { if (e.key === 'Enter') selectCollection(coll.name as string); }}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') selectCollection(coll.name as string);
+						}}
 					>
-						<svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="color:var(--color-warning)"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-						<span class="truncate flex-1">{coll.name as string}</span>
-						<span class="text-[10px] px-1 py-0.5 rounded bg-warning/20 text-warning font-medium">system</span>
+						<svg
+							class="h-4 w-4 shrink-0"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+							stroke-width="2"
+							style="color:var(--color-warning)"
+							><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg
+						>
+						<span class="flex-1 truncate">{coll.name as string}</span>
+						<span class="rounded bg-warning/20 px-1 py-0.5 text-[10px] font-medium text-warning"
+							>system</span
+						>
 					</div>
 				{/each}
 			{/if}
@@ -510,28 +574,32 @@
 {/snippet}
 
 {#snippet footerContent()}
-	<Button class="btn-primary btn-full" onclick={newCollection}><Plus size={18} /> New Collection</Button>
+	<Button class="btn-primary btn-full" onclick={newCollection}
+		><Plus size={18} /> New Collection</Button
+	>
 {/snippet}
 
 <!-- Main content -->
 {#if loading}
-	<div class="flex flex-col items-center justify-center flex-1 min-h-[200px] text-base-content/40 gap-2">
+	<div
+		class="flex min-h-[200px] flex-1 flex-col items-center justify-center gap-2 text-base-content/40"
+	>
 		<p class="text-sm">Loading...</p>
 	</div>
 {:else if collection}
 	<!-- Breadcrumb -->
-	<div class="flex items-center justify-between pb-3 mb-3">
+	<div class="mb-3 flex items-center justify-between pb-3">
 		<nav class="flex items-center gap-2">
 			<span class="text-base-content/50">Collections</span>
 			<span class="text-xs opacity-30">/</span>
 			<span class="font-medium">{(collection.name as string) ?? '...'}</span>
 			<button
 				type="button"
-				class="p-0.5 ml-2 rounded cursor-pointer opacity-40 hover:opacity-100 transition-opacity border-none bg-transparent text-base-content"
+				class="ml-2 cursor-pointer rounded border-none bg-transparent p-0.5 text-base-content opacity-40 transition-opacity hover:opacity-100"
 				onclick={() => editCollection(collection!)}
 				title="Edit collection"
 			>
-				<Settings class="w-4 h-4" />
+				<Settings class="h-4 w-4" />
 			</button>
 		</nav>
 		<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
@@ -548,53 +616,86 @@
 	/>
 
 	<!-- Record create/edit SidePane -->
-	<SidePane bind:show={showRecordPane} title={editingRecordId ? 'Edit Record' : 'New Record'} closable={false}>
+	<SidePane
+		bind:show={showRecordPane}
+		title={editingRecordId ? 'Edit Record' : 'New Record'}
+		closable={false}
+	>
 		{#snippet headerExtra()}
 			{#if editingRecordId}
 				<Dropdown>
 					{#snippet trigger()}
-						<button
-							type="button"
-							class="btn btn-ghost btn-sm px-2"
-						>
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+						<button type="button" class="btn btn-ghost btn-sm px-2">
+							<svg
+								width="16"
+								height="16"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle
+									cx="12"
+									cy="19"
+									r="1"
+								/></svg
+							>
 						</button>
 					{/snippet}
-					<div class="p-1 min-w-[140px]">
+					<div class="min-w-[140px] p-1">
 						<button
 							type="button"
-							class="text-error flex items-center gap-2 px-3 py-1.5 text-sm w-full rounded-field cursor-pointer border-none bg-transparent hover:bg-error/10"
+							class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-1.5 text-sm text-error hover:bg-error/10"
 							onclick={deleteRecord}
 						>
-							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+							<svg
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								><polyline points="3 6 5 6 21 6" /><path
+									d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+								/></svg
+							>
 							Delete
 						</button>
 					</div>
 				</Dropdown>
 			{/if}
 		{/snippet}
-		<div class="flex flex-col min-h-0 h-full">
+		<div class="flex h-full min-h-0 flex-col">
 			<div class="flex-1 overflow-y-auto p-4">
-					<RecordForm
-						fields={(((collection?.fields ?? []) as Record<string, unknown>[])
-							.filter((f) => !f.system && !f.hidden)
-							.sort((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)))}
-						bind:data={recordData}
-						disabled={recordSaving}
-						errors={recordFieldErrors}
-					/>
-				</div>
+				<RecordForm
+					fields={((collection?.fields ?? []) as Record<string, unknown>[]).toSorted(
+						(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
+					)}
+					bind:data={recordData}
+					disabled={recordSaving}
+					errors={recordFieldErrors}
+					editing={!!editingRecordId}
+					bind:passwordSaving
+					bind:passwordError
+					onPasswordSave={savePassword}
+				/>
+			</div>
 
 			{#if recordError}
-				<div class="shrink-0 px-4 py-2 text-xs text-error bg-error/10 border-t border-base-300">{recordError}</div>
+				<div class="shrink-0 border-t border-base-300 bg-error/10 px-4 py-2 text-xs text-error">
+					{recordError}
+				</div>
 			{/if}
 
-			<div class="shrink-0 flex items-center gap-2 px-4 py-3 border-t border-base-300">
-				<Button class="btn-ghost mr-auto" onclick={() => showRecordPane = false}>Close</Button>
+			<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
+				<Button class="btn-ghost mr-auto" onclick={() => (showRecordPane = false)}>Close</Button>
 				<Button
 					class="btn-primary"
 					loading={recordSaving}
-					disabled={!Object.keys(recordData).length || recordSaving}
+					disabled={recordSaving}
 					onclick={saveRecord}
 				>
 					{editingRecordId ? 'Update' : 'Create'}
@@ -605,13 +706,18 @@
 {/if}
 
 <!-- New/Edit Collection SidePane -->
-<SidePane bind:show={showCollectionPane} title={editingCollectionId ? 'Edit Collection' : 'New Collection'}>
-	<div class="flex flex-col min-h-0 h-full">
+<SidePane
+	bind:show={showCollectionPane}
+	title={editingCollectionId ? 'Edit Collection' : 'New Collection'}
+>
+	<div class="flex h-full min-h-0 flex-col">
 		<!-- Header: Name + Type row -->
 		<div class="shrink-0 p-4 pb-3">
 			<div class="flex gap-0">
-				<div class="field flex-1 min-w-0">
-					<label for="coll-name" class="block text-xs font-medium text-base-content/70 mb-1">Name</label>
+				<div class="field min-w-0 flex-1">
+					<label for="coll-name" class="mb-1 block text-xs font-medium text-base-content/70"
+						>Name</label
+					>
 					<input
 						id="coll-name"
 						type="text"
@@ -629,22 +735,33 @@
 				</div>
 				<Dropdown bind:show={typeOpen} class="shrink-0">
 					{#snippet trigger()}
-						<label class="block text-xs font-medium text-base-content/70 mb-1">&nbsp;</label>
+						<label class="mb-1 block text-xs font-medium text-base-content/70">&nbsp;</label>
 						<button
 							type="button"
-							class="btn btn-sm border-2 border-current bg-transparent text-base-content rounded-field flex items-center gap-2 whitespace-nowrap px-3 h-[34px]"
+							class="btn btn-sm flex h-[34px] items-center gap-2 rounded-field border-2 border-current bg-transparent px-3 whitespace-nowrap text-base-content"
 						>
 							<span>Type: {getTypeLabel(newType)}</span>
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ml-auto"><polyline points="6 9 12 15 18 9"/></svg>
+							<svg
+								width="16"
+								height="16"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								class="ml-auto"><polyline points="6 9 12 15 18 9" /></svg
+							>
 						</button>
 					{/snippet}
 					<div class="min-w-[200px] py-1">
 						{#each collectionTypes as ct (ct.value)}
 							<button
 								type="button"
-								class="flex items-center gap-2 w-full px-3 py-2 text-sm text-left cursor-pointer border-none bg-transparent text-base-content rounded-field hover:bg-base-200"
+								class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-2 text-left text-sm text-base-content hover:bg-base-200"
 								class:font-medium={ct.value === newType}
-								onmousedown={() => { newType = ct.value; typeOpen = false; }}
+								onmousedown={() => {
+									newType = ct.value;
+									typeOpen = false;
+								}}
 							>
 								<span>{ct.label}</span>
 							</button>
@@ -655,97 +772,117 @@
 		</div>
 
 		<!-- Header: Tabs (separate section with bottom border) -->
-		<nav class="shrink-0 flex gap-0 border-b border-base-300 px-4">
+		<nav class="flex shrink-0 gap-0 border-b border-base-300 px-4">
 			<button
 				type="button"
-				class="px-3 py-2 text-sm border-b-2 transition-colors cursor-pointer {activeTab === 'Fields' ? 'border-primary text-primary' : 'border-transparent text-base-content/60'}"
-				onclick={() => activeTab = 'Fields'}
-			>Fields</button>
+				class="cursor-pointer border-b-2 px-3 py-2 text-sm transition-colors {activeTab === 'Fields'
+					? 'border-primary text-primary'
+					: 'border-transparent text-base-content/60'}"
+				onclick={() => (activeTab = 'Fields')}>Fields</button
+			>
 			<button
 				type="button"
-				class="px-3 py-2 text-sm border-b-2 transition-colors cursor-pointer {activeTab === 'API rules' ? 'border-primary text-primary' : 'border-transparent text-base-content/60'}"
-				onclick={() => activeTab = 'API rules'}
-			>API rules</button>
+				class="cursor-pointer border-b-2 px-3 py-2 text-sm transition-colors {activeTab ===
+				'API rules'
+					? 'border-primary text-primary'
+					: 'border-transparent text-base-content/60'}"
+				onclick={() => (activeTab = 'API rules')}>API rules</button
+			>
 		</nav>
 
 		<!-- Tab content -->
-			<div class="flex-1 overflow-y-auto p-4">
+		<div class="flex-1 overflow-y-auto p-4">
 			{#if activeTab === 'Fields'}
 				<!-- Fields list with drag-reorder -->
 				<div class="space-y-1" bind:this={fieldsListEl}>
 					{#each newFields as field, i (field)}
 						{#if dropIndex === i}
-							<div class="h-1 bg-primary rounded-field" transition:slide={{ duration: 100 }}></div>
+							<div class="h-1 rounded-field bg-primary" transition:slide={{ duration: 100 }}></div>
 						{/if}
 						<div data-sortable-child class:opacity-40={dragIndex === i}>
-							<FieldSettings field={newFields[i]} fieldIndex={i} collections={collections} />
+							<FieldSettings field={newFields[i]} fieldIndex={i} {collections} />
 						</div>
 					{/each}
 					{#if dropIndex === newFields.length}
-						<div class="h-1 bg-primary rounded-field" transition:slide={{ duration: 100 }}></div>
+						<div class="h-1 rounded-field bg-primary" transition:slide={{ duration: 100 }}></div>
 					{/if}
 				</div>
 
 				{#if newFields.length === 0}
-					<div class="text-center py-6 opacity-40 text-sm">No fields configured. Click "Add Field" to start.</div>
+					<div class="py-6 text-center text-sm opacity-40">
+						No fields configured. Click "Add Field" to start.
+					</div>
 				{/if}
 
 				<NewFieldButton bind:fields={newFields} />
 
-				<hr class="border-t border-base-300 my-3" />
+				<hr class="my-3 border-t border-base-300" />
 
-				<p class="text-xs font-semibold mb-2">Unique constraints and indexes ({newIndexes.length})</p>
-				<div class="flex flex-wrap gap-1 mb-2">
-					{#each newIndexes as idx, i (idx + '-' + i)}
-						<button type="button" class="inline-flex items-center gap-1 px-2 py-1 text-xs rounded bg-base-200 border border-base-300 cursor-pointer"
-							onclick={() => { newIndexes.splice(i, 1); newIndexes = [...newIndexes]; }}
-						>
-							{#if idx.startsWith('UNIQUE')}
-								<strong>Unique:</strong>
-							{/if}
-							<span>{idx.replace(/^UNIQUE\s+/, '')}</span>
-							<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="opacity-60"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-						</button>
-					{/each}
-					<button type="button" class="inline-flex items-center gap-1 px-2 py-1 text-xs rounded bg-base-200 border border-base-300 cursor-pointer" onclick={() => newIndexes = [...newIndexes, '']}>
-						<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-						<span>New index</span>
-					</button>
-				</div>
+				<button
+					type="button"
+					class="btn btn-ghost btn-xs flex w-full items-center justify-start gap-2 text-left"
+					onclick={() => (showIndexesModal = true)}
+				>
+					<svg
+						width="14"
+						height="14"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg
+					>
+					<span>Unique constraints and indexes ({newIndexes.length})</span>
+				</button>
 			{:else}
 				<!-- API Rules tab -->
 				<div class="flex flex-col gap-2">
 					<div class="flex items-center gap-1 text-xs text-base-content/60">
-						<span>All rules follow the <a target="_blank" rel="noopener noreferrer" href="https://pocketbase.io/docs/api-rules-and-filters/" class="underline">PocketBase filter syntax and operators</a>.</span>
-						<strong tabindex="-1" class="ml-auto cursor-pointer hover:underline" onclick={() => showRulesInfo = !showRulesInfo}>
+						<span
+							>All rules follow the <a
+								target="_blank"
+								rel="noopener noreferrer"
+								href="https://pocketbase.io/docs/api-rules-and-filters/"
+								class="underline">PocketBase filter syntax and operators</a
+							>.</span
+						>
+						<strong
+							tabindex="-1"
+							class="ml-auto cursor-pointer hover:underline"
+							onclick={() => (showRulesInfo = !showRulesInfo)}
+						>
 							{showRulesInfo ? 'Hide available fields' : 'Show available fields'}
 						</strong>
 					</div>
 
 					{#if showRulesInfo}
-						<div class="p-3 text-xs bg-warning/10 border border-warning/30 rounded-field">
+						<div class="rounded-field border border-warning/30 bg-warning/10 p-3 text-xs">
 							<p class="mb-1">The following record fields are available:</p>
-							<div class="flex flex-wrap gap-1 mb-2">
-								{#each newFields.filter(f => !f['@toDelete']) as field (field.name)}
-									<code class="px-1 py-0.5 bg-base-300 rounded text-xs">{field.name}</code>
+							<div class="mb-2 flex flex-wrap gap-1">
+								{#each newFields.filter((f) => !f['@toDelete']) as field (field.name)}
+									<code class="rounded bg-base-300 px-1 py-0.5 text-xs">{field.name}</code>
 								{/each}
 							</div>
 							<hr class="my-2 border-base-300" />
-							<p class="mb-1">The request fields could be accessed with the special <strong>@request</strong> fields:</p>
-							<div class="flex flex-wrap gap-1 mb-2">
-								<code class="px-1 py-0.5 bg-base-300 rounded text-xs">@request.headers.*</code>
-								<code class="px-1 py-0.5 bg-base-300 rounded text-xs">@request.query.*</code>
-								<code class="px-1 py-0.5 bg-base-300 rounded text-xs">@request.body.*</code>
-								<code class="px-1 py-0.5 bg-base-300 rounded text-xs">@request.auth.*</code>
+							<p class="mb-1">
+								The request fields could be accessed with the special <strong>@request</strong> fields:
+							</p>
+							<div class="mb-2 flex flex-wrap gap-1">
+								<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.headers.*</code>
+								<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.query.*</code>
+								<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.body.*</code>
+								<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.auth.*</code>
 							</div>
 							<hr class="my-2 border-base-300" />
 							<p class="mb-1">You could also add constraints using <strong>@collection</strong>:</p>
 							<div class="flex flex-wrap gap-1">
-								<code class="px-1 py-0.5 bg-base-300 rounded text-xs">@collection.ANY_COLLECTION_NAME.*</code>
+								<code class="rounded bg-base-300 px-1 py-0.5 text-xs"
+									>@collection.ANY_COLLECTION_NAME.*</code
+								>
 							</div>
 							<hr class="my-2 border-base-300" />
 							<p class="mb-1">Example rule:</p>
-							<code class="px-1 py-0.5 bg-base-300 rounded text-xs">@request.auth.id != ""</code>
+							<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.auth.id != ""</code>
 						</div>
 					{/if}
 
@@ -759,14 +896,34 @@
 		</div>
 
 		{#if error}
-			<div class="shrink-0 px-4 py-2 text-xs text-error bg-error/10 border-t border-base-300">{error}</div>
+			<div class="shrink-0 border-t border-base-300 bg-error/10 px-4 py-2 text-xs text-error">
+				{error}
+			</div>
 		{/if}
 
 		<!-- Footer -->
-		<div class="shrink-0 flex items-center gap-2 px-4 py-3 border-t border-base-300">
-			<button type="button" class="btn btn-ghost mr-auto" onclick={() => showCollectionPane = false}>Close</button>
+		<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
+			<button
+				type="button"
+				class="btn btn-ghost mr-auto"
+				onclick={() => (showCollectionPane = false)}>Close</button
+			>
 			{#if error}
-				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-error"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+				<svg
+					width="16"
+					height="16"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					class="text-error"
+					><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line
+						x1="12"
+						y1="16"
+						x2="12.01"
+						y2="16"
+					/></svg
+				>
 			{/if}
 			<button
 				type="button"
@@ -780,6 +937,16 @@
 		</div>
 	</div>
 </SidePane>
+
+<!-- Indexes Modal -->
+<IndexesModal
+	bind:show={showIndexesModal}
+	bind:indexes={newIndexes}
+	fieldNames={newFields
+		.filter((f) => !f['@toDelete'])
+		.map((f) => f.name as string)
+		.filter(Boolean)}
+/>
 
 <style>
 	/* sortable children need pointer-events to catch drag enter/leave */

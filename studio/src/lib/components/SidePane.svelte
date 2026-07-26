@@ -20,24 +20,26 @@
 	}
 </script>
 
-<svelte:body onkeydown={(e) => { if (e.key === 'Escape' && show) close(); }} />
+<svelte:body
+	onkeydown={(e) => {
+		if (e.key === 'Escape' && show) close();
+	}}
+/>
 
 {#if show}
-	<div
-		class="fixed inset-0 z-50 bg-neutral/50"
-		role="presentation"
-		onclick={close}
-	>
+	<div class="fixed inset-0 z-50 bg-neutral/50" role="presentation" onclick={close}>
 		<div
-			class="absolute top-0 right-0 h-full w-full max-w-xl flex flex-col bg-base-100 shadow-lg"
+			class="absolute top-0 right-0 flex h-full w-full max-w-xl flex-col bg-base-100 shadow-lg"
 			role="dialog"
 			aria-label={title || 'Side panel'}
 			transition:fly={{ x: 320, duration: 200 }}
 			onclick={(e) => e.stopPropagation()}
-			onkeydown={(e) => { if (e.key === 'Escape') close(); }}
+			onkeydown={(e) => {
+				if (e.key === 'Escape') close();
+			}}
 		>
 			{#if title}
-				<div class="flex items-center justify-between px-4 py-3 border-b border-base-300 shrink-0">
+				<div class="flex shrink-0 items-center justify-between border-b border-base-300 px-4 py-3">
 					<h2 class="font-semibold">{title}</h2>
 					<div class="flex items-center gap-1">
 						{@render headerExtra?.()}

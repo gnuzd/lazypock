@@ -8,7 +8,7 @@
 	const sidebar = getSidebar();
 </script>
 
-<div class="flex flex-col h-full">
+<div class="flex h-full flex-col">
 	<AppHeader />
 	<div class="flex flex-1 overflow-hidden">
 		<Sidebar header={sidebar.header} body={sidebar.body} footer={sidebar.footer} />

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Button from '$lib/components/Button.svelte';
 
-let {
+	let {
 		columns,
 		rows,
 		onrowclick,
@@ -9,7 +9,12 @@ let {
 		emptyActionLabel = '',
 		onemptyaction
 	}: {
-		columns: { key: string; label: string; class?: string; render?: (row: Record<string, unknown>) => string }[];
+		columns: {
+			key: string;
+			label: string;
+			class?: string;
+			render?: (row: Record<string, unknown>) => string;
+		}[];
 		rows: Record<string, unknown>[];
 		onrowclick?: (row: Record<string, unknown>) => void;
 		emptyLabel?: string;
@@ -18,21 +23,24 @@ let {
 	} = $props();
 </script>
 
-<div class="overflow-x-auto border border-base-300 rounded-box bg-base-100">
+<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
 	<table class="w-full border-collapse text-sm">
 		<thead>
-			<tr class="text-xs font-semibold uppercase tracking-wider text-base-content/60 bg-base-200">
+			<tr class="bg-base-200 text-xs font-semibold tracking-wider text-base-content/60 uppercase">
 				{#each columns as col (col.key)}
-					<th class="px-3.5 py-2.5 text-left whitespace-nowrap border-b border-base-300 {col.class ?? ''}">{col.label}</th>
+					<th
+						class="border-b border-base-300 px-3.5 py-2.5 text-left whitespace-nowrap {col.class ??
+							''}">{col.label}</th
+					>
 				{/each}
 			</tr>
 		</thead>
 		<tbody>
 			{#if rows.length === 0}
 				<tr>
-					<td colspan={columns.length} class="text-center py-8 opacity-50">
+					<td colspan={columns.length} class="py-8 text-center opacity-50">
 						{#if emptyLabel}
-							<span class="block mb-2 text-sm">{emptyLabel}</span>
+							<span class="mb-2 block text-sm">{emptyLabel}</span>
 						{/if}
 						{#if emptyActionLabel && onemptyaction}
 							<Button class="btn-primary" onclick={onemptyaction}>{emptyActionLabel}</Button>
@@ -44,11 +52,11 @@ let {
 					<tr class="transition-[background] duration-(--animation-speed-fast) hover:bg-base-200">
 						{#each columns as col (col.key)}
 							<td
-								class="px-3.5 py-2 border-b border-base-200 max-w-60 truncate {col.class ?? ''}"
+								class="max-w-60 truncate border-b border-base-200 px-3.5 py-2 {col.class ?? ''}"
 								role={onrowclick ? 'button' : undefined}
 								onclick={onrowclick ? () => onrowclick(row) : undefined}
 							>
-								{col.render ? col.render(row) : (row[col.key] as string ?? '—')}
+								{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
 							</td>
 						{/each}
 					</tr>
