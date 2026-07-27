@@ -69,10 +69,15 @@ defmodule LazypockWeb.DynamicController do
       |> put_resp_header("x-total-count", to_string(total))
       |> json(DynamicView.paginated_response(items, total, page, per_page))
     else
-      {:error, reason} ->
+      {:error, :not_found} ->
         conn
         |> put_status(404)
-        |> json(error_response(404, reason))
+        |> json(error_response(404, "Collection not found"))
+
+      {:error, reason} ->
+        conn
+        |> put_status(403)
+        |> json(error_response(403, reason))
     end
   end
 
@@ -90,6 +95,11 @@ defmodule LazypockWeb.DynamicController do
         conn
         |> put_status(404)
         |> json(error_response(404, "The requested resource wasn't found."))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
 
       {:error, reason} ->
         conn
@@ -124,6 +134,11 @@ defmodule LazypockWeb.DynamicController do
           |> json(error_response(400, reason))
       end
     else
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
+
       {:error, reason} ->
         conn
         |> put_status(403)
@@ -157,6 +172,11 @@ defmodule LazypockWeb.DynamicController do
         |> put_status(404)
         |> json(error_response(404, "The requested resource wasn't found."))
 
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
+
       {:error, reason} ->
         conn
         |> put_status(403)
@@ -184,6 +204,11 @@ defmodule LazypockWeb.DynamicController do
         conn
         |> put_status(404)
         |> json(error_response(404, "The requested resource wasn't found."))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
 
       {:error, reason} ->
         conn

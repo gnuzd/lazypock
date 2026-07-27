@@ -37,13 +37,14 @@ defmodule LazypockWeb.Router do
     post("/superusers/login", SuperUserController, :login)
   end
 
-  # Authenticated API routes
+  # Authenticated API routes — token is verified but NOT hard-blocked here.
+  # Access control is handled by each controller/enforcer.
   scope "/api", LazypockWeb do
     pipe_through(:auth)
 
     get("/superusers/me", SuperUserController, :me)
 
-    # Collection management
+    # Collection management (DDL operations — enforcer checks superuser/rules)
     get("/collections", CollectionController, :list)
     post("/collections", CollectionController, :create)
     get("/collections/:id", CollectionController, :show)

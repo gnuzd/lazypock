@@ -208,6 +208,30 @@ defmodule Lazypock.Schema.DDL do
             )
           end
 
+          # Save metadata fields if provided (rules, options, hooks)
+          metadata = [:rules, :options, :hooks]
+
+          metadata_updates =
+            metadata
+            |> Enum.reduce(%{}, fn key, acc ->
+              case Keyword.fetch(opts, key) do
+                {:ok, value} when is_map(value) ->
+                  Map.put(acc, key, value)
+
+                {:ok, value} ->
+                  Map.put(acc, key, value)
+
+                :error ->
+                  acc
+              end
+            end)
+
+          unless metadata_updates == %{} do
+            collection
+            |> Ecto.Changeset.change(metadata_updates)
+            |> Repo.update!()
+          end
+
           existing_fields =
             Repo.all(
               from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)

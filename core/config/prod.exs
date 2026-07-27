@@ -1,7 +1,6 @@
 import Config
 
-config :lazypock, LazypockWeb.Endpoint,
-  cache_static_manifest: Application.app_dir(:lazypock, "priv/static/cache_manifest.json")
+config :lazypock, LazypockWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
 # Force using SSL in production. This also sets the "strict-security-transport" header,
 # known as HSTS. If you have a health check endpoint, you may want to exclude it below.

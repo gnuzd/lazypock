@@ -5,11 +5,28 @@ defmodule Lazypock.Rules.Enforcer do
   Rules use PocketBase-compatible syntax and are stored in
   `_collections.rules` per collection.
 
+  ## PocketBase-compatible rule semantics
+
+  Rules follow three-state logic:
+
+  | Rule value    | Meaning                                       |
+  |---------------|-----------------------------------------------|
+  | `nil` (absent)| **Superuser only.** Non-superusers denied.    |
+  | `""` (empty)  | **Public.** Anyone can access (no filter).    |
+  | filter string | **Conditional.** Users matching filter gain
+                    access via `@request.auth.*` tokens.      |
+
+  * **`@request.auth.*` tokens** — `@request.auth.id`, `@request.auth.email`,
+    `@request.auth.role` are replaced with the authenticated user's values.
+    For unauthenticated requests they become empty strings `''`.
+
+  * **Superuser bypass** — Authenticated superusers always bypass all
+    rules entirely (matches PocketBase superadmin behavior).
+
   ## How it works
 
   * **listRule** — Compiled via FilterCompiler into a SQL WHERE clause
-    that is merged into the list query. @request.auth tokens are resolved
-    to actual user values before compilation.
+    that is merged into the list query.
 
   * **viewRule, createRule, updateRule, deleteRule** — Resolved against the
     target record/attrs using a simple existence check:
@@ -30,19 +47,31 @@ defmodule Lazypock.Rules.Enforcer do
   @spec authorize_list(String.t(), map() | nil) ::
           {:ok, {String.t(), [term()]}} | {:error, String.t()}
   def authorize_list(collection_name, user) do
-    # Check manageRule first — admin bypass
-    manage_rule = get_rule(collection_name, "manageRule")
-
-    if manage_rule != "" and passes_rule?(manage_rule, user, nil, collection_name) do
+    # 1. Superuser bypass — authenticated superusers always have access
+    if user != nil do
       {:ok, {"", []}}
     else
-      rule = get_rule(collection_name, "listRule")
+      # 2. Check manageRule — admin-like access for non-superusers
+      manage_rule = get_rule(collection_name, "manageRule")
 
-      if rule == "" do
+      if manage_rule != nil and passes_rule?(manage_rule, user, nil, collection_name) do
         {:ok, {"", []}}
       else
-        resolved = resolve_user_tokens(rule, user)
-        FilterCompiler.compile(resolved)
+        # 3. Check listRule — three-state:
+        #    nil = superuser only, "" = public, filter = evaluate
+        rule = get_rule(collection_name, "listRule")
+
+        cond do
+          rule == nil ->
+            {:error, "Access denied by listRule"}
+
+          rule == "" ->
+            {:ok, {"", []}}
+
+          true ->
+            resolved = resolve_user_tokens(rule, user)
+            FilterCompiler.compile(resolved)
+        end
       end
     end
   end
@@ -80,26 +109,51 @@ defmodule Lazypock.Rules.Enforcer do
   end
 
   @doc """
+  Convenience: authorize_manage for collection management access.
+  Superusers always pass. Non-superusers must match the collection's
+  manageRule (if set). If manageRule is nil, only superusers gain access.
+  """
+  @spec authorize_manage(String.t(), map() | nil) :: :ok | {:error, String.t()}
+  def authorize_manage(collection_name, user) do
+    authorize_mutation(collection_name, "manageRule", user, nil)
+  end
+
+  @doc """
   Authorizes a mutation against a record/attrs.
   """
   @spec authorize_mutation(String.t(), String.t(), map() | nil, map() | nil) ::
           :ok | {:error, String.t()}
   def authorize_mutation(collection_name, rule_key, user, record_or_attrs) do
-    # Check manageRule first
-    manage_rule = get_rule(collection_name, "manageRule")
+    # 1. Superuser bypass — authenticated superusers always have access
+    if user != nil do
+      :ok
+    else
+      # 2. Check manageRule — admin-like access for non-superusers
+      manage_rule = get_rule(collection_name, "manageRule")
 
-    cond do
-      manage_rule != "" and passes_rule?(manage_rule, user, record_or_attrs, collection_name) ->
-        :ok
+      cond do
+        manage_rule != nil and passes_rule?(manage_rule, user, record_or_attrs, collection_name) ->
+          :ok
 
-      true ->
-        rule = get_rule(collection_name, rule_key)
+        true ->
+          # 3. Check the specific action rule (viewRule, createRule, etc.)
+          #    nil = superuser only, "" = public, filter = evaluate
+          rule = get_rule(collection_name, rule_key)
 
-        cond do
-          rule == "" -> :ok
-          passes_rule?(rule, user, record_or_attrs, collection_name) -> :ok
-          true -> {:error, "Access denied by #{rule_key}"}
-        end
+          cond do
+            rule == nil ->
+              {:error, "Access denied by #{rule_key}"}
+
+            rule == "" ->
+              :ok
+
+            passes_rule?(rule, user, record_or_attrs, collection_name) ->
+              :ok
+
+            true ->
+              {:error, "Access denied by #{rule_key}"}
+          end
+      end
     end
   end
 
@@ -107,7 +161,7 @@ defmodule Lazypock.Rules.Enforcer do
 
   defp get_rule(collection_name, rule_key) do
     {:ok, collection} = Registry.get(collection_name)
-    collection.rules[rule_key] || ""
+    collection.rules[rule_key]
   end
 
   defp passes_rule?(rule, user, context, collection_name) do
@@ -180,16 +234,20 @@ defmodule Lazypock.Rules.Enforcer do
   defp eval_without_db(sql, params, record) do
     if String.contains?(sql, ~s(")) do
       # Rule references record fields — resolve them against the input attrs
-      resolved = Enum.reduce(record, sql, fn {key, val}, acc ->
-        key_str = if is_atom(key), do: Atom.to_string(key), else: key
-        val_str = cond do
-          is_nil(val) -> "null"
-          is_boolean(val) -> String.downcase(to_string(val))
-          is_binary(val) -> ~s('#{escape_quote(val)}')
-          true -> to_string(val)
-        end
-        String.replace(acc, ~s("#{key_str}"), val_str)
-      end)
+      resolved =
+        Enum.reduce(record, sql, fn {key, val}, acc ->
+          key_str = if is_atom(key), do: Atom.to_string(key), else: key
+
+          val_str =
+            cond do
+              is_nil(val) -> "null"
+              is_boolean(val) -> String.downcase(to_string(val))
+              is_binary(val) -> ~s('#{escape_quote(val)}')
+              true -> to_string(val)
+            end
+
+          String.replace(acc, ~s("#{key_str}"), val_str)
+        end)
 
       # Now run SELECT 1 WHERE with resolved values
       case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{resolved}", []) do

@@ -9,11 +9,14 @@
 	import { browser } from '$app/environment';
 
 	let { children } = $props();
-
+	let initialized = $state(false);
 	onMount(async () => {
 		await client.authStore.init();
 
-		if (!browser) return;
+		if (!browser) {
+			initialized = true;
+			return;
+		}
 
 		const path = window.location.pathname;
 		const isLoginPage = path === base + '/login';
@@ -30,24 +33,35 @@
 					path.startsWith(base + '/logs') ||
 					path.startsWith(base + '/settings')
 				) {
+					initialized = true;
 					return;
 				}
 				const result = await client.listCollections('page=1&perPage=200');
 				const name = result?.items?.[0]?.name ?? '';
 				window.location.href = base + '/collections?collection=' + name;
+				return;
 			} catch {
 				// Token is stale — clear it and show login
 				client.authStore.clear();
 				if (!isLoginPage) {
 					window.location.href = base + '/login';
+					return;
 				}
+				// Already on login page — let it render
+				initialized = true;
+				return;
 			}
 		} else if (!isLoginPage) {
 			window.location.href = base + '/login';
+			return;
 		}
+
+		initialized = true;
 	});
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
-{@render children()}
+{#if initialized}
+	{@render children()}
+{/if}
 <Toaster richColors position="top-right" />

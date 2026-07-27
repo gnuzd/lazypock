@@ -122,11 +122,13 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'email')
     """
     execute """
-      INSERT INTO _fields (collection_id, name, type, required, system, sort_order, hidden, options, created_at, updated_at)
+      INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
 				SELECT c.id, 'password_hash', 'password', true, true, 1, '{}'::jsonb, now(), now()
       FROM _collections c WHERE c.name = 'users'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'password_hash')
     """
+
+
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
       SELECT c.id, 'created_at', 'autodate', true, true, 2, '{\"onCreate\": true}'::jsonb, now(), now()
