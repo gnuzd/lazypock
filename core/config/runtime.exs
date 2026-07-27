@@ -39,9 +39,6 @@ if config_env() == :dev do
 end
 
 if config_env() == :prod do
-  config :lazypock, LazypockWeb.Endpoint,
-    cache_static_manifest: Application.app_dir(:lazypock, "priv/static/cache_manifest.json")
-
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """

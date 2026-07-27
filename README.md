@@ -64,6 +64,69 @@ LazyPock/
 
 ---
 
+## How to Run
+
+### Prerequisites
+
+- **Elixir 1.17+** + **Erlang/OTP 26+**
+- **PostgreSQL 15+**
+- `zig` and `xz` installed (for Burrito release builds)
+
+### Development (mix phx.server)
+
+```bash
+cd core
+
+# Setup the project
+export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev"
+mix setup
+
+# Start the Phoenix server
+export PHX_SERVER=true
+export SECRET_KEY_BASE="$(mix phx.gen.secret)"
+mix phx.server
+```
+
+### Production Release (Burrito single binary)
+
+```bash
+cd core
+
+# Build the release
+MIX_ENV=prod mix release
+
+# The binary will be at:
+#   core/burrito_out/lazypock_macos_silicon
+```
+
+#### Required Environment Variables
+
+When running the Burrito binary, these env vars **must** be set:
+
+| Variable | Description | Example |
+|---|---|---|
+| `DATABASE_URL` | PostgreSQL connection string | `ecto://postgres:postgres@localhost:5432/lazypock_dev` |
+| `PHX_SERVER` | Enable the HTTP server (set to `true`) | `true` |
+| `SECRET_KEY_BASE` | Secret for signing cookies | (generate with `mix phx.gen.secret`) |
+| `PHX_HOST` | Public hostname (optional, defaults to `example.com`) | `localhost` |
+| `PORT` | HTTP port (optional, defaults to `4000`) | `4000` |
+| `POOL_SIZE` | DB connection pool size (optional, defaults to `10`) | `10` |
+
+**Minimal example:**
+
+```bash
+export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
+export PHX_SERVER=true
+export SECRET_KEY_BASE="$(mix phx.gen.secret)"
+export PHX_HOST="localhost"
+
+./core/burrito_out/lazypock_macos_silicon
+```
+
+Note: The release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
+
+---
+
 ## Quick Preview (Planned API)
 
 ```bash

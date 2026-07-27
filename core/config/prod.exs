@@ -1,5 +1,6 @@
 import Config
 
+config :hello, HelloWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
 # Force using SSL in production. This also sets the "strict-security-transport" header,
 # known as HSTS. If you have a health check endpoint, you may want to exclude it below.

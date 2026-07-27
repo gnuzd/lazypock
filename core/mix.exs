@@ -33,20 +33,20 @@ defmodule Lazypock.MixProject do
   end
 
   def releases do
-  [
-    lazypock: [
-      steps: [:assemble, &Burrito.wrap/1],
-      burrito: [
-        targets: [
-          # macos: [os: :darwin, cpu: :x86_64],
-          macos_silicon: [os: :darwin, cpu: :aarch64],
-          # linux: [os: :linux, cpu: :x86_64],
-          # windows: [os: :windows, cpu: :x86_64]
+    [
+      lazypock: [
+        steps: [:assemble, &Burrito.wrap/1],
+        burrito: [
+          targets: [
+            # macos: [os: :darwin, cpu: :x86_64],
+            macos_silicon: [os: :darwin, cpu: :aarch64]
+            # linux: [os: :linux, cpu: :x86_64],
+            # windows: [os: :windows, cpu: :x86_64]
+          ]
         ]
       ]
     ]
-  ]
-end
+  end
 
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
