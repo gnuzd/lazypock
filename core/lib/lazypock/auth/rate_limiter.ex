@@ -31,7 +31,7 @@ defmodule Lazypock.Auth.RateLimiter do
         :ets.new(@table_name, [
           :named_table,
           :set,
-          :protected,
+          :public,
           read_concurrency: true,
           write_concurrency: true
         ])
@@ -89,8 +89,8 @@ defmodule Lazypock.Auth.RateLimiter do
     key = {ip, collection, email}
     now = System.monotonic_time(:second)
 
-    # Atomically increment position 2 (count), default to {key, 1, now}
-    _new_count = :ets.update_counter(@table_name, key, {2, 1}, {key, 1, now})
+    # Atomically increment position 2 (count), default to {key, 0, now}
+    _new_count = :ets.update_counter(@table_name, key, {2, 1}, {key, 0, now})
     :ok
   end
 
