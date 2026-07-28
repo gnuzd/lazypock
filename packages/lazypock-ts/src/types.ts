@@ -1,5 +1,6 @@
 // ── Record & Collection types ───────────────────────────
 
+/** Shape of a record returned from any collection. */
 export interface ApiRecord {
 	id: string;
 	collectionId: string;
@@ -9,6 +10,7 @@ export interface ApiRecord {
 	[key: string]: unknown;
 }
 
+/** Paginated list response matching PocketBase format. */
 export interface ListResult<T = ApiRecord> {
 	items: T[];
 	page: number;
@@ -17,6 +19,7 @@ export interface ListResult<T = ApiRecord> {
 	totalPages: number;
 }
 
+/** HTTP method supported by the client. */
 export type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
 export interface RequestOptions {

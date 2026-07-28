@@ -1,17 +1,26 @@
 // ── Auth Store ──────────────────────────────────────────
 // Pluggable storage adapter: swap for AsyncStorage on RN, localStorage on web, etc.
 
+/**
+ * Interface for pluggable persistence backends.
+ * Swap for `AsyncStorage` on React Native, `localStorage` on web, etc.
+ */
 export interface StorageAdapter {
+	/** Retrieve a stored value by key. */
 	get(key: string): string | null | Promise<string | null>;
+	/** Persist a key-value pair. */
 	set(key: string, value: string): void | Promise<void>;
+	/** Remove a stored value by key. */
 	remove(key: string): void | Promise<void>;
 }
 
+/** Shape of an authenticated user record (from auth collections). */
 export interface AuthModel {
 	id: string;
 	[key: string]: unknown;
 }
 
+/** Callback signature for auth state changes. */
 export type AuthListener = (model: AuthModel | null, token: string) => void;
 
 // Server token TTL: 7 days (matches Phoenix.Token max_age)
@@ -25,6 +34,10 @@ export class AuthStore {
 	private listeners = new Set<AuthListener>();
 	private storage: StorageAdapter;
 
+	/**
+	 * Create an AuthStore with optional custom storage adapter.
+	 * @param storage Persistence backend. Defaults to `memoryStorage` (localStorage fallback).
+	 */
 	constructor(storage?: StorageAdapter) {
 		this.storage = storage ?? {
 			get: (_key: string) => null,
@@ -33,18 +46,25 @@ export class AuthStore {
 		};
 	}
 
+	/** The current JWT token string, or empty string if not authenticated. */
 	get token(): string {
 		return this._token;
 	}
 
+	/** The current authenticated user record, or null. */
 	get model(): AuthModel | null {
 		return this._model;
 	}
 
+	/** Whether a token exists (does not check expiry). */
 	get isValid(): boolean {
 		return !!this._token;
 	}
 
+	/**
+	 * Whether the current token has expired (with a 30-second buffer).
+	 * Returns false when no expiry has been recorded (e.g. superuser tokens).
+	 */
 	get isExpired(): boolean {
 		return (
 			this._tokenExpiresAt !== null &&
@@ -52,15 +72,23 @@ export class AuthStore {
 		);
 	}
 
+	/** The auth collection name used for automatic token refresh. */
 	get collectionName(): string | null {
 		return this._collectionName;
 	}
 
+	/**
+	 * Set the auth collection name (used internally by auto-refresh).
+	 * @param name The collection name, or null for superuser tokens.
+	 */
 	setCollectionName(name: string | null): void {
 		this._collectionName = name;
 	}
 
-	/** Load persisted auth from storage */
+	/**
+	 * Load persisted auth state from storage.
+	 * Should be called once at application startup.
+	 */
 	async init(): Promise<void> {
 		const [token, model, expiresAt] = await Promise.all([
 			this.storage.get("auth_token"),
@@ -78,6 +106,11 @@ export class AuthStore {
 		}
 	}
 
+	/**
+	 * Update the current auth token and model, persist to storage, and notify listeners.
+	 * @param token The JWT token string.
+	 * @param model The authenticated user record, or null for superusers.
+	 */
 	set(token: string, model: AuthModel | null): void {
 		this._token = token;
 		this._model = model;
@@ -92,6 +125,9 @@ export class AuthStore {
 		this.notify();
 	}
 
+	/**
+	 * Clear all auth state (token, model, expiry) and notify listeners.
+	 */
 	clear(): void {
 		this._token = "";
 		this._model = null;
@@ -105,6 +141,11 @@ export class AuthStore {
 		this.notify();
 	}
 
+	/**
+	 * Register a listener for auth state changes.
+	 * @param fn Callback invoked with (model, token) on every change.
+	 * @returns An unsubscribe function.
+	 */
 	onChange(fn: AuthListener): () => void {
 		this.listeners.add(fn);
 		return () => this.listeners.delete(fn);
@@ -118,6 +159,7 @@ export class AuthStore {
 }
 
 // ── Memory-only storage (default, works everywhere) ─────
+/** Default storage adapter using `localStorage` with graceful fallback. */
 export const memoryStorage: StorageAdapter = {
 	get(key: string) {
 		try {

@@ -5,11 +5,16 @@ import type { HttpClient } from "./http";
 import type { AuthStore, AuthModel } from "./auth";
 import type { ApiRecord, ListResult, RequestOptions } from "./types";
 
+/**
+ * Typed CRUD service for a single dynamic collection.
+ * Get an instance via {@link LazypockClient.collection}.
+ */
 export class CollectionService {
 	private http: HttpClient;
 	private collectionName: string;
 	private authStore?: AuthStore;
 
+	/** @internal */
 	constructor(http: HttpClient, collectionName: string, authStore?: AuthStore) {
 		this.http = http;
 		this.collectionName = collectionName;
@@ -20,7 +25,11 @@ export class CollectionService {
 		return encodeURIComponent(id);
 	}
 
-	/** List records with optional filter params */
+	/**
+	 * List records with optional filter/sort/pagination.
+	 * @param params Query parameters including `filter`, `sort`, `page`, `perPage`, `expand`.
+	 * @param options Optional request options.
+	 */
 	list<T = ApiRecord>(
 		params?: Record<string, string>,
 		options?: RequestOptions,
@@ -32,7 +41,11 @@ export class CollectionService {
 		);
 	}
 
-	/** Get a single record by id */
+	/**
+	 * Get a single record by ID.
+	 * @param id Record ID.
+	 * @param options Optional request options.
+	 */
 	getOne<T = ApiRecord>(
 		id: string,
 		options?: RequestOptions,
@@ -43,7 +56,11 @@ export class CollectionService {
 		);
 	}
 
-	/** Create a new record */
+	/**
+	 * Create a new record.
+	 * @param data Record fields.
+	 * @param options Optional request options.
+	 */
 	create<T = ApiRecord>(
 		data: Record<string, unknown>,
 		options?: RequestOptions,
@@ -55,7 +72,12 @@ export class CollectionService {
 		);
 	}
 
-	/** Update a record by id */
+	/**
+	 * Update a record by ID.
+	 * @param id Record ID.
+	 * @param data Updated record fields.
+	 * @param options Optional request options.
+	 */
 	update<T = ApiRecord>(
 		id: string,
 		data: Record<string, unknown>,
@@ -68,7 +90,11 @@ export class CollectionService {
 		);
 	}
 
-	/** Delete a record by id */
+	/**
+	 * Delete a record by ID.
+	 * @param id Record ID.
+	 * @param options Optional request options.
+	 */
 	delete(id: string, options?: RequestOptions): Promise<null> {
 		return this.http.delete(
 			"/" + this.encodeId(this.collectionName) + "/" + this.encodeId(id),

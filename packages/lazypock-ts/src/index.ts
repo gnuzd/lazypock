@@ -39,6 +39,7 @@ export type {
 	FileRecord,
 };
 
+/** Options for constructing a {@link LazypockClient}. */
 export interface LazypockClientOptions {
 	/** API base URL (e.g. 'http://localhost:4000/api') */
 	baseUrl: string;
@@ -50,6 +51,19 @@ export interface LazypockClientOptions {
 	realtime?: RealtimeService;
 }
 
+/**
+ * Lazypock API client.
+ *
+ * Provides methods for authentication, CRUD operations on dynamic collections,
+ * file management, and real-time subscriptions.
+ *
+ * @example
+ * ```ts
+ * const client = new LazypockClient({ baseUrl: 'http://localhost:4000/api' });
+ * await client.login('admin@example.com', 'password');
+ * const posts = await client.collection('posts').list();
+ * ```
+ */
 export class LazypockClient {
 	readonly http: HttpClient;
 	readonly authStore: AuthStore;
@@ -57,6 +71,10 @@ export class LazypockClient {
 	readonly files: FilesService;
 	private collectionCache = new Map<string, CollectionService>();
 
+	/**
+	 * Create a new Lazypock client.
+	 * @param options Configuration options.
+	 */
 	constructor(options: LazypockClientOptions) {
 		const baseUrl = options.baseUrl.replace(/\/+$/, "");
 		this.authStore =
@@ -66,7 +84,13 @@ export class LazypockClient {
 		this.files = new FilesService(this.http);
 	}
 
-	/** Get or create a typed collection service */
+	/**
+	 * Get or create a typed service for the given collection.
+	 * Services are cached after first access.
+	 *
+	 * @param name The collection name.
+	 * @returns A {@link CollectionService} instance.
+	 */
 	collection(name: string): CollectionService {
 		let svc = this.collectionCache.get(name);
 		if (!svc) {
@@ -78,10 +102,18 @@ export class LazypockClient {
 
 	// ── Auth ──
 
+	/** Check whether any superuser exists (for login vs setup screen routing). */
 	async checkSuperuser(): Promise<{ has_superuser: boolean } | null> {
 		return this.http.get<{ has_superuser: boolean }>("/superusers/check");
 	}
 
+	/**
+	 * Create the initial superuser account.
+	 * Only works when no superuser exists yet.
+	 * Stores the returned token in the auth store.
+	 * @param email Superuser email.
+	 * @param password Superuser password (min 8 chars).
+	 */
 	async setup(
 		email: string,
 		password: string,
@@ -96,6 +128,17 @@ export class LazypockClient {
 		return data;
 	}
 
+	/**
+	 * Authenticate as a superuser or auth collection user.
+	 *
+	 * When `collection` is provided, authenticates against
+	 * `/{collection}/auth-with-password`. Otherwise logs in as superuser.
+	 * Stores the returned token in the auth store.
+	 *
+	 * @param email User email or identity.
+	 * @param password User password.
+	 * @param collection Optional auth collection name.
+	 */
 	async login(
 		email: string,
 		password: string,
@@ -129,6 +172,7 @@ export class LazypockClient {
 		return data;
 	}
 
+	/** Fetch the current superuser profile and refresh the auth model. */
 	async me<T = ApiRecord>(options?: RequestOptions): Promise<T | null> {
 		const data = await this.http.get<T>("/superusers/me", options);
 		if (data) {
@@ -141,6 +185,11 @@ export class LazypockClient {
 	/**
 	 * Authenticate against an auth collection with email/password.
 	 * Stores the returned token and user record in the auth store.
+	 *
+	 * @param collection The auth collection name.
+	 * @param identity Email or username.
+	 * @param password Password.
+	 * @param options Optional request options.
 	 */
 	async authWithPassword(
 		collection: string,
@@ -167,6 +216,9 @@ export class LazypockClient {
 	/**
 	 * Refresh an auth collection token.
 	 * Uses the currently stored auth token.
+	 *
+	 * @param collection The auth collection name.
+	 * @param options Optional request options.
 	 */
 	async authRefresh(
 		collection: string,
@@ -188,18 +240,25 @@ export class LazypockClient {
 		return data;
 	}
 
+	/** Clear the current auth state and remove persisted tokens. */
 	logout(): void {
 		this.authStore.clear();
 	}
 
 	// ── Health ──
 
+	/** Ping the API health endpoint. */
 	health(options?: RequestOptions): Promise<Record<string, unknown> | null> {
 		return this.http.get<Record<string, unknown>>("/health", options);
 	}
 
 	// ── Collection Management (admin) ──
 
+	/**
+	 * List all collections (admin).
+	 * @param q URL query string (e.g. `page=1&perPage=200`).
+	 * @param options Optional request options.
+	 */
 	listCollections(
 		q?: string,
 		options?: RequestOptions,
@@ -210,6 +269,11 @@ export class LazypockClient {
 		);
 	}
 
+	/**
+	 * Get a single collection by ID or name.
+	 * @param id Collection ID or name.
+	 * @param options Optional request options.
+	 */
 	getCollection(
 		id: string,
 		options?: RequestOptions,
@@ -220,6 +284,11 @@ export class LazypockClient {
 		);
 	}
 
+	/**
+	 * Create a new collection (admin).
+	 * @param data Collection definition (name, type, fields, options, rules, etc.).
+	 * @param options Optional request options.
+	 */
 	createCollection(
 		data: Record<string, unknown>,
 		options?: RequestOptions,
@@ -227,6 +296,12 @@ export class LazypockClient {
 		return this.http.post<ApiRecord>("/collections", data, options);
 	}
 
+	/**
+	 * Update an existing collection (admin).
+	 * @param id Collection ID or name.
+	 * @param data Updated collection fields.
+	 * @param options Optional request options.
+	 */
 	updateCollection(
 		id: string,
 		data: Record<string, unknown>,
@@ -239,12 +314,29 @@ export class LazypockClient {
 		);
 	}
 
+	/**
+	 * Delete a collection (admin).
+	 * @param id Collection ID or name.
+	 * @param options Optional request options.
+	 */
 	deleteCollection(id: string, options?: RequestOptions): Promise<null> {
 		return this.http.delete("/collections/" + encodeURIComponent(id), options);
 	}
 
 	// ── Records (dynamic collection) ──
 
+	/**
+	 * List records from a dynamic collection with optional filter/sort/pagination.
+	 *
+	 * @param coll Collection name.
+	 * @param params Query parameters including:
+	 *   - `filter` — PocketBase filter syntax (e.g. `title~'hello' && published=true`)
+	 *   - `sort` — Comma-separated, `-` prefix for DESC (e.g. `-created,title`)
+	 *   - `page` — Page number (default: 1)
+	 *   - `perPage` — Items per page (default: 30, max: 200)
+	 *   - `expand` — Comma-separated relation fields (e.g. `author,category`)
+	 * @param options Optional request options.
+	 */
 	listRecords(
 		coll: string,
 		params?: Record<string, string>,
@@ -257,6 +349,12 @@ export class LazypockClient {
 		);
 	}
 
+	/**
+	 * Get a single record by ID.
+	 * @param coll Collection name.
+	 * @param id Record ID.
+	 * @param options Optional request options.
+	 */
 	getRecord(
 		coll: string,
 		id: string,
@@ -268,6 +366,12 @@ export class LazypockClient {
 		);
 	}
 
+	/**
+	 * Create a record in a dynamic collection.
+	 * @param coll Collection name.
+	 * @param data Record fields.
+	 * @param options Optional request options.
+	 */
 	createRecord(
 		coll: string,
 		data: Record<string, unknown>,
@@ -280,6 +384,13 @@ export class LazypockClient {
 		);
 	}
 
+	/**
+	 * Update a record in a dynamic collection.
+	 * @param coll Collection name.
+	 * @param id Record ID.
+	 * @param data Updated record fields.
+	 * @param options Optional request options.
+	 */
 	updateRecord(
 		coll: string,
 		id: string,
@@ -293,6 +404,12 @@ export class LazypockClient {
 		);
 	}
 
+	/**
+	 * Delete a record from a dynamic collection.
+	 * @param coll Collection name.
+	 * @param id Record ID.
+	 * @param options Optional request options.
+	 */
 	deleteRecord(
 		coll: string,
 		id: string,

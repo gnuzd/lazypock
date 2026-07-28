@@ -39,6 +39,19 @@ export function wsUrlFromBaseUrl(baseUrl: string): string {
 	}
 }
 
+/**
+ * Phoenix Channel client for real-time collection subscriptions.
+ *
+ * Connects via WebSocket and subscribes to collection topics.
+ * Includes automatic reconnection with exponential backoff.
+ *
+ * @example
+ * ```ts
+ * const rt = new RealtimeService();
+ * rt.connect({ url: wsUrlFromBaseUrl('http://localhost:4000/api') });
+ * rt.subscribe('collection:posts', (e) => console.log(e));
+ * ```
+ */
 export class RealtimeService {
 	private ws: WebSocket | null = null;
 	private refCounter = 0;

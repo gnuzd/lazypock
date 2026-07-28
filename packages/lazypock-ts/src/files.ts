@@ -21,16 +21,20 @@ export function getFileUrl(baseUrl: string, fileId: string): string {
 	return baseUrl.replace(/\/+$/, "") + "/files/" + encodeURIComponent(fileId);
 }
 
+/**
+ * Service for file upload, retrieval, and deletion.
+ * Access via {@link LazypockClient.files}.
+ */
 export class FilesService {
 	constructor(private http: HttpClient) {}
 
 	/**
 	 * Upload a file or blob.
 	 *
-	 * @param file   The File or Blob to upload.
-	 * @param filename  Optional filename (required if file is a Blob).
-	 * @param options   Optional request options (signal, custom fetch).
-	 * @param meta      Optional metadata: collectionName, recordId, fieldName.
+	 * @param file The File or Blob to upload.
+	 * @param filename Optional filename (required if `file` is a Blob without a name).
+	 * @param options Optional request options (signal, custom fetch).
+	 * @param meta Optional metadata: collectionName, recordId, fieldName for ownership tracking.
 	 */
 	async upload(
 		file: File | Blob,
@@ -62,7 +66,8 @@ export class FilesService {
 	}
 
 	/**
-	 * GET /api/files/:id — returns the file metadata.
+	 * Fetch file metadata including URL.
+	 * @param fileId The file ID.
 	 */
 	async getUrl(fileId: string): Promise<string | null> {
 		const data = await this.http.request<Record<string, unknown>>(
@@ -76,7 +81,9 @@ export class FilesService {
 	}
 
 	/**
-	 * DELETE /api/files/:id
+	 * Delete a file by ID.
+	 * @param fileId The file ID.
+	 * @param options Optional request options.
 	 */
 	async delete(fileId: string, options?: RequestOptions): Promise<null> {
 		return this.http.request<null>(
