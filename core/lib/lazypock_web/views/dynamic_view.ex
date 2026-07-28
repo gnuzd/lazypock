@@ -5,6 +5,7 @@ defmodule LazypockWeb.DynamicView do
   """
 
   alias Lazypock.Collections.Registry
+  alias Lazypock.Schemas.GenericRecord
 
   @doc """
   Formats a list of records from a collection into PocketBase-compatible items,
@@ -37,6 +38,64 @@ defmodule LazypockWeb.DynamicView do
     |> Map.put("collectionName", collection.name)
     |> rename_timestamps()
     |> strip_password_fields(collection)
+  end
+
+  @doc """
+  Expands relation fields on a list of records.
+
+  For each field in `expand_fields` (comma-separated), loads the related
+  record from the target collection and adds it as `expand.{field_name}`
+  on each record.
+
+  Silently skips unknown fields, non-relation fields, missing collections,
+  and missing related records.
+  """
+  @spec expand_records([map()], String.t() | nil, String.t()) :: [map()]
+  def expand_records(records, nil, _collection_name), do: records
+  def expand_records(records, "", _collection_name), do: records
+
+  def expand_records(records, expand_fields, collection_name) do
+    field_names = String.split(expand_fields, ",") |> Enum.map(&String.trim/1)
+    {:ok, collection} = Registry.get(collection_name)
+    relation_fields = find_relation_fields(collection, field_names)
+
+    Enum.map(records, fn record ->
+      expanded = expand_record(record, relation_fields)
+
+      if expanded == %{} do
+        record
+      else
+        Map.put(record, "expand", expanded)
+      end
+    end)
+  end
+
+  defp find_relation_fields(collection, expand_fields) do
+    expand_set = MapSet.new(expand_fields)
+
+    (collection.fields || [])
+    |> Enum.filter(fn f -> f.type == "relation" and MapSet.member?(expand_set, f.name) end)
+    |> Enum.map(fn f -> {f.name, f.options["collection"]} end)
+  end
+
+  defp expand_record(record, relation_fields) do
+    Map.new(relation_fields, fn {field_name, target_collection} ->
+      related_id = record[field_name]
+
+      related =
+        if is_binary(related_id) and related_id != "" do
+          case Registry.get(target_collection) do
+            {:ok, _coll} -> GenericRecord.get(target_collection, related_id)
+            {:error, _} -> nil
+          end
+        else
+          nil
+        end
+
+      {field_name, related}
+    end)
+    |> Enum.filter(fn {_, v} -> not is_nil(v) end)
+    |> Map.new()
   end
 
   @doc """
