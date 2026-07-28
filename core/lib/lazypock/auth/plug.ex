@@ -2,11 +2,18 @@ defmodule Lazypock.Auth.Plug do
   @moduledoc """
   Plug for authenticating requests via JWT bearer tokens.
 
-  Extracts and validates the token from the Authorization header,
-  then assigns `current_superuser` to the conn if valid.
+  Supports two token types:
+  - **Superuser tokens** — assigns `current_superuser` (Ecto struct)
+  - **Auth collection user tokens** — assigns `current_user` (record map)
+
+  The Enforcer uses `current_superuser` for superuser bypass and
+  `current_user` for `@request.auth.*` rule resolution.
   """
 
   import Plug.Conn
+
+  alias Lazypock.Auth.Token
+  alias Lazypock.Schemas.GenericRecord
 
   @doc """
   Authenticates the request. Called from the router pipeline.
@@ -18,7 +25,8 @@ defmodule Lazypock.Auth.Plug do
     |> get_token()
     |> case do
       {:ok, token} ->
-        case Lazypock.Auth.Token.verify_token(token) do
+        # Try superuser token first
+        case Token.verify_token(token) do
           {:ok, claims} ->
             superuser = Lazypock.Repo.get(Lazypock.Auth.SuperUser, claims["id"])
 
@@ -26,16 +34,40 @@ defmodule Lazypock.Auth.Plug do
               conn
               |> assign(:current_superuser, superuser)
               |> assign(:current_superuser_claims, claims)
+              |> assign(:current_user, nil)
             else
-              conn |> assign(:current_superuser, nil)
+              conn |> assign_nil()
             end
 
           {:error, _reason} ->
-            conn |> assign(:current_superuser, nil)
+            # Try auth collection user token
+            case Token.verify_user_token(token) do
+              {:ok, claims} ->
+                collection_name = claims["collectionName"]
+                user_id = claims["id"]
+
+                if collection_name && user_id do
+                  user = GenericRecord.get(collection_name, user_id)
+
+                  if user do
+                    conn
+                    |> assign(:current_user, user)
+                    |> assign(:current_user_claims, claims)
+                    |> assign(:current_superuser, nil)
+                  else
+                    conn |> assign_nil()
+                  end
+                else
+                  conn |> assign_nil()
+                end
+
+              {:error, _reason} ->
+                conn |> assign_nil()
+            end
         end
 
       :none ->
-        conn |> assign(:current_superuser, nil)
+        conn |> assign_nil()
     end
   end
 
@@ -44,6 +76,28 @@ defmodule Lazypock.Auth.Plug do
   """
   def authenticated?(conn) do
     !!conn.assigns[:current_superuser]
+  end
+
+  @doc """
+  Returns the currently authenticated user record (auth collection) or nil.
+  """
+  def current_user(conn) do
+    conn.assigns[:current_user]
+  end
+
+  @doc """
+  Returns the currently authenticated superuser or nil.
+  """
+  def current_superuser(conn) do
+    conn.assigns[:current_superuser]
+  end
+
+  defp assign_nil(conn) do
+    conn
+    |> assign(:current_superuser, nil)
+    |> assign(:current_superuser_claims, nil)
+    |> assign(:current_user, nil)
+    |> assign(:current_user_claims, nil)
   end
 
   defp get_token(conn) do

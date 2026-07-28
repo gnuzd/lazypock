@@ -57,6 +57,23 @@ defmodule LazypockWeb.Router do
     delete("/files/:id", FileController, :delete)
   end
 
+  # Auth collection routes — must be BEFORE dynamic :collection routes
+  # These use :collection param just like dynamic routes, but with specific path suffixes
+  scope "/api", LazypockWeb do
+    pipe_through(:api)
+
+    # No auth required (public login/methods)
+    post("/:collection/auth-with-password", AuthController, :auth_with_password)
+    get("/:collection/auth-methods", AuthController, :auth_methods)
+  end
+
+  scope "/api", LazypockWeb do
+    pipe_through(:auth)
+
+    # Auth required (token refresh)
+    post("/:collection/auth-refresh", AuthController, :auth_refresh)
+  end
+
   # Dynamic collection routes — must be LAST
   scope "/api", LazypockWeb do
     pipe_through(:auth)

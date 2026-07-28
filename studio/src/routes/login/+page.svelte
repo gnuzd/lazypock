@@ -49,9 +49,7 @@
 		try {
 			await client.login(result.data.email, result.data.password);
 			await client.me();
-			const res = await client.listCollections('page=1&perPage=200');
-			const name = res?.items?.[0]?.name ?? '';
-			if (browser) window.location.href = base + '/collections?collection=' + name;
+			if (browser) window.location.href = base + '/collections?collection=users';
 		} catch (err) {
 			toast.error((err as { message?: string }).message || 'Login failed');
 		} finally {

@@ -491,11 +491,34 @@ defmodule Lazypock.Schema.DDL do
         }
       end)
 
+    # Default rules for auth collections (matching PocketBase auth defaults)
+    default_rules =
+      if type == "auth" do
+        %{
+          "listRule" => "",
+          "viewRule" => "",
+          "createRule" => "",
+          "updateRule" => "id = @request.auth.id",
+          "deleteRule" => "id = @request.auth.id",
+          "manageRule" => nil
+        }
+      else
+        %{
+          "listRule" => "",
+          "viewRule" => "",
+          "createRule" => "@request.auth.id != ''",
+          "updateRule" => "",
+          "deleteRule" => "",
+          "manageRule" => nil
+        }
+      end
+
     %Lazypock.Collections.Collection{}
     |> Lazypock.Collections.Collection.changeset(%{
       name: name,
       type: type,
       schema: initial_schema,
+      rules: default_rules,
       managed: true
     })
     |> Repo.insert!()

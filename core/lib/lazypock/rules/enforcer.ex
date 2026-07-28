@@ -48,7 +48,7 @@ defmodule Lazypock.Rules.Enforcer do
           {:ok, {String.t(), [term()]}} | {:error, String.t()}
   def authorize_list(collection_name, user) do
     # 1. Superuser bypass — authenticated superusers always have access
-    if user != nil do
+    if superuser?(user) do
       {:ok, {"", []}}
     else
       # 2. Check manageRule — admin-like access for non-superusers
@@ -125,7 +125,7 @@ defmodule Lazypock.Rules.Enforcer do
           :ok | {:error, String.t()}
   def authorize_mutation(collection_name, rule_key, user, record_or_attrs) do
     # 1. Superuser bypass — authenticated superusers always have access
-    if user != nil do
+    if superuser?(user) do
       :ok
     else
       # 2. Check manageRule — admin-like access for non-superusers
@@ -158,6 +158,12 @@ defmodule Lazypock.Rules.Enforcer do
   end
 
   # ── Private ──────────────────────────────────────────
+
+  # A superuser is an Ecto struct (from SuperUser schema).
+  # An auth collection user is a plain map (from GenericRecord.get).
+  # Only structs get the superuser bypass.
+  defp superuser?(%{__struct__: _}), do: true
+  defp superuser?(_), do: false
 
   defp get_rule(collection_name, rule_key) do
     {:ok, collection} = Registry.get(collection_name)

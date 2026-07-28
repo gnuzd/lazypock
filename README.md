@@ -4,7 +4,7 @@
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**. Define collections in the Studio admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
 
-**Status:** Beta — Core backend features working. Studio SvelteKit admin UI in development.
+**Status:** Beta — Core backend features working. Auth collections (user JWT, login/refresh, rule integration) ✅. Studio SvelteKit admin UI in development.
 
 ---
 
@@ -65,8 +65,8 @@ LazyPock/
 |---|---|---|---|
 | 🗄️ **Dynamic Collections** | DDL create/drop/add field. Real Pg tables with real columns. ✅ | Collection CRUD in side pane. Field editor (add/remove/reorder). ✅ | — |
 | 🌐 **REST API** | `GET/POST/PATCH/DELETE /api/:collection`. Filter, sort, paginate. ✅ | Record browser with DataTable + dynamic RecordForm. ✅ | `client.collection(name).list/getOne/create/update/delete` ✅ |
-| 🔐 **Superuser Auth** | JWT setup/login/verify. Token refresh. Superuser-only guard. ✅ | Login page. Auth guard. Token persistence. Auto-redirect. ✅ | `client.login/me/logout`, `AuthStore` with localStorage ✅ |
-| 🛡️ **Rules** | Three-state (nil=superuser, ""=public, filter). Enforcer for all CRUD + manageRule. ✅ | Rule editor with lock/unlock per field. `manageRule` field. ✅ | — |
+| 🔐 **Auth System** | Superuser JWT (setup/login/verify) + **auth collection JWT** (`/:collection/auth-with-password`, `/:collection/auth-refresh`, `/:collection/auth-methods`). Dual token verification in Plug. ✅ | Login page. Auth guard. Token persistence. Auto-redirect. ✅ | `client.login/me/logout`, `AuthStore` with localStorage ✅ |
+| 🛡️ **Rules** | Three-state (nil=superuser, ""=public, filter). Enforcer for all CRUD + manageRule. Auth user support (non-superusers evaluated against rules). ✅ | Rule editor with lock/unlock per field. `manageRule` field. ✅ | — |
 | ⚡ **Realtime** | Phoenix Channels. Broadcaster wired into DynamicController. Rule-enforced join. ✅ | Real-time record updates via `client.realtime.subscribe()`. ✅ | `RealtimeService` with Phoenix Channel protocol ✅ |
 | 📁 **File Storage** | Upload, serve, delete. Local + S3 adapters. ✅ | — | — (via REST API) |
 | 🪝 **Hooks** | File-based Elixir hooks. Lifecycle behavior. Dispatcher wired into controller. ✅ | — | — |
@@ -226,13 +226,13 @@ Schema  Hooks  Rules  ← Dynamic engine layer
 
 See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 
-**Current Status:** BE core (Phases 1–7) done. Studio SPA (Phase 8) active. SDK (Phase 9) shipping.
+**Current Status:** BE core (Phases 1–7) done. Auth collections (Phase 3 — user JWT, login/refresh, rule integration) ✅. Studio SPA (Phase 8) active. SDK (Phase 9) shipping.
 
 | Phase | What | Status |
 |---|---|---|
 | 1 | Foundation (DDL engine, meta tables, registry) | ✅ Complete |
 | 2 | Dynamic CRUD API | ✅ Complete |
-| 3 | Superuser Auth (JWT, login, setup) | ✅ Complete |
+| 3 | Auth System (superusers + auth collection JWT, login/refresh, rule integration) | ✅ Complete |
 | 4 | Rule Engine (Enforcer, three-state, manageRule) | ✅ Complete |
 | 5 | Realtime (Phoenix Channels, Broadcaster) | ✅ Complete |
 | 6 | File Storage (upload, serve, local + S3) | ✅ Complete |

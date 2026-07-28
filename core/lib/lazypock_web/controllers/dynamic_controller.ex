@@ -30,7 +30,7 @@ defmodule LazypockWeb.DynamicController do
   # ── List (GET /api/:collection) ─────────────────────
 
   def list(conn, %{"collection" => name} = params) do
-    user = conn.assigns[:current_superuser]
+    user = resolve_user(conn)
 
     with {:ok, collection} <- Registry.get(name),
          {:ok, {rule_where, rule_params}} <- Enforcer.authorize_list(name, user) do
@@ -84,7 +84,7 @@ defmodule LazypockWeb.DynamicController do
   # ── Show (GET /api/:collection/:id) ─────────────────
 
   def show(conn, %{"collection" => name, "id" => id}) do
-    user = conn.assigns[:current_superuser]
+    user = resolve_user(conn)
 
     with {:ok, _collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
@@ -111,7 +111,7 @@ defmodule LazypockWeb.DynamicController do
   # ── Create (POST /api/:collection) ──────────────────
 
   def create(conn, %{"collection" => name} = params) do
-    user = conn.assigns[:current_superuser]
+    user = resolve_user(conn)
     context = %{collection_name: name, user: user, conn: conn}
 
     with {:ok, collection} <- Registry.get(name),
@@ -149,7 +149,7 @@ defmodule LazypockWeb.DynamicController do
   # ── Update (PATCH /api/:collection/:id) ─────────────
 
   def update(conn, %{"collection" => name, "id" => id} = params) do
-    user = conn.assigns[:current_superuser]
+    user = resolve_user(conn)
     context = %{collection_name: name, user: user, conn: conn}
 
     with {:ok, collection} <- Registry.get(name),
@@ -187,7 +187,7 @@ defmodule LazypockWeb.DynamicController do
   # ── Delete (DELETE /api/:collection/:id) ────────────
 
   def delete(conn, %{"collection" => name, "id" => id}) do
-    user = conn.assigns[:current_superuser]
+    user = resolve_user(conn)
     context = %{collection_name: name, user: user, conn: conn}
 
     with {:ok, _collection} <- Registry.get(name),
@@ -242,6 +242,13 @@ defmodule LazypockWeb.DynamicController do
       |> Enum.join(", ")
 
     "ORDER BY #{clauses}"
+  end
+
+  # Return the authenticated user for Enforcer rule resolution.
+  # Superusers pass their struct (triggering superuser bypass).
+  # Auth collection users pass their record map (for @request.auth.*).
+  defp resolve_user(conn) do
+    conn.assigns[:current_superuser] || conn.assigns[:current_user]
   end
 
   defp error_response(code, message) do

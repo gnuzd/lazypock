@@ -27,11 +27,26 @@ defmodule LazypockWeb.CollectionSocket do
       token ->
         case Token.verify_token(token) do
           {:ok, claims} ->
-            user = %{"id" => claims["id"], "email" => claims["email"], "role" => claims["type"]}
+            # Superuser token
+            user = %{"id" => claims["id"], "email" => claims["email"], "role" => "superuser"}
             {:ok, assign(socket, :current_user, user)}
 
           {:error, _reason} ->
-            {:error, %{reason: "Invalid token"}}
+            # Try auth collection user token
+            case Token.verify_user_token(token) do
+              {:ok, claims} ->
+                user = %{
+                  "id" => claims["id"],
+                  "email" => claims["email"] || "",
+                  "role" => "user",
+                  "collectionName" => claims["collectionName"]
+                }
+
+                {:ok, assign(socket, :current_user, user)}
+
+              {:error, _reason} ->
+                {:error, %{reason: "Invalid token"}}
+            end
         end
     end
   end

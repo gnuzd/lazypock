@@ -111,7 +111,9 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
 
     execute """
       INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
-      SELECT 'users', 'auth', false, true, '[]', '{}', '{}', '{}', now(), now()
+      SELECT 'users', 'auth', false, true, '[]',
+        '{"listRule": "", "viewRule": "", "createRule": "", "updateRule": "id = @request.auth.id", "deleteRule": "id = @request.auth.id"}'::jsonb,
+        '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = 'users')
     """
 

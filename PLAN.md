@@ -2,7 +2,7 @@
 
 > **Your whole backend. In one lazy pocket.** 🦥👖
 
-**Status:** Core backend (Phases 1–7) complete. Studio SPA (Phase 8) in active development. SDK (Phase 9) shipping.
+**Status:** Core backend (Phases 1–7) complete. Auth collections (Phase 3) — superuser + regular auth user JWT, login/refresh, rule integration ✅. Studio SPA (Phase 8) in active development. SDK (Phase 9) shipping. Auth collections (Phase 3) — superuser + regular auth user JWT, login/refresh, rule integration ✅
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**.
 Define collections in an admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
@@ -113,7 +113,7 @@ scaffolding a new app FROM this core, not within the monorepo itself.
 | Tenancy | Single tenant (one DB = one app) | Simplicity. Matches PocketBase's "one SQLite file = one app" |
 | Rule engine | PocketBase-style DSL → Ecto dynamic queries | Declarative, compilable to SQL for performance |
 | Hooks | 3 layers: Declarative (JSON), File-based (.ex), Runtime (sandboxed eval) | Progressive power: zero-code → full Elixir |
-| Auth | Pow + custom JWT provider | Battle-tested, extensible, collection-type: "auth" |
+| Auth | Custom JWT provider (dual token: superuser + auth collection) | Superuser tokens + per-collection auth user tokens, both verified in Plug |
 | Realtime | Phoenix Channels + PubSub | Native to Phoenix, proven at scale |
 | File storage | Waffle + custom adapter (local/S3) | Pluggable backends |
 | Releases | `mix release` → single tarball | "One binary" experience like PocketBase |
@@ -683,11 +683,9 @@ When a collection is created with `type: "auth"`, it automatically gets these sy
 | Field | Type | System | Hidden | Description |
 |---|---|---|---|---|
 | `email` | email | no | no | Unique identifier |
-| `password_hash` | password | yes | yes | Never returned in API |
-| `verified` | bool | yes | no | Email verified flag |
-| `role` | select | no | no | `user` or `admin` |
-| `token_version` | number | yes | yes | Incremented on password change → invalidates all tokens |
-| `last_login` | date | yes | no | |
+| `password` | password | yes | yes | Never returned in API, bcrypt-hashed |
+| `name` | text | no | no | Display name (optional) |
+| `avatar` | text | no | no | Avatar URL (optional) |
 
 ### 3.2 JWT Implementation
 
@@ -735,18 +733,16 @@ end
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/auth/login` | Email + password → access + refresh token |
-| `POST` | `/api/auth/register` | Create user in auth collection |
-| `POST` | `/api/auth/refresh` | Refresh token → new access token |
-| `GET` | `/api/auth/me` | Return authenticated user's record |
-| `POST` | `/api/auth/request-password-reset` | Send reset email |
-| `POST` | `/api/auth/confirm-password-reset` | Reset password with token |
-| `POST` | `/api/auth/request-email-change` | Request email change |
-| `POST` | `/api/auth/confirm-email-change` | Confirm email change |
-| `POST` | `/api/auth/request-verification` | Send verification email |
-| `POST` | `/api/auth/confirm-verification` | Verify email |
-| `GET` | `/api/auth/oauth2/{provider}` | Initiate OAuth2 flow |
-| `GET` | `/api/auth/oauth2/{provider}/callback` | OAuth2 callback |
+| `POST` | `/:collection/auth-with-password` | Email + password → JWT token + user record |
+| `POST` | `/:collection/auth-refresh` | Refresh JWT token (requires auth) |
+| `GET` | `/:collection/auth-methods` | List available auth methods |
+| `POST` | `/api/superusers/login` | Superuser login (legacy) |
+| `POST` | `/api/superusers/setup` | First superuser setup |
+| `POST` | `/api/auth/request-password-reset` | (planned) Send reset email |
+| `POST` | `/api/auth/confirm-password-reset` | (planned) Reset password with token |
+| `POST` | `/api/auth/request-verification` | (planned) Send verification email |
+| `POST` | `/api/auth/confirm-verification` | (planned) Verify email |
+| `GET` | `/api/auth/oauth2/{provider}` | (planned) OAuth2 flow |
 
 ### 3.4 Auth Plug Pipeline
 
@@ -801,8 +797,11 @@ config :lazypock, :oauth2_providers, [
 - [x] Superuser login/setup/me/check endpoints
 - [x] Superuser auto-creation from env vars (`LAZYPOCK_SUPERUSER_*`)
 - [x] Auth plug middleware (`Lazypock.Auth.Plug`)
-- [ ] Auth collection type with system fields (email, password, role)
-- [ ] PocketBase-compatible auth endpoints (`/api/auth/*`)
+- [x] Auth collection type with system fields (email, password, role)
+- [x] Auth collection JWT tokens (`generate_user_token/2`, `verify_user_token/1`)
+- [x] PocketBase-compatible auth endpoints (`/:collection/auth-with-password`, `/:collection/auth-refresh`, `/:collection/auth-methods`)
+- [x] AuthController (`auth_with_password`, `auth_refresh`, `auth_methods`)
+- [x] Dynamic email/password field resolution from collection schema
 - [ ] OAuth2 provider support
 - [ ] Rate limiting on login attempts
 

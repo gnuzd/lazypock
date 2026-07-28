@@ -33,9 +33,7 @@
 					) {
 						return;
 					}
-					const result = await client.listCollections('page=1&perPage=200');
-					const name = result?.items?.[0]?.name ?? '';
-					window.location.href = base + '/collections?collection=' + name;
+					window.location.href = base + '/collections?collection=users';
 					return;
 				} catch {
 					// Token is stale — clear it and show login
