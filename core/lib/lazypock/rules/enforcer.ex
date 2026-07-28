@@ -223,11 +223,14 @@ defmodule Lazypock.Rules.Enforcer do
     if record_id do
       table = TypeMapper.quote_ident(collection_name)
 
+      # Postgrex expects 16-byte binary for UUID columns, not string
+      uuid_bin = Ecto.UUID.dump!(record_id)
+
       {:ok, %{rows: rows}} =
         Ecto.Adapters.SQL.query(
           Repo,
           "SELECT 1 FROM #{table} WHERE id = $#{length(params) + 1} AND (#{sql}) LIMIT 1",
-          params ++ [record_id]
+          params ++ [uuid_bin]
         )
 
       length(rows) > 0
@@ -255,7 +258,23 @@ defmodule Lazypock.Rules.Enforcer do
           String.replace(acc, ~s("#{key_str}"), val_str)
         end)
 
-      # Now run SELECT 1 WHERE with resolved values
+      # Resolve remaining $1, $2 etc. parameter placeholders with actual values
+      resolved =
+        params
+        |> Enum.with_index(1)
+        |> Enum.reduce(resolved, fn {val, idx}, acc ->
+          val_str =
+            cond do
+              is_nil(val) -> "null"
+              is_boolean(val) -> String.downcase(to_string(val))
+              is_binary(val) -> ~s('#{escape_quote(val)}')
+              true -> to_string(val)
+            end
+
+          String.replace(acc, "$#{idx}", val_str)
+        end)
+
+      # Now run SELECT 1 WHERE with fully resolved values
       case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{resolved}", []) do
         {:ok, %{rows: rows}} when rows != [] -> true
         _ -> false
