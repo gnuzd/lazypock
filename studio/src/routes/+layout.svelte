@@ -11,52 +11,48 @@
 	let { children } = $props();
 	let initialized = $state(false);
 	onMount(async () => {
-		await client.authStore.init();
+		try {
+			await client.authStore.init();
 
-		if (!browser) {
-			initialized = true;
-			return;
-		}
+			if (!browser) return;
 
-		const path = window.location.pathname;
-		const isLoginPage = path === base + '/login';
+			const path = window.location.pathname;
+			const isLoginPage = path === base + '/login';
 
-		if (client.authStore.isValid && !isLoginPage) {
-			// Verify the token is actually valid before redirecting
-			try {
-				await client.me();
-				// Token is good — connect realtime and stay
-				connectRealtime();
+			if (client.authStore.isValid && !isLoginPage) {
+				// Verify the token is actually valid before redirecting
+				try {
+					await client.me();
+					// Token is good — connect realtime and stay
+					connectRealtime();
 
-				if (
-					path.startsWith(base + '/collections') ||
-					path.startsWith(base + '/logs') ||
-					path.startsWith(base + '/settings')
-				) {
-					initialized = true;
+					if (
+						path.startsWith(base + '/collections') ||
+						path.startsWith(base + '/logs') ||
+						path.startsWith(base + '/settings')
+					) {
+						return;
+					}
+					const result = await client.listCollections('page=1&perPage=200');
+					const name = result?.items?.[0]?.name ?? '';
+					window.location.href = base + '/collections?collection=' + name;
 					return;
+				} catch {
+					// Token is stale — clear it and show login
+					client.authStore.clear();
+					if (!isLoginPage) {
+						window.location.href = base + '/login';
+						return;
+					}
+					// Already on login page — let it render
 				}
-				const result = await client.listCollections('page=1&perPage=200');
-				const name = result?.items?.[0]?.name ?? '';
-				window.location.href = base + '/collections?collection=' + name;
-				return;
-			} catch {
-				// Token is stale — clear it and show login
-				client.authStore.clear();
-				if (!isLoginPage) {
-					window.location.href = base + '/login';
-					return;
-				}
-				// Already on login page — let it render
-				initialized = true;
+			} else if (!isLoginPage) {
+				window.location.href = base + '/login';
 				return;
 			}
-		} else if (!isLoginPage) {
-			window.location.href = base + '/login';
-			return;
+		} finally {
+			initialized = true;
 		}
-
-		initialized = true;
 	});
 </script>
 

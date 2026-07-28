@@ -113,31 +113,38 @@ defmodule LazypockWeb.CollectionController do
             conn |> put_status(403) |> json(%{error: reason})
 
           :ok ->
-            # Build rules map from flat rule keys if present (SPA sends them flat)
-            rules =
-              if params["rules"] do
-                # Strip nil values from the rules map, treat as superuser-only
-                params["rules"]
-                |> Enum.filter(fn {_k, v} -> not is_nil(v) end)
-                |> Map.new()
-              else
-                rule_keys = [
-                  "listRule",
-                  "viewRule",
-                  "createRule",
-                  "updateRule",
-                  "deleteRule",
-                  "manageRule"
-                ]
+            # Build rules map from flat rule keys if present (SPA sends them flat).
+            # Only include rules when explicitly provided — omitting rules preserves
+            # existing values and prevents silent data loss.
+            rule_keys = [
+              "listRule",
+              "viewRule",
+              "createRule",
+              "updateRule",
+              "deleteRule",
+              "manageRule"
+            ]
 
-                rule_keys
-                |> Enum.reduce(%{}, fn key, acc ->
-                  case Map.fetch(params, key) do
-                    {:ok, value} when not is_nil(value) -> Map.put(acc, key, value)
-                    _ -> acc
-                  end
-                end)
-              # Always pass even if empty — empty map clears old rules to superuser-only
+            rules =
+              cond do
+                is_map(params["rules"]) ->
+                  # Strip nil values from the rules map, treat as superuser-only
+                  params["rules"]
+                  |> Enum.filter(fn {_k, v} -> not is_nil(v) end)
+                  |> Map.new()
+
+                Enum.any?(rule_keys, &Map.has_key?(params, &1)) ->
+                  rule_keys
+                  |> Enum.reduce(%{}, fn key, acc ->
+                    case Map.fetch(params, key) do
+                      {:ok, value} when not is_nil(value) -> Map.put(acc, key, value)
+                      _ -> acc
+                    end
+                  end)
+
+                true ->
+                  # No rule params provided — don't touch existing rules
+                  nil
               end
 
             opts =

@@ -160,8 +160,8 @@
 	let createRule = $state<string | null>(null);
 	let updateRule = $state<string | null>(null);
 	let deleteRule = $state<string | null>(null);
+	let manageRule = $state<string | null>(null);
 	let showRulesInfo = $state(false);
-
 	const collectionTypes = [
 		{ value: 'base', label: 'Base collection' },
 		{ value: 'view', label: 'View collection' },
@@ -280,6 +280,7 @@
 		createRule = null;
 		updateRule = null;
 		deleteRule = null;
+		manageRule = null;
 		showCollectionPane = true;
 	}
 
@@ -288,7 +289,7 @@
 		newName = (coll.name as string) ?? '';
 		newType = (coll.type as string) ?? 'base';
 		newFields = ((coll.fields as Record<string, unknown>[]) ?? [])
-			.map((f) => ({
+			.map((f): Record<string, unknown> => ({
 				...f,
 				id: (f.id as string) ?? crypto.randomUUID()
 			}))
@@ -303,6 +304,7 @@
 		createRule = ((coll.rules as Record<string, unknown>)?.['createRule'] as string | null) ?? null;
 		updateRule = ((coll.rules as Record<string, unknown>)?.['updateRule'] as string | null) ?? null;
 		deleteRule = ((coll.rules as Record<string, unknown>)?.['deleteRule'] as string | null) ?? null;
+		manageRule = ((coll.rules as Record<string, unknown>)?.['manageRule'] as string | null) ?? null;
 		showCollectionPane = true;
 	}
 
@@ -327,7 +329,8 @@
 			viewRule,
 			createRule,
 			updateRule,
-			deleteRule
+			deleteRule,
+			manageRule
 		};
 
 		// Validate with zod
@@ -891,6 +894,7 @@
 					<RuleField label="Create rule" name="createRule" bind:value={createRule} />
 					<RuleField label="Update rule" name="updateRule" bind:value={updateRule} />
 					<RuleField label="Delete rule" name="deleteRule" bind:value={deleteRule} />
+					<RuleField label="Manage rule" name="manageRule" bind:value={manageRule} />
 				</div>
 			{/if}
 		</div>
