@@ -95,6 +95,7 @@ export class CollectionService {
 			options,
 		);
 		if (data && this.authStore) {
+			this.authStore.setCollectionName(this.collectionName);
 			this.authStore.set(data.token, data.record as unknown as AuthModel);
 		}
 		return data;
@@ -115,6 +116,7 @@ export class CollectionService {
 			options,
 		);
 		if (data && this.authStore) {
+			this.authStore.setCollectionName(this.collectionName);
 			this.authStore.set(data.token, data.record as unknown as AuthModel);
 		}
 		return data;
