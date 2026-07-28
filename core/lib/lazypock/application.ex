@@ -26,7 +26,7 @@ defmodule Lazypock.Application do
 
         # Create _files table for file storage
         Lazypock.Files.Store.ensure_files_table!()
-        Process.sleep(:infinity)
+
         {:ok, pid}
 
       error ->
