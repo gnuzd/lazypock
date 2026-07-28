@@ -2,6 +2,8 @@
 
 > **Your whole backend. In one lazy pocket.** 🦥👖
 
+**Status:** Core backend (Phases 1–7) complete. Studio SPA (Phase 8) in active development. SDK (Phase 9) shipping.
+
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**.
 Define collections in an admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
 
@@ -11,31 +13,31 @@ Define collections in an admin UI, get instant REST API + realtime subscriptions
 LazyPock/
 ├── core/                  # Elixir backend (Phoenix app)
 │   ├── lib/
-│   │   ├── LazyPock/            # Core library
-│   │   │   ├── Collections/     # Collection registry + metadata
-│   │   │   ├── Schema/          # DDL engine + type mapper
-│   │   │   ├── Schemas/         # GenericRecord + dynamic ecto
-│   │   │   ├── Rules/           # Rule compiler + enforcer
-│   │   │   ├── Hooks/           # Hook system (3 layers)
-│   │   │   ├── Auth/            # JWT + OAuth2
-│   │   │   ├── Files/           # File storage + thumbnails
-│   │   │   └── Realtime/        # Channel broadcaster
-│   │   └── LazyPockWeb/         # Web layer
+│   │   ├── lazypock/            # Core library
+│   │   │   ├── collections/     # Collection registry + ETS cache
+│   │   │   ├── schema/          # DDL engine + type mapper
+│   │   │   ├── schemas/         # GenericRecord + FilterCompiler
+│   │   │   ├── rules/           # Rule enforcer
+│   │   │   ├── hooks/           # Hook dispatcher + lifecycle
+│   │   │   ├── auth/            # Superuser JWT auth
+│   │   │   ├── files/           # File storage (local + S3)
+│   │   │   └── realtime/        # Channel broadcaster
+│   │   └── lazypock_web/        # Controllers, channels, router
 │   ├── priv/hooks/              # User hook modules (*.ex)
 │   ├── test/
 │   └── mix.exs
 │
-├── sdk-js/                # JavaScript/TypeScript SDK → npm: lazypock
+├── studio/                # SvelteKit admin SPA
 │   ├── src/
-│   │   ├── client.ts      # LazyPock client class
-│   │   ├── auth.ts        # Auth methods
-│   │   ├── collection.ts  # CRUD + subscribe
-│   │   ├── files.ts       # File upload/download
-│   │   └── realtime.ts    # Phoenix channel wrapper
-│   └── package.json       # "name": "lazypock"
+│   │   ├── routes/              # Login, collections, layout
+│   │   └── lib/components/      # Reusable Svelte components
+│   └── package.json
 │
-├── sdk-dart/              # Dart/Flutter SDK (stretch goal)
-├── sdk-py/                # Python SDK (stretch goal)
+├── packages/
+│   └── lazypock-ts/       # TypeScript SDK → npm
+│       ├── src/            # LazypockClient, auth, CRUD, realtime
+│       └── package.json
+│
 ├── PLAN.md
 └── README.md
 ```
@@ -55,7 +57,7 @@ scaffolding a new app FROM this core, not within the monorepo itself.
 6. [Phase 5 — Realtime (Channels)](#phase-5--realtime)
 7. [Phase 6 — File Storage](#phase-6--file-storage)
 8. [Phase 7 — Hook System](#phase-7--hook-system)
-9. [Phase 8 — Admin Dashboard (LiveView)](#phase-8--admin-dashboard)
+9. [Phase 8 — Studio Admin SPA (SvelteKit)](#phase-8--studio-admin-spa-sveltekit)
 10. [Phase 9 — Client SDKs](#phase-9--client-sdks)
 11. [Phase 10 — Polish & Release](#phase-10--polish--release)
 
@@ -64,35 +66,43 @@ scaffolding a new app FROM this core, not within the monorepo itself.
 ## Architecture Overview
 
 ```
-                     ┌─────────────────────────────┐
-                     │     Admin Dashboard (LV)     │
-                     │  Collections │ Rules │ Files │
-                     │  Hooks │ Auth │ Logs          │
-                     └──────────────┬──────────────┘
-                                    │
-             ┌──────────────────────┼──────────────────────┐
-             ▼                      ▼                      ▼
-   ┌─────────────────┐  ┌──────────────────┐  ┌───────────────────┐
-   │  Schema Manager │  │  Hook Registry   │  │  Rule Engine      │
-   │  • DDL Engine   │  │  • File hooks    │  │  • Compiler       │
-   │  • Type Mapper  │  │  • Declarative   │  │  • Enforcer       │
-   │  • Metadata CRUD│  │  • Runtime eval  │  │  • Query modifier │
-   └────────┬────────┘  └────────┬─────────┘  └────────┬──────────┘
-            │                    │                      │
-            └────────────────────┼──────────────────────┘
-                                 │
-                   ┌─────────────▼──────────────┐
-                   │     Dispatcher Pipeline     │
-                   │  validate → pre-hooks → DB  │
-                   │  → broadcast → after-hooks  │
-                   └─────────────┬──────────────┘
-                                 │
-                   ┌─────────────▼──────────────┐
-                   │    PostgreSQL (DATABASE_URL)│
-                   │  • User tables (real cols)  │
-                   │  • _collections, _fields    │
-                   │  • _hooks, _files           │
-                   └────────────────────────────┘
+                     ┌─────────────────────────────────┐
+                     │     Studio (SvelteKit SPA)        │
+                     │  Collections │ Records │ Rules     │
+                     │  Fields │ Indexes │ Auth            │
+                     └──────────────────┬──────────────────┘
+                                        │
+                     ┌──────────────────┼──────────────────┐
+                     │                  ▼                  │
+                     │          Phoenix Backend            │
+                     │   Controllers → Auth Plug           │
+                     └──────────────────┬──────────────────┘
+                                        │
+             ┌──────────────────────────┼──────────────────────────┐
+             ▼                          ▼                          ▼
+   ┌─────────────────┐    ┌──────────────────┐    ┌───────────────────┐
+   │  DDL Engine     │    │  Hook Dispatcher │    │  Rule Enforcer    │
+   │  • create/drop  │    │  • Lifecycle      │    │  • Three-state     │
+   │  • TypeMapper   │    │  • Registry       │    │  • manageRule      │
+   │  • Metadata CRUD│    │  • Pre/after hooks│    │  • SQL WHERE gen   │
+   └────────┬────────┘    └────────┬─────────┘    └────────┬──────────┘
+            │                      │                       │
+            └──────────────────────┼───────────────────────┘
+                                   │
+                   ┌───────────────▼──────────────────┐
+                   │    Generic Data Layer            │
+                   │  GenericRecord (SQL)             │
+                   │  DynamicController (CRUD)        │
+                   │  Realtime Broadcaster            │
+                   │  Broadcaster → Phoenix Channels  │
+                   └───────────────┬──────────────────┘
+                                   │
+                   ┌───────────────▼──────────────────┐
+                   │    PostgreSQL                    │
+                   │  • User tables (real cols)       │
+                   │  • _collections, _fields         │
+                   │  • _files, _superusers           │
+                   └──────────────────────────────────┘
 ```
 
 ### Key Design Decisions
@@ -447,11 +457,11 @@ end
 - [x] Phoenix project scaffolded with PostgreSQL
 - [x] `_collections` and `_fields` migrations + Ecto schemas
 - [x] `TypeMapper` module (PG types + Ecto types)
-- [x] `DDL` module (create/drop collection, add/drop field)
+- [x] `DDL` module (create/drop collection, add/drop field, update metadata)
 - [x] `CollectionRegistry` GenServer + ETS cache
-- [x] `GenericRecord` — universal Ecto schema
-- [x] Basic ExUnit tests for DDL operations
-- [ ] Mix task: `mix lazypock.create_collection posts title:text body:text published:bool`
+- [x] `GenericRecord` — SQL-based record CRUD helper
+- [x] `FilterCompiler` — PocketBase filter → SQL WHERE
+- [ ] Mix task: `mix lazypock.create_collection`
 
 ---
 
@@ -650,11 +660,12 @@ Consistent error format matching PocketBase:
 
 ### 2.6 Deliverables (Phase 2)
 
-- [ ] `DynamicController` with full CRUD
-- [ ] Filter compiler (PocketBase syntax → Ecto dynamic queries)
-- [ ] Sort, paginate, expand, field selection
-- [ ] PocketBase-compatible JSON response format
-- [ ] Error handling middleware with canonical error format
+- [x] `DynamicController` with full CRUD (list/show/create/update/delete)
+- [x] Filter compiler (PocketBase syntax → SQL WHERE clauses)
+- [x] Sort, paginate, field selection
+- [ ] Relation expansion (`expand` parameter)
+- [x] PocketBase-compatible JSON response format
+- [x] Error handling with canonical error format
 - [ ] Comprehensive ExUnit tests for filter/sort/paginate edge cases
 
 ---
@@ -785,12 +796,14 @@ config :lazypock, :oauth2_providers, [
 
 ### 3.6 Deliverables (Phase 3)
 
-- [ ] Auth collection type with system fields
-- [ ] JWT access + refresh token implementation
-- [ ] All PocketBase-compatible auth endpoints
-- [ ] Auth plug middleware
-- [ ] OAuth2 provider support (Google, GitHub to start)
-- [ ] Password hashing (bcrypt/argon2)
+- [x] Superuser auth table + schema (`_superusers`)
+- [x] JWT token generation + verification
+- [x] Superuser login/setup/me/check endpoints
+- [x] Superuser auto-creation from env vars (`LAZYPOCK_SUPERUSER_*`)
+- [x] Auth plug middleware (`Lazypock.Auth.Plug`)
+- [ ] Auth collection type with system fields (email, password, role)
+- [ ] PocketBase-compatible auth endpoints (`/api/auth/*`)
+- [ ] OAuth2 provider support
 - [ ] Rate limiting on login attempts
 
 ---
@@ -918,14 +931,18 @@ end
 
 ### 4.6 Deliverables (Phase 4)
 
-- [ ] Rule tokenizer + parser + compiler
-- [ ] Ecto query modifier for list/view rules
-- [ ] In-memory evaluator for create/update/delete rules
-- [ ] `@request.auth.*` variable resolution
-- [ ] `manageRule` support (admin override)
-- [ ] Rule validation in Admin UI (syntax checking)
+- [x] Rules stored as JSONB in `_collections.rules`
+- [x] `Enforcer` module — three-state logic (nil/""/filter)
+- [x] `authorize_list/2` — returns SQL WHERE clause for query modification
+- [x] `authorize_create/3` — in-memory rule evaluation for attrs
+- [x] `authorize_update/4` — in-memory rule evaluation for existing record
+- [x] `authorize_delete/3` — in-memory rule evaluation for record
+- [x] `authorize_manage/2` — manageRule for delegated collection management
+- [x] `@request.auth.*` variable resolution with SQL evaluation
+- [x] Superuser bypass (superusers always pass all rules)
+- [ ] Rule validation in Studio (syntax checking)
 - [ ] Sensible defaults per collection type
-- [ ] ExUnit tests: 50+ rule scenarios
+- [ ] ExUnit tests for rule scenarios
 
 ---
 
@@ -1037,12 +1054,13 @@ client.collection("posts").unsubscribe(); // all subscriptions for this collecti
 
 ### 5.5 Deliverables (Phase 5)
 
-- [ ] Phoenix Channel with collection-aware topics
-- [ ] `Realtime.Broadcaster` wired into all CRUD controllers
-- [ ] Client-side JS SDK (npm package: `lazypock`)
+- [x] Phoenix Channel with collection-aware topics (`collection:name`, `collection:name:{id}`)
+- [x] `Realtime.Broadcaster` wired into DynamicController
+- [x] Rule enforcement on channel join (checks listRule)
+- [x] Admin channel for collection CRUD events
+- [ ] Client-side JS SDK subscriptions (basic `RealtimeService` exists)
 - [ ] Reconnection handling
 - [ ] Auth integration (channels authenticate via JWT)
-- [ ] Rule enforcement on realtime (honor listRule/viewRule)
 
 ---
 
@@ -1141,14 +1159,16 @@ end
 
 ### 6.5 Deliverables (Phase 6)
 
-- [ ] `_files` system table + Ecto schema
-- [ ] File upload endpoint (multipart)
-- [ ] File serve endpoint (with Content-Type)
+- [x] `_files` table auto-created on boot
+- [x] File upload endpoint (`POST /api/files`)
+- [x] File serve endpoint (`GET /api/files/:id`)
+- [x] File delete endpoint (`DELETE /api/files/:id`)
+- [x] Local storage adapter (`Lazypock.Files.Adapters.Local`)
+- [x] S3 adapter (`Lazypock.Files.Adapters.S3`)
 - [ ] Thumbnail generation (Vix/libvips)
-- [ ] Local + S3 storage adapters
 - [ ] File ownership tracking (collection/record/field)
-- [ ] Auto-cleanup on record delete (via hooks or system)
-- [ ] File size limits configurable per collection
+- [ ] Auto-cleanup on record delete
+- [ ] File size limits per collection
 
 ---
 
@@ -1391,18 +1411,17 @@ Scans `priv/hooks/` at boot, maps collection names to hook modules, supports hot
 
 ### 7.6 Deliverables (Phase 7)
 
-- [ ] Layer 1: Declarative hook engine with 8 built-in actions
-- [ ] Layer 2: File-based Elixir hook behaviour + auto-discovery
-- [ ] Layer 3: Runtime eval hooks (admin UI)
-- [ ] Hook dispatcher pipeline (pre → DB → after)
-- [ ] Hook context (`%Context{conn, user, repo, ...}`)
+- [x] Layer 2: File-based Elixir hook behaviour + auto-discovery (`Lifecycle` + `Registry`)
+- [x] Hook dispatcher pipeline wired into DynamicController
+- [ ] Layer 1: Declarative hook engine with built-in actions (set_field, webhook, etc.)
+- [ ] Layer 3: Runtime eval hooks (Studio admin UI)
 - [ ] Template variable system (`{{record.title}}`, `{{now}}`, `{{env.VAR}}`)
 - [ ] Hook execution logging/tracing
-- [ ] ExUnit: hook pipeline tests for all three layers
+- [ ] ExUnit: hook pipeline tests
 
 ---
 
-## Phase 8 — Admin Dashboard (LiveView)
+## Phase 8 — Studio Admin SPA (SvelteKit)
 
 **Goal:** Feature-complete admin dashboard for managing collections, records, rules, hooks, files, and auth.
 
@@ -1514,51 +1533,46 @@ Scans `priv/hooks/` at boot, maps collection names to hook modules, supports hot
 - Rate limiting config
 - Environment config view
 
-### 8.3 LiveView Component Tree (Key Components)
+### 8.3 Studio Component Tree
 
 ```
-LazyPockWeb.AdminLive
-├── SidebarLive (collections list, nav)
-├── DashboardLive
-│   ├── StatCard (counts)
-│   ├── ActivityFeed
-│   └── HealthIndicator
-├── CollectionManagerLive
-│   ├── CollectionFormLive (create/edit)
-│   └── FieldEditorLive (drag & drop field builder)
-├── RecordBrowserLive
-│   ├── RecordFilterBar
-│   ├── RecordTable
-│   ├── RecordFormLive (dynamic form from schema)
-│   └── Pagination
-├── RuleEditorLive
-│   ├── RuleBuilder (visual)
-│   └── RuleTester
-├── AuthManagerLive
-├── HookManagerLive
-│   ├── DeclarativeHookBuilder
-│   └── CodeEditor (runtime hooks)
-├── FileBrowserLive
-│   ├── FileGrid
-│   └── UploadZone
-└── LogsLive
-    └── LogFilter
+studio/src/routes/
+├── +layout.svelte           # Auth guard, realtime init
+├── login/+page.svelte       # Superuser login/setup
+└── (app)/
+    ├── +layout.svelte        # App shell with sidebar
+    └── collections/+page.svelte  # Main: sidebar + DataTable + SidePane
+        ├── DataTable.svelte  # Generic tabular view
+        ├── SidePane.svelte   # Slide-out panel for forms
+        ├── FieldSettings.svelte  # Per-field config
+        ├── NewFieldButton.svelte # Add field button
+        ├── RecordForm.svelte # Dynamic form from schema
+        ├── RuleField.svelte  # Lock/unlock rule input
+        ├── IndexesModal.svelte    # Unique/index manager
+        ├── Dropdown.svelte   # Menu dropdown
+        ├── Button.svelte     # Styled button
+        ├── Input.svelte      # Styled input
+        ├── Modal.svelte      # Generic modal
+        └── OptionRow.svelte  # Select options row
 ```
 
 ### 8.4 Deliverables (Phase 8)
 
-- [ ] Admin layout + navigation (sidebar, top bar)
+- [x] **Studio SvelteKit SPA** serves at `/_/*` (replaces LiveView dashboard)
+- [x] Auth guard + login page with token persistence
+- [x] Collection sidebar with user/system grouping
+- [x] Collection CRUD (create/edit/delete) in slide-out pane
+- [x] Field editor (add, remove, reorder fields)
+- [x] Record browser with dynamic schema DataTable
+- [x] Record CRUD (create/edit/delete) with form validation
+- [x] API Rules tab with per-rule lock/unlock (including manageRule)
+- [x] Unique constraint/indexes management modal
 - [ ] Home dashboard with stats/health
-- [ ] Collection manager (CRUD + field editor)
-- [ ] Record browser (table + dynamic form CRUD)
-- [ ] Rule editor (syntax highlighting + visual builder + tester)
-- [ ] Auth manager
-- [ ] Hook manager (declarative builder + code editor)
-- [ ] File browser (grid + upload)
+- [ ] Auth manager (user management)
+- [ ] Hook manager
+- [ ] File browser
 - [ ] Logs / audit trail viewer
 - [ ] Settings page
-- [ ] Dark mode toggle
-- [ ] Responsive design (workable on tablet)
 
 ---
 
@@ -1615,12 +1629,15 @@ await client.files.delete(fileId);
 
 ### 9.4 Deliverables (Phase 9)
 
-- [ ] `lazypock` npm package
-- [ ] Full auth flow (login, register, refresh, auto-refresh)
-- [ ] Full CRUD with filter/sort/paginate/expand
-- [ ] Realtime subscriptions with auto-reconnect
-- [ ] File upload/download with progress
-- [ ] TypeScript types generated from collection schemas
+- [x] `lazypock` npm package (publishable)
+- [x] Superuser auth flow (login, me, logout)
+- [x] Full CRUD for records (list/getOne/create/update/delete)
+- [x] Collection management SDK methods
+- [x] `AuthStore` with localStorage persistence
+- [x] `RealtimeService` with Phoenix Channel WebSocket protocol
+- [x] TypeScript types (`ApiRecord`, `ListResult`, `AuthModel`)
+- [ ] File upload/download
+- [ ] Auto-refresh on token expiry
 - [ ] UMD + ESM builds
 - [ ] README + API docs + examples
 
@@ -1720,14 +1737,14 @@ mix lazypock.eject posts  # → lib/my_app/schemas/posts.ex
 
 ### 10.6 Deliverables (Phase 10)
 
-- [ ] CLI tool with `new`, `server`, `collections.*`, `schema.*`, `db.*`, `eject`
-- [ ] `mix release` single tarball build
+- [ ] CLI tool with `new`, `server`, `collections.*`, `schema.*` subcommands
+- [x] `mix release` single tarball build (Burrito)
 - [ ] Docker image + docker-compose
 - [ ] Comprehensive documentation
-- [ ] Full test suite (unit + integration + channel + LV)
+- [ ] Full test suite (unit + integration + channel)
 - [ ] CI/CD pipeline
 - [ ] Hex.pm + npm publication
-- [ ] Deployment guides (Fly.io, Docker, bare metal)
+- [ ] Deployment guides
 - [ ] Brand assets + landing page
 
 ---
