@@ -93,7 +93,7 @@ defmodule Lazypock.Schemas.FilterCompiler do
   end
 
   defp parse_not(["!" | rest]) do
-    case parse_primary(rest) do
+    case parse_comparison(rest) do
       {:ok, expr, remaining} -> {:ok, {:not, expr}, remaining}
       _ -> :error
     end
