@@ -104,7 +104,10 @@
 			<input type="text" class="select-search" bind:value={search} placeholder="Search..." />
 			<div class="select-options">
 				{#each filtered as choice (choice)}
-					<label class="select-option" class:selected={selected.includes(choice)}>
+					<label
+						class="select-option"
+						class:selected={selected.includes(choice)}
+						onclick={() => selectOption(choice)}>
 						{#if isMulti}
 							<input
 								type="checkbox"
