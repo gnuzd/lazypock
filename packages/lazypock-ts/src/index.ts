@@ -20,14 +20,23 @@ import {
 	type RequestOptions,
 } from "./types";
 import { RealtimeService, wsUrlFromBaseUrl } from "./realtime";
+import { FilesService, getFileUrl, type FileRecord } from "./files";
 
-export { AuthStore, ApiError, RealtimeService, wsUrlFromBaseUrl };
+export {
+	AuthStore,
+	ApiError,
+	RealtimeService,
+	wsUrlFromBaseUrl,
+	FilesService,
+	getFileUrl,
+};
 export type {
 	StorageAdapter,
 	AuthModel,
 	ApiRecord,
 	ListResult,
 	RequestOptions,
+	FileRecord,
 };
 
 export interface LazypockClientOptions {
@@ -45,6 +54,7 @@ export class LazypockClient {
 	readonly http: HttpClient;
 	readonly authStore: AuthStore;
 	readonly realtime: RealtimeService;
+	readonly files: FilesService;
 	private collectionCache = new Map<string, CollectionService>();
 
 	constructor(options: LazypockClientOptions) {
@@ -53,6 +63,7 @@ export class LazypockClient {
 			options.authStore ?? new AuthStore(options.storage ?? memoryStorage);
 		this.http = new HttpClient(baseUrl, this.authStore);
 		this.realtime = options.realtime ?? new RealtimeService();
+		this.files = new FilesService(this.http);
 	}
 
 	/** Get or create a typed collection service */
@@ -79,6 +90,7 @@ export class LazypockClient {
 			{ token: string } & Record<string, unknown>
 		>("/superusers/setup", { email, password });
 		if (data) {
+			this.authStore.setCollectionName(null);
 			this.authStore.set(data.token, null);
 		}
 		return data;
@@ -92,19 +104,25 @@ export class LazypockClient {
 		let data;
 		if (collection) {
 			data = await this.http.post<
-				{ token: string; record: Record<string, unknown> } & Record<string, unknown>
-			>(
-				"/" + encodeURIComponent(collection) + "/auth-with-password",
-				{ identity: email, password },
-			);
+				{ token: string; record: Record<string, unknown> } & Record<
+					string,
+					unknown
+				>
+			>("/" + encodeURIComponent(collection) + "/auth-with-password", {
+				identity: email,
+				password,
+			});
 			if (data && data.record) {
+				this.authStore.setCollectionName(collection);
 				this.authStore.set(data.token, data.record as unknown as AuthModel);
 			}
 		} else {
-			data = await this.http.post<
-				{ token: string } & Record<string, unknown>
-			>("/superusers/login", { email, password });
+			data = await this.http.post<{ token: string } & Record<string, unknown>>(
+				"/superusers/login",
+				{ email, password },
+			);
 			if (data) {
+				this.authStore.setCollectionName(null);
 				this.authStore.set(data.token, null);
 			}
 		}
@@ -129,7 +147,9 @@ export class LazypockClient {
 		identity: string,
 		password: string,
 		options?: RequestOptions,
-	): Promise<({ token: string; record: ApiRecord } & Record<string, unknown>) | null> {
+	): Promise<
+		({ token: string; record: ApiRecord } & Record<string, unknown>) | null
+	> {
 		const data = await this.http.post<
 			{ token: string; record: ApiRecord } & Record<string, unknown>
 		>(
@@ -138,6 +158,7 @@ export class LazypockClient {
 			options,
 		);
 		if (data) {
+			this.authStore.setCollectionName(collection);
 			this.authStore.set(data.token, data.record as unknown as AuthModel);
 		}
 		return data;
@@ -150,7 +171,9 @@ export class LazypockClient {
 	async authRefresh(
 		collection: string,
 		options?: RequestOptions,
-	): Promise<({ token: string; record: ApiRecord } & Record<string, unknown>) | null> {
+	): Promise<
+		({ token: string; record: ApiRecord } & Record<string, unknown>) | null
+	> {
 		const data = await this.http.post<
 			{ token: string; record: ApiRecord } & Record<string, unknown>
 		>(
@@ -159,6 +182,7 @@ export class LazypockClient {
 			options,
 		);
 		if (data) {
+			this.authStore.setCollectionName(collection);
 			this.authStore.set(data.token, data.record as unknown as AuthModel);
 		}
 		return data;

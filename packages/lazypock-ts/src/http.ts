@@ -15,17 +15,63 @@ export class HttpClient {
 		this.defaultFetch = globalThis.fetch.bind(globalThis);
 	}
 
+	private async refreshAuth(): Promise<{
+		token: string;
+		record: Record<string, unknown>;
+	} | null> {
+		const collection = this.authStore.collectionName;
+		if (!collection) return null;
+		try {
+			const url =
+				this.baseUrl + "/" + encodeURIComponent(collection) + "/auth-refresh";
+			const headers: Record<string, string> = {
+				"Content-Type": "application/json",
+			};
+			if (this.authStore.token) {
+				headers["Authorization"] = "Bearer " + this.authStore.token;
+			}
+			const res = await this.defaultFetch(url, {
+				method: "POST",
+				headers,
+			});
+			if (!res.ok) {
+				this.authStore.clear();
+				return null;
+			}
+			const data = (await res.json()) as Record<string, unknown>;
+			if (data && typeof data.token === "string") {
+				this.authStore.set(
+					data.token,
+					(data.record as Record<string, unknown> as any) ?? null,
+				);
+				return data as { token: string; record: Record<string, unknown> };
+			}
+			return null;
+		} catch {
+			return null;
+		}
+	}
+
 	async request<T = unknown>(
 		method: Method,
 		path: string,
 		body?: unknown,
 		options?: RequestOptions,
 	): Promise<T | null> {
+		// Auto-refresh if token is expired
+		if (this.authStore.isExpired && this.authStore.collectionName) {
+			await this.refreshAuth();
+		}
+
 		const url = this.baseUrl + path;
 		const headers: Record<string, string> = {
-			"Content-Type": "application/json",
 			...options?.headers,
 		};
+
+		// Don't set Content-Type for FormData (browser sets multipart boundary)
+		if (!(body instanceof FormData)) {
+			headers["Content-Type"] = "application/json";
+		}
 
 		if (this.authStore.token) {
 			headers["Authorization"] = "Bearer " + this.authStore.token;
@@ -38,7 +84,11 @@ export class HttpClient {
 		};
 
 		if (body != null && method !== "GET" && method !== "DELETE") {
-			init.body = JSON.stringify(body);
+			if (body instanceof FormData) {
+				init.body = body;
+			} else {
+				init.body = JSON.stringify(body);
+			}
 		}
 
 		const fetcher = options?.fetch ?? this.defaultFetch;
