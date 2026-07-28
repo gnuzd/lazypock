@@ -49,26 +49,44 @@ defmodule LazypockWeb.AuthController do
   Returns a fresh token and updated user record.
   """
   def auth_refresh(conn, %{"collection" => collection_name}) do
+    # Verify the URL collection matches the token's claim (prevents cross-collection contamination)
+    claims = conn.assigns[:current_user_claims]
+
+    cond do
+      is_nil(conn.assigns[:current_user]) ->
+        conn
+        |> put_status(401)
+        |> json(%{"code" => 401, "message" => "Not authenticated", "data" => %{}})
+
+      is_nil(claims) or claims["collectionName"] != collection_name ->
+        conn
+        |> put_status(403)
+        |> json(%{"code" => 403, "message" => "Token does not match this collection", "data" => %{}})
+
+      true ->
+        do_auth_refresh(conn, collection_name)
+    end
+  end
+
+  defp do_auth_refresh(conn, collection_name) do
     case Registry.get(collection_name) do
-      {:ok, collection} ->
-        case conn.assigns[:current_user] do
-          nil ->
-            conn
-            |> put_status(401)
-            |> json(%{"code" => 401, "message" => "Not authenticated", "data" => %{}})
+      {:ok, %{type: "auth"} = collection} ->
+        user = conn.assigns[:current_user]
+        password_field = find_password_field(collection)
+        safe_user = Map.drop(user, [password_field])
+        {:ok, token} = Token.generate_user_token(user, collection_name)
 
-          user ->
-            password_field = find_password_field(collection)
-            safe_user = Map.drop(user, [password_field])
-            {:ok, token} = Token.generate_user_token(user, collection_name)
+        conn
+        |> put_status(200)
+        |> json(%{
+          "token" => token,
+          "record" => safe_user
+        })
 
-            conn
-            |> put_status(200)
-            |> json(%{
-              "token" => token,
-              "record" => safe_user
-            })
-        end
+      {:ok, _} ->
+        conn
+        |> put_status(400)
+        |> json(%{"code" => 400, "message" => "Not an auth collection", "data" => %{}})
 
       {:error, :not_found} ->
         conn
@@ -173,7 +191,7 @@ defmodule LazypockWeb.AuthController do
   defp verify_password(conn, collection_name, user, password, collection) do
     # Find the password field name from the collection schema
     password_field = find_password_field(collection)
-    password_hash = user[password_field] || user[String.to_atom(password_field)]
+    password_hash = user[password_field]
 
     cond do
       is_nil(password_hash) ->
