@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Lock, Unlock } from '@lucide/svelte';
+	import { validateRule } from '$lib/ruleValidator';
 
 	let {
 		label = 'Rule',
@@ -17,6 +18,19 @@
 
 	let prevValue = $state('');
 	let focused = $state(false);
+	let dirty = $state(false);
+	let validation = $state<{ valid: boolean; error?: string } | null>(null);
+
+	// Re-validate when value changes (only after first interaction)
+	$effect(() => {
+		const v = value;
+		if (v == null) {
+			validation = null;
+			dirty = false;
+		} else if (dirty) {
+			validation = validateRule(v);
+		}
+	});
 
 	function lock() {
 		if (value === null) return;
@@ -81,6 +95,7 @@
 					bind:value
 					onfocus={() => (focused = true)}
 					onblur={() => (focused = false)}
+					oninput={() => { if (!dirty) dirty = true; }}
 					{disabled}
 				/>
 			</div>
@@ -94,5 +109,39 @@
 				<span class="hidden sm:inline">Set superusers only</span>
 			</button>
 		</div>
+
+		{#if dirty && validation}
+			<div class="flex items-center gap-1 px-3 pb-1.5">
+				{#if validation.valid}
+					<svg
+						width="12"
+						height="12"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.5"
+						class="shrink-0 text-success"
+					><polyline points="20 6 9 17 4 12" /></svg
+					>
+					<span class="text-xs text-success">Syntax OK</span>
+				{:else}
+					<svg
+						width="12"
+						height="12"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.5"
+						class="shrink-0 text-error"
+					><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line
+							x1="9"
+							y1="9"
+							x2="15"
+							y2="15" /></svg
+					>
+					<span class="text-xs text-error">{validation.error}</span>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 </div>
