@@ -26,7 +26,13 @@ defmodule Lazypock.Application do
 
         # Create _files table for file storage
         Lazypock.Files.Store.ensure_files_table!()
-        Process.sleep(:infinity)
+
+        # Keep the BEAM alive — Burrito's Go wrapper exits the process when the
+        # boot script returns. In test, ExUnit manages the lifecycle itself.
+        unless Mix.env() == :test do
+          Process.sleep(:infinity)
+        end
+
         {:ok, pid}
 
       error ->
