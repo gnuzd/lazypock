@@ -14,6 +14,11 @@ defmodule LazypockWeb.DynamicController do
     * `perPage` — Items per page (default: 30, max: 200)
     * `fields` — Comma-separated field names to return
     * `skipTotal` — If `true`, skip total count query (performance)
+    * `expand` — Comma-separated relation field names to expand: `author,category`
+
+  ## Query parameters (show action)
+
+    * `expand` — Comma-separated relation field names to expand: `author,category`
   """
 
   use LazypockWeb, :controller
@@ -64,6 +69,7 @@ defmodule LazypockWeb.DynamicController do
         )
 
       items = DynamicView.format_items(records, name)
+      items = DynamicView.expand_records(items, params["expand"], name)
 
       conn
       |> put_resp_header("x-total-count", to_string(total))
@@ -83,13 +89,15 @@ defmodule LazypockWeb.DynamicController do
 
   # ── Show (GET /api/:collection/:id) ─────────────────
 
-  def show(conn, %{"collection" => name, "id" => id}) do
+  def show(conn, %{"collection" => name, "id" => id} = params) do
     user = resolve_user(conn)
 
     with {:ok, _collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_view(name, user, record) do
-      conn |> json(DynamicView.format_item(record, name))
+      item = DynamicView.format_item(record, name)
+      [item] = DynamicView.expand_records([item], params["expand"], name)
+      conn |> json(item)
     else
       nil ->
         conn
