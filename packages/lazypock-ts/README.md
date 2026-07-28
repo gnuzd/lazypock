@@ -1,0 +1,226 @@
+# Lazypock — TypeScript SDK
+
+TypeScript client library for [Lazypock](https://github.com/gnuzd/lazypock), an open-source PocketBase-compatible backend.
+
+## Installation
+
+```bash
+npm install lazypock
+```
+
+## Quick Start
+
+```typescript
+import { LazypockClient } from 'lazypock';
+
+const client = new LazypockClient({ baseUrl: 'http://localhost:4000/api' });
+
+// Superuser login
+await client.login('admin@example.com', 'password');
+
+// Or auth collection login
+await client.login('user@example.com', 'password', 'users');
+// Or using the explicit method:
+await client.authWithPassword('users', 'user@example.com', 'password');
+
+// List records
+const posts = await client.collection('posts').list({ filter: 'published=true' });
+
+// Create a record
+const newPost = await client.collection('posts').create({ title: 'Hello', published: true });
+
+// File upload
+const file = await client.files.upload(fileInput.files[0]);
+
+// Real-time subscriptions
+client.collection('posts').subscribe('*', (e) => console.log(e.action, e.record));
+```
+
+## API Reference
+
+### LazypockClient
+
+The main client class.
+
+#### Constructor Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `baseUrl` | `string` | required | API base URL (e.g. `http://localhost:4000/api`) |
+| `storage` | `StorageAdapter` | `memoryStorage` | Custom storage adapter for token persistence |
+| `authStore` | `AuthStore` | auto-created | Explicit auth store instance |
+| `realtime` | `RealtimeService` | auto-created | Real-time service for WebSocket subscriptions |
+
+#### Authentication Methods
+
+- `login(email, password, collection?)` — Login as superuser or auth collection user
+- `authWithPassword(collection, identity, password, options?)` — Auth collection login
+- `authRefresh(collection, options?)` — Refresh auth token
+- `checkSuperuser()` — Check if any superuser exists
+- `setup(email, password)` — Create initial superuser
+- `logout()` — Clear auth state
+- `me(options?)` — Get current superuser profile
+
+#### Record Methods
+
+- `listRecords(collection, params?, options?)` — List records with filter/sort/pagination
+- `getRecord(collection, id, options?)` — Get single record
+- `createRecord(collection, data, options?)` — Create record
+- `updateRecord(collection, id, data, options?)` — Update record
+- `deleteRecord(collection, id, options?)` — Delete record
+
+#### Collection Management
+
+- `listCollections(query?, options?)` — List all collections
+- `getCollection(id, options?)` — Get collection details
+- `createCollection(data, options?)` — Create new collection
+- `updateCollection(id, data, options?)` — Update collection
+- `deleteCollection(id, options?)` — Delete collection
+
+#### File Operations
+
+- `files.upload(file, filename?, options?, meta?)` — Upload a file
+- `files.getUrl(fileId)` — Get file metadata
+- `files.delete(fileId, options?)` — Delete a file
+- `getFileUrl(baseUrl, fileId)` — Construct a file URL from base URL and file ID (utility)
+
+#### Realtime
+
+- `realtime.connect(opts)` — Connect to WebSocket
+- `realtime.disconnect()` — Disconnect
+- `realtime.subscribe(topic, callback)` — Subscribe to collection changes
+- `realtime.unsubscribe(topic, callback?)` — Unsubscribe
+- `collection(name).subscribe(pattern, callback)` — Convenience subscription on collection service
+- `collection(name).unsubscribe(pattern, callback?)` — Convenience unsubscription
+
+### CollectionService
+
+Returned by `client.collection(name)`.
+
+- `list(params?, options?)` — List records
+- `getOne(id, options?)` — Get record by ID
+- `create(data, options?)` — Create record
+- `update(id, data, options?)` — Update record
+- `delete(id, options?)` — Delete record
+- `authWithPassword(identity, password, options?)` — Login to this auth collection
+- `authRefresh(options?)` — Refresh token for this auth collection
+- `authMethods(options?)` — Get available auth methods
+
+### AuthStore
+
+Handles token persistence and auto-refresh.
+
+- `token` — Current JWT token
+- `model` — Current auth model (user record or null)
+- `isValid` — Whether a token exists
+- `isExpired` — Whether the current token has expired (with 30s buffer)
+- `collectionName` — Name of the auth collection used for token refresh
+- `set(token, model)` — Update token and model
+- `setCollectionName(name)` — Set the auth collection name for token refresh
+- `clear()` — Clear all auth state
+- `onChange(callback)` — Listen for auth changes (returns unsubscribe function)
+- `init()` — Restore persisted auth from storage
+
+### Types
+
+```typescript
+interface ApiRecord {
+  id: string;
+  collectionId: string;
+  collectionName: string;
+  created: string;
+  updated: string;
+  [key: string]: unknown;
+}
+
+interface ListResult<T> {
+  page: number;
+  perPage: number;
+  totalItems: number;
+  totalPages: number;
+  items: T[];
+}
+
+interface AuthModel {
+  id: string;
+  [key: string]: unknown;
+}
+
+interface FileRecord {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  [key: string]: unknown;
+}
+
+interface RequestOptions {
+  signal?: AbortSignal;
+  fetch?: typeof fetch;
+  headers?: Record<string, string>;
+}
+```
+
+## Error Handling
+
+The SDK throws `ApiError` on non-2xx responses:
+
+```typescript
+import { LazypockClient, ApiError } from 'lazypock';
+
+try {
+  await client.collection('posts').create({ title: 'My Post' });
+} catch (err) {
+  if (err instanceof ApiError) {
+    console.log(err.status);    // HTTP status code
+    console.log(err.message);   // Error message
+    console.log(err.data);      // Full response data
+  }
+}
+```
+
+## Configuration
+
+### Storage Adapter
+
+By default, the SDK uses `localStorage` for token persistence. You can provide a custom adapter:
+
+```typescript
+import { LazypockClient, AuthStore } from 'lazypock';
+
+const customStorage = {
+  get: async (key) => await AsyncStorage.getItem(key),
+  set: async (key, value) => await AsyncStorage.setItem(key, value),
+  remove: async (key) => await AsyncStorage.removeItem(key),
+};
+
+const client = new LazypockClient({
+  baseUrl: 'http://localhost:4000/api',
+  storage: customStorage,
+});
+```
+
+### Auto Token Refresh
+
+The SDK automatically refreshes expired auth tokens. When a token expires, the next API call triggers a transparent refresh via the `auth-refresh` endpoint. No manual intervention needed.
+
+## Real-time Subscriptions
+
+```typescript
+// Subscribe to all changes in a collection
+client.collection('posts').subscribe('*', (event) => {
+  console.log(event.action); // 'create' | 'update' | 'delete'
+  console.log(event.record);
+});
+
+// Subscribe to a specific record
+client.collection('posts').subscribe('abc123', (event) => { ... });
+
+// Unsubscribe
+client.collection('posts').unsubscribe('*');
+```
+
+## License
+
+MIT

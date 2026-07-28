@@ -4,11 +4,19 @@
 import { ApiError, type Method, type RequestOptions } from "./types";
 import type { AuthStore } from "./auth";
 
+/**
+ * Low-level HTTP client wrapping `fetch` with automatic auth token injection.
+ * Only relies on `globalThis.fetch` — works in browser, React Native, and Node 18+.
+ */
 export class HttpClient {
 	private baseUrl: string;
 	private authStore: AuthStore;
 	private defaultFetch: typeof globalThis.fetch;
 
+	/**
+	 * @param baseUrl The API base URL (e.g. `http://localhost:4000/api`). Trailing slash stripped.
+	 * @param authStore The auth store providing the token for Authorization headers.
+	 */
 	constructor(baseUrl: string, authStore: AuthStore) {
 		this.baseUrl = baseUrl.replace(/\/+$/, "");
 		this.authStore = authStore;
@@ -52,6 +60,16 @@ export class HttpClient {
 		}
 	}
 
+	/**
+	 * Make an HTTP request with automatic auth token injection and optional auto-refresh.
+	 *
+	 * @param method HTTP method.
+	 * @param path URL path (appended to baseUrl).
+	 * @param body JSON-serializable body, or FormData for file uploads.
+	 * @param options Optional request options.
+	 * @returns Parsed JSON response, or null for 204 No Content.
+	 * @throws {ApiError} On non-2xx responses.
+	 */
 	async request<T = unknown>(
 		method: Method,
 		path: string,
@@ -120,10 +138,21 @@ export class HttpClient {
 		return data as T;
 	}
 
+	/**
+	 * HTTP GET.
+	 * @param path URL path.
+	 * @param options Optional request options.
+	 */
 	get<T = unknown>(path: string, options?: RequestOptions): Promise<T | null> {
 		return this.request<T>("GET", path, undefined, options);
 	}
 
+	/**
+	 * HTTP POST.
+	 * @param path URL path.
+	 * @param body Optional request body.
+	 * @param options Optional request options.
+	 */
 	post<T = unknown>(
 		path: string,
 		body?: unknown,
@@ -132,6 +161,12 @@ export class HttpClient {
 		return this.request<T>("POST", path, body, options);
 	}
 
+	/**
+	 * HTTP PATCH.
+	 * @param path URL path.
+	 * @param body Optional request body.
+	 * @param options Optional request options.
+	 */
 	patch<T = unknown>(
 		path: string,
 		body?: unknown,
@@ -140,6 +175,11 @@ export class HttpClient {
 		return this.request<T>("PATCH", path, body, options);
 	}
 
+	/**
+	 * HTTP DELETE.
+	 * @param path URL path.
+	 * @param options Optional request options.
+	 */
 	delete<T = unknown>(
 		path: string,
 		options?: RequestOptions,
