@@ -59,7 +59,7 @@ export class LazypockClient {
 	collection(name: string): CollectionService {
 		let svc = this.collectionCache.get(name);
 		if (!svc) {
-			svc = new CollectionService(this.http, name);
+			svc = new CollectionService(this.http, name, this.authStore);
 			this.collectionCache.set(name, svc);
 		}
 		return svc as unknown as CollectionService;
@@ -87,12 +87,26 @@ export class LazypockClient {
 	async login(
 		email: string,
 		password: string,
+		collection?: string,
 	): Promise<({ token: string } & Record<string, unknown>) | null> {
-		const data = await this.http.post<
-			{ token: string } & Record<string, unknown>
-		>("/superusers/login", { email, password });
-		if (data) {
-			this.authStore.set(data.token, null);
+		let data;
+		if (collection) {
+			data = await this.http.post<
+				{ token: string; record: Record<string, unknown> } & Record<string, unknown>
+			>(
+				"/" + encodeURIComponent(collection) + "/auth-with-password",
+				{ identity: email, password },
+			);
+			if (data && data.record) {
+				this.authStore.set(data.token, data.record as unknown as AuthModel);
+			}
+		} else {
+			data = await this.http.post<
+				{ token: string } & Record<string, unknown>
+			>("/superusers/login", { email, password });
+			if (data) {
+				this.authStore.set(data.token, null);
+			}
 		}
 		return data;
 	}
@@ -102,6 +116,50 @@ export class LazypockClient {
 		if (data) {
 			// Update the auth model with fresh data
 			this.authStore.set(this.authStore.token, data as unknown as AuthModel);
+		}
+		return data;
+	}
+
+	/**
+	 * Authenticate against an auth collection with email/password.
+	 * Stores the returned token and user record in the auth store.
+	 */
+	async authWithPassword(
+		collection: string,
+		identity: string,
+		password: string,
+		options?: RequestOptions,
+	): Promise<({ token: string; record: ApiRecord } & Record<string, unknown>) | null> {
+		const data = await this.http.post<
+			{ token: string; record: ApiRecord } & Record<string, unknown>
+		>(
+			"/" + encodeURIComponent(collection) + "/auth-with-password",
+			{ identity, password },
+			options,
+		);
+		if (data) {
+			this.authStore.set(data.token, data.record as unknown as AuthModel);
+		}
+		return data;
+	}
+
+	/**
+	 * Refresh an auth collection token.
+	 * Uses the currently stored auth token.
+	 */
+	async authRefresh(
+		collection: string,
+		options?: RequestOptions,
+	): Promise<({ token: string; record: ApiRecord } & Record<string, unknown>) | null> {
+		const data = await this.http.post<
+			{ token: string; record: ApiRecord } & Record<string, unknown>
+		>(
+			"/" + encodeURIComponent(collection) + "/auth-refresh",
+			undefined,
+			options,
+		);
+		if (data) {
+			this.authStore.set(data.token, data.record as unknown as AuthModel);
 		}
 		return data;
 	}
