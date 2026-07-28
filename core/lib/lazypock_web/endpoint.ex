@@ -8,14 +8,19 @@ defmodule LazypockWeb.Endpoint do
     same_site: "Lax"
   ]
 
-  socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
-    longpoll: [connect_info: [session: @session_options]]
-
+  # Realtime socket for collection events
   socket "/socket", LazypockWeb.CollectionSocket,
     websocket: true,
     longpoll: false
 
+  # Serve SvelteKit SPA built assets (under /_ base path)
+  plug Plug.Static,
+    at: "/_",
+    from: {:lazypock, "priv/static/studio"},
+    gzip: not code_reloading?,
+    raise_on_missing_only: code_reloading?
+
+  # Serve global static files
   plug Plug.Static,
     at: "/",
     from: :lazypock,
@@ -24,8 +29,6 @@ defmodule LazypockWeb.Endpoint do
     raise_on_missing_only: code_reloading?
 
   if code_reloading? do
-    socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
-    plug Phoenix.LiveReloader
     plug Phoenix.CodeReloader
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :lazypock
   end

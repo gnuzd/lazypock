@@ -22,7 +22,7 @@ defmodule Lazypock.Auth.Setup do
         id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email         TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
-        inserted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
       )
       """,
@@ -74,17 +74,17 @@ defmodule Lazypock.Auth.Setup do
 
       case Ecto.Adapters.SQL.query(
              Repo,
-             "INSERT INTO _superusers (email, password_hash) VALUES ($1, $2) RETURNING id, email, inserted_at, updated_at",
+             "INSERT INTO _superusers (email, password_hash) VALUES ($1, $2) RETURNING id, email, created_at, updated_at",
              [email, password_hash]
            ) do
-        {:ok, %{rows: [[id, email, inserted_at, updated_at]]}} ->
+        {:ok, %{rows: [[id, email, created_at, updated_at]]}} ->
           now = DateTime.utc_now()
 
           superuser = %SuperUser{
             id: id,
             email: email,
             password_hash: password_hash,
-            inserted_at: inserted_at || now,
+            created_at: created_at || now,
             updated_at: updated_at || now
           }
 

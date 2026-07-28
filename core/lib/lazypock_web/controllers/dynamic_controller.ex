@@ -68,6 +68,16 @@ defmodule LazypockWeb.DynamicController do
       conn
       |> put_resp_header("x-total-count", to_string(total))
       |> json(DynamicView.paginated_response(items, total, page, per_page))
+    else
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
+
+      {:error, reason} ->
+        conn
+        |> put_status(403)
+        |> json(error_response(403, reason))
     end
   end
 
@@ -86,6 +96,11 @@ defmodule LazypockWeb.DynamicController do
         |> put_status(404)
         |> json(error_response(404, "The requested resource wasn't found."))
 
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
+
       {:error, reason} ->
         conn
         |> put_status(403)
@@ -95,14 +110,16 @@ defmodule LazypockWeb.DynamicController do
 
   # ── Create (POST /api/:collection) ──────────────────
 
-  def create(conn, %{"collection" => name, "data" => attrs}) do
+  def create(conn, %{"collection" => name} = params) do
     user = conn.assigns[:current_superuser]
     context = %{collection_name: name, user: user, conn: conn}
 
-    with {:ok, _collection} <- Registry.get(name),
+    with {:ok, collection} <- Registry.get(name),
+         raw_attrs = Map.get(params, "data") || Map.drop(params, ["collection"]),
+         attrs = sanitize_attrs(raw_attrs, collection),
          :ok <- Enforcer.authorize_create(name, user, attrs),
          {:ok, enriched_attrs} <- Hooks.dispatch_create(attrs, context) do
-      case GenericRecord.insert(name, enriched_attrs) do
+      case GenericRecord.insert(name, Map.drop(enriched_attrs, ["id"])) do
         {:ok, record} ->
           Broadcaster.broadcast_create(name, record)
           Hooks.dispatch_after_create(record, context)
@@ -117,6 +134,11 @@ defmodule LazypockWeb.DynamicController do
           |> json(error_response(400, reason))
       end
     else
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
+
       {:error, reason} ->
         conn
         |> put_status(403)
@@ -130,12 +152,18 @@ defmodule LazypockWeb.DynamicController do
     user = conn.assigns[:current_superuser]
     context = %{collection_name: name, user: user, conn: conn}
 
-    with {:ok, _collection} <- Registry.get(name),
+    with {:ok, collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_update(name, user, record),
-         attrs = params["data"] || params,
+         raw_attrs = params["data"] || params,
+         attrs = sanitize_attrs(raw_attrs, collection),
          {:ok, enriched_attrs} <- Hooks.dispatch_update(record, attrs, context),
-         updated_record when not is_nil(updated_record) <- GenericRecord.update(name, id, enriched_attrs) do
+         updated_record when not is_nil(updated_record) <-
+           GenericRecord.update(
+             name,
+             id,
+             Map.drop(enriched_attrs, ["id", "created_at", "updated_at", "collectionName"])
+           ) do
       Broadcaster.broadcast_update(name, updated_record)
       conn |> json(DynamicView.format_item(updated_record, name))
     else
@@ -143,6 +171,11 @@ defmodule LazypockWeb.DynamicController do
         conn
         |> put_status(404)
         |> json(error_response(404, "The requested resource wasn't found."))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
 
       {:error, reason} ->
         conn
@@ -171,6 +204,11 @@ defmodule LazypockWeb.DynamicController do
         conn
         |> put_status(404)
         |> json(error_response(404, "The requested resource wasn't found."))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(error_response(404, "Collection not found"))
 
       {:error, reason} ->
         conn
@@ -214,4 +252,41 @@ defmodule LazypockWeb.DynamicController do
   defp combine_wheres("", sql), do: sql
   defp combine_wheres(sql, ""), do: sql
   defp combine_wheres(left, right), do: "(#{left}) AND (#{right})"
+
+  # Strip system fields, coerce empty strings to nil for non-text types,
+  # and bcrypt-hash password fields automatically.
+  # Empty password values are dropped entirely (keep existing on update).
+  defp sanitize_attrs(attrs, collection) do
+    field_types =
+      (collection.fields || [])
+      |> Enum.map(fn f -> {f.name, f.type} end)
+      |> Map.new()
+
+    non_text_types = MapSet.new(["number", "bool", "date", "datetime"])
+    system_fields = MapSet.new(["id", "created_at", "updated_at", "collectionName", "collection"])
+
+    attrs
+    |> Map.drop(MapSet.to_list(system_fields))
+    |> Enum.reduce(%{}, fn {key, value}, acc ->
+      type = Map.get(field_types, key, "text")
+
+      cond do
+        # Empty password on update → skip entirely (keep existing)
+        type == "password" and value == "" ->
+          acc
+
+        # Password with value → bcrypt hash
+        type == "password" and is_binary(value) ->
+          Map.put(acc, key, Bcrypt.hash_pwd_salt(value))
+
+        # Empty string for non-text type → nil
+        value == "" and MapSet.member?(non_text_types, type) ->
+          Map.put(acc, key, nil)
+
+        # Everything else as-is
+        true ->
+          Map.put(acc, key, value)
+      end
+    end)
+  end
 end

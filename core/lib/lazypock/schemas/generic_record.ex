@@ -20,6 +20,7 @@ defmodule Lazypock.Schemas.GenericRecord do
   Inserts a record into a dynamic collection table.
 
   Returns `{:ok, record_map}` or `{:error, error_message}`.
+  All return values are coerced to JSON-safe types.
   """
   @spec insert(String.t(), map()) :: {:ok, map()} | {:error, String.t()}
   def insert(collection_name, attrs) when is_binary(collection_name) and is_map(attrs) do
@@ -31,6 +32,7 @@ defmodule Lazypock.Schemas.GenericRecord do
       |> Map.new()
       |> Map.put("created_at", now)
       |> Map.put("updated_at", now)
+      |> coerce_values_for_db()
 
     columns = Map.keys(data) |> Enum.map(&TypeMapper.quote_ident/1) |> Enum.join(", ")
     placeholders = 1..map_size(data) |> Enum.map(&"$#{&1}") |> Enum.join(", ")
@@ -44,7 +46,7 @@ defmodule Lazypock.Schemas.GenericRecord do
 
     case Ecto.Adapters.SQL.query(Repo, sql, values) do
       {:ok, %{rows: [row], columns: cols}} ->
-        {:ok, Enum.zip(cols, row) |> Map.new()}
+        {:ok, row_to_map(cols, row)}
 
       {:error, err} ->
         {:error, Exception.message(err)}
@@ -53,13 +55,14 @@ defmodule Lazypock.Schemas.GenericRecord do
 
   @doc """
   Returns all records from a collection as a list of maps.
+  All values coerced to JSON-safe types.
   """
   @spec all(String.t()) :: [map()]
   def all(collection_name) when is_binary(collection_name) do
     sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)}"
 
     case Ecto.Adapters.SQL.query(Repo, sql, []) do
-      {:ok, result} -> rows_to_maps(result)
+      {:ok, result} -> result |> rows_to_maps() |> Enum.map(&coerce_row/1)
       {:error, _} -> []
     end
   end
@@ -73,11 +76,18 @@ defmodule Lazypock.Schemas.GenericRecord do
       GenericRecord.all_where("posts", "title = $1", ["Hello"])
   """
   @spec all_where(String.t(), String.t(), [term()]) :: [map()]
-  def all_where(collection_name, where_clause, params \\ []) do
-    sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)} WHERE #{where_clause}"
+  def all_where(collection_name, where_clause \\ "", params \\ []) do
+    sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)}"
+
+    sql =
+      if has_where?(where_clause) do
+        sql <> " WHERE " <> where_clause
+      else
+        sql <> " " <> where_clause
+      end
 
     case Ecto.Adapters.SQL.query(Repo, sql, params) do
-      {:ok, result} -> rows_to_maps(result)
+      {:ok, result} -> result |> rows_to_maps() |> Enum.map(&coerce_row/1)
       {:error, _} -> []
     end
   end
@@ -87,11 +97,12 @@ defmodule Lazypock.Schemas.GenericRecord do
   """
   @spec get(String.t(), String.t()) :: map() | nil
   def get(collection_name, id) when is_binary(collection_name) do
-    sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)} WHERE id = $1::uuid"
+    sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)} WHERE id = $1"
+    id_bin = maybe_uuid_to_bin(id)
 
-    case Ecto.Adapters.SQL.query(Repo, sql, [id]) do
+    case Ecto.Adapters.SQL.query(Repo, sql, [id_bin]) do
       {:ok, %{rows: [row], columns: cols}} ->
-        Enum.zip(cols, row) |> Map.new()
+        row_to_map(cols, row)
 
       {:ok, _} ->
         nil
@@ -110,6 +121,7 @@ defmodule Lazypock.Schemas.GenericRecord do
       attrs
       |> Enum.map(fn {k, v} -> {to_string(k), v} end)
       |> Map.new()
+      |> coerce_values_for_db()
 
     set_clauses =
       data
@@ -124,15 +136,16 @@ defmodule Lazypock.Schemas.GenericRecord do
     sql = """
     UPDATE #{TypeMapper.quote_ident(collection_name)}
     SET #{set_clauses}, "updated_at" = $#{id_param + 1}
-    WHERE id = $#{id_param}::uuid
+    WHERE id = $#{id_param}
     RETURNING *
     """
 
-    values = Map.values(data) ++ [id, DateTime.utc_now()]
+    id_bin = maybe_uuid_to_bin(id)
+    values = Map.values(data) ++ [id_bin, DateTime.utc_now()]
 
     case Ecto.Adapters.SQL.query(Repo, sql, values) do
       {:ok, %{rows: [row], columns: cols}} ->
-        Enum.zip(cols, row) |> Map.new()
+        row_to_map(cols, row)
 
       {:ok, _} ->
         nil
@@ -147,9 +160,10 @@ defmodule Lazypock.Schemas.GenericRecord do
   """
   @spec delete(String.t(), String.t()) :: :ok | {:error, String.t()}
   def delete(collection_name, id) when is_binary(collection_name) do
-    sql = "DELETE FROM #{TypeMapper.quote_ident(collection_name)} WHERE id = $1::uuid"
+    sql = "DELETE FROM #{TypeMapper.quote_ident(collection_name)} WHERE id = $1"
+    id_bin = maybe_uuid_to_bin(id)
 
-    case Ecto.Adapters.SQL.query(Repo, sql, [id]) do
+    case Ecto.Adapters.SQL.query(Repo, sql, [id_bin]) do
       {:ok, _} -> :ok
       {:error, err} -> {:error, Exception.message(err)}
     end
@@ -188,9 +202,90 @@ defmodule Lazypock.Schemas.GenericRecord do
 
   # ── Private ──
 
+  # ── Private ──
+
   defp rows_to_maps(%{rows: rows, columns: cols}) do
     Enum.map(rows, fn row ->
       Enum.zip(cols, row) |> Map.new()
     end)
   end
+
+  # Coerce a raw result row (cols + row data) into JSON-safe map.
+  # Postgrex returns binary UUIDs, Decimal, Date, NaiveDateTime etc.
+  defp row_to_map(cols, row) do
+    cols
+    |> Enum.zip(row)
+    |> Enum.map(fn {col, val} ->
+      {col, coerce_value(val)}
+    end)
+    |> Map.new()
+  end
+
+  defp coerce_row(map) do
+    Map.new(map, fn {k, v} -> {k, coerce_value(v)} end)
+  end
+
+  defp coerce_value(v) when is_binary(v) and byte_size(v) == 16, do: Ecto.UUID.cast!(v)
+  defp coerce_value(%Decimal{} = d), do: Decimal.to_float(d)
+  defp coerce_value(%Date{} = d), do: Date.to_iso8601(d)
+  defp coerce_value(%NaiveDateTime{} = dt), do: NaiveDateTime.to_iso8601(dt)
+  defp coerce_value(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp coerce_value(v), do: v
+
+  # Parse string date/datetime values into Elixir structs before sending to Postgrex.
+  defp coerce_values_for_db(map) do
+    Map.new(map, fn {key, value} ->
+      {key, coerce_for_db(value)}
+    end)
+  end
+
+  defp coerce_for_db(%DateTime{} = dt), do: dt
+  defp coerce_for_db(%NaiveDateTime{} = dt), do: dt
+  defp coerce_for_db(%Date{} = d), do: d
+
+  defp coerce_for_db(value) when is_binary(value) do
+    cond do
+      # ISO 8601 datetime with timezone "2024-01-15T00:00:00Z" or "2024-01-15T00:00:00+00:00"
+      String.match?(value, ~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/) ->
+        case DateTime.from_iso8601(value) do
+          {:ok, dt, _} ->
+            dt
+
+          {:error, _} ->
+            case NaiveDateTime.from_iso8601(value) do
+              {:ok, ndt} -> ndt
+              {:error, _} -> value
+            end
+        end
+
+      # ISO 8601 date "2024-01-15"
+      String.match?(value, ~r/^\d{4}-\d{2}-\d{2}$/) ->
+        case Date.from_iso8601(value) do
+          {:ok, d} -> d
+          {:error, _} -> value
+        end
+
+      true ->
+        value
+    end
+  end
+
+  defp coerce_for_db(value), do: value
+
+  # Detect if a clause starts with a SQL keyword vs being a WHERE condition
+  defp has_where?(clause) do
+    is_binary(clause) and clause != "" and
+      not String.match?(clause, ~r/^\s*(ORDER BY|LIMIT|OFFSET|HAVING|GROUP BY)/i)
+  end
+
+  # Convert a UUID string to Postgrex-compatible binary for UUID columns
+  # Convert a UUID string to Postgrex-compatible binary for UUID columns
+  defp maybe_uuid_to_bin(id) when is_binary(id) do
+    case Ecto.UUID.dump(id) do
+      {:ok, bin} -> bin
+      :error -> id
+    end
+  end
+
+  defp maybe_uuid_to_bin(id), do: id
 end

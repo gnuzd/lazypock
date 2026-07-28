@@ -25,8 +25,7 @@ config :lazypock, LazypockWeb.Endpoint,
   debug_errors: true,
   secret_key_base: "wP4dJa7Fetp637jHnnbbJ4jeHcKRKkWJJknwOFzpumT5MYw6uyV5j09cTas0RtlG",
   watchers: [
-    esbuild: {Esbuild, :install_and_run, [:lazypock, ~w(--sourcemap=inline --watch)]},
-    tailwind: {Tailwind, :install_and_run, [:lazypock, ~w(--watch)]}
+    # Vite dev server runs separately via `cd ui && npm run dev`
   ]
 
 # ## SSL Support

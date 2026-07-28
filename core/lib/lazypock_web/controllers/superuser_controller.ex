@@ -17,10 +17,7 @@ defmodule LazypockWeb.SuperUserController do
         |> put_status(201)
         |> json(%{
           "token" => jwt,
-          "superuser" => %{
-            "id" => superuser.id,
-            "email" => superuser.email
-          }
+          "superuser" => superuser_json(superuser)
         })
 
       {:error, reason} ->
@@ -43,10 +40,7 @@ defmodule LazypockWeb.SuperUserController do
         |> put_status(200)
         |> json(%{
           "token" => jwt,
-          "superuser" => %{
-            "id" => superuser.id,
-            "email" => superuser.email
-          }
+          "superuser" => superuser_json(superuser)
         })
 
       {:error, reason} ->
@@ -69,10 +63,7 @@ defmodule LazypockWeb.SuperUserController do
         |> json(%{"code" => 401, "message" => "Not authenticated", "data" => %{}})
 
       superuser ->
-        json(conn, %{
-          "id" => superuser.id,
-          "email" => superuser.email
-        })
+        json(conn, superuser_json(superuser))
     end
   end
 
@@ -82,5 +73,14 @@ defmodule LazypockWeb.SuperUserController do
   """
   def check(conn, _params) do
     json(conn, %{"has_superuser" => Setup.any_superuser?()})
+  end
+
+  defp superuser_json(superuser) do
+    %{
+      "id" => Ecto.UUID.cast!(superuser.id),
+      "email" => superuser.email,
+      "created" => superuser.created_at,
+      "updated" => superuser.updated_at
+    }
   end
 end

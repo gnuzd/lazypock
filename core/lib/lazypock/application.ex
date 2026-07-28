@@ -17,16 +17,21 @@ defmodule Lazypock.Application do
     ]
 
     opts = [strategy: :one_for_one, name: Lazypock.Supervisor]
-    result = Supervisor.start_link(children, opts)
 
-    # Boot-time setup: create _superusers table + auto-create from env
-    Lazypock.Auth.Setup.ensure_superusers_table!()
-    Lazypock.Auth.Setup.create_from_env!()
+    case Supervisor.start_link(children, opts) do
+      {:ok, pid} ->
+        # Boot-time setup: create _superusers table + auto-create from env
+        Lazypock.Auth.Setup.ensure_superusers_table!()
+        Lazypock.Auth.Setup.create_from_env!()
 
-    # Create _files table for file storage
-    Lazypock.Files.Store.ensure_files_table!()
+        # Create _files table for file storage
+        Lazypock.Files.Store.ensure_files_table!()
+        Process.sleep(:infinity)
+        {:ok, pid}
 
-    result
+      error ->
+        error
+    end
   end
 
   # Tell Phoenix to update the endpoint configuration

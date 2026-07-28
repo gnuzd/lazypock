@@ -1,0 +1,159 @@
+@layer components {
+	/* ── Button base ── */
+	.btn {
+		@apply m-0 inline-flex min-h-[38px] shrink-0 cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-field)] border-0 px-4 text-center text-[0.9375rem] leading-none font-bold no-underline transition-[color,background] duration-200 outline-none select-none;
+	}
+	.btn:disabled,
+	.btn.disabled {
+		@apply pointer-events-none cursor-default !text-[var(--color-base-disabled)];
+	}
+
+	/* ── Variants ── */
+	.btn-primary {
+		@apply bg-primary text-primary-content;
+	}
+	.btn-primary:hover,
+	.btn-primary:focus-visible {
+		@apply brightness-110;
+	}
+	.btn-primary:active {
+		@apply brightness-125;
+	}
+	.btn-primary:disabled,
+	.btn-primary.disabled {
+		@apply !bg-[var(--color-base-300)];
+	}
+
+	.btn-secondary {
+		@apply bg-secondary text-primary;
+	}
+	.btn-secondary:hover,
+	.btn-secondary:focus-visible {
+		@apply brightness-90;
+	}
+	.btn-secondary:active {
+		@apply brightness-85;
+	}
+	.btn-secondary:disabled,
+	.btn-secondary.disabled {
+		@apply !bg-[var(--color-base-300)];
+	}
+
+	.btn-info {
+		@apply bg-info text-[var(--color-info-content)];
+	}
+	.btn-info:hover,
+	.btn-info:focus-visible {
+		@apply brightness-110;
+	}
+	.btn-info:active {
+		@apply brightness-125;
+	}
+	.btn-info:disabled,
+	.btn-info.disabled {
+		@apply !bg-[var(--color-base-300)];
+	}
+
+	.btn-success {
+		@apply bg-success text-[var(--color-success-content)];
+	}
+	.btn-success:hover,
+	.btn-success:focus-visible {
+		@apply brightness-110;
+	}
+	.btn-success:active {
+		@apply brightness-125;
+	}
+	.btn-success:disabled,
+	.btn-success.disabled {
+		@apply !bg-[var(--color-base-300)];
+	}
+
+	.btn-warning {
+		@apply bg-warning text-[var(--color-warning-content)];
+	}
+	.btn-warning:hover,
+	.btn-warning:focus-visible {
+		@apply brightness-110;
+	}
+	.btn-warning:active {
+		@apply brightness-125;
+	}
+	.btn-warning:disabled,
+	.btn-warning.disabled {
+		@apply !bg-[var(--color-base-300)];
+	}
+
+	.btn-error {
+		@apply bg-error text-[var(--color-error-content)];
+	}
+	.btn-error:hover,
+	.btn-error:focus-visible {
+		@apply brightness-110;
+	}
+	.btn-error:active {
+		@apply brightness-125;
+	}
+	.btn-error:disabled,
+	.btn-error.disabled {
+		@apply !bg-[var(--color-base-300)];
+	}
+
+	.btn-outline {
+		@apply border-2 border-current bg-[var(--color-base-100)] text-[var(--color-base-content)];
+	}
+	.btn-outline:hover,
+	.btn-outline:focus-visible {
+		@apply bg-[var(--color-base-200)];
+	}
+	.btn-outline:active {
+		@apply bg-[var(--color-base-300)];
+	}
+	.btn-outline:disabled,
+	.btn-outline.disabled {
+		@apply !border-[var(--color-base-300)] !bg-transparent;
+	}
+
+	.btn-ghost {
+		@apply bg-transparent text-[var(--color-base-content)];
+	}
+	.btn-ghost:hover,
+	.btn-ghost:focus-visible {
+		@apply bg-[var(--color-base-300)];
+	}
+	.btn-ghost:active {
+		@apply bg-[var(--color-base-400)];
+	}
+	.btn-ghost:disabled,
+	.btn-ghost.disabled {
+		@apply !bg-transparent;
+	}
+
+	/* ── Sizes ── */
+	.btn-sm {
+		@apply min-h-7 px-3 text-sm;
+	}
+	.btn-md {
+		@apply min-h-[38px] px-6 text-[0.9375rem];
+	}
+	.btn-lg {
+		@apply min-h-[46px] text-lg;
+	}
+
+	/* ── Modifiers ── */
+	.btn-pill {
+		@apply rounded-full;
+	}
+	.btn-circle {
+		@apply h-[var(--btn-height)] w-[var(--btn-height)] content-center justify-center rounded-full !p-0;
+	}
+	.btn-circle.btn-sm {
+		@apply h-[var(--btn-height-sm)] w-[var(--btn-height-sm)];
+	}
+	.btn-circle.btn-lg {
+		@apply h-[var(--btn-height-lg)] w-[var(--btn-height-lg)];
+	}
+	.btn-full {
+		@apply w-full;
+	}
+}

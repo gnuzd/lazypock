@@ -1,0 +1,2 @@
+/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */
+.btn-spinner.svelte-18sv61c{--size:14px;width:var(--size);height:var(--size);border:2px solid;border-top-color:#0000;border-radius:50%;flex-shrink:0;animation:.6s linear infinite svelte-18sv61c-btn-spin}@keyframes svelte-18sv61c-btn-spin{0%{transform:rotate(0)}to{transform:rotate(360deg)}}

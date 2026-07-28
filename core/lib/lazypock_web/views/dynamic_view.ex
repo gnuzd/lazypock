@@ -18,7 +18,8 @@ defmodule LazypockWeb.DynamicView do
       record
       |> Map.put("collectionId", collection.id)
       |> Map.put("collectionName", collection.name)
-      |> format_timestamps()
+      |> rename_timestamps()
+      |> strip_password_fields(collection)
     end)
   end
 
@@ -34,7 +35,8 @@ defmodule LazypockWeb.DynamicView do
     record
     |> Map.put("collectionId", collection.id)
     |> Map.put("collectionName", collection.name)
-    |> format_timestamps()
+    |> rename_timestamps()
+    |> strip_password_fields(collection)
   end
 
   @doc """
@@ -54,25 +56,26 @@ defmodule LazypockWeb.DynamicView do
     }
   end
 
-  defp format_timestamps(record) do
+  defp rename_timestamps(record) do
     record
-    |> format_timestamp("created_at", "created")
-    |> format_timestamp("updated_at", "updated")
+    |> maybe_rename("created_at", "created")
+    |> maybe_rename("updated_at", "updated")
   end
 
-  defp format_timestamp(record, db_key, api_key) do
-    case Map.get(record, db_key) do
-      nil ->
-        Map.put(record, api_key, nil)
+  # Strips password fields from API responses (security + PocketBase compat).
+  defp strip_password_fields(record, collection) do
+    password_fields =
+      (collection.fields || [])
+      |> Enum.filter(fn f -> f.type == "password" end)
+      |> Enum.map(fn f -> f.name end)
 
-      %DateTime{} = dt ->
-        record |> Map.put(api_key, DateTime.to_iso8601(dt)) |> Map.delete(db_key)
+    Map.drop(record, password_fields)
+  end
 
-      value when is_binary(value) ->
-        record |> Map.put(api_key, value) |> Map.delete(db_key)
-
-      _ ->
-        record |> Map.put(api_key, nil) |> Map.delete(db_key)
+  defp maybe_rename(record, old_key, new_key) do
+    case Map.fetch(record, old_key) do
+      {:ok, value} -> record |> Map.put(new_key, value) |> Map.delete(old_key)
+      :error -> record
     end
   end
 end
