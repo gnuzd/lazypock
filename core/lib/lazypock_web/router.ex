@@ -1,34 +1,83 @@
 defmodule LazypockWeb.Router do
   use LazypockWeb, :router
 
-  pipeline :browser do
-    plug(:accepts, ["html"])
+  # Serve the Svelte SPA admin UI (static files)
+  # In production: priv/static/admin/ is built by the Svelte project
+  # In dev: the Svelte dev server proxies to avoid CORS issues
+  pipeline :spa do
+    plug(:accepts, ["html", "json"])
     plug(:fetch_session)
-    plug(:fetch_live_flash)
-    plug(:put_root_layout, html: {LazypockWeb.Layouts, :root})
-    plug(:protect_from_forgery)
-    plug(:put_secure_browser_headers)
   end
 
   pipeline :api do
     plug(:accepts, ["json"])
   end
 
-  scope "/", LazypockWeb do
-    pipe_through(:browser)
-
-    get("/", PageController, :home)
+  pipeline :auth do
+    plug(:accepts, ["json"])
+    plug(Lazypock.Auth.Plug)
   end
 
-  # API routes
+  # Admin SPA — catch-all for /_/*
+  scope "/_", LazypockWeb do
+    pipe_through(:spa)
+
+    get("/*path", AdminSpaController, :index)
+  end
+
+  # Health check (no auth)
   scope "/api", LazypockWeb do
     pipe_through(:api)
 
-    # Health check
     get("/health", HealthController, :index)
 
-    # Dynamic collection routes — must be LAST
-    # Matches: GET /api/posts, GET /api/posts/:id, POST /api/posts, etc.
+    # Superuser auth (no auth required)
+    get("/superusers/check", SuperUserController, :check)
+    post("/superusers/setup", SuperUserController, :setup)
+    post("/superusers/login", SuperUserController, :login)
+  end
+
+  # Authenticated API routes — token is verified but NOT hard-blocked here.
+  # Access control is handled by each controller/enforcer.
+  scope "/api", LazypockWeb do
+    pipe_through(:auth)
+
+    get("/superusers/me", SuperUserController, :me)
+
+    # Collection management (DDL operations — enforcer checks superuser/rules)
+    get("/collections", CollectionController, :list)
+    post("/collections", CollectionController, :create)
+    get("/collections/:id", CollectionController, :show)
+    patch("/collections/:id", CollectionController, :update)
+    delete("/collections/:id", CollectionController, :delete)
+
+    # File routes — must be BEFORE dynamic :collection routes
+    post("/files", FileController, :upload)
+    get("/files/:id", FileController, :show)
+    delete("/files/:id", FileController, :delete)
+  end
+
+  # Auth collection routes — must be BEFORE dynamic :collection routes
+  # These use :collection param just like dynamic routes, but with specific path suffixes
+  scope "/api", LazypockWeb do
+    pipe_through(:api)
+
+    # No auth required (public login/methods)
+    post("/:collection/auth-with-password", AuthController, :auth_with_password)
+    get("/:collection/auth-methods", AuthController, :auth_methods)
+  end
+
+  scope "/api", LazypockWeb do
+    pipe_through(:auth)
+
+    # Auth required (token refresh)
+    post("/:collection/auth-refresh", AuthController, :auth_refresh)
+  end
+
+  # Dynamic collection routes — must be LAST
+  scope "/api", LazypockWeb do
+    pipe_through(:auth)
+
     get("/:collection", DynamicController, :list)
     get("/:collection/:id", DynamicController, :show)
     post("/:collection", DynamicController, :create)

@@ -1,1 +1,8 @@
 .DS_Store
+core/priv/uploads/*
+!core/priv/uploads/.gitkeep
+
+example
+
+# Pi subagent transient files
+.pi-subagents/

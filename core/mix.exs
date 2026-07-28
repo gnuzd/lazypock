@@ -11,7 +11,8 @@ defmodule Lazypock.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      releases: releases()
     ]
   end
 
@@ -31,9 +32,25 @@ defmodule Lazypock.MixProject do
     ]
   end
 
+  def releases do
+    [
+      lazypock: [
+        steps: [:assemble, &Burrito.wrap/1],
+        burrito: [
+          targets: [
+            # macos: [os: :darwin, cpu: :x86_64],
+            macos_silicon: [os: :darwin, cpu: :aarch64]
+            # linux: [os: :linux, cpu: :x86_64],
+            # windows: [os: :windows, cpu: :x86_64]
+          ]
+        ]
+      ]
+    ]
+  end
+
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
-  defp elixirc_paths(_), do: ["lib"]
+  defp elixirc_paths(_), do: ["lib", "priv/hooks"]
 
   # Specifies your project dependencies.
   #
@@ -48,27 +65,13 @@ defmodule Lazypock.MixProject do
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.2.0"},
       {:lazy_html, ">= 0.1.0", only: :test},
-      {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
-      {:tailwind, "~> 0.5", runtime: Mix.env() == :dev},
-      {:heroicons,
-       github: "tailwindlabs/heroicons",
-       tag: "v2.2.0",
-       sparse: "optimized",
-       app: false,
-       compile: false,
-       depth: 1},
-      {:daisyui,
-       github: "saadeghi/daisyui",
-       tag: "v5.5.20",
-       sparse: "packages/bundle",
-       app: false,
-       compile: false,
-       depth: 1},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      {:bcrypt_elixir, "~> 3.0"},
+      {:burrito, "~> 1.0"}
     ]
   end
 
@@ -84,11 +87,15 @@ defmodule Lazypock.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["compile", "tailwind lazypock", "esbuild lazypock"],
+      "assets.setup": fn _ ->
+        IO.puts("Svelte UI: cd studio && npm install")
+      end,
+      "assets.build": ["compile", "ui.build"],
+      "studio.build": fn _ ->
+        {_, 0} = System.cmd("npm", ["run", "build"], cd: "../studio", into: IO.binstream())
+      end,
       "assets.deploy": [
-        "tailwind lazypock --minify",
-        "esbuild lazypock --minify",
+        "studio.build",
         "phx.digest"
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]

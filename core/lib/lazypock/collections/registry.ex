@@ -122,12 +122,26 @@ defmodule Lazypock.Collections.Registry do
   end
 
   @impl true
+  def handle_info({:collection_updated, collection}, state) do
+    # Reload the specific collection with its fields preloaded
+    collection = Repo.preload(collection, :fields)
+    :ets.insert(@table_name, {collection.name, collection})
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info({:collection_deleted, name}, state) do
     :ets.delete(@table_name, name)
     {:noreply, state}
   end
 
   # ── Private ──────────────────────────────────────────────
+
+  @impl true
+  def handle_info(_msg, state) do
+    # Ignore unknown messages (e.g. schema broadcasts we don't handle)
+    {:noreply, state}
+  end
 
   defp load_all_into_cache do
     # Clear existing cache

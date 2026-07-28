@@ -4,7 +4,6 @@ defmodule Lazypock.Schemas.FilterCompiler do
   with parameterized values.
   """
 
-
   @doc """
   Compiles a PocketBase filter string into a SQL WHERE clause with parameters.
   """
@@ -46,8 +45,6 @@ defmodule Lazypock.Schemas.FilterCompiler do
   # ── Tokenizer ────────────────────────────────────────
 
   defp tokenize(str) do
-    # Use regex to split on operators with lookarounds to handle adjacent chars
-    # Split on any of: && || >= <= != !~ > < ~ = ! ( )
     tokens =
       Regex.split(
         ~r/(&&|\|\||>=|<=|!=|!~|>|<|~|=|!|[()])/,
@@ -215,23 +212,37 @@ defmodule Lazypock.Schemas.FilterCompiler do
     {renumber(sql, idx), params}
   end
 
+  # Field ILIKE 'pattern'
   defp emit_simple({"~", {:field, f}, {:literal, val}}) do
     {~s["#{f}" ILIKE $1], ["%" <> val <> "%"]}
   end
 
+  # Field NOT ILIKE 'pattern'
   defp emit_simple({"!~", {:field, f}, {:literal, val}}) do
     {~s["#{f}" NOT ILIKE $1], ["%" <> val <> "%"]}
   end
 
+  # Field OP Literal
   defp emit_simple({op, {:field, f}, {:literal, val}}) when op in ~w(= != > >= < <=) do
     {~s["#{f}" #{op} $1], [val]}
   end
 
+  # Literal OP Literal — e.g. '' != '' (from @request.auth.id != '' when unauthenticated)
+  defp emit_simple({op, {:literal, left}, {:literal, right}}) when op in ~w(= != > >= < <=) do
+    {~s[$1 #{op} $2], [left, right]}
+  end
+
+  # Standalone field
   defp emit_simple({:field, name}) do
     {~s["#{name}"], []}
   end
 
-  # Catch-all: if we somehow get an unexpected AST node, treat it as a no-op
+  # Standalone literal (fallback — unlikely)
+  defp emit_simple({:literal, value}) do
+    {"$1", [value]}
+  end
+
+  # Catch-all: unknown AST node → no-op
   defp emit_simple(_ast), do: {"", []}
 
   defp emit_one(ast, idx) do

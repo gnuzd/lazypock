@@ -2,9 +2,9 @@
 
 > **Your whole backend. In one lazy pocket.**
 
-LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**. Define collections in an admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
+LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**. Define collections in the Studio admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
 
-**Status:** 🚧 Planning & Architecture — See [PLAN.md](./PLAN.md)
+**Status:** Beta — Core backend features working. Auth collections (user JWT, login/refresh, rule integration) ✅. Studio SvelteKit admin UI in development.
 
 ---
 
@@ -14,55 +14,150 @@ LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoeni
 LazyPock/
 ├── core/                  # Elixir backend (Phoenix app)
 │   ├── lib/
-│   │   ├── LazyPock/            # Core library
-│   │   │   ├── Collections/     # Collection registry + metadata
-│   │   │   ├── Schema/          # DDL engine + type mapper
-│   │   │   ├── Schemas/         # GenericRecord + dynamic ecto
-│   │   │   ├── Rules/           # Rule compiler + enforcer
-│   │   │   ├── Hooks/           # Hook system (3 layers)
-│   │   │   ├── Auth/            # JWT + OAuth2
-│   │   │   ├── Files/           # File storage + thumbnails
-│   │   │   └── Realtime/        # Channel broadcaster
-│   │   └── LazyPockWeb/         # Web layer (controllers, channels, liveview)
+│   │   ├── lazypock/            # Core library
+│   │   │   ├── collections/     # Collection registry + ETS cache
+│   │   │   ├── schema/          # DDL engine + type mapper
+│   │   │   ├── schemas/         # GenericRecord + FilterCompiler
+│   │   │   ├── rules/           # Rule enforcer (PocketBase-compatible)
+│   │   │   ├── hooks/           # Hook discovery & dispatcher
+│   │   │   ├── auth/            # Superuser JWT auth + token
+│   │   │   ├── files/           # File storage (local + S3 adapters)
+│   │   │   └── realtime/        # Broadcaster (Phoenix PubSub)
+│   │   └── lazypock_web/        # Web layer (controllers, channels)
+│   │       ├── controllers/     # CollectionController, DynamicController, etc.
+│   │       └── channels/        # CollectionChannel, AdminChannel
 │   ├── priv/
-│   │   └── hooks/               # User hook modules (*.ex)
+│   │   ├── hooks/               # User hook modules (*.ex)
+│   │   └── static/studio/       # Built Studio SPA
 │   ├── test/
 │   └── mix.exs
 │
-├── sdk-js/                # JavaScript/TypeScript SDK → npm: lazypock
+├── studio/                # SvelteKit admin UI (SPA)
 │   ├── src/
-│   │   ├── client.ts      # LazyPock client class
-│   │   ├── auth.ts        # Auth methods
-│   │   ├── collection.ts  # CRUD + subscribe
-│   │   ├── files.ts       # File upload/download
-│   │   └── realtime.ts    # Phoenix channel wrapper
-│   ├── test/
-│   └── package.json       # "name": "lazypock"
+│   │   ├── routes/              # SvelteKit pages
+│   │   │   ├── +layout.svelte   # Auth guard + realtime init
+│   │   │   ├── login/           # Login page
+│   │   │   └── (app)/           # Authenticated pages
+│   │   │       └── collections/ # Collection CRUD + records + rules
+│   │   └── lib/
+│   │       ├── components/      # Reusable Svelte components
+│   │       └── client.ts        # LazypockClient singleton
+│   └── package.json
 │
-├── sdk-dart/              # Dart/Flutter SDK (future)
-├── sdk-py/                # Python SDK (future)
+├── packages/
+│   └── lazypock-ts/       # TypeScript SDK → npm: lazypock
+│       ├── src/
+│       │   ├── index.ts    # LazypockClient class
+│       │   ├── auth.ts     # AuthStore, JWT management
+│       │   ├── collection.ts # Typed collection CRUD
+│       │   └── realtime.ts # Phoenix Channel WebSocket client
+│       └── package.json
+│
 ├── PLAN.md                # Full architecture & development plan
 └── README.md
 ```
 
 ---
 
-## What It Does
+## What Works Now
 
-| Feature | How |
-|---|---|
-| 🗄️ **Dynamic Collections** | Create collections in the admin UI → real PostgreSQL tables with real columns. No migrations, no restarts. |
-| 🌐 **Auto REST API** | `GET /api/posts`, `POST /api/posts`, etc. Filter, sort, paginate, expand relations — all PocketBase-compatible. |
-| 🔐 **Auth Built-In** | Auth collections with email/password, JWT tokens, OAuth2 (Google, GitHub, etc.), and API keys. |
-| ⚡ **Realtime** | Phoenix Channels: subscribe to `collection:posts` or `collection:posts:abc123` and get live updates. |
-| 🪝 **Hooks** | Three layers: declarative (JSON config), file-based (Elixir modules), runtime (code in admin UI). |
-| 🛡️ **Rules** | PocketBase-style access control: `owner_id = @request.auth.id \|\| @request.auth.role = 'admin'` |
-| 📁 **File Storage** | Upload, serve, thumbnail. Local + S3 backends. |
-| 🎨 **Admin Dashboard** | Phoenix LiveView dashboard — manage everything without touching code. |
-| 📦 **Single Binary** | `mix release` → one tarball. Deploy anywhere. |
-| 🔌 **Client SDKs** | Official JS/TS SDK. Dart/Flutter and Python planned. |
+| Feature | BE (core) | FE (Studio) | SDK (lazypock-ts) |
+|---|---|---|---|
+| 🗄️ **Dynamic Collections** | DDL create/drop/add field. Real Pg tables with real columns. ✅ | Collection CRUD in side pane. Field editor (add/remove/reorder). ✅ | — |
+| 🌐 **REST API** | `GET/POST/PATCH/DELETE /api/:collection`. Filter, sort, paginate. ✅ | Record browser with DataTable + dynamic RecordForm. ✅ | `client.collection(name).list/getOne/create/update/delete` ✅ |
+| 🔐 **Auth System** | Superuser JWT (setup/login/verify) + **auth collection JWT** (`/:collection/auth-with-password`, `/:collection/auth-refresh`, `/:collection/auth-methods`). Dual token verification in Plug. ✅ | Login page. Auth guard. Token persistence. Auto-redirect. ✅ | `client.login/me/logout`, `AuthStore` with localStorage ✅ |
+| 🛡️ **Rules** | Three-state (nil=superuser, ""=public, filter). Enforcer for all CRUD + manageRule. Auth user support (non-superusers evaluated against rules). ✅ | Rule editor with lock/unlock per field. `manageRule` field. ✅ | — |
+| ⚡ **Realtime** | Phoenix Channels. Broadcaster wired into DynamicController. Rule-enforced join. ✅ | Real-time record updates via `client.realtime.subscribe()`. ✅ | `RealtimeService` with Phoenix Channel protocol ✅ |
+| 📁 **File Storage** | Upload, serve, delete. Local + S3 adapters. ✅ | — | — (via REST API) |
+| 🪝 **Hooks** | File-based Elixir hooks. Lifecycle behavior. Dispatcher wired into controller. ✅ | — | — |
+| 🎨 **Admin Dashboard** | Serves Svelte SPA at `/_/*`. Proxy support in dev. ✅ | Collections sidebar. Record CRUD. Field editor. Rules. Indexes. ✅ | — |
 
 ---
+
+## How to Run
+
+### Prerequisites
+
+- **Elixir 1.17+** + **Erlang/OTP 26+**
+- **PostgreSQL 15+**
+- **Node.js 20+** (for Studio admin UI)
+- `zig` and `xz` installed (for Burrito release builds)
+
+### Development
+
+#### 1. Backend (Phoenix)
+
+```bash
+cd core
+
+export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev"
+mix setup          # Install deps, create DB, run migrations, seed
+mix phx.server     # Starts Phoenix on http://localhost:4000
+```
+
+#### 2. Studio (SvelteKit Admin UI)
+
+```bash
+cd studio
+
+npm install
+npm run dev         # Starts Vite dev server on http://localhost:5173
+```
+
+> The SvelteKit dev server proxies `/api` requests to the Phoenix backend (port 4000). The Studio is served at `http://localhost:5173/_/`.
+
+#### 3. TypeScript SDK
+
+```bash
+cd packages/lazypock-ts
+npm install
+npm run build
+```
+
+### First-Time Setup
+
+1. Open Studio at `http://localhost:5173/_/` (or `/_` if serving from Phoenix)
+2. You'll be redirected to the login page
+3. Click **Setup** to create the first superuser account
+4. Login and start managing collections
+
+### Production Release (Burrito single binary)
+
+```bash
+cd core
+MIX_ENV=prod mix release
+# Binary: core/burrito_out/lazypock_macos_silicon
+```
+
+#### Required Environment Variables
+
+| Variable | Description | Example |
+|---|---|---|
+| `DATABASE_URL` | PostgreSQL connection string | `ecto://postgres:postgres@localhost:5432/lazypock_dev` |
+| `PHX_SERVER` | Enable the HTTP server (set to `true`) | `true` |
+| `SECRET_KEY_BASE` | Secret for signing cookies | (generate with `mix phx.gen.secret`) |
+| `PHX_HOST` | Public hostname (optional, defaults to `example.com`) | `localhost` |
+| `PORT` | HTTP port (optional, defaults to `4000`) | `4000` |
+| `POOL_SIZE` | DB connection pool size (optional, defaults to `10`) | `10` |
+| `LAZYPOCK_SUPERUSER_EMAIL` | Auto-create superuser on boot | `admin@lazypock.app` |
+| `LAZYPOCK_SUPERUSER_PASSWORD` | Auto-create superuser on boot | `your-password` |
+
+**Minimal production example:**
+
+```bash
+export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
+export PHX_SERVER=true
+export SECRET_KEY_BASE="$(mix phx.gen.secret)"
+export PHX_HOST="localhost"
+LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \
+  ./core/burrito_out/lazypock_macos_silicon
+```
+
+Note: The release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
+
+---
+
+## Quick Preview
 
 ## Quick Preview (Planned API)
 
@@ -129,22 +224,22 @@ Schema  Hooks  Rules  ← Dynamic engine layer
 
 ## Development Plan
 
-See **[PLAN.md](./PLAN.md)** for the full 10-phase development plan:
+See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 
-| Phase | What | Duration |
+**Current Status:** BE core (Phases 1–7) done. Auth collections (Phase 3 — user JWT, login/refresh, rule integration) ✅. Studio SPA (Phase 8) active. SDK (Phase 9) shipping.
+
+| Phase | What | Status |
 |---|---|---|
-| 1 | Foundation (scaffold, meta tables, DDL engine) | ~1 week |
-| 2 | Dynamic CRUD API | ~1.5 weeks |
-| 3 | Auth System | ~1 week |
-| 4 | Rule Engine | ~1 week |
-| 5 | Realtime (Channels) | ~1 week |
-| 6 | File Storage | ~1 week |
-| 7 | Hook System | ~1.5 weeks |
-| 8 | Admin Dashboard (LiveView) | ~2.5 weeks |
-| 9 | Client SDKs | ~1 week |
-| 10 | Polish & Release | ~2 weeks |
-
-**Total estimated:** ~13 weeks to v1.0
+| 1 | Foundation (DDL engine, meta tables, registry) | ✅ Complete |
+| 2 | Dynamic CRUD API | ✅ Complete |
+| 3 | Auth System (superusers + auth collection JWT, login/refresh, rule integration) | ✅ Complete |
+| 4 | Rule Engine (Enforcer, three-state, manageRule) | ✅ Complete |
+| 5 | Realtime (Phoenix Channels, Broadcaster) | ✅ Complete |
+| 6 | File Storage (upload, serve, local + S3) | ✅ Complete |
+| 7 | Hook System (Lifecycle, Dispatcher, Registry) | ✅ Complete |
+| 8 | Studio Admin SPA (SvelteKit) | 🚧 In Progress |
+| 9 | TypeScript SDK | 🚧 Shipping |
+| 10 | Polish & Release | ⏳ Planned |
 
 ---
 
@@ -165,13 +260,10 @@ See **[PLAN.md](./PLAN.md)** for the full 10-phase development plan:
 | Framework | Phoenix 1.7+ |
 | Database | Ecto + Postgrex + PostgreSQL 15+ |
 | Auth | Joken + bcrypt_elixir |
-| OAuth2 | Assent |
-| Admin UI | Phoenix LiveView 0.20+ |
+| Admin UI | **SvelteKit SPA** (`studio/`) — built to `core/priv/static/studio/` |
 | Image Processing | Vix (libvips) |
-| JS SDK | TypeScript (in `sdk-js/`) |
-| Dart SDK | Dart (in `sdk-dart/`, future) |
-| Python SDK | Python (in `sdk-py/`, future) |
-| CSS | Tailwind CSS (optional) |
+| JS SDK | TypeScript (`packages/lazypock-ts/`) |
+| CSS | Tailwind CSS (Studio), none (core) |
 
 ---
 

@@ -12,7 +12,8 @@ defmodule Lazypock.Repo.Migrations.CreateSystemTables do
       add :hooks, :jsonb, null: false, default: "{}"
       add :managed, :boolean, null: false, default: true
 
-      timestamps()
+      add :created_at, :utc_datetime_usec, null: false, default: fragment("now()")
+      add :updated_at, :utc_datetime_usec, null: false, default: fragment("now()")
     end
 
     create unique_index(:_collections, [:name])
@@ -31,7 +32,8 @@ defmodule Lazypock.Repo.Migrations.CreateSystemTables do
       add :system, :boolean, default: false
       add :sort_order, :integer, default: 0
 
-      timestamps()
+      add :created_at, :utc_datetime_usec, null: false, default: fragment("now()")
+      add :updated_at, :utc_datetime_usec, null: false, default: fragment("now()")
     end
 
     create unique_index(:_fields, [:collection_id, :name])
