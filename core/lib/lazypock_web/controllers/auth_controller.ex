@@ -10,6 +10,7 @@ defmodule LazypockWeb.AuthController do
   alias Lazypock.Collections.Registry
   alias Lazypock.Schemas.GenericRecord
   alias Lazypock.Auth.Token
+  alias Lazypock.Auth.RateLimiter
 
   @doc """
   POST /api/:collection/auth-with-password
@@ -37,7 +38,21 @@ defmodule LazypockWeb.AuthController do
         |> json(%{"code" => 400, "message" => "Missing required field: password", "data" => %{}})
 
       true ->
-        do_auth_with_password(conn, collection_name, email, password)
+        ip = RateLimiter.ip_from_conn(conn)
+
+        case RateLimiter.check_rate(ip, collection_name, email) do
+          :ok ->
+            do_auth_with_password(conn, collection_name, email, password)
+
+          {:error, :rate_limited} ->
+            conn
+            |> put_status(429)
+            |> json(%{
+              "code" => 429,
+              "message" => "Too many login attempts. Please try again later.",
+              "data" => %{}
+            })
+        end
     end
   end
 
@@ -61,7 +76,11 @@ defmodule LazypockWeb.AuthController do
       is_nil(claims) or claims["collectionName"] != collection_name ->
         conn
         |> put_status(403)
-        |> json(%{"code" => 403, "message" => "Token does not match this collection", "data" => %{}})
+        |> json(%{
+          "code" => 403,
+          "message" => "Token does not match this collection",
+          "data" => %{}
+        })
 
       true ->
         do_auth_refresh(conn, collection_name)
@@ -123,11 +142,13 @@ defmodule LazypockWeb.AuthController do
   end
 
   defp do_auth_with_password(conn, collection_name, email, password) do
+    ip = RateLimiter.ip_from_conn(conn)
+
     # First check the collection exists and is auth type
     case Registry.get(collection_name) do
       {:ok, %{type: "auth"} = collection} ->
         # Find user by email in this collection
-        find_user_by_email(conn, collection_name, email, collection, password)
+        find_user_by_email(conn, collection_name, email, collection, password, ip)
 
       {:ok, _} ->
         conn
@@ -141,7 +162,7 @@ defmodule LazypockWeb.AuthController do
     end
   end
 
-  defp find_user_by_email(conn, collection_name, email, collection, password) do
+  defp find_user_by_email(conn, collection_name, email, collection, password, ip) do
     # Find the email field dynamically from collection schema
     email_field = find_email_field(collection)
 
@@ -155,9 +176,11 @@ defmodule LazypockWeb.AuthController do
     case records do
       [user | _] ->
         # First matching user
-        verify_password(conn, collection_name, user, password, collection)
+        verify_password(conn, collection_name, user, password, collection, ip, email)
 
       [] ->
+        RateLimiter.record_attempt(ip, collection_name, email, :failure)
+
         conn
         |> put_status(401)
         |> json(%{"code" => 401, "message" => "Invalid email or password", "data" => %{}})
@@ -188,21 +211,26 @@ defmodule LazypockWeb.AuthController do
     end
   end
 
-  defp verify_password(conn, collection_name, user, password, collection) do
+  defp verify_password(conn, collection_name, user, password, collection, ip, email) do
     # Find the password field name from the collection schema
     password_field = find_password_field(collection)
     password_hash = user[password_field]
 
     cond do
       is_nil(password_hash) ->
+        RateLimiter.record_attempt(ip, collection_name, email, :failure)
+
         conn
         |> put_status(401)
         |> json(%{"code" => 401, "message" => "Invalid email or password", "data" => %{}})
 
       Bcrypt.verify_pass(password, password_hash) ->
+        RateLimiter.record_attempt(ip, collection_name, email, :success)
         handle_successful_login(conn, collection_name, user, password_field)
 
       true ->
+        RateLimiter.record_attempt(ip, collection_name, email, :failure)
+
         conn
         |> put_status(401)
         |> json(%{"code" => 401, "message" => "Invalid email or password", "data" => %{}})
