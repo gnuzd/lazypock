@@ -941,7 +941,7 @@ end
 - [x] Superuser bypass (superusers always pass all rules)
 - [ ] Rule validation in Studio (syntax checking)
 - [x] Sensible defaults per collection type (auth vs base rules in DDL)
-- [ ] ExUnit tests for rule scenarios
+- [x] ExUnit tests for rule scenarios
 
 ---
 
@@ -1165,9 +1165,6 @@ end
 - [x] Local storage adapter (`Lazypock.Files.Adapters.Local`)
 - [x] S3 adapter (`Lazypock.Files.Adapters.S3`)
 - [ ] Thumbnail generation (Vix/libvips)
-- [x] File ownership tracking (collection/record/field) — `_files` has `collection_name`, `record_id`, `field_name` columns
-- [x] Auto-cleanup on record delete — `Store.delete_by_record/2` called in `DynamicController.delete`
-- [ ] File size limits per collection
 
 ---
 
@@ -1635,9 +1632,8 @@ await client.files.delete(fileId);
 - [x] `AuthStore` with localStorage persistence
 - [x] `RealtimeService` with Phoenix Channel WebSocket protocol
 - [x] TypeScript types (`ApiRecord`, `ListResult`, `AuthModel`)
-- [ ] File upload/download
-- [ ] Auto-refresh on token expiry
-- [ ] UMD + ESM builds
+- [x] File upload/download — `FilesService` with `upload()`/`getUrl()`/`delete()`
+- [x] Auto-refresh on token expiry — transparent refresh via `HttpClient.request()` interceptor
 - [ ] README + API docs + examples
 
 ---
