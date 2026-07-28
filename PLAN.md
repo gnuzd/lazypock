@@ -803,7 +803,7 @@ config :lazypock, :oauth2_providers, [
 - [x] AuthController (`auth_with_password`, `auth_refresh`, `auth_methods`)
 - [x] Dynamic email/password field resolution from collection schema
 - [ ] OAuth2 provider support
-- [ ] Rate limiting on login attempts
+- [x] Rate limiting on login attempts
 
 ---
 
@@ -940,7 +940,7 @@ end
 - [x] `@request.auth.*` variable resolution with SQL evaluation
 - [x] Superuser bypass (superusers always pass all rules)
 - [ ] Rule validation in Studio (syntax checking)
-- [ ] Sensible defaults per collection type
+- [x] Sensible defaults per collection type (auth vs base rules in DDL)
 - [ ] ExUnit tests for rule scenarios
 
 ---
@@ -1057,9 +1057,9 @@ client.collection("posts").unsubscribe(); // all subscriptions for this collecti
 - [x] `Realtime.Broadcaster` wired into DynamicController
 - [x] Rule enforcement on channel join (checks listRule)
 - [x] Admin channel for collection CRUD events
-- [ ] Client-side JS SDK subscriptions (basic `RealtimeService` exists)
-- [ ] Reconnection handling
-- [ ] Auth integration (channels authenticate via JWT)
+- [x] Client-side JS SDK subscriptions (basic `RealtimeService` exists)
+- [x] Reconnection handling (heartbeat, `onclose`→`scheduleReconnect`, `resubscribeAll`)
+- [x] Auth integration (channels authenticate via JWT)
 
 ---
 
@@ -1165,8 +1165,8 @@ end
 - [x] Local storage adapter (`Lazypock.Files.Adapters.Local`)
 - [x] S3 adapter (`Lazypock.Files.Adapters.S3`)
 - [ ] Thumbnail generation (Vix/libvips)
-- [ ] File ownership tracking (collection/record/field)
-- [ ] Auto-cleanup on record delete
+- [x] File ownership tracking (collection/record/field) — `_files` has `collection_name`, `record_id`, `field_name` columns
+- [x] Auto-cleanup on record delete — `Store.delete_by_record/2` called in `DynamicController.delete`
 - [ ] File size limits per collection
 
 ---
@@ -1412,7 +1412,7 @@ Scans `priv/hooks/` at boot, maps collection names to hook modules, supports hot
 
 - [x] Layer 2: File-based Elixir hook behaviour + auto-discovery (`Lifecycle` + `Registry`)
 - [x] Hook dispatcher pipeline wired into DynamicController
-- [ ] Layer 1: Declarative hook engine with built-in actions (set_field, webhook, etc.)
+- [ ] Layer 1: Declarative hook engine with built-in actions (set_field, webhook, etc.) — skeleton exists (`run_declarative_hooks/4` returns `{:ok, data}` unchanged)
 - [ ] Layer 3: Runtime eval hooks (Studio admin UI)
 - [ ] Template variable system (`{{record.title}}`, `{{now}}`, `{{env.VAR}}`)
 - [ ] Hook execution logging/tracing
