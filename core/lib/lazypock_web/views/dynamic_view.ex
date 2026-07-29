@@ -5,7 +5,8 @@ defmodule LazypockWeb.DynamicView do
   """
 
   alias Lazypock.Collections.Registry
-  alias Lazypock.Schemas.GenericRecord
+  alias Lazypock.Repo
+  alias Lazypock.Schema.TypeMapper
 
   @doc """
   Formats a list of records from a collection into PocketBase-compatible items,
@@ -57,10 +58,21 @@ defmodule LazypockWeb.DynamicView do
   def expand_records(records, expand_fields, collection_name) do
     field_names = String.split(expand_fields, ",") |> Enum.map(&String.trim/1)
     {:ok, collection} = Registry.get(collection_name)
-		relation_fields = find_relation_fields(collection, field_names)
+    relation_fields = find_relation_fields(collection, field_names)
+
+    # Batch-fetch all related records across all input records
+    # to avoid N+1 queries (e.g. 10 posts sharing one category)
+    batch = batch_fetch_related(records, relation_fields)
 
     Enum.map(records, fn record ->
-      expanded = expand_record(record, relation_fields)
+      expanded =
+        Map.new(relation_fields, fn {field_name, target_collection} ->
+          related_id = record[field_name]
+          key = {target_collection, related_id}
+          {field_name, Map.get(batch, key)}
+        end)
+        |> Enum.filter(fn {_, v} -> not is_nil(v) end)
+        |> Map.new()
 
       if expanded == %{} do
         record
@@ -79,25 +91,55 @@ defmodule LazypockWeb.DynamicView do
     |> Enum.filter(fn {_, target} -> is_binary(target) end)
   end
 
-  defp expand_record(record, relation_fields) do
-    Map.new(relation_fields, fn {field_name, target_collection} ->
-      related_id = record[field_name]
+  # Batch-fetch all related records across the input records.
+  # Groups unique (target_collection, id) pairs and issues one
+  # IN query per target collection — avoids N+1.
+  defp batch_fetch_related(records, relation_fields) do
+    pairs =
+      for record <- records,
+          {field_name, target_collection} <- relation_fields,
+          related_id = record[field_name],
+          is_binary(related_id) and related_id != "",
+          reduce: MapSet.new() do
+        acc -> MapSet.put(acc, {target_collection, related_id})
+      end
+      |> Enum.to_list()
 
-      related =
-        if is_binary(related_id) and related_id != "" do
-          case Registry.get(target_collection) do
-            {:ok, _coll} -> GenericRecord.get(target_collection, related_id)
-            {:error, _} -> nil
-          end
-        else
-          nil
+    if pairs == [] do
+      %{}
+    else
+      pairs
+      |> Enum.group_by(fn {target, _id} -> target end, fn {_target, id} -> id end)
+      |> Enum.flat_map(fn {target, ids} ->
+        case Registry.get(target) do
+          {:ok, _coll} ->
+            placeholders =
+              ids |> Enum.with_index(1) |> Enum.map(fn {_id, i} -> "$#{i}" end) |> Enum.join(", ")
+
+            sql = "SELECT * FROM #{TypeMapper.quote_ident(target)} WHERE id IN (#{placeholders})"
+            id_bins = Enum.map(ids, &Ecto.UUID.dump!/1)
+
+            case Ecto.Adapters.SQL.query(Repo, sql, id_bins) do
+              {:ok, %{rows: rows, columns: cols}} ->
+                rows |> rows_to_maps(cols) |> Enum.map(fn r -> {{target, r["id"]}, r} end)
+              {:error, _} ->
+                []
+            end
+
+          {:error, _} ->
+            []
         end
-
-      {field_name, related}
-    end)
-    |> Enum.filter(fn {_, v} -> not is_nil(v) end)
-    |> Map.new()
+      end)
+      |> Map.new()
+    end
   end
+
+  defp rows_to_maps(rows, cols) do
+    Enum.map(rows, fn row ->
+      cols |> Enum.zip(row) |> Map.new()
+    end)
+  end
+
 
   @doc """
   Builds a paginated response matching PocketBase format.
