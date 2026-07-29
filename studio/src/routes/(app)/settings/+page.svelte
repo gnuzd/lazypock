@@ -6,7 +6,17 @@
 	import Input from '$lib/components/Input.svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
 	import { RefreshCw } from '@lucide/svelte';
-	import { Archive, Check, Clipboard, Cog, Database, Download, HardDrive, Mail, Upload } from '@lucide/svelte';
+	import {
+		Archive,
+		Check,
+		Clipboard,
+		Cog,
+		Database,
+		Download,
+		HardDrive,
+		Mail,
+		Upload
+	} from '@lucide/svelte';
 
 	type Section =
 		'application' | 'mail' | 'files' | 'backups' | 'cron' | 'export' | 'import' | 'sql';
@@ -168,7 +178,13 @@
 			await client.http.patch('/settings', {
 				s3_enabled: storageEnabled,
 				s3: storageEnabled
-					? { bucket: s3Bucket, region: s3Region, access_key: s3AccessKey, secret_key: s3SecretKey, endpoint: s3Endpoint }
+					? {
+							bucket: s3Bucket,
+							region: s3Region,
+							access_key: s3AccessKey,
+							secret_key: s3SecretKey,
+							endpoint: s3Endpoint
+						}
 					: null
 			});
 		} catch {
@@ -181,9 +197,20 @@
 	// ── Export ──
 	let schemaJson = $derived(JSON.stringify(Object.values(selectedExports), null, 4));
 	let totalSelected = $derived(Object.keys(selectedExports).length);
-	let areAllSelected = $derived(collectionsList.length > 0 && totalSelected === collectionsList.length);
+	let areAllSelected = $derived(
+		collectionsList.length > 0 && totalSelected === collectionsList.length
+	);
 
 	async function loadCollections() {
+		// if already loaded, skip
+		if (collectionsList.length > 0) {
+			// rebuild selected
+			selectedExports = {};
+			for (const c of collectionsList) {
+				selectedExports[c.id] = c;
+			}
+			return;
+		}
 		loadingCollections = true;
 		try {
 			const res = (await client.http.get('/collections')) as {
@@ -367,6 +394,13 @@
 		}
 	}
 
+	// ── Load collections on mount ──
+	$effect(() => {
+		if (activeSection === 'export' && collectionsList.length === 0) {
+			loadCollections();
+		}
+	});
+
 	// ── Backups ──
 	async function doBackup() {
 		backingUp = true;
@@ -462,13 +496,19 @@
 	{#if activeSection === 'application'}
 		<h2 class="mb-4 text-lg font-semibold">Application Settings</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<Input label="App Name" placeholder="Lazypock" bind:value={appName} help="Displayed in the admin UI header." />
+			<Input
+				label="App Name"
+				placeholder="Lazypock"
+				bind:value={appName}
+				help="Displayed in the admin UI header."
+			/>
 			<div class="mt-4 flex items-center gap-3">
-				<Button class="btn-primary" loading={appSaving} disabled={appSaving} onclick={saveApp}>Save</Button>
+				<Button class="btn-primary" loading={appSaving} disabled={appSaving} onclick={saveApp}
+					>Save</Button
+				>
 				{#if appSaved}<span class="text-xs text-success">Saved!</span>{/if}
 			</div>
 		</div>
-
 	{:else if activeSection === 'mail'}
 		<h2 class="mb-4 text-lg font-semibold">Mail Settings</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
@@ -476,9 +516,18 @@
 				<p>Configure common settings for sending emails.</p>
 			</div>
 
-			<div class="mb-6">
-				<Input label="Sender name" placeholder="John Doe" bind:value={senderName} />
-				<Input label="Sender address" placeholder="noreply@example.com" type="email" bind:value={senderAddress} />
+			<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start">
+				<div class="flex-1">
+					<Input label="Sender name" placeholder="John Doe" bind:value={senderName} />
+				</div>
+				<div class="flex-1">
+					<Input
+						label="Sender address"
+						placeholder="noreply@example.com"
+						type="email"
+						bind:value={senderAddress}
+					/>
+				</div>
 			</div>
 
 			<!-- SMTP toggle -->
@@ -494,17 +543,17 @@
 
 			{#if mailEnabled}
 				<div transition:slide={{ duration: 150 }}>
-					<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12">
-						<div class="lg:col-span-5">
+					<div class="flex flex-col gap-3 sm:flex-row">
+						<div class="flex-[5]">
 							<Input label="SMTP server host" placeholder="smtp.example.com" bind:value={smtpHost} required />
 						</div>
-						<div class="lg:col-span-3">
+						<div class="flex-[3]">
 							<Input label="Port" placeholder="587" bind:value={smtpPort} required />
 						</div>
-						<div class="lg:col-span-4">
+						<div class="flex-[4]">
 							<Input label="Username" bind:value={smtpUser} />
 						</div>
-						<div class="lg:col-span-4 lg:col-start-1">
+						<div class="flex-[4]">
 							<Input label="Password" type="password" bind:value={smtpPass} />
 						</div>
 					</div>
@@ -539,7 +588,11 @@
 									</div>
 								</div>
 								<div class="lg:col-span-4">
-									<Input label="EHLO/HELO domain" placeholder="Default to localhost" bind:value={smtpLocalName} />
+									<Input
+										label="EHLO/HELO domain"
+										placeholder="Default to localhost"
+										bind:value={smtpLocalName}
+									/>
 								</div>
 							</div>
 						</div>
@@ -551,13 +604,14 @@
 				<Button class="btn-primary" loading={mailSaving} onclick={saveMail}>Save changes</Button>
 			</div>
 		</div>
-
 	{:else if activeSection === 'files'}
 		<h2 class="mb-4 text-lg font-semibold">Files Storage</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
 			<div class="mb-4 text-sm text-base-content/60">
 				<p>By default Lazypock uses the local file system to store uploaded files.</p>
-				<p>If you have limited disk space, you could optionally connect to an S3 compatible storage.</p>
+				<p>
+					If you have limited disk space, you could optionally connect to an S3 compatible storage.
+				</p>
 			</div>
 
 			<!-- S3 toggle -->
@@ -582,16 +636,21 @@
 							<Input label="Access Key" bind:value={s3AccessKey} />
 							<Input label="Secret Key" type="password" bind:value={s3SecretKey} />
 						</div>
-						<Input label="Endpoint (optional)" placeholder="https://s3.amazonaws.com" bind:value={s3Endpoint} />
+						<Input
+							label="Endpoint (optional)"
+							placeholder="https://s3.amazonaws.com"
+							bind:value={s3Endpoint}
+						/>
 					</div>
 				</div>
 			{/if}
 
 			<div class="flex items-center justify-end gap-3">
-				<Button class="btn-primary" loading={storageSaving} onclick={saveStorage}>Save changes</Button>
+				<Button class="btn-primary" loading={storageSaving} onclick={saveStorage}
+					>Save changes</Button
+				>
 			</div>
 		</div>
-
 	{:else if activeSection === 'backups'}
 		<h2 class="mb-4 text-lg font-semibold">Backups</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
@@ -600,17 +659,18 @@
 			</p>
 			<Button class="btn-primary" loading={backingUp} onclick={doBackup}>Download Backup</Button>
 		</div>
-
 	{:else if activeSection === 'cron'}
 		<h2 class="mb-4 text-lg font-semibold">Cron</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
 			<p class="text-sm text-base-content/60">Cron job scheduling coming soon.</p>
 		</div>
-
 	{:else if activeSection === 'export'}
 		<h2 class="mb-4 text-lg font-semibold">Export Collections</h2>
-		<div class="text-sm text-base-content/60 mb-4">
-			<p>Below you'll find your current collections configuration that you could import in another environment.</p>
+		<div class="mb-4 text-sm text-base-content/60">
+			<p>
+				Below you'll find your current collections configuration that you could import in another
+				environment.
+			</p>
 		</div>
 
 		{#if loadingCollections}
@@ -659,19 +719,20 @@
 					<div class="relative min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
 						<button
 							type="button"
-							class="absolute right-2 top-2 z-10 cursor-pointer rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs text-base-content/60 hover:text-base-content"
+							class="absolute top-2 right-2 z-10 cursor-pointer rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs text-base-content/60 hover:text-base-content"
 							disabled={!totalSelected}
 							onclick={copyExport}
 						>
 							{#if exportCopied}
-								<span class="flex items-center gap-1 text-success"><Check class="h-3 w-3" />Copied</span>
+								<span class="flex items-center gap-1 text-success"
+									><Check class="h-3 w-3" />Copied</span
+								>
 							{:else}
 								<span class="flex items-center gap-1"><Clipboard class="h-3 w-3" />Copy</span>
 							{/if}
 						</button>
-						<pre class="max-h-80 overflow-auto p-3 font-mono text-xs">{
-							schemaJson || 'Select collections to preview...'}</pre
-						>
+						<pre class="max-h-80 overflow-auto p-3 font-mono text-xs">{schemaJson ||
+								'Select collections to preview...'}</pre>
 					</div>
 				</div>
 
@@ -683,7 +744,6 @@
 				</div>
 			</div>
 		{/if}
-
 	{:else if activeSection === 'import'}
 		<h2 class="mb-4 text-lg font-semibold">Import Collections</h2>
 
@@ -726,10 +786,11 @@
 						rows="10"
 						placeholder={importPlaceholder}
 						bind:value={importSchemas}
-						oninput={parseImport}
-					></textarea>
+						oninput={parseImport}></textarea>
 					{#if importSchemas && !isValidImport}
-						<p class="mt-1 text-xs text-error">{importResult || 'Invalid collections configuration.'}</p>
+						<p class="mt-1 text-xs text-error">
+							{importResult || 'Invalid collections configuration.'}
+						</p>
 					{/if}
 				</div>
 
@@ -738,7 +799,12 @@
 						<span class="txt">Delete missing collections and schema fields</span>
 					</label>
 					<label class="switch">
-						<input id="delete-missing" type="checkbox" bind:checked={deleteMissing} disabled={!isValidImport} />
+						<input
+							id="delete-missing"
+							type="checkbox"
+							bind:checked={deleteMissing}
+							disabled={!isValidImport}
+						/>
 						<span class="switch-slider"></span>
 					</label>
 				</div>
@@ -754,19 +820,29 @@
 					<div class="mb-4 space-y-1">
 						{#each importChanges.removed as name (name)}
 							<label class="flex items-center gap-2 rounded-field bg-error/20 px-3 py-1.5 text-sm">
-								<span class="rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold text-white">Deleted</span>
+								<span class="text-white rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold"
+									>Deleted</span
+								>
 								<span>{name}</span>
 							</label>
 						{/each}
 						{#each importChanges.changed as name (name)}
-							<label class="flex items-center gap-2 rounded-field bg-warning/20 px-3 py-1.5 text-sm">
-								<span class="rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold text-white">Changed</span>
+							<label
+								class="flex items-center gap-2 rounded-field bg-warning/20 px-3 py-1.5 text-sm"
+							>
+								<span class="text-white rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold"
+									>Changed</span
+								>
 								<span>{name}</span>
 							</label>
 						{/each}
 						{#each importChanges.added as name (name)}
-							<label class="flex items-center gap-2 rounded-field bg-success/20 px-3 py-1.5 text-sm">
-								<span class="rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold text-white">Added</span>
+							<label
+								class="flex items-center gap-2 rounded-field bg-success/20 px-3 py-1.5 text-sm"
+							>
+								<span class="text-white rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold"
+									>Added</span
+								>
 								<span>{name}</span>
 							</label>
 						{/each}
@@ -800,7 +876,6 @@
 				{/if}
 			</div>
 		{/if}
-
 	{/if}
 </div>
 
@@ -995,8 +1070,7 @@
 	}
 
 	/* ── Grid helpers ── */
-	.lg\:col-span-3 { grid-column: span 3 / span 3; }
-	.lg\:col-span-4 { grid-column: span 4 / span 4; }
-	.lg\:col-span-5 { grid-column: span 5 / span 5; }
-	.lg\:col-start-1 { grid-column-start: 1; }
+	.lg\:col-span-4 {
+		grid-column: span 4 / span 4;
+	}
 </style>
