@@ -160,7 +160,7 @@
 					onchange={(e) => (field.collectionId = (e.target as HTMLSelectElement).value)}
 				>
 					<option value="" disabled>Select collection*</option>
-					{#each collections.filter((c) => (c.type as string) !== 'view') as coll (coll.id as string)}
+					{#each collections.filter((c) => (c.type as string) !== 'view' && !c.system) as coll (coll.id as string)}
 						<option value={coll.id as string}>{coll.name as string}</option>
 					{/each}
 				</select>
