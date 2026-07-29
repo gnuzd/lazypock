@@ -81,7 +81,13 @@ export class HttpClient {
 			await this.refreshAuth();
 		}
 
-		const url = this.baseUrl + path;
+		let url = this.baseUrl + path;
+		if (options?.params) {
+			const qs = new URLSearchParams(options.params).toString();
+			if (qs) {
+				url += (path.includes("?") ? "&" : "?") + qs;
+			}
+		}
 		const headers: Record<string, string> = {
 			...options?.headers,
 		};

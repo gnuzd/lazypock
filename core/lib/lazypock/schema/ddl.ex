@@ -265,6 +265,13 @@ defmodule Lazypock.Schema.DDL do
             end)
 
           for f <- fields_with_sort, MapSet.member?(existing_names, f["name"]) do
+            opts =
+              if f["type"] == "relation" do
+                normalize_relation_opts(f)
+              else
+                Map.get(f, "options", %{})
+              end
+
             Repo.update_all(
               from(fld in Lazypock.Collections.Field,
                 where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
@@ -274,7 +281,7 @@ defmodule Lazypock.Schema.DDL do
                 unique: Map.get(f, "unique", false),
                 hidden: Map.get(f, "hidden", false),
                 system: Map.get(f, "system", false),
-                options: Map.get(f, "options", %{}),
+                options: opts,
                 indexed: Map.get(f, "indexed", false),
                 sort_order: f["sort_order"]
               ]
@@ -531,6 +538,13 @@ defmodule Lazypock.Schema.DDL do
   end
 
   defp create_field_metadata_entry!(collection_id, field_def) do
+    normalized_opts =
+      if field_def["type"] == "relation" do
+        normalize_relation_opts(field_def)
+      else
+        Map.get(field_def, "options", %{})
+      end
+
     %Lazypock.Collections.Field{}
     |> Lazypock.Collections.Field.changeset(%{
       collection_id: collection_id,
@@ -539,11 +553,34 @@ defmodule Lazypock.Schema.DDL do
       required: Map.get(field_def, "required", false),
       unique: Map.get(field_def, "unique", false),
       default_value: field_def["default"],
-      options: Map.get(field_def, "options", %{}),
+      options: normalized_opts,
       indexed: Map.get(field_def, "indexed", false),
       sort_order: Map.get(field_def, "sort_order", 0)
     })
     |> Repo.insert!()
+  end
+
+  defp normalize_relation_opts(field_def) do
+    opts = Map.get(field_def, "options", %{})
+    # If options already has a "collection" key pointing to a name, use it
+    if is_binary(opts["collection"]) and opts["collection"] != "" do
+      opts
+    else
+      # Try to resolve collectionId (UUID from SPA) to a collection name
+      raw_id = field_def["collectionId"] || opts["collectionId"]
+      if is_binary(raw_id) and raw_id != "" do
+        collection =
+          Lazypock.Repo.get_by(Lazypock.Collections.Collection, id: raw_id) ||
+            Lazypock.Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
+        if collection do
+          Map.put(opts, "collection", collection.name)
+        else
+          opts
+        end
+      else
+        opts
+      end
+    end
   end
 
   defp update_collection_schema!(collection) do

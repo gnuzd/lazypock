@@ -57,7 +57,7 @@ defmodule LazypockWeb.DynamicView do
   def expand_records(records, expand_fields, collection_name) do
     field_names = String.split(expand_fields, ",") |> Enum.map(&String.trim/1)
     {:ok, collection} = Registry.get(collection_name)
-    relation_fields = find_relation_fields(collection, field_names)
+		relation_fields = find_relation_fields(collection, field_names)
 
     Enum.map(records, fn record ->
       expanded = expand_record(record, relation_fields)
@@ -76,6 +76,7 @@ defmodule LazypockWeb.DynamicView do
     (collection.fields || [])
     |> Enum.filter(fn f -> f.type == "relation" and MapSet.member?(expand_set, f.name) end)
     |> Enum.map(fn f -> {f.name, f.options["collection"]} end)
+    |> Enum.filter(fn {_, target} -> is_binary(target) end)
   end
 
   defp expand_record(record, relation_fields) do

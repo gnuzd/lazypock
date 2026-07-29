@@ -101,6 +101,29 @@ export class CollectionService {
 			options,
 		);
 	}
+	// ── Expand / Relation Fields ──
+
+	/**
+	 * Get a list of expandable (relation) fields for this collection.
+	 * Useful for constructing `expand` query parameters.
+	 */
+	async expandFields(
+		options?: RequestOptions,
+	): Promise<{ field: string; targetCollection: string }[] | null> {
+		const data = await this.http.get<{
+			fields?: { name: string; type: string; options?: Record<string, string> }[];
+		}>(
+			"/collections/" + this.encodeId(this.collectionName),
+			options,
+		);
+		if (!data?.fields) return null;
+		return data.fields
+			.filter((f) => f.type === "relation" && f.options?.collection)
+			.map((f) => ({
+				field: f.name,
+				targetCollection: f.options!.collection,
+			}));
+	}
 
 	// ── Auth Collection Methods ──
 

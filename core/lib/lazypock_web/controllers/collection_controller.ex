@@ -208,6 +208,13 @@ defmodule LazypockWeb.CollectionController do
         (collection.fields || [])
         |> Enum.sort_by(& &1.sort_order, :asc)
         |> Enum.map(fn f ->
+          collection_id =
+            if f.type == "relation" do
+              resolve_collection_id_from_options(f.options)
+            else
+              nil
+            end
+
           %{
             id: f.id,
             name: f.name,
@@ -218,7 +225,8 @@ defmodule LazypockWeb.CollectionController do
             indexed: f.indexed,
             hidden: f.hidden,
             system: f.system,
-            sort_order: f.sort_order
+            sort_order: f.sort_order,
+            collectionId: collection_id
           }
         end),
       rules: collection.rules,
@@ -231,6 +239,19 @@ defmodule LazypockWeb.CollectionController do
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
+  # Resolve a relation field's target collection UUID from options.
+  # Looks up the collection name stored in options["collection"] and returns its ID.
+  defp resolve_collection_id_from_options(opts) do
+    coll_name = opts["collection"]
+    if is_binary(coll_name) and coll_name != "" do
+      case CollectionRegistry.get(coll_name) do
+        {:ok, coll} -> coll.id
+        {:error, _} -> nil
+      end
+    else
+      nil
+    end
+  end
   # Resolve a collection name from either a UUID or a name string
   defp resolve_collection_name(id_or_name) do
     case CollectionRegistry.get(id_or_name) do
