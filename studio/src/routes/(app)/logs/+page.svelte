@@ -2,6 +2,10 @@
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
+	import { setSidebar } from '$lib/sidebar.svelte';
+
+	// Hide the sidebar on this page
+	setSidebar();
 
 	let logs = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
@@ -14,10 +18,27 @@
 	let detailId = $state<string | null>(null);
 	let detail = $state<Record<string, unknown> | null>(null);
 
+	// Stats
+	let stats = $state<Record<string, unknown> | null>(null);
+	let statsLoading = $state(false);
+
 	onMount(async () => {
+		loadStats();
 		loadCollections();
 		loadLogs();
 	});
+
+	async function loadStats() {
+		statsLoading = true;
+		try {
+			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
+			stats = res;
+		} catch {
+			// ignore
+		} finally {
+			statsLoading = false;
+		}
+	}
 
 	async function loadCollections() {
 		try {
@@ -94,6 +115,7 @@
 		try {
 			await client.http.delete('/logs?all=true');
 			loadLogs();
+			loadStats();
 		} catch {
 			// ignore
 		}
@@ -103,12 +125,57 @@
 		try {
 			await client.http.delete('/logs');
 			loadLogs();
+			loadStats();
 		} catch {
 			// ignore
 		}
 	}
 </script>
 
+<!-- Stats cards -->
+<div class="mb-5 grid grid-cols-5 gap-3">
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-xs text-base-content/60">Total Requests</div>
+		<div class="mt-0.5 text-2xl font-semibold">
+			{statsLoading ? '...' : Number(stats?.total ?? 0).toLocaleString()}
+		</div>
+	</div>
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-xs text-base-content/60">Last 24h</div>
+		<div class="mt-0.5 text-2xl font-semibold">
+			{statsLoading ? '...' : Number(stats?.last_24h ?? 0).toLocaleString()}
+		</div>
+	</div>
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-xs text-base-content/60">Errors (24h)</div>
+		<div class="mt-0.5 text-2xl font-semibold {Number(stats?.errors_24h ?? 0) > 0 ? 'text-error' : ''}">
+			{statsLoading ? '...' : Number(stats?.errors_24h ?? 0).toLocaleString()}
+		</div>
+	</div>
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-xs text-base-content/60">Avg Duration (24h)</div>
+		<div class="mt-0.5 text-2xl font-semibold">
+			{statsLoading ? '...' : formatDuration(stats?.avg_duration ?? 0)}
+		</div>
+	</div>
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-xs text-base-content/60">Method Split</div>
+		<div class="mt-0.5 space-y-0.5 text-xs">
+			{#if stats?.methods && Array.isArray(stats.methods)}
+		{#each stats.methods as m, i (i)}
+			{@const method = String((m as Record<string, unknown>)?.method ?? '')}
+			{@const count = Number((m as Record<string, unknown>)?.count ?? 0)}
+			<div class="flex items-center gap-2">
+				<span class={'font-semibold ' + methodClass(method)}>{method}</span>
+				<span class="ml-auto text-base-content/60">{count.toLocaleString()}</span>
+			</div>
+		{/each}
+	{/if}
+		</div>
+	</div>
+</div>
+
+<!-- Filters bar -->
 <div class="mb-4 flex items-center justify-between gap-2">
 	<h1 class="text-xl font-semibold">Request Logs</h1>
 	<div class="flex items-center gap-2">

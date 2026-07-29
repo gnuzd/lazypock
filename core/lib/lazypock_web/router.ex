@@ -59,6 +59,7 @@ defmodule LazypockWeb.Router do
 
     # Request logs (superuser)
     get("/logs", LogsController, :list)
+    get("/logs/stats", LogsController, :stats)
     get("/logs/collections", LogsController, :collections)
     get("/logs/:id", LogsController, :show)
     delete("/logs", LogsController, :delete_logs)

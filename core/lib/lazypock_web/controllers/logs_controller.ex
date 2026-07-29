@@ -34,6 +34,11 @@ defmodule LazypockWeb.LogsController do
     if conn.halted, do: conn, else: do_collections(conn)
   end
 
+  def stats(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_stats(conn)
+  end
+
   def delete_logs(conn, params) do
     conn = require_superuser!(conn)
     if conn.halted, do: conn, else: do_delete_logs(conn, params)
@@ -192,6 +197,73 @@ defmodule LazypockWeb.LogsController do
       {:error, _} ->
         json(conn, %{items: []})
     end
+  end
+
+  defp do_stats(conn) do
+    total =
+      case Ecto.Adapters.SQL.query(
+             Repo,
+             "SELECT COUNT(*) FROM _request_logs",
+             []
+           ) do
+        {:ok, %{rows: [[count]]}} -> count
+        _ -> 0
+      end
+
+    # Last 24h
+    last_24h =
+      case Ecto.Adapters.SQL.query(
+             Repo,
+             "SELECT COUNT(*) FROM _request_logs WHERE created_at > now() - interval '24 hours'",
+             []
+           ) do
+        {:ok, %{rows: [[count]]}} -> count
+        _ -> 0
+      end
+
+    # Errors (status >= 400) in last 24h
+    errors_24h =
+      case Ecto.Adapters.SQL.query(
+             Repo,
+             "SELECT COUNT(*) FROM _request_logs WHERE created_at > now() - interval '24 hours' AND status >= 400",
+             []
+           ) do
+        {:ok, %{rows: [[count]]}} -> count
+        _ -> 0
+      end
+
+    # Avg duration in last 24h
+    avg_duration =
+      case Ecto.Adapters.SQL.query(
+             Repo,
+             "SELECT COALESCE(AVG(duration), 0) FROM _request_logs WHERE created_at > now() - interval '24 hours'",
+             []
+           ) do
+        {:ok, %{rows: [[avg]]}} -> avg
+        _ -> 0
+      end
+
+    # Method distribution in last 24h
+    methods =
+      case Ecto.Adapters.SQL.query(
+             Repo,
+             "SELECT method, COUNT(*) as cnt FROM _request_logs WHERE created_at > now() - interval '24 hours' GROUP BY method ORDER BY cnt DESC",
+             []
+           ) do
+        {:ok, result} ->
+          Enum.map(result.rows, fn [method, count] -> %{method: method, count: count} end)
+
+        {:error, _} ->
+          []
+      end
+
+    json(conn, %{
+      total: total,
+      last_24h: last_24h,
+      errors_24h: errors_24h,
+      avg_duration: avg_duration,
+      methods: methods
+    })
   end
 
   defp do_delete_logs(conn, params) do
