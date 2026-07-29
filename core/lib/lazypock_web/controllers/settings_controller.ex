@@ -104,9 +104,33 @@ defmodule LazypockWeb.SettingsController do
       true ->
         case Ecto.Adapters.SQL.query(Repo, sql, []) do
           {:ok, %{columns: columns, rows: rows}} ->
+            safe_rows =
+              Enum.map(rows, fn row ->
+                Enum.map(row, fn
+                  nil -> nil
+                  val when is_binary(val) ->
+                    # UUIDs come as raw binary — convert to string
+                    case Ecto.UUID.load(val) do
+                      {:ok, str} -> str
+                      :error ->
+                        # Valid UTF-8 string
+                        if String.valid?(val), do: val, else: Base.encode16(val, case: :lower)
+                    end
+
+                  %DateTime{} = dt -> DateTime.to_iso8601(dt)
+                  %NaiveDateTime{} = dt -> NaiveDateTime.to_iso8601(dt)
+                  %Date{} = d -> Date.to_iso8601(d)
+                  %Decimal{} = d -> Decimal.to_string(d)
+                  val when is_integer(val) -> val
+                  val when is_float(val) -> val
+                  val when is_boolean(val) -> val
+                  val -> inspect(val)
+                end)
+              end)
+
             json(conn, %{
               columns: columns,
-              rows: rows,
+              rows: safe_rows,
               total: length(rows)
             })
 
