@@ -545,7 +545,12 @@
 				<div transition:slide={{ duration: 150 }}>
 					<div class="flex flex-col gap-3 sm:flex-row">
 						<div class="flex-[5]">
-							<Input label="SMTP server host" placeholder="smtp.example.com" bind:value={smtpHost} required />
+							<Input
+								label="SMTP server host"
+								placeholder="smtp.example.com"
+								bind:value={smtpHost}
+								required
+							/>
 						</div>
 						<div class="flex-[3]">
 							<Input label="Port" placeholder="587" bind:value={smtpPort} required />
@@ -627,7 +632,7 @@
 
 			{#if storageEnabled}
 				<div transition:slide={{ duration: 150 }}>
-					<div class="mb-4">
+					<div class="flex flex-col gap-3">
 						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 							<Input label="S3 Bucket" placeholder="my-bucket" bind:value={s3Bucket} required />
 							<Input label="Region" placeholder="us-east-1" bind:value={s3Region} />
