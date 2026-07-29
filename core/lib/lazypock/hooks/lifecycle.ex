@@ -63,6 +63,18 @@ defmodule Lazypock.Hooks.Lifecycle do
   """
   @callback validate(map(), context()) :: :ok | {:error, keyword()}
 
+  @doc """
+  Intercept or customize an outgoing email.
+
+  Called before every transactional email (verification, password reset, email change).
+  Return `{:ok, modified_email_data}` to send with changes, `{:error, reason}` to abort,
+  or `:skip` to silently drop the email.
+
+  `email_data` is a map with keys: `template`, `to_name`, `to_address`, `assigns`.
+  The `assigns` list includes `:token` and `:app_name`.
+  """
+  @callback on_email(map(), context()) :: {:ok, map()} | {:error, term()} | :skip
+
   @optional_callbacks [
     on_create: 2,
     after_create: 2,
@@ -70,7 +82,8 @@ defmodule Lazypock.Hooks.Lifecycle do
     after_update: 3,
     on_delete: 2,
     after_delete: 2,
-    validate: 2
+    validate: 2,
+    on_email: 2
   ]
 
   defmacro __using__(opts) do
@@ -89,6 +102,7 @@ defmodule Lazypock.Hooks.Lifecycle do
       def on_delete(_record, _ctx), do: :ok
       def after_delete(_record, _ctx), do: :ok
       def validate(_record, _ctx), do: :ok
+      def on_email(email_data, _ctx), do: {:ok, email_data}
 
       defoverridable on_create: 2,
                      after_create: 2,
@@ -96,7 +110,8 @@ defmodule Lazypock.Hooks.Lifecycle do
                      after_update: 3,
                      on_delete: 2,
                      after_delete: 2,
-                     validate: 2
+                     validate: 2,
+                     on_email: 2
     end
   end
 end

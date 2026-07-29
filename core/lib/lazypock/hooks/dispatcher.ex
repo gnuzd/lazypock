@@ -150,4 +150,24 @@ defmodule Lazypock.Hooks.Dispatcher do
   end
 
   # after_update not yet wired in the controller — add when needed
+
+  # ── Email hooks ────────────────────────────────────────
+
+  @doc """
+  Dispatches email interception hooks for a given collection.
+
+  Returns `{:ok, modified_email_data}`, `{:error, reason}`, or `:skip`.
+  """
+  def dispatch_email(_template, email_data, context) do
+    collection_name = context.collection.collection_name || context.collection.name
+    modules = Registry.get(collection_name)
+
+    Enum.reduce_while(modules, {:ok, email_data}, fn module, {:ok, current_data} ->
+      case module.on_email(current_data, context) do
+        {:ok, modified} -> {:cont, {:ok, modified}}
+        {:error, reason} -> {:halt, {:error, reason}}
+        :skip -> {:halt, :skip}
+      end
+    end)
+  end
 end

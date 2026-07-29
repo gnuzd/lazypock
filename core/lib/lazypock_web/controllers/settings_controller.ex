@@ -229,4 +229,31 @@ defmodule LazypockWeb.SettingsController do
       errors: Enum.reverse(errors_list)
     })
   end
+
+  # ── Send test email ──
+
+  def send_test_email(conn, params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_send_test_email(conn, params)
+  end
+
+  defp do_send_test_email(conn, params) do
+    to_address = params["to"]
+
+    if is_nil(to_address) or to_address == "" do
+      conn
+      |> put_status(400)
+      |> json(%{error: "Recipient email is required"})
+    else
+      case Lazypock.Mailer.deliver(:verification, to_address, to_address, token: "test-token") do
+        :ok ->
+          json(conn, %{success: true, message: "Test email sent to #{to_address}"})
+
+        {:error, reason} ->
+          conn
+          |> put_status(500)
+          |> json(%{error: "Failed to send email: #{reason}"})
+      end
+    end
+  end
 end

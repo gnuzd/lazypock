@@ -72,7 +72,9 @@ defmodule Lazypock.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:bcrypt_elixir, "~> 3.0"},
-      {:burrito, "~> 1.0"}
+      {:burrito, "~> 1.0"},
+      {:swoosh, "~> 1.17"},
+      {:gen_smtp, "~> 1.2"}
     ]
   end
 
