@@ -5,7 +5,7 @@
 
 	import { client } from '$lib/client';
 
-let {
+	let {
 		fields,
 		collections = [] as Record<string, unknown>[],
 		data = $bindable({}),
@@ -36,72 +36,79 @@ let {
 		onPasswordSave?: (password: string) => void;
 	} = $props();
 
-// ── Relation field helpers ──
-/** Cache of fetched records per target collection */
-let relationCache = $state<Record<string, Record<string, unknown>[]>>({});
-/** Search text per relation field */
-let relationSearch = $state<Record<string, string>>({});
-/** Whether each relation field's dropdown is open */
-let relationOpen = $state<Record<string, boolean>>({});
+	// ── Relation field helpers ──
+	/** Cache of fetched records per target collection */
+	let relationCache = $state<Record<string, Record<string, unknown>[]>>({});
+	/** Search text per relation field */
+	let relationSearch = $state<Record<string, string>>({});
+	/** Whether each relation field's dropdown is open */
+	let relationOpen = $state<Record<string, boolean>>({});
 
-function resolveTargetCollection(field: Record<string, unknown>): string | null {
-	const collId = field.collectionId as string | undefined;
-	if (!collId) return null;
-	const coll = collections.find((c) => c.id === collId);
-	return coll?.name as string ?? null;
-}
-
-function getPresentableField(collName: string): string | null {
-	const coll = collections.find((c) => c.name === collName);
-	if (!coll) return null;
-	const fields = (coll.fields as Record<string, unknown>[]) ?? [];
-	// Prefer the first non-ID field marked presentable; fall back to any text/email/name-like field
-	const presentable = fields.find((f) => f.presentable && f.name !== 'id');
-	if (presentable) return presentable.name as string;
-	const nameLike = fields.find((f) => f.name === 'name' || f.name === 'title' || f.name === 'email');
-	if (nameLike) return nameLike.name as string;
-	return null;
-}
-
-async function openRelationDropdown(fieldName: string, targetColl: string) {
-	if (relationCache[targetColl]) {
-		relationOpen[fieldName] = true;
-		relationOpen = { ...relationOpen };
-		return;
+	function resolveTargetCollection(field: Record<string, unknown>): string | null {
+		const collId = field.collectionId as string | undefined;
+		if (!collId) return null;
+		const coll = collections.find((c) => c.id === collId);
+		return (coll?.name as string) ?? null;
 	}
-	// Fetch records from target collection
-	try {
-		const result = await client.listRecords(targetColl, { page: '1', perPage: '200' });
-		relationCache[targetColl] = (result?.items ?? []) as Record<string, unknown>[];
-		relationCache = { ...relationCache };
-		relationOpen[fieldName] = true;
-		relationOpen = { ...relationOpen };
-	} catch {
-		// ignore
-	}
-}
 
-function getFilteredOptions(fieldName: string, targetColl: string): { value: string; label: string }[] {
-	const records = relationCache[targetColl] ?? [];
-	const search = (relationSearch[fieldName] ?? '').toLowerCase();
-	const presentField = getPresentableField(targetColl);
-	
-	return records
-		.filter((r) => {
-			if (!search) return true;
-			const id = (r.id as string) ?? '';
-			if (id.toLowerCase().includes(search)) return true;
-			if (presentField) {
-				const val = (r[presentField] as string) ?? '';
-				if (val.toLowerCase().includes(search)) return true;
-			}
-			return false;
-		})
-		.map((r) => ({
-			value: r.id as string,
-			label: presentField ? `${r[presentField] ?? ''} (${(r.id as string)?.slice(0, 8)}...)` : (r.id as string)
-		}));
-}
+	function getPresentableField(collName: string): string | null {
+		const coll = collections.find((c) => c.name === collName);
+		if (!coll) return null;
+		const fields = (coll.fields as Record<string, unknown>[]) ?? [];
+		// Prefer the first non-ID field marked presentable; fall back to any text/email/name-like field
+		const presentable = fields.find((f) => f.presentable && f.name !== 'id');
+		if (presentable) return presentable.name as string;
+		const nameLike = fields.find(
+			(f) => f.name === 'name' || f.name === 'title' || f.name === 'email'
+		);
+		if (nameLike) return nameLike.name as string;
+		return null;
+	}
+
+	async function openRelationDropdown(fieldName: string, targetColl: string) {
+		if (relationCache[targetColl]) {
+			relationOpen[fieldName] = true;
+			relationOpen = { ...relationOpen };
+			return;
+		}
+		// Fetch records from target collection
+		try {
+			const result = await client.listRecords(targetColl, { page: '1', perPage: '200' });
+			relationCache[targetColl] = (result?.items ?? []) as Record<string, unknown>[];
+			relationCache = { ...relationCache };
+			relationOpen[fieldName] = true;
+			relationOpen = { ...relationOpen };
+		} catch {
+			// ignore
+		}
+	}
+
+	function getFilteredOptions(
+		fieldName: string,
+		targetColl: string
+	): { value: string; label: string }[] {
+		const records = relationCache[targetColl] ?? [];
+		const search = (relationSearch[fieldName] ?? '').toLowerCase();
+		const presentField = getPresentableField(targetColl);
+
+		return records
+			.filter((r) => {
+				if (!search) return true;
+				const id = (r.id as string) ?? '';
+				if (id.toLowerCase().includes(search)) return true;
+				if (presentField) {
+					const val = (r[presentField] as string) ?? '';
+					if (val.toLowerCase().includes(search)) return true;
+				}
+				return false;
+			})
+			.map((r) => ({
+				value: r.id as string,
+				label: presentField
+					? `${r[presentField] ?? ''} (${(r.id as string)?.slice(0, 8)}...)`
+					: (r.id as string)
+			}));
+	}
 
 	const TEXT_INPUT_TYPES = new Set(['text', 'number', 'email', 'url', 'password']);
 
@@ -289,15 +296,14 @@ function getFilteredOptions(fieldName: string, targetColl: string): { value: str
 											relationSearch[name] = '';
 											relationOpen = { ...relationOpen };
 											relationSearch = { ...relationSearch };
-										}}
-									>{opt.label}</button
-								>
-							{/each}
-							{#if filtered.length === 0}
-								<div class="relation-empty">No matching records</div>
-							{/if}
+										}}>{opt.label}</button
+									>
+								{/each}
+								{#if filtered.length === 0}
+									<div class="relation-empty">No matching records</div>
+								{/if}
+							</div>
 						</div>
-					</div>
 					{/if}
 				</div>
 				<span class="field-help"
