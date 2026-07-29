@@ -492,7 +492,10 @@
 {/snippet}
 
 <!-- Main content -->
-<div class="mx-auto" style="max-width:870px">
+<div
+	class="mx-auto"
+	style="max-width: {activeSection === 'export' || activeSection === 'import' ? '1200px' : '870px'}"
+>
 	{#if activeSection === 'application'}
 		<h2 class="mb-4 text-lg font-semibold">Application Settings</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
@@ -703,7 +706,7 @@
 								<span class="text-xs text-base-content/50">({totalSelected} selected)</span>
 							</label>
 						</div>
-						<div class="max-h-80 overflow-y-auto">
+						<div class="max-h-96 overflow-y-auto">
 							{#each collectionsList as c (c.id)}
 								<label
 									class="flex cursor-pointer items-center gap-2 border-b border-base-200 px-3 py-1.5 text-sm hover:bg-base-200"
@@ -736,7 +739,7 @@
 								<span class="flex items-center gap-1"><Clipboard class="h-3 w-3" />Copy</span>
 							{/if}
 						</button>
-						<pre class="max-h-80 overflow-auto p-3 font-mono text-xs">{schemaJson ||
+						<pre class="max-h-96 overflow-auto p-3 font-mono text-xs">{schemaJson ||
 								'Select collections to preview...'}</pre>
 					</div>
 				</div>
@@ -788,7 +791,7 @@
 						class="field-input font-mono text-xs"
 						class:border-error={importSchemas && !isValidImport}
 						spellcheck="false"
-						rows="10"
+						rows="16"
 						placeholder={importPlaceholder}
 						bind:value={importSchemas}
 						oninput={parseImport}></textarea>
@@ -895,13 +898,13 @@
 			</p>
 			<textarea
 				class="input w-full font-mono text-xs outline-none focus:outline-none"
-				rows="4"
+				rows="12"
 				placeholder="SELECT * FROM _collections"
 				bind:value={sqlQuery}></textarea>
 			<div class="mt-2 flex items-center gap-2">
-				<Button class="btn-primary btn-sm" loading={sqlRunning} onclick={runSql}>Run Query</Button>
+				<Button class="btn-primary" loading={sqlRunning} onclick={runSql}>Run Query</Button>
 				<button
-					class="cursor-pointer border-none bg-transparent text-xs text-base-content/50 hover:text-base-content"
+					class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
 					onclick={() => {
 						sqlQuery = 'SELECT name, type FROM _collections ORDER BY name';
 						sqlResults = null;
