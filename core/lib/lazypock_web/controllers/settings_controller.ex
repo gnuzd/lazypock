@@ -95,7 +95,9 @@ defmodule LazypockWeb.SettingsController do
         conn |> put_status(400) |> json(%{error: "SQL query is required"})
 
       not safe_query?(sql) ->
-        conn |> put_status(403) |> json(%{error: "Only SELECT, EXPLAIN, and WITH queries are allowed"})
+        conn
+        |> put_status(403)
+        |> json(%{error: "Only SELECT, EXPLAIN, and WITH queries are allowed"})
 
       true ->
         case Ecto.Adapters.SQL.query(Repo, sql, []) do
@@ -116,6 +118,7 @@ defmodule LazypockWeb.SettingsController do
 
   defp safe_query?(sql) do
     trimmed = String.trim(sql) |> String.upcase()
+
     Enum.any?(@safe_prefixes, fn prefix ->
       String.starts_with?(trimmed, prefix)
     end)
@@ -133,6 +136,7 @@ defmodule LazypockWeb.SettingsController do
       Lazypock.Collections.Registry.list()
       |> Enum.map(fn coll ->
         records = Lazypock.Schemas.GenericRecord.all(coll.name)
+
         %{
           name: coll.name,
           type: coll.type,
@@ -175,12 +179,15 @@ defmodule LazypockWeb.SettingsController do
               end
             end)
 
-          insert_count = case inserted do
-            {:ok, c} -> c
-            _ -> 0
-          end
+          insert_count =
+            case inserted do
+              {:ok, c} -> c
+              _ -> 0
+            end
 
-          {:cont, {:ok, [%{name: name, type: type, records_imported: insert_count} | imported_acc], errors_acc}}
+          {:cont,
+           {:ok, [%{name: name, type: type, records_imported: insert_count} | imported_acc],
+            errors_acc}}
 
         {:error, reason} ->
           {:cont, {:ok, imported_acc, [%{name: name, error: reason} | errors_acc]}}
