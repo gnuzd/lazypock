@@ -3,6 +3,9 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
+	import { Chart, LineElement, PointElement, LineController, LinearScale, TimeScale, Filler, Tooltip } from 'chart.js';
+	import 'chartjs-adapter-luxon';
+	import zoomPlugin from 'chartjs-plugin-zoom';
 
 	// Hide the sidebar on this page
 	setSidebar();
@@ -18,25 +21,139 @@
 	let detailId = $state<string | null>(null);
 	let detail = $state<Record<string, unknown> | null>(null);
 
-	// Stats
-	let stats = $state<Record<string, unknown> | null>(null);
-	let statsLoading = $state(false);
+	// Chart
+	let chartCanvas: HTMLCanvasElement | undefined = $state();
+	let chartInst: Chart | undefined = $state();
+	let chartData: { x: Date; y: number }[] = $state([]);
+	let chartLoading = $state(false);
 
 	onMount(async () => {
-		loadStats();
 		loadCollections();
 		loadLogs();
+		await loadChart();
 	});
 
-	async function loadStats() {
-		statsLoading = true;
+	function initChart() {
+		if (!chartCanvas || chartInst) return;
+
+		Chart.register(LineElement, PointElement, LineController, LinearScale, TimeScale, Filler, Tooltip);
+		Chart.register(zoomPlugin);
+
+		chartInst = new Chart(chartCanvas, {
+			type: 'line',
+			data: {
+				datasets: [
+					{
+						label: 'Total requests',
+						data: [],
+						borderColor: '#e34562',
+						pointBackgroundColor: '#e34562',
+						backgroundColor: 'rgb(239,69,101,0.05)',
+						borderWidth: 2,
+						pointRadius: 1,
+						pointBorderWidth: 0,
+						fill: true,
+					},
+				],
+			},
+			options: {
+				resizeDelay: 250,
+				maintainAspectRatio: false,
+				animation: false,
+				interaction: {
+					intersect: false,
+					mode: 'index' as const,
+				},
+				scales: {
+					y: {
+						beginAtZero: true,
+						grid: {
+							color: '#edf0f3',
+						},
+						border: {
+							color: '#e4e9ec',
+						},
+						ticks: {
+							precision: 0,
+							maxTicksLimit: 4,
+							autoSkip: true,
+							color: '#666f75',
+						},
+					},
+					x: {
+						type: 'time' as const,
+						time: {
+							unit: 'hour' as const,
+							tooltipFormat: 'DD h a',
+						},
+						grid: {
+							color: (c: { tick?: { major?: boolean } }) => (c.tick?.major ? '#edf0f3' : ''),
+						},
+						border: {
+							color: '#e4e9ec' as const,
+						},
+						ticks: {
+							maxTicksLimit: 15,
+							autoSkip: true,
+							maxRotation: 0,
+							major: {
+								enabled: true,
+							},
+							color: (c: { tick?: { major?: boolean } }) =>
+								c.tick?.major ? '#16161a' : '#666f75',
+						},
+					},
+				},
+				plugins: {
+					legend: {
+						display: false,
+					},
+					zoom: {
+						pan: {
+							enabled: true,
+							mode: 'x' as const,
+						},
+						zoom: {
+							mode: 'x' as const,
+							pinch: {
+								enabled: true,
+							},
+							drag: {
+								enabled: true,
+								backgroundColor: 'rgba(255, 99, 132, 0.2)',
+								borderWidth: 0,
+								threshold: 10,
+							},
+						},
+					},
+				},
+			},
+		}) as unknown as Chart;
+	}
+
+	// Update chart when data changes
+	$effect(() => {
+		if (chartInst && chartData.length > 0) {
+			chartInst.data.datasets[0].data = chartData as never;
+			chartInst.update('none');
+		}
+	});
+
+	async function loadChart() {
+		chartLoading = true;
 		try {
 			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
-			stats = res;
+			const hourly = (res?.hourly as { date: string; total: number }[]) ?? [];
+			chartData = hourly.map((h) => ({
+				x: new Date(h.date),
+				y: h.total,
+			}));
+			// Init chart after data loads (canvas is guaranteed to exist by now)
+			initChart();
 		} catch {
 			// ignore
 		} finally {
-			statsLoading = false;
+			chartLoading = false;
 		}
 	}
 
@@ -115,7 +232,7 @@
 		try {
 			await client.http.delete('/logs?all=true');
 			loadLogs();
-			loadStats();
+			loadChart();
 		} catch {
 			// ignore
 		}
@@ -125,53 +242,26 @@
 		try {
 			await client.http.delete('/logs');
 			loadLogs();
-			loadStats();
+			loadChart();
 		} catch {
 			// ignore
 		}
 	}
 </script>
 
-<!-- Stats cards -->
-<div class="mb-5 grid grid-cols-5 gap-3">
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-xs text-base-content/60">Total Requests</div>
-		<div class="mt-0.5 text-2xl font-semibold">
-			{statsLoading ? '...' : Number(stats?.total ?? 0).toLocaleString()}
-		</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-xs text-base-content/60">Last 24h</div>
-		<div class="mt-0.5 text-2xl font-semibold">
-			{statsLoading ? '...' : Number(stats?.last_24h ?? 0).toLocaleString()}
-		</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-xs text-base-content/60">Errors (24h)</div>
-		<div class="mt-0.5 text-2xl font-semibold {Number(stats?.errors_24h ?? 0) > 0 ? 'text-error' : ''}">
-			{statsLoading ? '...' : Number(stats?.errors_24h ?? 0).toLocaleString()}
-		</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-xs text-base-content/60">Avg Duration (24h)</div>
-		<div class="mt-0.5 text-2xl font-semibold">
-			{statsLoading ? '...' : formatDuration(stats?.avg_duration ?? 0)}
-		</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-xs text-base-content/60">Method Split</div>
-		<div class="mt-0.5 space-y-0.5 text-xs">
-			{#if stats?.methods && Array.isArray(stats.methods)}
-		{#each stats.methods as m, i (i)}
-			{@const method = String((m as Record<string, unknown>)?.method ?? '')}
-			{@const count = Number((m as Record<string, unknown>)?.count ?? 0)}
-			<div class="flex items-center gap-2">
-				<span class={'font-semibold ' + methodClass(method)}>{method}</span>
-				<span class="ml-auto text-base-content/60">{count.toLocaleString()}</span>
+<!-- Chart area -->
+<div class="mb-5">
+	<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
+		{#if chartLoading}
+			<div class="absolute inset-0 z-50 flex items-center justify-center">
+				<span class="loading loading-spinner loading-sm" />
 			</div>
-		{/each}
-	{/if}
-		</div>
+		{/if}
+		<canvas
+			bind:this={chartCanvas}
+			class="h-full w-full"
+			ondblclick={() => chartInst?.resetZoom()}
+		/>
 	</div>
 </div>
 

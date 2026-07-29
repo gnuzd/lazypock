@@ -210,16 +210,27 @@ defmodule LazypockWeb.LogsController do
         _ -> 0
       end
 
-    # Last 24h
-    last_24h =
+    # Hourly request volume for the last 24 hours (for chart)
+    hourly =
       case Ecto.Adapters.SQL.query(
              Repo,
-             "SELECT COUNT(*) FROM _request_logs WHERE created_at > now() - interval '24 hours'",
+             "SELECT date_trunc('hour', created_at) AS hour, COUNT(*) AS cnt FROM _request_logs WHERE created_at > now() - interval '24 hours' GROUP BY hour ORDER BY hour",
              []
            ) do
-        {:ok, %{rows: [[count]]}} -> count
-        _ -> 0
+        {:ok, result} ->
+          Enum.map(result.rows, fn [hour, count] ->
+            %{
+              date: maybe_iso8601(hour),
+              total: count
+            }
+          end)
+
+        {:error, _} ->
+          []
       end
+
+    # Last 24h total
+    last_24h = Enum.reduce(hourly, 0, fn %{total: t}, acc -> acc + t end)
 
     # Errors (status >= 400) in last 24h
     errors_24h =
@@ -243,26 +254,12 @@ defmodule LazypockWeb.LogsController do
         _ -> 0
       end
 
-    # Method distribution in last 24h
-    methods =
-      case Ecto.Adapters.SQL.query(
-             Repo,
-             "SELECT method, COUNT(*) as cnt FROM _request_logs WHERE created_at > now() - interval '24 hours' GROUP BY method ORDER BY cnt DESC",
-             []
-           ) do
-        {:ok, result} ->
-          Enum.map(result.rows, fn [method, count] -> %{method: method, count: count} end)
-
-        {:error, _} ->
-          []
-      end
-
     json(conn, %{
       total: total,
+      hourly: hourly,
       last_24h: last_24h,
       errors_24h: errors_24h,
-      avg_duration: avg_duration,
-      methods: methods
+      avg_duration: avg_duration
     })
   end
 
