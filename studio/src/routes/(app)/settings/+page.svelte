@@ -3,18 +3,32 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
-	import { Archive, Cog, Database, HardDrive, Mail, Upload } from '@lucide/svelte';
+	import { RefreshCw } from '@lucide/svelte';
+	import { Archive, Cog, Database, Download, HardDrive, Mail, Upload } from '@lucide/svelte';
 
-	type Section = 'application' | 'mail' | 'files' | 'backups' | 'export-import' | 'sql';
+	type Section =
+		'application' | 'mail' | 'files' | 'backups' | 'cron' | 'export' | 'import' | 'sql';
 
-	const sections: { id: Section; label: string; icon: typeof Cog }[] = [
+	interface SectionItem {
+		id: Section;
+		label: string;
+		icon: typeof Cog;
+	}
+
+	const systemSections: SectionItem[] = [
 		{ id: 'application', label: 'Application', icon: Cog },
 		{ id: 'mail', label: 'Mail', icon: Mail },
 		{ id: 'files', label: 'Files Storage', icon: HardDrive },
 		{ id: 'backups', label: 'Backups', icon: Archive },
-		{ id: 'export-import', label: 'Export/Import', icon: Upload },
-		{ id: 'sql', label: 'SQL Console', icon: Database }
+		{ id: 'cron', label: 'Cron', icon: RefreshCw }
 	];
+
+	const syncSections: SectionItem[] = [
+		{ id: 'export', label: 'Export Collections', icon: Upload },
+		{ id: 'import', label: 'Import Collections', icon: Download }
+	];
+
+	const debugSections: SectionItem[] = [{ id: 'sql', label: 'SQL Console', icon: Database }];
 
 	let activeSection = $state<Section>('application');
 
@@ -245,7 +259,56 @@
 </script>
 
 {#snippet bodyContent()}
-	{#each sections as s (s.id)}
+	<div
+		class="mb-1 px-3.5 pt-2 text-[10px] font-semibold tracking-wider text-base-content/40 uppercase"
+	>
+		System
+	</div>
+	{#each systemSections as s (s.id)}
+		<button
+			class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
+			class:bg-base-200={s.id === activeSection}
+			class:font-medium={s.id === activeSection}
+			role="button"
+			tabindex="0"
+			onclick={() => (activeSection = s.id)}
+			onkeydown={(e) => {
+				if (e.key === 'Enter') activeSection = s.id;
+			}}
+		>
+			<s.icon class="h-4 w-4 shrink-0 opacity-60" />
+			<span class="flex-1 truncate">{s.label}</span>
+		</button>
+	{/each}
+
+	<div
+		class="mt-2 mb-1 px-3.5 pt-2 text-[10px] font-semibold tracking-wider text-base-content/40 uppercase"
+	>
+		Sync
+	</div>
+	{#each syncSections as s (s.id)}
+		<button
+			class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
+			class:bg-base-200={s.id === activeSection}
+			class:font-medium={s.id === activeSection}
+			role="button"
+			tabindex="0"
+			onclick={() => (activeSection = s.id)}
+			onkeydown={(e) => {
+				if (e.key === 'Enter') activeSection = s.id;
+			}}
+		>
+			<s.icon class="h-4 w-4 shrink-0 opacity-60" />
+			<span class="flex-1 truncate">{s.label}</span>
+		</button>
+	{/each}
+
+	<div
+		class="mt-2 mb-1 px-3.5 pt-2 text-[10px] font-semibold tracking-wider text-base-content/40 uppercase"
+	>
+		Debug
+	</div>
+	{#each debugSections as s (s.id)}
 		<button
 			class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
 			class:bg-base-200={s.id === activeSection}
@@ -420,11 +483,15 @@
 			</p>
 			<Button class="btn-primary" loading={backingUp} onclick={doBackup}>Download Backup</Button>
 		</div>
-	{:else if activeSection === 'export-import'}
-		<h2 class="mb-4 text-lg font-semibold">Export & Import Collections</h2>
+	{:else if activeSection === 'cron'}
+		<h2 class="mb-4 text-lg font-semibold">Cron</h2>
+		<div class="rounded-box border border-base-300 bg-base-100 p-6">
+			<p class="text-sm text-base-content/60">Cron job scheduling coming soon.</p>
+		</div>
 
-		<div class="mb-4 rounded-box border border-base-300 bg-base-100 p-6">
-			<h3 class="mb-3 text-sm font-medium">Export</h3>
+	{:else if activeSection === 'export'}
+		<h2 class="mb-4 text-lg font-semibold">Export Collections</h2>
+		<div class="rounded-box border border-base-300 bg-base-100 p-6">
 			<p class="mb-3 text-xs text-base-content/60">
 				Export all collections, their schema, rules, and records as JSON.
 			</p>
@@ -440,9 +507,9 @@
 				{exportData ? 'Re-export' : 'Export All'}
 			</Button>
 		</div>
-
+	{:else if activeSection === 'import'}
+		<h2 class="mb-4 text-lg font-semibold">Import Collections</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<h3 class="mb-3 text-sm font-medium">Import</h3>
 			<p class="mb-3 text-xs text-base-content/60">
 				Import collections from a previously exported JSON file. Existing collections with the same
 				name will be skipped.
