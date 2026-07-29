@@ -25,7 +25,7 @@ defmodule LazypockWeb.EmailController do
          :ok <- ensure_auth_collection!(collection),
          {:ok, _user} <- find_user_by_email(collection_name, collection, email) do
       Emails.request_verification(collection_name, email)
-      json(conn, %{})
+      resp(conn, 204, "")
     else
       {:error, "Invalid request"} ->
         # Always return 204 to avoid revealing whether email exists
@@ -43,11 +43,8 @@ defmodule LazypockWeb.EmailController do
 
     case Emails.confirm_verification(collection_name, token) do
       {:ok, user} ->
-        password_field = find_password_field_for(collection_name)
-        safe_user = Map.drop(user, [String.to_existing_atom(password_field) || :password_hash])
-
         json(conn, %{
-          "record" => safe_user
+          "record" => user
         })
 
       {:error, reason} ->
@@ -148,23 +145,10 @@ defmodule LazypockWeb.EmailController do
     end
   end
 
-  defp find_password_field_for(collection_name) do
-    alias Lazypock.Repo
-
-    case Ecto.Adapters.SQL.query(
-           Repo,
-           "SELECT name FROM _fields WHERE collection_id = (SELECT id FROM _collections WHERE name = $1) AND type = 'password' LIMIT 1",
-           [collection_name]
-         ) do
-      {:ok, %{rows: [[name]]}} -> name
-      _ -> "password_hash"
-    end
+  defp row_to_map(columns, row) do
+    Enum.zip(columns, row) |> Map.new()
   end
 
   defp quote_table(name), do: "\"#{name}\""
   defp quote_ident(name), do: "\"#{name}\""
-
-  defp row_to_map(columns, row) do
-    Enum.zip(columns, row) |> Map.new()
-  end
 end

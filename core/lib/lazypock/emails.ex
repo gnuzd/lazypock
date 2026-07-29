@@ -72,7 +72,11 @@ defmodule Lazypock.Emails do
       # Delete used OTP
       delete_otp(otp_record)
 
-      {:ok, Map.put(user, "verified", true)}
+      verified_user = Map.put(user, "verified", true)
+      password_field = find_password_field(collection)
+      safe_user = Map.drop(verified_user, [password_field])
+
+      {:ok, safe_user}
     end
   end
 
@@ -160,6 +164,13 @@ defmodule Lazypock.Emails do
   end
 
   defp verify_otp(collection_name, raw_token) do
+    # Clean up expired OTPs first
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "DELETE FROM _otps WHERE collection_ref = $1 AND created_at < now() - interval '24 hours'",
+      [collection_name]
+    )
+
     # Find matching OTP records for this collection
     case Ecto.Adapters.SQL.query(
            Repo,
