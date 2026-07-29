@@ -11,6 +11,7 @@ defmodule LazypockWeb.Router do
 
   pipeline :api do
     plug(:accepts, ["json"])
+    plug(LazypockWeb.Plugs.RequestLogger)
   end
 
   pipeline :auth do
@@ -55,6 +56,24 @@ defmodule LazypockWeb.Router do
     post("/files", FileController, :upload)
     get("/files/:id", FileController, :show)
     delete("/files/:id", FileController, :delete)
+
+    # Request logs (superuser)
+    get("/logs", LogsController, :list)
+    get("/logs/collections", LogsController, :collections)
+    get("/logs/:id", LogsController, :show)
+    delete("/logs", LogsController, :delete_logs)
+
+    # App settings (superuser)
+    get("/settings", SettingsController, :show)
+    patch("/settings", SettingsController, :update)
+    put("/settings", SettingsController, :update)
+
+    # SQL console — read-only queries (superuser)
+    post("/sql/query", SettingsController, :sql_query)
+
+    # Export/Import collections
+    get("/export", SettingsController, :export_all)
+    post("/import", SettingsController, :import_all)
   end
 
   # Auth collection routes — must be BEFORE dynamic :collection routes
