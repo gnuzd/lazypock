@@ -4,7 +4,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
 	import { RefreshCw } from '@lucide/svelte';
-	import { Archive, Cog, Database, Download, HardDrive, Mail, Upload } from '@lucide/svelte';
+	import { Archive, Check, Clipboard, Cog, Database, Download, HardDrive, Mail, Upload } from '@lucide/svelte';
 
 	type Section =
 		'application' | 'mail' | 'files' | 'backups' | 'cron' | 'export' | 'import' | 'sql';
@@ -57,10 +57,21 @@
 	let storageSaving = $state(false);
 	let storageSaved = $state(false);
 
-	// ── Export/Import ──
-	let exporting = $state(false);
-	let exportData = $state<Record<string, unknown> | null>(null);
-	let importFile = $state<File | undefined>();
+	// ── Export ──
+	let collectionsList = $state<{ id: string; name: string; type: string }[]>([]);
+	let loadingCollections = $state(false);
+	let selectedExports = $state<Record<string, { id: string; name: string; type: string }>>({});
+	let exportCopied = $state(false);
+
+	// ── Import ──
+	let importSchemas = $state('');
+	let importFileInput: HTMLInputElement | undefined = $state();
+	const importPlaceholder = `[{ "id": "...", "name": "...", "type": "base", "fields": [] }]`;
+	let importLoadingFile = $state(false);
+	let parsedCollections: { id: string; name: string; type: string }[] = [];
+	let oldCollections: { id: string; name: string; type: string }[] = [];
+	let loadingOldCollections = $state(false);
+	let deleteMissing = $state(true);
 	let importing = $state(false);
 	let importResult = $state<string | null>(null);
 
@@ -168,43 +179,164 @@
 	}
 
 	// ── Export ──
-	async function doExport() {
-		exporting = true;
-		exportData = null;
+	let schemaJson = $derived(JSON.stringify(Object.values(selectedExports), null, 4));
+	let totalSelected = $derived(Object.keys(selectedExports).length);
+	let areAllSelected = $derived(collectionsList.length > 0 && totalSelected === collectionsList.length);
+
+	async function loadCollections() {
+		loadingCollections = true;
 		try {
-			const res = (await client.http.get('/export')) as Record<string, unknown> | null;
-			exportData = res;
+			const res = (await client.http.get('/collections')) as {
+				items?: { id: string; name: string; type: string }[];
+			};
+			collectionsList = res?.items ?? [];
+			// Remove timestamps and oauth2, select all by default
+			selectedExports = {};
+			for (const c of collectionsList) {
+				selectedExports[c.id] = c;
+			}
 		} catch {
 			// ignore
 		} finally {
-			exporting = false;
+			loadingCollections = false;
+		}
+	}
+
+	function toggleSelectAll() {
+		if (areAllSelected) {
+			selectedExports = {};
+		} else {
+			selectedExports = {};
+			for (const c of collectionsList) {
+				selectedExports[c.id] = c;
+			}
+		}
+	}
+
+	function toggleSelectCollection(c: { id: string; name: string; type: string }) {
+		if (selectedExports[c.id]) {
+			const next = { ...selectedExports };
+			delete next[c.id];
+			selectedExports = next;
+		} else {
+			selectedExports = { ...selectedExports, [c.id]: c };
 		}
 	}
 
 	function downloadExport() {
-		if (!exportData) return;
-		const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+		const data = Object.values(selectedExports);
+		const blob = new Blob([JSON.stringify(data, null, 4)], { type: 'application/json' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `lazypock-export-${new Date().toISOString().slice(0, 10)}.json`;
+		a.download = `lazypock-schema-${new Date().toISOString().slice(0, 10)}.json`;
 		a.click();
 		URL.revokeObjectURL(url);
 	}
 
+	function copyExport() {
+		navigator.clipboard.writeText(schemaJson);
+		exportCopied = true;
+		setTimeout(() => (exportCopied = false), 2000);
+	}
+
 	// ── Import ──
+
+	function loadFile(file: File) {
+		importLoadingFile = true;
+		const reader = new FileReader();
+		reader.onload = async (event) => {
+			importLoadingFile = false;
+			importSchemas = (event.target?.result as string) ?? '';
+			if (importFileInput) importFileInput.value = '';
+			parseImport();
+		};
+		reader.onerror = () => {
+			importLoadingFile = false;
+			importResult = 'Failed to load the imported JSON.';
+			if (importFileInput) importFileInput.value = '';
+		};
+		reader.readAsText(file);
+	}
+
+	function parseImport() {
+		parsedCollections = [];
+		importResult = null;
+		try {
+			const data = JSON.parse(importSchemas);
+			if (!Array.isArray(data)) {
+				importResult = 'Invalid format. Expected an array of collections.';
+				return;
+			}
+			// Deduplicate by id
+			const seenIds: Record<string, true> = {};
+			for (const c of data) {
+				if (c.id && c.name && !seenIds[c.id]) {
+					seenIds[c.id] = true;
+					parsedCollections.push({ id: c.id, name: c.name, type: c.type || 'base' });
+				}
+			}
+		} catch {
+			importResult = 'Invalid JSON format.';
+		}
+	}
+
+	function clearImport() {
+		importSchemas = '';
+		parsedCollections = [];
+		importResult = null;
+		if (importFileInput) importFileInput.value = '';
+	}
+
+	let isValidImport = $derived(!!importSchemas && parsedCollections.length > 0 && !importResult);
+
+	// Detect changes
+	let importChanges = $derived.by(() => {
+		if (!isValidImport) return { added: [], removed: [], changed: [] };
+		const added: string[] = [];
+		const removed: string[] = [];
+		const changed: string[] = [];
+		const oldMap = new Map(oldCollections.map((c) => [c.id, c]));
+		const newIds = new Set(parsedCollections.map((c) => c.id));
+
+		for (const c of oldCollections) {
+			if (!newIds.has(c.id)) {
+				if (deleteMissing) removed.push(c.name);
+			}
+		}
+
+		for (const c of parsedCollections) {
+			const old = oldMap.get(c.id);
+			if (!old) {
+				added.push(c.name);
+			} else if (old.name !== c.name || old.type !== c.type) {
+				changed.push(c.name);
+			}
+		}
+		return { added, removed, changed };
+	});
+
+	let hasChanges = $derived(
+		importChanges.added.length > 0 ||
+			importChanges.removed.length > 0 ||
+			importChanges.changed.length > 0
+	);
+
 	async function doImport() {
-		if (!importFile) return;
+		if (!isValidImport) return;
 		importing = true;
 		importResult = null;
 		try {
-			const text = await importFile.text();
-			const data = JSON.parse(text);
-			const res = (await client.http.post('/import', data)) as Record<string, unknown> | null;
+			const data = JSON.parse(importSchemas);
+			const res = (await client.http.post('/import', {
+				collections: data,
+				deleteMissing: deleteMissing
+			})) as { imported?: unknown[]; errors?: unknown[] } | null;
 			if (res?.errors && (res.errors as unknown[]).length > 0) {
 				importResult = `Imported ${(res.imported as unknown[]).length} collections with ${(res.errors as unknown[]).length} errors.`;
 			} else {
-				importResult = `Successfully imported ${((res?.imported as unknown[]) ?? []).length} collections.`;
+				const count = (res?.imported as unknown[])?.length ?? 0;
+				importResult = `Successfully imported ${count} collections.`;
 			}
 		} catch (e) {
 			importResult = `Import failed: ${(e as Error).message}`;
@@ -327,7 +459,7 @@
 {/snippet}
 
 <!-- Main content -->
-<div class="mx-auto max-w-2xl">
+<div class="mx-auto" style="max-width:870px">
 	{#if activeSection === 'application'}
 		<h2 class="mb-4 text-lg font-semibold">Application Settings</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
@@ -488,46 +620,223 @@
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
 			<p class="text-sm text-base-content/60">Cron job scheduling coming soon.</p>
 		</div>
-
 	{:else if activeSection === 'export'}
 		<h2 class="mb-4 text-lg font-semibold">Export Collections</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<p class="mb-3 text-xs text-base-content/60">
-				Export all collections, their schema, rules, and records as JSON.
+		<div class="mb-4 text-sm text-base-content/60">
+			<p>
+				Below you'll find your current collections configuration that you could import in another
+				environment.
 			</p>
-			{#if exportData}
-				<div class="mb-3">
-					<p class="mb-1 text-xs text-success">
-						Export ready ({(exportData.collections as unknown[]).length} collections)
-					</p>
-					<Button class="btn-primary btn-sm" onclick={downloadExport}>Download JSON</Button>
-				</div>
-			{/if}
-			<Button class="btn-primary" loading={exporting} onclick={doExport}>
-				{exportData ? 'Re-export' : 'Export All'}
-			</Button>
 		</div>
+
+		{#if loadingCollections}
+			<div class="flex justify-center py-8">
+				<span class="text-sm text-base-content/50">Loading collections...</span>
+			</div>
+		{:else if collectionsList.length === 0}
+			<div class="rounded-box border border-base-300 bg-base-100 p-6 text-center">
+				<p class="text-sm text-base-content/50">No collections yet.</p>
+				<Button class="btn-primary mt-4" onclick={loadCollections}>Load Collections</Button>
+			</div>
+		{:else}
+			<div class="export-panel flex flex-col gap-4">
+				<!-- Checkbox list + Preview side by side -->
+				<div class="flex flex-col gap-4 lg:flex-row">
+					<!-- Collection list -->
+					<div class="min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
+						<div class="border-b border-base-300 px-3 py-2">
+							<label class="flex cursor-pointer items-center gap-2 text-sm font-medium">
+								<input
+									type="checkbox"
+									class="checkbox"
+									checked={areAllSelected}
+									onchange={toggleSelectAll}
+								/>
+								Select all
+								<span class="text-xs text-base-content/50">({totalSelected} selected)</span>
+							</label>
+						</div>
+						<div class="max-h-80 overflow-y-auto">
+							{#each collectionsList as c (c.id)}
+								<label
+									class="flex cursor-pointer items-center gap-2 border-b border-base-200 px-3 py-1.5 text-sm hover:bg-base-200"
+								>
+									<input
+										type="checkbox"
+										class="checkbox"
+										checked={selectedExports[c.id] !== undefined}
+										onchange={() => toggleSelectCollection(c)}
+									/>
+									<span class="font-medium">{c.name}</span>
+									<span class="text-xs text-base-content/40">{c.type}</span>
+								</label>
+							{/each}
+						</div>
+					</div>
+
+					<!-- JSON preview -->
+					<div class="relative min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
+						<button
+							type="button"
+							class="absolute top-2 right-2 z-10 cursor-pointer rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs text-base-content/60 hover:text-base-content"
+							disabled={!totalSelected}
+							onclick={copyExport}
+						>
+							{#if exportCopied}
+								<span class="flex items-center gap-1 text-success"
+									><Check class="h-3 w-3" />Copied</span
+								>
+							{:else}
+								<span class="flex items-center gap-1"><Clipboard class="h-3 w-3" />Copy</span>
+							{/if}
+						</button>
+						<pre class="max-h-80 overflow-auto p-3 font-mono text-xs">{schemaJson ||
+								'Select collections to preview...'}</pre>
+					</div>
+				</div>
+
+				<!-- Download button -->
+				<div class="flex justify-end">
+					<Button class="btn-primary" disabled={!totalSelected} onclick={downloadExport}>
+						<Download class="h-4 w-4" />
+						Download as JSON
+					</Button>
+				</div>
+			</div>
+		{/if}
 	{:else if activeSection === 'import'}
 		<h2 class="mb-4 text-lg font-semibold">Import Collections</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<p class="mb-3 text-xs text-base-content/60">
-				Import collections from a previously exported JSON file. Existing collections with the same
-				name will be skipped.
-			</p>
-			<input
-				type="file"
-				accept=".json"
-				class="mb-3 block w-full text-sm file:mr-3 file:cursor-pointer file:rounded-field file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-sm file:text-primary-content"
-				onchange={(e) => (importFile = (e.target as HTMLInputElement).files?.[0])}
-			/>
-			<Button class="btn-primary" loading={importing} disabled={!importFile} onclick={doImport}
-				>Import</Button
-			>
-			{#if importResult}
-				<p class="mt-2 text-xs text-base-content/60">{importResult}</p>
-			{/if}
-		</div>
-	{:else if activeSection === 'sql'}
+
+		{#if loadingOldCollections}
+			<div class="flex justify-center py-8">
+				<span class="text-sm text-base-content/50">Loading existing collections...</span>
+			</div>
+		{:else}
+			<div class="rounded-box border border-base-300 bg-base-100 p-6">
+				<div class="mb-4 text-sm text-base-content/60">
+					<p>
+						Paste below the collections configuration you want to import or
+						<button
+							type="button"
+							class="btn btn-outline btn-sm ml-2"
+							class:btn-loading={importLoadingFile}
+							onclick={() => importFileInput?.click()}
+						>
+							Load from JSON file
+						</button>
+					</p>
+					<input
+						bind:this={importFileInput}
+						type="file"
+						accept=".json"
+						class="hidden"
+						onchange={() => {
+							if (importFileInput?.files?.length) loadFile(importFileInput.files[0]);
+						}}
+					/>
+				</div>
+
+				<div class="field">
+					<label for="import-schemas" class="mb-1 block text-sm font-medium text-base-content/70"
+						>Collections</label
+					>
+					<textarea
+						id="import-schemas"
+						class="input w-full font-mono text-xs"
+						class:border-error={importSchemas && !isValidImport}
+						spellcheck="false"
+						rows="10"
+						placeholder={importPlaceholder}
+						bind:value={importSchemas}
+						oninput={parseImport}></textarea>
+					{#if importSchemas && !isValidImport}
+						<p class="mt-1 text-xs text-error">
+							{importResult || 'Invalid collections configuration.'}
+						</p>
+					{/if}
+				</div>
+
+				<div class="mb-4 flex items-center gap-2">
+					<input
+						id="delete-missing"
+						type="checkbox"
+						bind:checked={deleteMissing}
+						disabled={!isValidImport}
+					/>
+					<label for="delete-missing" class="text-sm text-base-content/70"
+						>Delete missing collections and schema fields</label
+					>
+				</div>
+
+				{#if isValidImport && parsedCollections.length > 0 && !hasChanges}
+					<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
+						Your collections configuration is already up-to-date!
+					</div>
+				{/if}
+
+				{#if isValidImport && hasChanges}
+					<h5 class="mb-2 text-sm font-semibold">Detected changes</h5>
+					<div class="mb-4 space-y-1">
+						{#each importChanges.removed as name (name)}
+							<div class="flex items-center gap-2 rounded-field bg-error/20 px-3 py-1.5 text-sm">
+								<span class="text-white rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold"
+									>Deleted</span
+								>
+								<span>{name}</span>
+							</div>
+						{/each}
+						{#each importChanges.changed as name (name)}
+							<div class="flex items-center gap-2 rounded-field bg-warning/20 px-3 py-1.5 text-sm">
+								<span class="text-white rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold"
+									>Changed</span
+								>
+								<span>{name}</span>
+							</div>
+						{/each}
+						{#each importChanges.added as name (name)}
+							<div class="flex items-center gap-2 rounded-field bg-success/20 px-3 py-1.5 text-sm">
+								<span class="text-white rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold"
+									>Added</span
+								>
+								<span>{name}</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+
+				<div class="flex items-center justify-between">
+					{#if importSchemas}
+						<button
+							type="button"
+							class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
+							onclick={clearImport}
+						>
+							Clear
+						</button>
+					{:else}
+						<div></div>
+					{/if}
+					<Button
+						class="btn-warning"
+						disabled={!isValidImport || !hasChanges}
+						loading={importing}
+						onclick={doImport}
+					>
+						Import
+					</Button>
+				</div>
+
+				{#if importResult && !importResult.startsWith('Invalid')}
+					<p class="mt-3 text-xs text-base-content/60">{importResult}</p>
+				{/if}
+			</div>
+		{/if}
+	{/if}
+</div>
+
+<!-- SQL Console is full-width -->
+{#if activeSection === 'sql'}
+	<div class="mx-auto" style="max-width:100%">
 		<h2 class="mb-4 text-lg font-semibold">SQL Console</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
 			<p class="mb-3 text-xs text-base-content/60">
@@ -535,7 +844,7 @@
 				are allowed.
 			</p>
 			<textarea
-				class="input w-full font-mono text-xs"
+				class="input w-full font-mono text-xs outline-none focus:outline-none"
 				rows="4"
 				placeholder="SELECT * FROM _collections"
 				bind:value={sqlQuery}></textarea>
@@ -584,11 +893,14 @@
 				</table>
 			</div>
 		{/if}
-	{/if}
-</div>
+	</div>
+{/if}
 
 <style>
 	input[type='radio'] {
+		accent-color: var(--color-primary);
+	}
+	.checkbox {
 		accent-color: var(--color-primary);
 	}
 </style>
