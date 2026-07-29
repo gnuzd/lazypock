@@ -107,24 +107,44 @@ defmodule LazypockWeb.SettingsController do
             safe_rows =
               Enum.map(rows, fn row ->
                 Enum.map(row, fn
-                  nil -> nil
+                  nil ->
+                    nil
+
                   val when is_binary(val) ->
-                    # UUIDs come as raw binary — convert to string
-                    case Ecto.UUID.load(val) do
-                      {:ok, str} -> str
-                      :error ->
-                        # Valid UTF-8 string
-                        if String.valid?(val), do: val, else: Base.encode16(val, case: :lower)
+                    if byte_size(val) == 16 do
+                      # UUID raw binary from Postgrex
+                      case Ecto.UUID.load(val) do
+                        {:ok, str} -> str
+                        :error -> inspect(val)
+                      end
+                    else
+                      # Normal text string
+                      if String.valid?(val), do: val, else: inspect(val)
                     end
 
-                  %DateTime{} = dt -> DateTime.to_iso8601(dt)
-                  %NaiveDateTime{} = dt -> NaiveDateTime.to_iso8601(dt)
-                  %Date{} = d -> Date.to_iso8601(d)
-                  %Decimal{} = d -> Decimal.to_string(d)
-                  val when is_integer(val) -> val
-                  val when is_float(val) -> val
-                  val when is_boolean(val) -> val
-                  val -> inspect(val)
+                  %DateTime{} = dt ->
+                    DateTime.to_iso8601(dt)
+
+                  %NaiveDateTime{} = dt ->
+                    NaiveDateTime.to_iso8601(dt)
+
+                  %Date{} = d ->
+                    Date.to_iso8601(d)
+
+                  %Decimal{} = d ->
+                    Decimal.to_string(d)
+
+                  val when is_integer(val) ->
+                    val
+
+                  val when is_float(val) ->
+                    val
+
+                  val when is_boolean(val) ->
+                    val
+
+                  val ->
+                    inspect(val)
                 end)
               end)
 

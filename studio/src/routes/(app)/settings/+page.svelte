@@ -935,7 +935,7 @@
 					<tbody>
 						{#each sqlResults.rows as row, i (String(i))}
 							<tr class="hover:bg-base-200 {i % 2 === 1 ? 'bg-base-100/50' : ''}">
-								{#each row as cell (cell)}
+								{#each row as cell, j (j)}
 									<td class="max-w-60 truncate border-b border-base-200 px-3 py-1.5 font-mono">
 										{cell == null ? 'NULL' : String(cell)}
 									</td>
