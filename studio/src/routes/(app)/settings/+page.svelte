@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
+	import { slide } from 'svelte/transition';
 	import Button from '$lib/components/Button.svelte';
+	import Input from '$lib/components/Input.svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
 	import { RefreshCw } from '@lucide/svelte';
 	import { Archive, Check, Clipboard, Cog, Database, Download, HardDrive, Mail, Upload } from '@lucide/svelte';
@@ -38,24 +40,27 @@
 	let appSaved = $state(false);
 
 	// ── Mail settings ──
+	let mailEnabled = $state(false);
+	let senderName = $state('');
+	let senderAddress = $state('');
 	let smtpHost = $state('');
 	let smtpPort = $state('587');
 	let smtpUser = $state('');
 	let smtpPass = $state('');
-	let smtpFrom = $state('');
-	let smtpSecure = $state(false);
+	let smtpTls = $state(false);
+	let smtpAuthMethod = $state('PLAIN');
+	let smtpLocalName = $state('');
+	let showMoreMail = $state(false);
 	let mailSaving = $state(false);
-	let mailSaved = $state(false);
 
 	// ── File storage settings ──
-	let storageBackend = $state<'local' | 's3'>('local');
+	let storageEnabled = $state(false);
 	let s3Bucket = $state('');
-	let s3Region = $state('');
+	let s3Region = $state('us-east-1');
 	let s3AccessKey = $state('');
 	let s3SecretKey = $state('');
 	let s3Endpoint = $state('');
 	let storageSaving = $state(false);
-	let storageSaved = $state(false);
 
 	// ── Export ──
 	let collectionsList = $state<{ id: string; name: string; type: string }[]>([]);
@@ -66,7 +71,7 @@
 	// ── Import ──
 	let importSchemas = $state('');
 	let importFileInput: HTMLInputElement | undefined = $state();
-	const importPlaceholder = `[{ "id": "...", "name": "...", "type": "base", "fields": [] }]`;
+	const importPlaceholder = '[{ "id": "...", "name": "...", "type": "base", "fields": [] }]';
 	let importLoadingFile = $state(false);
 	let parsedCollections: { id: string; name: string; type: string }[] = [];
 	let oldCollections: { id: string; name: string; type: string }[] = [];
@@ -89,17 +94,23 @@
 			const res = (await client.http.get('/settings')) as Record<string, unknown> | null;
 			if (!res) return;
 			appName = (res.app_name as string) ?? '';
-			const mail = (res.mail as Record<string, string>) ?? {};
-			smtpHost = mail.host ?? '';
-			smtpPort = mail.port ?? '587';
-			smtpUser = mail.user ?? '';
-			smtpFrom = mail.from ?? '';
-			const _secure = mail.secure as string | boolean | undefined;
-			smtpSecure = _secure === 'true' || _secure === true;
-			storageBackend = (res.storage_backend as 'local' | 's3') ?? 'local';
+
+			const mail = (res.mail as Record<string, unknown>) ?? {};
+			mailEnabled = (mail.enabled as boolean) ?? false;
+			senderName = (mail.sender_name as string) ?? '';
+			senderAddress = (mail.sender_address as string) ?? '';
+			smtpHost = (mail.host as string) ?? '';
+			smtpPort = (mail.port as string) ?? '587';
+			smtpUser = (mail.user as string) ?? '';
+			smtpPass = (mail.pass as string) ?? '';
+			smtpTls = (mail.tls as boolean) ?? false;
+			smtpAuthMethod = (mail.auth_method as string) ?? 'PLAIN';
+			smtpLocalName = (mail.local_name as string) ?? '';
+
+			storageEnabled = (res.s3_enabled as boolean) ?? false;
 			const s3 = (res.s3 as Record<string, string>) ?? {};
 			s3Bucket = s3.bucket ?? '';
-			s3Region = s3.region ?? '';
+			s3Region = s3.region ?? 'us-east-1';
 			s3AccessKey = s3.access_key ?? '';
 			s3SecretKey = s3.secret_key ?? '';
 			s3Endpoint = s3.endpoint ?? '';
@@ -129,22 +140,21 @@
 
 	async function saveMail() {
 		mailSaving = true;
-		mailSaved = false;
 		try {
 			await client.http.patch('/settings', {
-				mail: smtpHost
-					? {
-							host: smtpHost,
-							port: smtpPort,
-							user: smtpUser,
-							pass: smtpPass,
-							from: smtpFrom,
-							secure: smtpSecure
-						}
-					: null
+				mail: {
+					enabled: mailEnabled,
+					sender_name: senderName || null,
+					sender_address: senderAddress || null,
+					host: smtpHost || null,
+					port: smtpPort || null,
+					user: smtpUser || null,
+					pass: smtpPass || null,
+					tls: smtpTls,
+					auth_method: smtpAuthMethod,
+					local_name: smtpLocalName || null
+				}
 			});
-			mailSaved = true;
-			setTimeout(() => (mailSaved = false), 2000);
 		} catch {
 			// ignore
 		} finally {
@@ -154,23 +164,13 @@
 
 	async function saveStorage() {
 		storageSaving = true;
-		storageSaved = false;
 		try {
 			await client.http.patch('/settings', {
-				storage_backend: storageBackend,
-				s3:
-					storageBackend === 's3'
-						? {
-								bucket: s3Bucket,
-								region: s3Region,
-								access_key: s3AccessKey,
-								secret_key: s3SecretKey,
-								endpoint: s3Endpoint
-							}
-						: null
+				s3_enabled: storageEnabled,
+				s3: storageEnabled
+					? { bucket: s3Bucket, region: s3Region, access_key: s3AccessKey, secret_key: s3SecretKey, endpoint: s3Endpoint }
+					: null
 			});
-			storageSaved = true;
-			setTimeout(() => (storageSaved = false), 2000);
 		} catch {
 			// ignore
 		} finally {
@@ -190,7 +190,6 @@
 				items?: { id: string; name: string; type: string }[];
 			};
 			collectionsList = res?.items ?? [];
-			// Remove timestamps and oauth2, select all by default
 			selectedExports = {};
 			for (const c of collectionsList) {
 				selectedExports[c.id] = c;
@@ -463,150 +462,136 @@
 	{#if activeSection === 'application'}
 		<h2 class="mb-4 text-lg font-semibold">Application Settings</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<div class="field mb-4">
-				<label for="app-name" class="mb-1 block text-sm font-medium text-base-content/70"
-					>App Name</label
-				>
-				<input
-					id="app-name"
-					type="text"
-					class="input w-full"
-					placeholder="Lazypock"
-					bind:value={appName}
-				/>
-				<p class="mt-1 text-xs text-base-content/50">Displayed in the admin UI header.</p>
-			</div>
-			<div class="flex items-center gap-3">
-				<Button class="btn-primary" loading={appSaving} disabled={appSaving} onclick={saveApp}
-					>Save</Button
-				>
+			<Input label="App Name" placeholder="Lazypock" bind:value={appName} help="Displayed in the admin UI header." />
+			<div class="mt-4 flex items-center gap-3">
+				<Button class="btn-primary" loading={appSaving} disabled={appSaving} onclick={saveApp}>Save</Button>
 				{#if appSaved}<span class="text-xs text-success">Saved!</span>{/if}
 			</div>
 		</div>
+
 	{:else if activeSection === 'mail'}
 		<h2 class="mb-4 text-lg font-semibold">Mail Settings</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<div class="mb-3 grid grid-cols-2 gap-3">
-				<div class="field">
-					<label for="smtp-host" class="mb-1 block text-xs font-medium text-base-content/70"
-						>SMTP Host</label
-					>
-					<input
-						id="smtp-host"
-						type="text"
-						class="input w-full"
-						placeholder="smtp.example.com"
-						bind:value={smtpHost}
-					/>
-				</div>
-				<div class="field">
-					<label for="smtp-port" class="mb-1 block text-xs font-medium text-base-content/70"
-						>Port</label
-					>
-					<input
-						id="smtp-port"
-						type="text"
-						class="input w-full"
-						placeholder="587"
-						bind:value={smtpPort}
-					/>
-				</div>
+			<div class="mb-4 text-sm text-base-content/60">
+				<p>Configure common settings for sending emails.</p>
 			</div>
-			<div class="mb-3 grid grid-cols-2 gap-3">
-				<div class="field">
-					<label for="smtp-user" class="mb-1 block text-xs font-medium text-base-content/70"
-						>Username</label
-					>
-					<input id="smtp-user" type="text" class="input w-full" bind:value={smtpUser} />
-				</div>
-				<div class="field">
-					<label for="smtp-pass" class="mb-1 block text-xs font-medium text-base-content/70"
-						>Password</label
-					>
-					<input id="smtp-pass" type="password" class="input w-full" bind:value={smtpPass} />
-				</div>
+
+			<div class="mb-6">
+				<Input label="Sender name" placeholder="John Doe" bind:value={senderName} />
+				<Input label="Sender address" placeholder="noreply@example.com" type="email" bind:value={senderAddress} />
 			</div>
-			<div class="field mb-3">
-				<label for="smtp-from" class="mb-1 block text-xs font-medium text-base-content/70"
-					>From Address</label
-				>
-				<input
-					id="smtp-from"
-					type="email"
-					class="input w-full"
-					placeholder="noreply@example.com"
-					bind:value={smtpFrom}
-				/>
-			</div>
-			<div class="mb-4 flex items-center gap-2">
-				<input id="smtp-secure" type="checkbox" bind:checked={smtpSecure} />
-				<label for="smtp-secure" class="text-xs text-base-content/70">Use TLS/SSL</label>
-			</div>
-			<div class="flex items-center gap-3">
-				<Button class="btn-primary" loading={mailSaving} disabled={mailSaving} onclick={saveMail}
-					>Save</Button
-				>
-				{#if mailSaved}<span class="text-xs text-success">Saved!</span>{/if}
-			</div>
-		</div>
-	{:else if activeSection === 'files'}
-		<h2 class="mb-4 text-lg font-semibold">Files Storage</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<div class="mb-4 flex gap-4">
-				<label class="flex cursor-pointer items-center gap-2">
-					<input type="radio" name="storage" value="local" bind:group={storageBackend} />
-					<span class="text-sm">Local Storage</span>
+
+			<!-- SMTP toggle -->
+			<div class="switch-field mb-4">
+				<label class="switch-label" for="mail-enabled">
+					<span class="txt">Use SMTP mail server <strong>(recommended)</strong></span>
 				</label>
-				<label class="flex cursor-pointer items-center gap-2">
-					<input type="radio" name="storage" value="s3" bind:group={storageBackend} />
-					<span class="text-sm">S3 Compatible</span>
+				<label class="switch">
+					<input id="mail-enabled" type="checkbox" bind:checked={mailEnabled} />
+					<span class="switch-slider"></span>
 				</label>
 			</div>
 
-			{#if storageBackend === 's3'}
-				<div class="mb-3 grid grid-cols-2 gap-3">
-					<div class="field">
-						<label class="mb-1 block text-xs font-medium text-base-content/70">S3 Bucket</label>
-						<input type="text" class="input w-full" bind:value={s3Bucket} />
+			{#if mailEnabled}
+				<div transition:slide={{ duration: 150 }}>
+					<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12">
+						<div class="lg:col-span-5">
+							<Input label="SMTP server host" placeholder="smtp.example.com" bind:value={smtpHost} required />
+						</div>
+						<div class="lg:col-span-3">
+							<Input label="Port" placeholder="587" bind:value={smtpPort} required />
+						</div>
+						<div class="lg:col-span-4">
+							<Input label="Username" bind:value={smtpUser} />
+						</div>
+						<div class="lg:col-span-4 lg:col-start-1">
+							<Input label="Password" type="password" bind:value={smtpPass} />
+						</div>
 					</div>
-					<div class="field">
-						<label class="mb-1 block text-xs font-medium text-base-content/70">Region</label>
-						<input type="text" class="input w-full" placeholder="us-east-1" bind:value={s3Region} />
-					</div>
-				</div>
-				<div class="mb-3 grid grid-cols-2 gap-3">
-					<div class="field">
-						<label class="mb-1 block text-xs font-medium text-base-content/70">Access Key</label>
-						<input type="text" class="input w-full" bind:value={s3AccessKey} />
-					</div>
-					<div class="field">
-						<label class="mb-1 block text-xs font-medium text-base-content/70">Secret Key</label>
-						<input type="password" class="input w-full" bind:value={s3SecretKey} />
-					</div>
-				</div>
-				<div class="field mb-4">
-					<label class="mb-1 block text-xs font-medium text-base-content/70"
-						>Endpoint (optional)</label
+
+					<button
+						type="button"
+						class="mt-2 mb-4 cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
+						onclick={() => (showMoreMail = !showMoreMail)}
 					>
-					<input
-						type="text"
-						class="input w-full"
-						placeholder="https://s3.amazonaws.com"
-						bind:value={s3Endpoint}
-					/>
+						{showMoreMail ? 'Hide more options' : 'Show more options'}
+					</button>
+
+					{#if showMoreMail}
+						<div transition:slide={{ duration: 150 }}>
+							<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12">
+								<div class="lg:col-span-4">
+									<div class="field">
+										<label class="field-label">TLS encryption</label>
+										<select class="field-input" bind:value={smtpTls}>
+											<option value={false}>Auto (StartTLS)</option>
+											<option value={true}>Always</option>
+										</select>
+									</div>
+								</div>
+								<div class="lg:col-span-4">
+									<div class="field">
+										<label class="field-label">AUTH method</label>
+										<select class="field-input" bind:value={smtpAuthMethod}>
+											<option value="PLAIN">PLAIN (default)</option>
+											<option value="LOGIN">LOGIN</option>
+										</select>
+									</div>
+								</div>
+								<div class="lg:col-span-4">
+									<Input label="EHLO/HELO domain" placeholder="Default to localhost" bind:value={smtpLocalName} />
+								</div>
+							</div>
+						</div>
+					{/if}
 				</div>
 			{/if}
 
-			<div class="flex items-center gap-3">
-				<Button
-					class="btn-primary"
-					loading={storageSaving}
-					disabled={storageSaving}
-					onclick={saveStorage}>Save</Button
-				>
-				{#if storageSaved}<span class="text-xs text-success">Saved!</span>{/if}
+			<div class="mt-6 flex items-center justify-end gap-3">
+				<Button class="btn-primary" loading={mailSaving} onclick={saveMail}>Save changes</Button>
 			</div>
 		</div>
+
+	{:else if activeSection === 'files'}
+		<h2 class="mb-4 text-lg font-semibold">Files Storage</h2>
+		<div class="rounded-box border border-base-300 bg-base-100 p-6">
+			<div class="mb-4 text-sm text-base-content/60">
+				<p>By default Lazypock uses the local file system to store uploaded files.</p>
+				<p>If you have limited disk space, you could optionally connect to an S3 compatible storage.</p>
+			</div>
+
+			<!-- S3 toggle -->
+			<div class="switch-field mb-4">
+				<label class="switch-label" for="storage-enabled">
+					<span class="txt">Use S3 storage</span>
+				</label>
+				<label class="switch">
+					<input id="storage-enabled" type="checkbox" bind:checked={storageEnabled} />
+					<span class="switch-slider"></span>
+				</label>
+			</div>
+
+			{#if storageEnabled}
+				<div transition:slide={{ duration: 150 }}>
+					<div class="mb-4">
+						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+							<Input label="S3 Bucket" placeholder="my-bucket" bind:value={s3Bucket} required />
+							<Input label="Region" placeholder="us-east-1" bind:value={s3Region} />
+						</div>
+						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+							<Input label="Access Key" bind:value={s3AccessKey} />
+							<Input label="Secret Key" type="password" bind:value={s3SecretKey} />
+						</div>
+						<Input label="Endpoint (optional)" placeholder="https://s3.amazonaws.com" bind:value={s3Endpoint} />
+					</div>
+				</div>
+			{/if}
+
+			<div class="flex items-center justify-end gap-3">
+				<Button class="btn-primary" loading={storageSaving} onclick={saveStorage}>Save changes</Button>
+			</div>
+		</div>
+
 	{:else if activeSection === 'backups'}
 		<h2 class="mb-4 text-lg font-semibold">Backups</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
@@ -615,18 +600,17 @@
 			</p>
 			<Button class="btn-primary" loading={backingUp} onclick={doBackup}>Download Backup</Button>
 		</div>
+
 	{:else if activeSection === 'cron'}
 		<h2 class="mb-4 text-lg font-semibold">Cron</h2>
 		<div class="rounded-box border border-base-300 bg-base-100 p-6">
 			<p class="text-sm text-base-content/60">Cron job scheduling coming soon.</p>
 		</div>
+
 	{:else if activeSection === 'export'}
 		<h2 class="mb-4 text-lg font-semibold">Export Collections</h2>
-		<div class="mb-4 text-sm text-base-content/60">
-			<p>
-				Below you'll find your current collections configuration that you could import in another
-				environment.
-			</p>
+		<div class="text-sm text-base-content/60 mb-4">
+			<p>Below you'll find your current collections configuration that you could import in another environment.</p>
 		</div>
 
 		{#if loadingCollections}
@@ -640,9 +624,7 @@
 			</div>
 		{:else}
 			<div class="export-panel flex flex-col gap-4">
-				<!-- Checkbox list + Preview side by side -->
 				<div class="flex flex-col gap-4 lg:flex-row">
-					<!-- Collection list -->
 					<div class="min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
 						<div class="border-b border-base-300 px-3 py-2">
 							<label class="flex cursor-pointer items-center gap-2 text-sm font-medium">
@@ -674,28 +656,25 @@
 						</div>
 					</div>
 
-					<!-- JSON preview -->
 					<div class="relative min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
 						<button
 							type="button"
-							class="absolute top-2 right-2 z-10 cursor-pointer rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs text-base-content/60 hover:text-base-content"
+							class="absolute right-2 top-2 z-10 cursor-pointer rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs text-base-content/60 hover:text-base-content"
 							disabled={!totalSelected}
 							onclick={copyExport}
 						>
 							{#if exportCopied}
-								<span class="flex items-center gap-1 text-success"
-									><Check class="h-3 w-3" />Copied</span
-								>
+								<span class="flex items-center gap-1 text-success"><Check class="h-3 w-3" />Copied</span>
 							{:else}
 								<span class="flex items-center gap-1"><Clipboard class="h-3 w-3" />Copy</span>
 							{/if}
 						</button>
-						<pre class="max-h-80 overflow-auto p-3 font-mono text-xs">{schemaJson ||
-								'Select collections to preview...'}</pre>
+						<pre class="max-h-80 overflow-auto p-3 font-mono text-xs">{
+							schemaJson || 'Select collections to preview...'}</pre
+						>
 					</div>
 				</div>
 
-				<!-- Download button -->
 				<div class="flex justify-end">
 					<Button class="btn-primary" disabled={!totalSelected} onclick={downloadExport}>
 						<Download class="h-4 w-4" />
@@ -704,6 +683,7 @@
 				</div>
 			</div>
 		{/if}
+
 	{:else if activeSection === 'import'}
 		<h2 class="mb-4 text-lg font-semibold">Import Collections</h2>
 
@@ -736,36 +716,31 @@
 					/>
 				</div>
 
-				<div class="field">
-					<label for="import-schemas" class="mb-1 block text-sm font-medium text-base-content/70"
-						>Collections</label
-					>
+				<div class="field mb-4">
+					<label for="import-schemas" class="field-label">Collections</label>
 					<textarea
 						id="import-schemas"
-						class="input w-full font-mono text-xs"
+						class="field-input font-mono text-xs"
 						class:border-error={importSchemas && !isValidImport}
 						spellcheck="false"
 						rows="10"
 						placeholder={importPlaceholder}
 						bind:value={importSchemas}
-						oninput={parseImport}></textarea>
+						oninput={parseImport}
+					></textarea>
 					{#if importSchemas && !isValidImport}
-						<p class="mt-1 text-xs text-error">
-							{importResult || 'Invalid collections configuration.'}
-						</p>
+						<p class="mt-1 text-xs text-error">{importResult || 'Invalid collections configuration.'}</p>
 					{/if}
 				</div>
 
-				<div class="mb-4 flex items-center gap-2">
-					<input
-						id="delete-missing"
-						type="checkbox"
-						bind:checked={deleteMissing}
-						disabled={!isValidImport}
-					/>
-					<label for="delete-missing" class="text-sm text-base-content/70"
-						>Delete missing collections and schema fields</label
-					>
+				<div class="switch-field mb-4">
+					<label class="switch-label" for="delete-missing">
+						<span class="txt">Delete missing collections and schema fields</span>
+					</label>
+					<label class="switch">
+						<input id="delete-missing" type="checkbox" bind:checked={deleteMissing} disabled={!isValidImport} />
+						<span class="switch-slider"></span>
+					</label>
 				</div>
 
 				{#if isValidImport && parsedCollections.length > 0 && !hasChanges}
@@ -778,28 +753,22 @@
 					<h5 class="mb-2 text-sm font-semibold">Detected changes</h5>
 					<div class="mb-4 space-y-1">
 						{#each importChanges.removed as name (name)}
-							<div class="flex items-center gap-2 rounded-field bg-error/20 px-3 py-1.5 text-sm">
-								<span class="text-white rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold"
-									>Deleted</span
-								>
+							<label class="flex items-center gap-2 rounded-field bg-error/20 px-3 py-1.5 text-sm">
+								<span class="rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold text-white">Deleted</span>
 								<span>{name}</span>
-							</div>
+							</label>
 						{/each}
 						{#each importChanges.changed as name (name)}
-							<div class="flex items-center gap-2 rounded-field bg-warning/20 px-3 py-1.5 text-sm">
-								<span class="text-white rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold"
-									>Changed</span
-								>
+							<label class="flex items-center gap-2 rounded-field bg-warning/20 px-3 py-1.5 text-sm">
+								<span class="rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold text-white">Changed</span>
 								<span>{name}</span>
-							</div>
+							</label>
 						{/each}
 						{#each importChanges.added as name (name)}
-							<div class="flex items-center gap-2 rounded-field bg-success/20 px-3 py-1.5 text-sm">
-								<span class="text-white rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold"
-									>Added</span
-								>
+							<label class="flex items-center gap-2 rounded-field bg-success/20 px-3 py-1.5 text-sm">
+								<span class="rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold text-white">Added</span>
 								<span>{name}</span>
-							</div>
+							</label>
 						{/each}
 					</div>
 				{/if}
@@ -831,6 +800,7 @@
 				{/if}
 			</div>
 		{/if}
+
 	{/if}
 </div>
 
@@ -897,10 +867,136 @@
 {/if}
 
 <style>
-	input[type='radio'] {
+	/* input[type='radio'] {
 		accent-color: var(--color-primary);
-	}
+	} */
 	.checkbox {
 		accent-color: var(--color-primary);
 	}
+
+	/* ── Switch toggle ── */
+	.switch-field {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 12px;
+		border-radius: var(--radius-field);
+		background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
+		transition: background var(--animation-speed, 0.2s);
+	}
+	.switch-field:focus-within {
+		background: color-mix(in oklab, var(--color-base-content) 12%, var(--color-base-100));
+	}
+	.switch-label {
+		flex: 1;
+		cursor: pointer;
+		font-size: 0.9375rem;
+		color: var(--color-base-content);
+	}
+	.switch-label .txt {
+		opacity: 0.85;
+	}
+	.switch {
+		position: relative;
+		display: inline-block;
+		width: 44px;
+		height: 24px;
+		flex-shrink: 0;
+	}
+	.switch input {
+		opacity: 0;
+		width: 0;
+		height: 0;
+		position: absolute;
+	}
+	.switch-slider {
+		position: absolute;
+		cursor: pointer;
+		inset: 0;
+		background: color-mix(in oklab, var(--color-base-content) 25%, transparent);
+		border-radius: 24px;
+		transition: 0.2s;
+	}
+	.switch-slider::before {
+		content: '';
+		position: absolute;
+		height: 18px;
+		width: 18px;
+		left: 3px;
+		bottom: 3px;
+		background: white;
+		border-radius: 50%;
+		transition: 0.2s;
+	}
+	.switch input:checked + .switch-slider {
+		background: var(--color-primary);
+	}
+	.switch input:checked + .switch-slider::before {
+		transform: translateX(20px);
+	}
+	.switch input:disabled + .switch-slider {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	/* ── Select field (for TLS/Auth) ── */
+	.field {
+		position: relative;
+		display: block;
+		outline: 0;
+		width: 100%;
+		min-width: 0;
+		border-radius: var(--radius-field);
+		background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
+		transition: background var(--animation-speed, 0.2s);
+	}
+	.field:focus-within {
+		background: color-mix(in oklab, var(--color-base-content) 12%, var(--color-base-100));
+	}
+	.field-label {
+		display: flex;
+		width: 100%;
+		gap: 5px;
+		align-items: center;
+		min-height: 24px;
+		padding: 9px 12px 1px;
+		font-weight: bold;
+		white-space: normal;
+		opacity: 0.7;
+		font-size: 0.875rem;
+		transition: color var(--animation-speed, 0.2s);
+		color: var(--color-base-content);
+	}
+	.field-input {
+		display: inline-block;
+		vertical-align: top;
+		outline: 0;
+		border: 0;
+		margin: 0;
+		width: 100%;
+		background: none;
+		font-weight: normal;
+		line-height: 1;
+		letter-spacing: inherit;
+		padding: 10px 12px;
+		color: var(--color-base-content);
+		font-size: 0.9375rem;
+		font-family: var(--font-sans, system-ui, sans-serif);
+	}
+	.field-input:focus,
+	.field-input:focus-visible,
+	.field-input:focus-within {
+		outline: 0;
+	}
+	select.field-input {
+		appearance: none;
+		cursor: pointer;
+	}
+
+	/* ── Grid helpers ── */
+	.lg\:col-span-3 { grid-column: span 3 / span 3; }
+	.lg\:col-span-4 { grid-column: span 4 / span 4; }
+	.lg\:col-span-5 { grid-column: span 5 / span 5; }
+	.lg\:col-start-1 { grid-column-start: 1; }
 </style>
