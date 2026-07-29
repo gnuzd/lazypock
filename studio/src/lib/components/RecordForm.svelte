@@ -3,8 +3,11 @@
 	import RichEditor from '$lib/components/RichEditor.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
 
+	import { client } from '$lib/client';
+
 	let {
 		fields,
+		collections = [] as Record<string, unknown>[],
 		data = $bindable({}),
 		disabled = false,
 		errors = {},
@@ -15,6 +18,8 @@
 	}: {
 		/** Collection schema fields (as returned from backend) */
 		fields: Record<string, unknown>[];
+		/** All collections list (for resolving relation targets) */
+		collections?: Record<string, unknown>[];
 		/** Bindable form data — mutated in-place */
 		data: Record<string, unknown>;
 		/** Disable all inputs (e.g. during save) */
@@ -30,6 +35,80 @@
 		/** Called when user saves password in edit mode */
 		onPasswordSave?: (password: string) => void;
 	} = $props();
+
+	// ── Relation field helpers ──
+	/** Cache of fetched records per target collection */
+	let relationCache = $state<Record<string, Record<string, unknown>[]>>({});
+	/** Search text per relation field */
+	let relationSearch = $state<Record<string, string>>({});
+	/** Whether each relation field's dropdown is open */
+	let relationOpen = $state<Record<string, boolean>>({});
+
+	function resolveTargetCollection(field: Record<string, unknown>): string | null {
+		const collId = field.collectionId as string | undefined;
+		if (!collId) return null;
+		const coll = collections.find((c) => c.id === collId);
+		return (coll?.name as string) ?? null;
+	}
+
+	function getPresentableField(collName: string): string | null {
+		const coll = collections.find((c) => c.name === collName);
+		if (!coll) return null;
+		const fields = (coll.fields as Record<string, unknown>[]) ?? [];
+		// Prefer the first non-ID field marked presentable; fall back to any text/email/name-like field
+		const presentable = fields.find((f) => f.presentable && f.name !== 'id');
+		if (presentable) return presentable.name as string;
+		const nameLike = fields.find(
+			(f) => f.name === 'name' || f.name === 'title' || f.name === 'email'
+		);
+		if (nameLike) return nameLike.name as string;
+		return null;
+	}
+
+	async function openRelationDropdown(fieldName: string, targetColl: string) {
+		if (relationCache[targetColl]) {
+			relationOpen[fieldName] = true;
+			relationOpen = { ...relationOpen };
+			return;
+		}
+		// Fetch records from target collection
+		try {
+			const result = await client.listRecords(targetColl, { page: '1', perPage: '200' });
+			relationCache[targetColl] = (result?.items ?? []) as Record<string, unknown>[];
+			relationCache = { ...relationCache };
+			relationOpen[fieldName] = true;
+			relationOpen = { ...relationOpen };
+		} catch {
+			// ignore
+		}
+	}
+
+	function getFilteredOptions(
+		fieldName: string,
+		targetColl: string
+	): { value: string; label: string }[] {
+		const records = relationCache[targetColl] ?? [];
+		const search = (relationSearch[fieldName] ?? '').toLowerCase();
+		const presentField = getPresentableField(targetColl);
+
+		return records
+			.filter((r) => {
+				if (!search) return true;
+				const id = (r.id as string) ?? '';
+				if (id.toLowerCase().includes(search)) return true;
+				if (presentField) {
+					const val = (r[presentField] as string) ?? '';
+					if (val.toLowerCase().includes(search)) return true;
+				}
+				return false;
+			})
+			.map((r) => ({
+				value: r.id as string,
+				label: presentField
+					? `${r[presentField] ?? ''} (${(r.id as string)?.slice(0, 8)}...)`
+					: (r.id as string)
+			}));
+	}
 
 	const TEXT_INPUT_TYPES = new Set(['text', 'number', 'email', 'url', 'password']);
 
@@ -169,21 +248,67 @@
 				{/if}
 			</div>
 
-			<!-- ═══ RELATION ═══ -->
+			<!-- ═══ RELATION (searchable dropdown) ═══ -->
 		{:else if type === 'relation'}
+			{@const targetColl = resolveTargetCollection(field)}
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
-				<input
-					id="f_{name}"
-					type="text"
-					{disabled}
-					value={(data[name] as string) ?? ''}
-					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
-					placeholder="Related record ID"
-				/>
+				<div class="relation-wrap">
+					<input
+						id="f_{name}"
+						type="text"
+						{disabled}
+						value={(data[name] as string) ?? ''}
+						placeholder={targetColl ? 'Search ' + targetColl + '...' : 'Related record ID'}
+						oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
+						onfocus={() => {
+							if (targetColl) openRelationDropdown(name, targetColl);
+						}}
+						onblur={() => {
+							setTimeout(() => {
+								relationOpen[name] = false;
+								relationOpen = { ...relationOpen };
+							}, 200);
+						}}
+					/>
+					{#if targetColl && relationOpen[name]}
+						{@const filtered = getFilteredOptions(name, targetColl)}
+						<div class="relation-dropdown">
+							<input
+								type="text"
+								class="relation-search"
+								placeholder="Type to filter..."
+								value={relationSearch[name] ?? ''}
+								oninput={(e: Event) => {
+									relationSearch[name] = (e.target as HTMLInputElement).value;
+									relationSearch = { ...relationSearch };
+								}}
+							/>
+							<div class="relation-options">
+								{#each filtered as opt}
+									<button
+										type="button"
+										class="relation-option"
+										class:active={data[name] === opt.value}
+										onmousedown={() => {
+											update(name, opt.value);
+											relationOpen[name] = false;
+											relationSearch[name] = '';
+											relationOpen = { ...relationOpen };
+											relationSearch = { ...relationSearch };
+										}}>{opt.label}</button
+									>
+								{/each}
+								{#if filtered.length === 0}
+									<div class="relation-empty">No matching records</div>
+								{/if}
+							</div>
+						</div>
+					{/if}
+				</div>
 				<span class="field-help"
-					>Related record ID{options.maxSelect && (options.maxSelect as number) > 1
-						? 's (comma-separated)'
+					>Related record{options.maxSelect && (options.maxSelect as number) > 1
+						? 's (multi-select not yet supported in dropdown)'
 						: ''}</span
 				>
 				{#if errors[name]}
@@ -626,5 +751,71 @@
 		padding: 8px 12px;
 		font-size: 0.875rem;
 		opacity: 0.4;
+	}
+
+	/* ── RELATION DROPDOWN ── */
+	.relation-wrap {
+		position: relative;
+	}
+
+	.relation-dropdown {
+		position: absolute;
+		top: 100%;
+		left: 0;
+		right: 0;
+		z-index: 50;
+		background: var(--color-base-100);
+		border: 1px solid var(--color-base-300);
+		border-radius: var(--radius-field);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+		max-height: 240px;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.relation-search {
+		width: 100%;
+		padding: 8px 10px;
+		border: none;
+		border-bottom: 1px solid var(--color-base-300);
+		background: transparent;
+		color: var(--color-base-content);
+		font-size: 0.8125rem;
+		outline: none;
+		box-sizing: border-box;
+	}
+
+	.relation-options {
+		overflow-y: auto;
+		flex: 1;
+	}
+
+	.relation-option {
+		display: block;
+		width: 100%;
+		padding: 7px 10px;
+		border: none;
+		background: transparent;
+		color: var(--color-base-content);
+		font-size: 0.8125rem;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.relation-option:hover {
+		background: color-mix(in oklab, var(--color-base-content) 10%, var(--color-base-100));
+	}
+
+	.relation-option.active {
+		background: color-mix(in oklab, var(--color-primary) 15%, var(--color-base-100));
+		color: var(--color-primary);
+	}
+
+	.relation-empty {
+		padding: 12px 10px;
+		font-size: 0.8125rem;
+		opacity: 0.4;
+		text-align: center;
 	}
 </style>

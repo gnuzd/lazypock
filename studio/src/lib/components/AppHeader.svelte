@@ -4,6 +4,20 @@
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
+
+	let appName = $state('');
+
+	onMount(async () => {
+		try {
+			const res = (await client.http.get('/settings')) as Record<string, unknown> | null;
+			if (res?.app_name) {
+				appName = res.app_name as string;
+			}
+		} catch {
+			// use default
+		}
+	});
 
 	function logout() {
 		disconnectRealtime();
@@ -26,7 +40,9 @@
 </script>
 
 <header class="flex h-11 shrink-0 items-center gap-2 bg-primary px-4 text-primary-content">
-	<span class=" mr-3 border-r border-primary-content/20 pr-3 font-semibold"> Lazypock </span>
+	<span class=" mr-3 border-r border-primary-content/20 pr-3 font-semibold">
+		{appName || 'Lazypock'}
+	</span>
 	<nav class="flex items-center gap-1">
 		<Button class={navClass('/collections')} onclick={() => _goto('/collections')}
 			>Collections</Button

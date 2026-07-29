@@ -12,6 +12,7 @@
 
 <aside
 	class="flex w-(--sidebar-width) shrink-0 flex-col overflow-hidden border-r border-base-300 bg-base-100"
+	style="--sidebar-width: 220px"
 >
 	{#if header}
 		<div class="border-b border-base-300 p-2">

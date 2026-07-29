@@ -126,7 +126,7 @@
 
 	let columns = $derived.by(() => {
 		const cols: { key: string; label: string; render: (r: Record<string, unknown>) => string }[] = [
-			{ key: 'id', label: 'ID', render: (r) => ((r.id as string)?.slice(0, 8) ?? '') + '...' }
+			{ key: 'id', label: 'ID', render: (r) => (r.id as string) ?? '' }
 		];
 		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
 			.filter((f) => !f.hidden)
@@ -677,6 +677,7 @@
 					fields={((collection?.fields ?? []) as Record<string, unknown>[]).toSorted(
 						(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
 					)}
+					{collections}
 					bind:data={recordData}
 					disabled={recordSaving}
 					errors={recordFieldErrors}
