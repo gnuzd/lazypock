@@ -5,8 +5,7 @@ defmodule LazypockWeb.DynamicView do
   """
 
   alias Lazypock.Collections.Registry
-  alias Lazypock.Repo
-  alias Lazypock.Schema.TypeMapper
+  alias Lazypock.Schemas.GenericRecord
 
   @doc """
   Formats a list of records from a collection into PocketBase-compatible items,
@@ -94,6 +93,7 @@ defmodule LazypockWeb.DynamicView do
   # Batch-fetch all related records across the input records.
   # Groups unique (target_collection, id) pairs and issues one
   # IN query per target collection — avoids N+1.
+  # Uses GenericRecord.all_where/3 for consistent data coercion.
   defp batch_fetch_related(records, relation_fields) do
     pairs =
       for record <- records,
@@ -116,15 +116,8 @@ defmodule LazypockWeb.DynamicView do
             placeholders =
               ids |> Enum.with_index(1) |> Enum.map(fn {_id, i} -> "$#{i}" end) |> Enum.join(", ")
 
-            sql = "SELECT * FROM #{TypeMapper.quote_ident(target)} WHERE id IN (#{placeholders})"
-            id_bins = Enum.map(ids, &Ecto.UUID.dump!/1)
-
-            case Ecto.Adapters.SQL.query(Repo, sql, id_bins) do
-              {:ok, %{rows: rows, columns: cols}} ->
-                rows |> rows_to_maps(cols) |> Enum.map(fn r -> {{target, r["id"]}, r} end)
-              {:error, _} ->
-                []
-            end
+            GenericRecord.all_where(target, "id IN (#{placeholders})", ids)
+            |> Enum.map(fn r -> {{target, r["id"]}, r} end)
 
           {:error, _} ->
             []
@@ -133,13 +126,6 @@ defmodule LazypockWeb.DynamicView do
       |> Map.new()
     end
   end
-
-  defp rows_to_maps(rows, cols) do
-    Enum.map(rows, fn row ->
-      cols |> Enum.zip(row) |> Map.new()
-    end)
-  end
-
 
   @doc """
   Builds a paginated response matching PocketBase format.
