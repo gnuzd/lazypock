@@ -3,9 +3,6 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
 	import { setSidebar } from '$lib/sidebar.svelte';
-	import { Chart, LineElement, PointElement, LineController, LinearScale, TimeScale, Filler, Tooltip } from 'chart.js';
-	import 'chartjs-adapter-luxon';
-	import zoomPlugin from 'chartjs-plugin-zoom';
 
 	// Hide the sidebar on this page
 	setSidebar();
@@ -21,23 +18,37 @@
 	let detailId = $state<string | null>(null);
 	let detail = $state<Record<string, unknown> | null>(null);
 
-	// Chart
+	// Chart (created in onMount to avoid SSR window issues)
 	let chartCanvas: HTMLCanvasElement | undefined = $state();
-	let chartInst: Chart | undefined = $state();
+	let chartInst: any = $state();
 	let chartData: { x: Date; y: number }[] = $state([]);
 	let chartLoading = $state(false);
 
-	onMount(async () => {
-		loadCollections();
-		loadLogs();
-		await loadChart();
-	});
+	// Chart class reference kept for re-loading after clear (set in onMount)
+	let ChartRef: any = $state();
 
-	function initChart() {
-		if (!chartCanvas || chartInst) return;
+	onMount(async () => {
+		// Dynamically import chart.js only on client-side
+		const [
+			{ Chart, LineElement, PointElement, LineController, LinearScale, TimeScale, Filler, Tooltip },
+			{ default: zoomPlugin }
+		] = await Promise.all([
+			import('chart.js'),
+			import('chartjs-plugin-zoom'),
+			import('chartjs-adapter-luxon')
+		]);
 
 		Chart.register(LineElement, PointElement, LineController, LinearScale, TimeScale, Filler, Tooltip);
 		Chart.register(zoomPlugin);
+
+		await loadChart(Chart);
+		loadCollections();
+		loadLogs();
+		ChartRef = Chart;
+	});
+
+	function initChart(Chart: any) {
+		if (!chartCanvas || chartInst) return;
 
 		chartInst = new Chart(chartCanvas, {
 			type: 'line',
@@ -52,9 +63,9 @@
 						borderWidth: 2,
 						pointRadius: 1,
 						pointBorderWidth: 0,
-						fill: true,
-					},
-				],
+						fill: true
+					}
+				]
 			},
 			options: {
 				resizeDelay: 250,
@@ -62,94 +73,78 @@
 				animation: false,
 				interaction: {
 					intersect: false,
-					mode: 'index' as const,
+					mode: 'index'
 				},
 				scales: {
 					y: {
 						beginAtZero: true,
-						grid: {
-							color: '#edf0f3',
-						},
-						border: {
-							color: '#e4e9ec',
-						},
+						grid: { color: '#edf0f3' },
+						border: { color: '#e4e9ec' },
 						ticks: {
 							precision: 0,
 							maxTicksLimit: 4,
 							autoSkip: true,
-							color: '#666f75',
-						},
+							color: '#666f75'
+						}
 					},
 					x: {
-						type: 'time' as const,
+						type: 'time',
 						time: {
-							unit: 'hour' as const,
-							tooltipFormat: 'DD h a',
+							unit: 'hour',
+							tooltipFormat: 'DD h a'
 						},
 						grid: {
-							color: (c: { tick?: { major?: boolean } }) => (c.tick?.major ? '#edf0f3' : ''),
+							color: (c: any) => (c.tick?.major ? '#edf0f3' : '')
 						},
-						border: {
-							color: '#e4e9ec' as const,
-						},
+						border: { color: '#e4e9ec' },
 						ticks: {
 							maxTicksLimit: 15,
 							autoSkip: true,
 							maxRotation: 0,
-							major: {
-								enabled: true,
-							},
-							color: (c: { tick?: { major?: boolean } }) =>
-								c.tick?.major ? '#16161a' : '#666f75',
-						},
-					},
+							major: { enabled: true },
+							color: (c: any) => (c.tick?.major ? '#16161a' : '#666f75')
+						}
+					}
 				},
 				plugins: {
-					legend: {
-						display: false,
-					},
+					legend: { display: false },
 					zoom: {
-						pan: {
-							enabled: true,
-							mode: 'x' as const,
-						},
+						pan: { enabled: true, mode: 'x' },
 						zoom: {
-							mode: 'x' as const,
-							pinch: {
-								enabled: true,
-							},
+							mode: 'x',
+							pinch: { enabled: true },
 							drag: {
 								enabled: true,
 								backgroundColor: 'rgba(255, 99, 132, 0.2)',
 								borderWidth: 0,
-								threshold: 10,
-							},
-						},
-					},
-				},
-			},
-		}) as unknown as Chart;
+								threshold: 10
+							}
+						}
+					}
+				}
+			}
+		});
+
+		// Update chart data reactively
+		$effect(() => {
+			if (chartInst && chartData.length > 0) {
+				chartInst.data.datasets[0].data = chartData;
+				chartInst.update('none');
+			}
+		});
 	}
 
-	// Update chart when data changes
-	$effect(() => {
-		if (chartInst && chartData.length > 0) {
-			chartInst.data.datasets[0].data = chartData as never;
-			chartInst.update('none');
-		}
-	});
-
-	async function loadChart() {
+	async function loadChart(Chart: any) {
 		chartLoading = true;
 		try {
 			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
 			const hourly = (res?.hourly as { date: string; total: number }[]) ?? [];
 			chartData = hourly.map((h) => ({
 				x: new Date(h.date),
-				y: h.total,
+				y: h.total
 			}));
-			// Init chart after data loads (canvas is guaranteed to exist by now)
-			initChart();
+			// Init chart after data loads
+			initChart(Chart);
 		} catch {
 			// ignore
 		} finally {
@@ -232,7 +227,7 @@
 		try {
 			await client.http.delete('/logs?all=true');
 			loadLogs();
-			loadChart();
+			loadChart(ChartRef);
 		} catch {
 			// ignore
 		}
@@ -242,7 +237,7 @@
 		try {
 			await client.http.delete('/logs');
 			loadLogs();
-			loadChart();
+			loadChart(ChartRef);
 		} catch {
 			// ignore
 		}
