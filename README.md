@@ -1,5 +1,7 @@
 # 🦥 LazyPock
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 > **Your whole backend. In one lazy pocket.**
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**. Define collections in the Studio admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
@@ -269,7 +271,7 @@ See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2024-2025 Chris Nguyen (gnuzd)
 
 ---
 

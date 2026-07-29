@@ -5,6 +5,7 @@ defmodule Lazypock.MixProject do
     [
       app: :lazypock,
       version: "0.1.0",
+      license: "MIT",
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,

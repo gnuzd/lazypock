@@ -223,4 +223,4 @@ client.collection('posts').unsubscribe('*');
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2024-2025 Chris Nguyen (gnuzd)

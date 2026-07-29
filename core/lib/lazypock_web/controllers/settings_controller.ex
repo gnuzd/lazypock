@@ -206,7 +206,8 @@ defmodule LazypockWeb.SettingsController do
                 _ -> 0
               end
 
-            {[%{name: name, type: type, records_imported: insert_count} | imported_acc], errors_acc}
+            {[%{name: name, type: type, records_imported: insert_count} | imported_acc],
+             errors_acc}
 
           {:error, reason} ->
             {imported_acc, [%{name: name, error: reason} | errors_acc]}
