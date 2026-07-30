@@ -59,6 +59,7 @@ defmodule LazypockWeb.Router do
 
     # Request logs (superuser)
     get("/logs", LogsController, :list)
+    get("/logs/stats", LogsController, :stats)
     get("/logs/collections", LogsController, :collections)
     get("/logs/:id", LogsController, :show)
     delete("/logs", LogsController, :delete_logs)
@@ -74,6 +75,9 @@ defmodule LazypockWeb.Router do
     # Export/Import collections
     get("/export", SettingsController, :export_all)
     post("/import", SettingsController, :import_all)
+
+    # Send test email (superuser)
+    post("/settings/test-email", SettingsController, :send_test_email)
   end
 
   # Auth collection routes — must be BEFORE dynamic :collection routes
@@ -84,6 +88,12 @@ defmodule LazypockWeb.Router do
     # No auth required (public login/methods)
     post("/:collection/auth-with-password", AuthController, :auth_with_password)
     get("/:collection/auth-methods", AuthController, :auth_methods)
+
+    # Email verification & password reset (public — no auth)
+    post("/:collection/request-verification", EmailController, :request_verification)
+    post("/:collection/confirm-verification", EmailController, :confirm_verification)
+    post("/:collection/request-password-reset", EmailController, :request_password_reset)
+    post("/:collection/confirm-password-reset", EmailController, :confirm_password_reset)
   end
 
   scope "/api", LazypockWeb do

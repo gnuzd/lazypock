@@ -14,10 +14,162 @@
 	let detailId = $state<string | null>(null);
 	let detail = $state<Record<string, unknown> | null>(null);
 
+	// Stats
+	let statsTotal = $state(0);
+	let statsLast24h = $state(0);
+	let statsErrors24h = $state(0);
+	let statsAvgDuration = $state(0);
+	// Chart (created in onMount to avoid SSR window issues)
+	let chartCanvas: HTMLCanvasElement | undefined = $state();
+	let chartInst: any = $state();
+	let chartData: { x: Date; y: number }[] = $state([]);
+	let chartLoading = $state(false);
+	let ChartRef: any = $state();
+
 	onMount(async () => {
+		// Dynamically import chart.js only on client-side
+		const [
+			{ Chart, LineElement, PointElement, LineController, LinearScale, TimeScale, Filler, Tooltip },
+			{ default: zoomPlugin }
+		] = await Promise.all([
+			import('chart.js'),
+			import('chartjs-plugin-zoom'),
+			import('chartjs-adapter-luxon')
+		]);
+
+		Chart.register(
+			LineElement,
+			PointElement,
+			LineController,
+			LinearScale,
+			TimeScale,
+			Filler,
+			Tooltip
+		);
+		Chart.register(zoomPlugin);
+
+		await loadStats();
+		await loadChart(Chart);
 		loadCollections();
 		loadLogs();
+		ChartRef = Chart;
 	});
+
+	function initChart(Chart: any) {
+		if (!chartCanvas || chartInst) return;
+
+		chartInst = new Chart(chartCanvas, {
+			type: 'line',
+			data: {
+				datasets: [
+					{
+						label: 'Total requests',
+						data: [],
+						borderColor: '#e34562',
+						pointBackgroundColor: '#e34562',
+						backgroundColor: 'rgb(239,69,101,0.05)',
+						borderWidth: 2,
+						pointRadius: 1,
+						pointBorderWidth: 0,
+						fill: true
+					}
+				]
+			},
+			options: {
+				resizeDelay: 250,
+				maintainAspectRatio: false,
+				animation: false,
+				interaction: {
+					intersect: false,
+					mode: 'index'
+				},
+				scales: {
+					y: {
+						beginAtZero: true,
+						grid: { color: '#edf0f3' },
+						border: { color: '#e4e9ec' },
+						ticks: {
+							precision: 0,
+							maxTicksLimit: 4,
+							autoSkip: true,
+							color: '#666f75'
+						}
+					},
+					x: {
+						type: 'time',
+						time: {
+							unit: 'hour',
+							tooltipFormat: 'DD h a'
+						},
+						grid: {
+							color: (c: any) => (c.tick?.major ? '#edf0f3' : '')
+						},
+						border: { color: '#e4e9ec' },
+						ticks: {
+							maxTicksLimit: 15,
+							autoSkip: true,
+							maxRotation: 0,
+							major: { enabled: true },
+							color: (c: any) => (c.tick?.major ? '#16161a' : '#666f75')
+						}
+					}
+				},
+				plugins: {
+					legend: { display: false },
+					zoom: {
+						pan: { enabled: true, mode: 'x' },
+						zoom: {
+							mode: 'x',
+							pinch: { enabled: true },
+							drag: {
+								enabled: true,
+								backgroundColor: 'rgba(255, 99, 132, 0.2)',
+								borderWidth: 0,
+								threshold: 10
+							}
+						}
+					}
+				}
+			}
+		});
+
+		// Update chart data reactively
+		$effect(() => {
+			if (chartInst && chartData.length > 0) {
+				chartInst.data.datasets[0].data = chartData;
+				chartInst.update('none');
+			}
+		});
+	}
+
+	async function loadStats() {
+		try {
+			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
+			statsTotal = (res?.total as number) ?? 0;
+			statsLast24h = (res?.last_24h as number) ?? 0;
+			statsErrors24h = (res?.errors_24h as number) ?? 0;
+			statsAvgDuration = (res?.avg_duration as number) ?? 0;
+		} catch {
+			// ignore
+		}
+	}
+
+	async function loadChart(Chart: any) {
+		chartLoading = true;
+		try {
+			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
+			const hourly = (res?.hourly as { date: string; total: number }[]) ?? [];
+			chartData = hourly.map((h) => ({
+				x: new Date(h.date),
+				y: h.total
+			}));
+			initChart(Chart);
+		} catch {
+			// ignore
+		} finally {
+			chartLoading = false;
+		}
+	}
 
 	async function loadCollections() {
 		try {
@@ -93,7 +245,9 @@
 		if (!confirm('Delete all request logs? This cannot be undone.')) return;
 		try {
 			await client.http.delete('/logs?all=true');
+			loadStats();
 			loadLogs();
+			loadChart(ChartRef);
 		} catch {
 			// ignore
 		}
@@ -102,13 +256,52 @@
 	async function clearOldLogs() {
 		try {
 			await client.http.delete('/logs');
+			loadStats();
 			loadLogs();
+			loadChart(ChartRef);
 		} catch {
 			// ignore
 		}
 	}
 </script>
 
+<!-- Chart -->
+<div class="mb-4">
+	<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
+		{#if chartLoading}
+			<div class="absolute inset-0 z-50 flex items-center justify-center">
+				<span class="loading loading-spinner loading-sm" />
+			</div>
+		{/if}
+		<canvas
+			bind:this={chartCanvas}
+			class="h-full w-full"
+			ondblclick={() => chartInst?.resetZoom()}
+		/>
+	</div>
+</div>
+
+<!-- Stats cards -->
+<div class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-2xl font-bold">{statsTotal.toLocaleString()}</div>
+		<div class="text-xs text-base-content/60">All time</div>
+	</div>
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-2xl font-bold">{statsLast24h.toLocaleString()}</div>
+		<div class="text-xs text-base-content/60">Last 24h</div>
+	</div>
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-2xl font-bold text-error">{statsErrors24h.toLocaleString()}</div>
+		<div class="text-xs text-base-content/60">Errors (24h)</div>
+	</div>
+	<div class="rounded-box border border-base-300 bg-base-100 p-4">
+		<div class="text-2xl font-bold">{formatDuration(statsAvgDuration)}</div>
+		<div class="text-xs text-base-content/60">Avg duration (24h)</div>
+	</div>
+</div>
+
+<!-- Filters bar -->
 <div class="mb-4 flex items-center justify-between gap-2">
 	<h1 class="text-xl font-semibold">Request Logs</h1>
 	<div class="flex items-center gap-2">
@@ -128,7 +321,7 @@
 			</select>
 		{/if}
 		<Button class="btn-ghost btn-sm" onclick={clearOldLogs}>Clean old (7d+)</Button>
-		<Button class="btn-error btn-sm" onclick={clearLogs}>Clear all</Button>
+		<Button class="btn-primary btn-sm" onclick={clearLogs}>Clear all</Button>
 	</div>
 </div>
 

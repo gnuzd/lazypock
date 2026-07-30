@@ -104,9 +104,53 @@ defmodule LazypockWeb.SettingsController do
       true ->
         case Ecto.Adapters.SQL.query(Repo, sql, []) do
           {:ok, %{columns: columns, rows: rows}} ->
+            safe_rows =
+              Enum.map(rows, fn row ->
+                Enum.map(row, fn
+                  nil ->
+                    nil
+
+                  val when is_binary(val) ->
+                    if byte_size(val) == 16 do
+                      # UUID raw binary from Postgrex
+                      case Ecto.UUID.load(val) do
+                        {:ok, str} -> str
+                        :error -> inspect(val)
+                      end
+                    else
+                      # Normal text string
+                      if String.valid?(val), do: val, else: inspect(val)
+                    end
+
+                  %DateTime{} = dt ->
+                    DateTime.to_iso8601(dt)
+
+                  %NaiveDateTime{} = dt ->
+                    NaiveDateTime.to_iso8601(dt)
+
+                  %Date{} = d ->
+                    Date.to_iso8601(d)
+
+                  %Decimal{} = d ->
+                    Decimal.to_string(d)
+
+                  val when is_integer(val) ->
+                    val
+
+                  val when is_float(val) ->
+                    val
+
+                  val when is_boolean(val) ->
+                    val
+
+                  val ->
+                    inspect(val)
+                end)
+              end)
+
             json(conn, %{
               columns: columns,
-              rows: rows,
+              rows: safe_rows,
               total: length(rows)
             })
 
@@ -228,5 +272,32 @@ defmodule LazypockWeb.SettingsController do
       imported: Enum.reverse(imported_list),
       errors: Enum.reverse(errors_list)
     })
+  end
+
+  # ── Send test email ──
+
+  def send_test_email(conn, params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_send_test_email(conn, params)
+  end
+
+  defp do_send_test_email(conn, params) do
+    to_address = params["to"]
+
+    if is_nil(to_address) or to_address == "" do
+      conn
+      |> put_status(400)
+      |> json(%{error: "Recipient email is required"})
+    else
+      case Lazypock.Mailer.deliver(:verification, to_address, to_address, token: "test-token") do
+        :ok ->
+          json(conn, %{success: true, message: "Test email sent to #{to_address}"})
+
+        {:error, reason} ->
+          conn
+          |> put_status(500)
+          |> json(%{error: "Failed to send email: #{reason}"})
+      end
+    end
   end
 end

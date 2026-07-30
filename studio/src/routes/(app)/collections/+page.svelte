@@ -4,7 +4,7 @@
 	import { slide } from 'svelte/transition';
 	import Dropdown from '$lib/components/Dropdown.svelte';
 	import { Folder, Plus, Settings } from '@lucide/svelte';
-	import { setSidebar } from '$lib/sidebar.svelte';
+	import Sidebar from '$lib/components/Sidebar.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import SidePane from '$lib/components/SidePane.svelte';
 	import FieldSettings from '$lib/components/FieldSettings.svelte';
@@ -488,8 +488,6 @@
 			recordSaving = false;
 		}
 	}
-
-	setSidebar(headerContent, bodyContent, footerContent);
 </script>
 
 {#snippet headerContent()}
@@ -582,132 +580,136 @@
 	>
 {/snippet}
 
-<!-- Main content -->
-{#if loading}
-	<div
-		class="flex min-h-[200px] flex-1 flex-col items-center justify-center gap-2 text-base-content/40"
-	>
-		<p class="text-sm">Loading...</p>
-	</div>
-{:else if collection}
-	<!-- Breadcrumb -->
-	<div class="mb-3 flex items-center justify-between pb-3">
-		<nav class="flex items-center gap-2">
-			<span class="text-base-content/50">Collections</span>
-			<span class="text-xs opacity-30">/</span>
-			<span class="font-medium">{(collection.name as string) ?? '...'}</span>
-			<button
-				type="button"
-				class="ml-2 cursor-pointer rounded border-none bg-transparent p-0.5 text-base-content opacity-40 transition-opacity hover:opacity-100"
-				onclick={() => editCollection(collection!)}
-				title="Edit collection"
+<!-- Layout: sidebar left, main content right -->
+<div class="flex flex-1 overflow-hidden">
+	<Sidebar header={headerContent} body={bodyContent} footer={footerContent} />
+	<main class="flex-1 overflow-auto p-6">
+		{#if loading}
+			<div
+				class="flex min-h-[200px] flex-1 flex-col items-center justify-center gap-2 text-base-content/40"
 			>
-				<Settings class="h-4 w-4" />
-			</button>
-		</nav>
-		<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
-	</div>
+				<p class="text-sm">Loading...</p>
+			</div>
+		{:else if collection}
+			<div class="mb-3 flex items-center justify-between pb-3">
+				<nav class="flex items-center gap-2">
+					<span class="text-base-content/50">Collections</span>
+					<span class="text-xs opacity-30">/</span>
+					<span class="font-medium">{(collection.name as string) ?? '...'}</span>
+					<button
+						type="button"
+						class="ml-2 cursor-pointer rounded border-none bg-transparent p-0.5 text-base-content opacity-40 transition-opacity hover:opacity-100"
+						onclick={() => editCollection(collection!)}
+						title="Edit collection"
+					>
+						<Settings class="h-4 w-4" />
+					</button>
+				</nav>
+				<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+			</div>
+			<DataTable
+				{columns}
+				{rows}
+				emptyLabel="No records yet. Create your first record to get started."
+				emptyActionLabel="+ New Record"
+				onemptyaction={newRecord}
+				onrowclick={(row) => editRecord(row)}
+			/>
+		{:else}
+			<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>
+		{/if}
+	</main>
+</div>
 
-	<!-- Table -->
-	<DataTable
-		{columns}
-		{rows}
-		emptyLabel="No records yet. Create your first record to get started."
-		emptyActionLabel="+ New Record"
-		onemptyaction={newRecord}
-		onrowclick={(row) => editRecord(row)}
-	/>
-
-	<!-- Record create/edit SidePane -->
-	<SidePane
-		bind:show={showRecordPane}
-		title={editingRecordId ? 'Edit Record' : 'New Record'}
-		closable={false}
-	>
-		{#snippet headerExtra()}
-			{#if editingRecordId}
-				<Dropdown>
-					{#snippet trigger()}
-						<button type="button" class="btn btn-ghost btn-sm px-2">
-							<svg
-								width="16"
-								height="16"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle
-									cx="12"
-									cy="19"
-									r="1"
-								/></svg
-							>
-						</button>
-					{/snippet}
-					<div class="min-w-[140px] p-1">
-						<button
-							type="button"
-							class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-1.5 text-sm text-error hover:bg-error/10"
-							onclick={deleteRecord}
+<!-- Record create/edit SidePane -->
+<SidePane
+	bind:show={showRecordPane}
+	title={editingRecordId ? 'Edit Record' : 'New Record'}
+	closable={false}
+>
+	{#snippet headerExtra()}
+		{#if editingRecordId}
+			<Dropdown>
+				{#snippet trigger()}
+					<button type="button" class="btn btn-ghost btn-sm px-2">
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle
+								cx="12"
+								cy="19"
+								r="1"
+							/></svg
 						>
-							<svg
-								width="14"
-								height="14"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								><polyline points="3 6 5 6 21 6" /><path
-									d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-								/></svg
-							>
-							Delete
-						</button>
-					</div>
-				</Dropdown>
-			{/if}
-		{/snippet}
-		<div class="flex h-full min-h-0 flex-col">
-			<div class="flex-1 overflow-y-auto p-4">
-				<RecordForm
-					fields={((collection?.fields ?? []) as Record<string, unknown>[]).toSorted(
-						(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
-					)}
-					{collections}
-					bind:data={recordData}
-					disabled={recordSaving}
-					errors={recordFieldErrors}
-					editing={!!editingRecordId}
-					bind:passwordSaving
-					bind:passwordError
-					onPasswordSave={savePassword}
-				/>
-			</div>
-
-			{#if recordError}
-				<div class="shrink-0 border-t border-base-300 bg-error/10 px-4 py-2 text-xs text-error">
-					{recordError}
+					</button>
+				{/snippet}
+				<div class="min-w-[140px] p-1">
+					<button
+						type="button"
+						class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-1.5 text-sm text-error hover:bg-error/10"
+						onclick={deleteRecord}
+					>
+						<svg
+							width="14"
+							height="14"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							><polyline points="3 6 5 6 21 6" /><path
+								d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+							/></svg
+						>
+						Delete
+					</button>
 				</div>
-			{/if}
-
-			<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-				<Button class="btn-ghost mr-auto" onclick={() => (showRecordPane = false)}>Close</Button>
-				<Button
-					class="btn-primary"
-					loading={recordSaving}
-					disabled={recordSaving}
-					onclick={saveRecord}
-				>
-					{editingRecordId ? 'Update' : 'Create'}
-				</Button>
-			</div>
+			</Dropdown>
+		{/if}
+	{/snippet}
+	<div class="flex h-full min-h-0 flex-col">
+		<div class="flex-1 overflow-y-auto p-4">
+			<RecordForm
+				fields={((collection?.fields ?? []) as Record<string, unknown>[]).toSorted(
+					(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
+				)}
+				{collections}
+				bind:data={recordData}
+				disabled={recordSaving}
+				errors={recordFieldErrors}
+				editing={!!editingRecordId}
+				bind:passwordSaving
+				bind:passwordError
+				onPasswordSave={savePassword}
+			/>
 		</div>
-	</SidePane>
-{/if}
+
+		{#if recordError}
+			<div class="shrink-0 border-t border-base-300 bg-error/10 px-4 py-2 text-xs text-error">
+				{recordError}
+			</div>
+		{/if}
+
+		<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
+			<Button class="btn-ghost mr-auto" onclick={() => (showRecordPane = false)}>Close</Button>
+			<Button
+				class="btn-primary"
+				loading={recordSaving}
+				disabled={recordSaving}
+				onclick={saveRecord}
+			>
+				{editingRecordId ? 'Update' : 'Create'}
+			</Button>
+		</div>
+	</div>
+</SidePane>
 
 <!-- New/Edit Collection SidePane -->
 <SidePane

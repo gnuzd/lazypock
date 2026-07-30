@@ -4,7 +4,7 @@
 	import { slide } from 'svelte/transition';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
-	import { setSidebar } from '$lib/sidebar.svelte';
+	import Sidebar from '$lib/components/Sidebar.svelte';
 	import { RefreshCw } from '@lucide/svelte';
 	import {
 		Archive,
@@ -129,8 +129,7 @@
 		}
 	});
 
-	// ── Sidebar ──
-	setSidebar(undefined, bodyContent, undefined);
+	// ── Sidebar body ──
 
 	// ── Save helpers ──
 
@@ -491,460 +490,480 @@
 	{/each}
 {/snippet}
 
-<!-- Main content -->
-<div class="mx-auto" style="max-width:870px">
-	{#if activeSection === 'application'}
-		<h2 class="mb-4 text-lg font-semibold">Application Settings</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<Input
-				label="App Name"
-				placeholder="Lazypock"
-				bind:value={appName}
-				help="Displayed in the admin UI header."
-			/>
-			<div class="mt-4 flex items-center gap-3">
-				<Button class="btn-primary" loading={appSaving} disabled={appSaving} onclick={saveApp}
-					>Save</Button
-				>
-				{#if appSaved}<span class="text-xs text-success">Saved!</span>{/if}
-			</div>
-		</div>
-	{:else if activeSection === 'mail'}
-		<h2 class="mb-4 text-lg font-semibold">Mail Settings</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<div class="mb-4 text-sm text-base-content/60">
-				<p>Configure common settings for sending emails.</p>
-			</div>
-
-			<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start">
-				<div class="flex-1">
-					<Input label="Sender name" placeholder="John Doe" bind:value={senderName} />
-				</div>
-				<div class="flex-1">
+<!-- Layout: sidebar left, main content right -->
+<div class="flex flex-1 overflow-hidden">
+	<Sidebar body={bodyContent} />
+	<main class="flex-1 overflow-auto p-6">
+		<div
+			class="mx-auto"
+			style="max-width: {activeSection === 'export' || activeSection === 'import'
+				? '1200px'
+				: '870px'}"
+		>
+			{#if activeSection === 'application'}
+				<h2 class="mb-4 text-lg font-semibold">Application Settings</h2>
+				<div class="rounded-box border border-base-300 bg-base-100 p-6">
 					<Input
-						label="Sender address"
-						placeholder="noreply@example.com"
-						type="email"
-						bind:value={senderAddress}
+						label="App Name"
+						placeholder="Lazypock"
+						bind:value={appName}
+						help="Displayed in the admin UI header."
 					/>
+					<div class="mt-4 flex items-center gap-3">
+						<Button class="btn-primary" loading={appSaving} disabled={appSaving} onclick={saveApp}
+							>Save</Button
+						>
+						{#if appSaved}<span class="text-xs text-success">Saved!</span>{/if}
+					</div>
 				</div>
-			</div>
+			{:else if activeSection === 'mail'}
+				<h2 class="mb-4 text-lg font-semibold">Mail Settings</h2>
+				<div class="rounded-box border border-base-300 bg-base-100 p-6">
+					<div class="mb-4 text-sm text-base-content/60">
+						<p>Configure common settings for sending emails.</p>
+					</div>
 
-			<!-- SMTP toggle -->
-			<div class="switch-field mb-4">
-				<label class="switch-label" for="mail-enabled">
-					<span class="txt">Use SMTP mail server <strong>(recommended)</strong></span>
-				</label>
-				<label class="switch">
-					<input id="mail-enabled" type="checkbox" bind:checked={mailEnabled} />
-					<span class="switch-slider"></span>
-				</label>
-			</div>
-
-			{#if mailEnabled}
-				<div transition:slide={{ duration: 150 }}>
-					<div class="flex flex-col gap-3 sm:flex-row">
-						<div class="flex-[5]">
+					<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start">
+						<div class="flex-1">
+							<Input label="Sender name" placeholder="John Doe" bind:value={senderName} />
+						</div>
+						<div class="flex-1">
 							<Input
-								label="SMTP server host"
-								placeholder="smtp.example.com"
-								bind:value={smtpHost}
-								required
+								label="Sender address"
+								placeholder="noreply@example.com"
+								type="email"
+								bind:value={senderAddress}
 							/>
-						</div>
-						<div class="flex-[3]">
-							<Input label="Port" placeholder="587" bind:value={smtpPort} required />
-						</div>
-						<div class="flex-[4]">
-							<Input label="Username" bind:value={smtpUser} />
-						</div>
-						<div class="flex-[4]">
-							<Input label="Password" type="password" bind:value={smtpPass} />
 						</div>
 					</div>
 
-					<button
-						type="button"
-						class="mt-2 mb-4 cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
-						onclick={() => (showMoreMail = !showMoreMail)}
-					>
-						{showMoreMail ? 'Hide more options' : 'Show more options'}
-					</button>
+					<!-- SMTP toggle -->
+					<div class="switch-field mb-4">
+						<label class="switch-label" for="mail-enabled">
+							<span class="txt">Use SMTP mail server <strong>(recommended)</strong></span>
+						</label>
+						<label class="switch">
+							<input id="mail-enabled" type="checkbox" bind:checked={mailEnabled} />
+							<span class="switch-slider"></span>
+						</label>
+					</div>
 
-					{#if showMoreMail}
+					{#if mailEnabled}
 						<div transition:slide={{ duration: 150 }}>
-							<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12">
-								<div class="lg:col-span-4">
-									<div class="field">
-										<label class="field-label">TLS encryption</label>
-										<select class="field-input" bind:value={smtpTls}>
-											<option value={false}>Auto (StartTLS)</option>
-											<option value={true}>Always</option>
-										</select>
-									</div>
-								</div>
-								<div class="lg:col-span-4">
-									<div class="field">
-										<label class="field-label">AUTH method</label>
-										<select class="field-input" bind:value={smtpAuthMethod}>
-											<option value="PLAIN">PLAIN (default)</option>
-											<option value="LOGIN">LOGIN</option>
-										</select>
-									</div>
-								</div>
-								<div class="lg:col-span-4">
+							<div class="flex flex-col gap-3 sm:flex-row">
+								<div class="flex-[5]">
 									<Input
-										label="EHLO/HELO domain"
-										placeholder="Default to localhost"
-										bind:value={smtpLocalName}
+										label="SMTP server host"
+										placeholder="smtp.example.com"
+										bind:value={smtpHost}
+										required
 									/>
 								</div>
+								<div class="flex-[3]">
+									<Input label="Port" placeholder="587" bind:value={smtpPort} required />
+								</div>
+								<div class="flex-[4]">
+									<Input label="Username" bind:value={smtpUser} />
+								</div>
+								<div class="flex-[4]">
+									<Input label="Password" type="password" bind:value={smtpPass} />
+								</div>
+							</div>
+
+							<button
+								type="button"
+								class="mt-2 mb-4 cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
+								onclick={() => (showMoreMail = !showMoreMail)}
+							>
+								{showMoreMail ? 'Hide more options' : 'Show more options'}
+							</button>
+
+							{#if showMoreMail}
+								<div transition:slide={{ duration: 150 }}>
+									<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12">
+										<div class="lg:col-span-4">
+											<div class="field">
+												<label class="field-label">TLS encryption</label>
+												<select class="field-input" bind:value={smtpTls}>
+													<option value={false}>Auto (StartTLS)</option>
+													<option value={true}>Always</option>
+												</select>
+											</div>
+										</div>
+										<div class="lg:col-span-4">
+											<div class="field">
+												<label class="field-label">AUTH method</label>
+												<select class="field-input" bind:value={smtpAuthMethod}>
+													<option value="PLAIN">PLAIN (default)</option>
+													<option value="LOGIN">LOGIN</option>
+												</select>
+											</div>
+										</div>
+										<div class="lg:col-span-4">
+											<Input
+												label="EHLO/HELO domain"
+												placeholder="Default to localhost"
+												bind:value={smtpLocalName}
+											/>
+										</div>
+									</div>
+								</div>
+							{/if}
+						</div>
+					{/if}
+
+					<div class="mt-6 flex items-center justify-end gap-3">
+						<Button class="btn-primary" loading={mailSaving} onclick={saveMail}>Save changes</Button
+						>
+					</div>
+				</div>
+			{:else if activeSection === 'files'}
+				<h2 class="mb-4 text-lg font-semibold">Files Storage</h2>
+				<div class="rounded-box border border-base-300 bg-base-100 p-6">
+					<div class="mb-4 text-sm text-base-content/60">
+						<p>By default Lazypock uses the local file system to store uploaded files.</p>
+						<p>
+							If you have limited disk space, you could optionally connect to an S3 compatible
+							storage.
+						</p>
+					</div>
+
+					<!-- S3 toggle -->
+					<div class="switch-field mb-4">
+						<label class="switch-label" for="storage-enabled">
+							<span class="txt">Use S3 storage</span>
+						</label>
+						<label class="switch">
+							<input id="storage-enabled" type="checkbox" bind:checked={storageEnabled} />
+							<span class="switch-slider"></span>
+						</label>
+					</div>
+
+					{#if storageEnabled}
+						<div transition:slide={{ duration: 150 }}>
+							<div class="flex flex-col gap-3">
+								<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+									<Input label="S3 Bucket" placeholder="my-bucket" bind:value={s3Bucket} required />
+									<Input label="Region" placeholder="us-east-1" bind:value={s3Region} />
+								</div>
+								<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+									<Input label="Access Key" bind:value={s3AccessKey} />
+									<Input label="Secret Key" type="password" bind:value={s3SecretKey} />
+								</div>
+								<Input
+									label="Endpoint (optional)"
+									placeholder="https://s3.amazonaws.com"
+									bind:value={s3Endpoint}
+								/>
 							</div>
 						</div>
 					{/if}
-				</div>
-			{/if}
 
-			<div class="mt-6 flex items-center justify-end gap-3">
-				<Button class="btn-primary" loading={mailSaving} onclick={saveMail}>Save changes</Button>
-			</div>
-		</div>
-	{:else if activeSection === 'files'}
-		<h2 class="mb-4 text-lg font-semibold">Files Storage</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<div class="mb-4 text-sm text-base-content/60">
-				<p>By default Lazypock uses the local file system to store uploaded files.</p>
-				<p>
-					If you have limited disk space, you could optionally connect to an S3 compatible storage.
-				</p>
-			</div>
-
-			<!-- S3 toggle -->
-			<div class="switch-field mb-4">
-				<label class="switch-label" for="storage-enabled">
-					<span class="txt">Use S3 storage</span>
-				</label>
-				<label class="switch">
-					<input id="storage-enabled" type="checkbox" bind:checked={storageEnabled} />
-					<span class="switch-slider"></span>
-				</label>
-			</div>
-
-			{#if storageEnabled}
-				<div transition:slide={{ duration: 150 }}>
-					<div class="flex flex-col gap-3">
-						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-							<Input label="S3 Bucket" placeholder="my-bucket" bind:value={s3Bucket} required />
-							<Input label="Region" placeholder="us-east-1" bind:value={s3Region} />
-						</div>
-						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-							<Input label="Access Key" bind:value={s3AccessKey} />
-							<Input label="Secret Key" type="password" bind:value={s3SecretKey} />
-						</div>
-						<Input
-							label="Endpoint (optional)"
-							placeholder="https://s3.amazonaws.com"
-							bind:value={s3Endpoint}
-						/>
-					</div>
-				</div>
-			{/if}
-
-			<div class="flex items-center justify-end gap-3">
-				<Button class="btn-primary" loading={storageSaving} onclick={saveStorage}
-					>Save changes</Button
-				>
-			</div>
-		</div>
-	{:else if activeSection === 'backups'}
-		<h2 class="mb-4 text-lg font-semibold">Backups</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<p class="mb-4 text-sm text-base-content/70">
-				Download a full JSON backup of all collections and their data.
-			</p>
-			<Button class="btn-primary" loading={backingUp} onclick={doBackup}>Download Backup</Button>
-		</div>
-	{:else if activeSection === 'cron'}
-		<h2 class="mb-4 text-lg font-semibold">Cron</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<p class="text-sm text-base-content/60">Cron job scheduling coming soon.</p>
-		</div>
-	{:else if activeSection === 'export'}
-		<h2 class="mb-4 text-lg font-semibold">Export Collections</h2>
-		<div class="mb-4 text-sm text-base-content/60">
-			<p>
-				Below you'll find your current collections configuration that you could import in another
-				environment.
-			</p>
-		</div>
-
-		{#if loadingCollections}
-			<div class="flex justify-center py-8">
-				<span class="text-sm text-base-content/50">Loading collections...</span>
-			</div>
-		{:else if collectionsList.length === 0}
-			<div class="rounded-box border border-base-300 bg-base-100 p-6 text-center">
-				<p class="text-sm text-base-content/50">No collections yet.</p>
-				<Button class="btn-primary mt-4" onclick={loadCollections}>Load Collections</Button>
-			</div>
-		{:else}
-			<div class="export-panel flex flex-col gap-4">
-				<div class="flex flex-col gap-4 lg:flex-row">
-					<div class="min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
-						<div class="border-b border-base-300 px-3 py-2">
-							<label class="flex cursor-pointer items-center gap-2 text-sm font-medium">
-								<input
-									type="checkbox"
-									class="checkbox"
-									checked={areAllSelected}
-									onchange={toggleSelectAll}
-								/>
-								Select all
-								<span class="text-xs text-base-content/50">({totalSelected} selected)</span>
-							</label>
-						</div>
-						<div class="max-h-80 overflow-y-auto">
-							{#each collectionsList as c (c.id)}
-								<label
-									class="flex cursor-pointer items-center gap-2 border-b border-base-200 px-3 py-1.5 text-sm hover:bg-base-200"
-								>
-									<input
-										type="checkbox"
-										class="checkbox"
-										checked={selectedExports[c.id] !== undefined}
-										onchange={() => toggleSelectCollection(c)}
-									/>
-									<span class="font-medium">{c.name}</span>
-									<span class="text-xs text-base-content/40">{c.type}</span>
-								</label>
-							{/each}
-						</div>
-					</div>
-
-					<div class="relative min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
-						<button
-							type="button"
-							class="absolute top-2 right-2 z-10 cursor-pointer rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs text-base-content/60 hover:text-base-content"
-							disabled={!totalSelected}
-							onclick={copyExport}
+					<div class="flex items-center justify-end gap-3">
+						<Button class="btn-primary" loading={storageSaving} onclick={saveStorage}
+							>Save changes</Button
 						>
-							{#if exportCopied}
-								<span class="flex items-center gap-1 text-success"
-									><Check class="h-3 w-3" />Copied</span
-								>
-							{:else}
-								<span class="flex items-center gap-1"><Clipboard class="h-3 w-3" />Copy</span>
-							{/if}
-						</button>
-						<pre class="max-h-80 overflow-auto p-3 font-mono text-xs">{schemaJson ||
-								'Select collections to preview...'}</pre>
 					</div>
 				</div>
-
-				<div class="flex justify-end">
-					<Button class="btn-primary" disabled={!totalSelected} onclick={downloadExport}>
-						<Download class="h-4 w-4" />
-						Download as JSON
-					</Button>
+			{:else if activeSection === 'backups'}
+				<h2 class="mb-4 text-lg font-semibold">Backups</h2>
+				<div class="rounded-box border border-base-300 bg-base-100 p-6">
+					<p class="mb-4 text-sm text-base-content/70">
+						Download a full JSON backup of all collections and their data.
+					</p>
+					<Button class="btn-primary" loading={backingUp} onclick={doBackup}>Download Backup</Button
+					>
 				</div>
-			</div>
-		{/if}
-	{:else if activeSection === 'import'}
-		<h2 class="mb-4 text-lg font-semibold">Import Collections</h2>
-
-		{#if loadingOldCollections}
-			<div class="flex justify-center py-8">
-				<span class="text-sm text-base-content/50">Loading existing collections...</span>
-			</div>
-		{:else}
-			<div class="rounded-box border border-base-300 bg-base-100 p-6">
+			{:else if activeSection === 'cron'}
+				<h2 class="mb-4 text-lg font-semibold">Cron</h2>
+				<div class="rounded-box border border-base-300 bg-base-100 p-6">
+					<p class="text-sm text-base-content/60">Cron job scheduling coming soon.</p>
+				</div>
+			{:else if activeSection === 'export'}
+				<h2 class="mb-4 text-lg font-semibold">Export Collections</h2>
 				<div class="mb-4 text-sm text-base-content/60">
 					<p>
-						Paste below the collections configuration you want to import or
-						<button
-							type="button"
-							class="btn btn-outline btn-sm ml-2"
-							class:btn-loading={importLoadingFile}
-							onclick={() => importFileInput?.click()}
-						>
-							Load from JSON file
-						</button>
+						Below you'll find your current collections configuration that you could import in
+						another environment.
 					</p>
-					<input
-						bind:this={importFileInput}
-						type="file"
-						accept=".json"
-						class="hidden"
-						onchange={() => {
-							if (importFileInput?.files?.length) loadFile(importFileInput.files[0]);
-						}}
-					/>
 				</div>
 
-				<div class="field mb-4">
-					<label for="import-schemas" class="field-label">Collections</label>
-					<textarea
-						id="import-schemas"
-						class="field-input font-mono text-xs"
-						class:border-error={importSchemas && !isValidImport}
-						spellcheck="false"
-						rows="10"
-						placeholder={importPlaceholder}
-						bind:value={importSchemas}
-						oninput={parseImport}></textarea>
-					{#if importSchemas && !isValidImport}
-						<p class="mt-1 text-xs text-error">
-							{importResult || 'Invalid collections configuration.'}
-						</p>
-					{/if}
-				</div>
+				{#if loadingCollections}
+					<div class="flex justify-center py-8">
+						<span class="text-sm text-base-content/50">Loading collections...</span>
+					</div>
+				{:else if collectionsList.length === 0}
+					<div class="rounded-box border border-base-300 bg-base-100 p-6 text-center">
+						<p class="text-sm text-base-content/50">No collections yet.</p>
+						<Button class="btn-primary mt-4" onclick={loadCollections}>Load Collections</Button>
+					</div>
+				{:else}
+					<div class="export-panel flex flex-col gap-4">
+						<div class="flex flex-col gap-4 lg:flex-row">
+							<div class="min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
+								<div class="border-b border-base-300 px-3 py-2">
+									<label class="flex cursor-pointer items-center gap-2 text-sm font-medium">
+										<input
+											type="checkbox"
+											class="checkbox"
+											checked={areAllSelected}
+											onchange={toggleSelectAll}
+										/>
+										Select all
+										<span class="text-xs text-base-content/50">({totalSelected} selected)</span>
+									</label>
+								</div>
+								<div class="max-h-96 overflow-y-auto">
+									{#each collectionsList as c (c.id)}
+										<label
+											class="flex cursor-pointer items-center gap-2 border-b border-base-200 px-3 py-1.5 text-sm hover:bg-base-200"
+										>
+											<input
+												type="checkbox"
+												class="checkbox"
+												checked={selectedExports[c.id] !== undefined}
+												onchange={() => toggleSelectCollection(c)}
+											/>
+											<span class="font-medium">{c.name}</span>
+											<span class="text-xs text-base-content/40">{c.type}</span>
+										</label>
+									{/each}
+								</div>
+							</div>
 
-				<div class="switch-field mb-4">
-					<label class="switch-label" for="delete-missing">
-						<span class="txt">Delete missing collections and schema fields</span>
-					</label>
-					<label class="switch">
-						<input
-							id="delete-missing"
-							type="checkbox"
-							bind:checked={deleteMissing}
-							disabled={!isValidImport}
-						/>
-						<span class="switch-slider"></span>
-					</label>
-				</div>
+							<div class="relative min-w-0 flex-1 rounded-box border border-base-300 bg-base-100">
+								<button
+									type="button"
+									class="absolute top-2 right-2 z-10 cursor-pointer rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs text-base-content/60 hover:text-base-content"
+									disabled={!totalSelected}
+									onclick={copyExport}
+								>
+									{#if exportCopied}
+										<span class="flex items-center gap-1 text-success"
+											><Check class="h-3 w-3" />Copied</span
+										>
+									{:else}
+										<span class="flex items-center gap-1"><Clipboard class="h-3 w-3" />Copy</span>
+									{/if}
+								</button>
+								<pre class="max-h-96 overflow-auto p-3 font-mono text-xs">{schemaJson ||
+										'Select collections to preview...'}</pre>
+							</div>
+						</div>
 
-				{#if isValidImport && parsedCollections.length > 0 && !hasChanges}
-					<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
-						Your collections configuration is already up-to-date!
+						<div class="flex justify-end">
+							<Button class="btn-primary" disabled={!totalSelected} onclick={downloadExport}>
+								<Download class="h-4 w-4" />
+								Download as JSON
+							</Button>
+						</div>
 					</div>
 				{/if}
+			{:else if activeSection === 'import'}
+				<h2 class="mb-4 text-lg font-semibold">Import Collections</h2>
 
-				{#if isValidImport && hasChanges}
-					<h5 class="mb-2 text-sm font-semibold">Detected changes</h5>
-					<div class="mb-4 space-y-1">
-						{#each importChanges.removed as name (name)}
-							<label class="flex items-center gap-2 rounded-field bg-error/20 px-3 py-1.5 text-sm">
-								<span class="text-white rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold"
-									>Deleted</span
+				{#if loadingOldCollections}
+					<div class="flex justify-center py-8">
+						<span class="text-sm text-base-content/50">Loading existing collections...</span>
+					</div>
+				{:else}
+					<div class="rounded-box border border-base-300 bg-base-100 p-6">
+						<div class="mb-4 text-sm text-base-content/60">
+							<p>
+								Paste below the collections configuration you want to import or
+								<button
+									type="button"
+									class="btn btn-outline btn-sm ml-2"
+									class:btn-loading={importLoadingFile}
+									onclick={() => importFileInput?.click()}
 								>
-								<span>{name}</span>
+									Load from JSON file
+								</button>
+							</p>
+							<input
+								bind:this={importFileInput}
+								type="file"
+								accept=".json"
+								class="hidden"
+								onchange={() => {
+									if (importFileInput?.files?.length) loadFile(importFileInput.files[0]);
+								}}
+							/>
+						</div>
+
+						<div class="field mb-4">
+							<label for="import-schemas" class="field-label">Collections</label>
+							<textarea
+								id="import-schemas"
+								class="field-input font-mono text-xs"
+								class:border-error={importSchemas && !isValidImport}
+								spellcheck="false"
+								rows="16"
+								placeholder={importPlaceholder}
+								bind:value={importSchemas}
+								oninput={parseImport}></textarea>
+							{#if importSchemas && !isValidImport}
+								<p class="mt-1 text-xs text-error">
+									{importResult || 'Invalid collections configuration.'}
+								</p>
+							{/if}
+						</div>
+
+						<div class="switch-field mb-4">
+							<label class="switch-label" for="delete-missing">
+								<span class="txt">Delete missing collections and schema fields</span>
 							</label>
-						{/each}
-						{#each importChanges.changed as name (name)}
-							<label
-								class="flex items-center gap-2 rounded-field bg-warning/20 px-3 py-1.5 text-sm"
+							<label class="switch">
+								<input
+									id="delete-missing"
+									type="checkbox"
+									bind:checked={deleteMissing}
+									disabled={!isValidImport}
+								/>
+								<span class="switch-slider"></span>
+							</label>
+						</div>
+
+						{#if isValidImport && parsedCollections.length > 0 && !hasChanges}
+							<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
+								Your collections configuration is already up-to-date!
+							</div>
+						{/if}
+
+						{#if isValidImport && hasChanges}
+							<h5 class="mb-2 text-sm font-semibold">Detected changes</h5>
+							<div class="mb-4 space-y-1">
+								{#each importChanges.removed as name (name)}
+									<label
+										class="flex items-center gap-2 rounded-field bg-error/20 px-3 py-1.5 text-sm"
+									>
+										<span
+											class="text-white rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold"
+											>Deleted</span
+										>
+										<span>{name}</span>
+									</label>
+								{/each}
+								{#each importChanges.changed as name (name)}
+									<label
+										class="flex items-center gap-2 rounded-field bg-warning/20 px-3 py-1.5 text-sm"
+									>
+										<span
+											class="text-white rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold"
+											>Changed</span
+										>
+										<span>{name}</span>
+									</label>
+								{/each}
+								{#each importChanges.added as name (name)}
+									<label
+										class="flex items-center gap-2 rounded-field bg-success/20 px-3 py-1.5 text-sm"
+									>
+										<span
+											class="text-white rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold"
+											>Added</span
+										>
+										<span>{name}</span>
+									</label>
+								{/each}
+							</div>
+						{/if}
+
+						<div class="flex items-center justify-between">
+							{#if importSchemas}
+								<button
+									type="button"
+									class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
+									onclick={clearImport}
+								>
+									Clear
+								</button>
+							{:else}
+								<div></div>
+							{/if}
+							<Button
+								class="btn-warning"
+								disabled={!isValidImport || !hasChanges}
+								loading={importing}
+								onclick={doImport}
 							>
-								<span class="text-white rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold"
-									>Changed</span
-								>
-								<span>{name}</span>
-							</label>
-						{/each}
-						{#each importChanges.added as name (name)}
-							<label
-								class="flex items-center gap-2 rounded-field bg-success/20 px-3 py-1.5 text-sm"
-							>
-								<span class="text-white rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold"
-									>Added</span
-								>
-								<span>{name}</span>
-							</label>
-						{/each}
+								Import
+							</Button>
+						</div>
+
+						{#if importResult && !importResult.startsWith('Invalid')}
+							<p class="mt-3 text-xs text-base-content/60">{importResult}</p>
+						{/if}
 					</div>
 				{/if}
-
-				<div class="flex items-center justify-between">
-					{#if importSchemas}
-						<button
-							type="button"
-							class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
-							onclick={clearImport}
-						>
-							Clear
-						</button>
-					{:else}
-						<div></div>
-					{/if}
-					<Button
-						class="btn-warning"
-						disabled={!isValidImport || !hasChanges}
-						loading={importing}
-						onclick={doImport}
-					>
-						Import
-					</Button>
-				</div>
-
-				{#if importResult && !importResult.startsWith('Invalid')}
-					<p class="mt-3 text-xs text-base-content/60">{importResult}</p>
-				{/if}
-			</div>
-		{/if}
-	{/if}
-</div>
-
-<!-- SQL Console is full-width -->
-{#if activeSection === 'sql'}
-	<div class="mx-auto" style="max-width:100%">
-		<h2 class="mb-4 text-lg font-semibold">SQL Console</h2>
-		<div class="rounded-box border border-base-300 bg-base-100 p-6">
-			<p class="mb-3 text-xs text-base-content/60">
-				Run read-only SQL queries against the database. Only SELECT, EXPLAIN, and WITH statements
-				are allowed.
-			</p>
-			<textarea
-				class="input w-full font-mono text-xs outline-none focus:outline-none"
-				rows="4"
-				placeholder="SELECT * FROM _collections"
-				bind:value={sqlQuery}></textarea>
-			<div class="mt-2 flex items-center gap-2">
-				<Button class="btn-primary btn-sm" loading={sqlRunning} onclick={runSql}>Run Query</Button>
-				<button
-					class="cursor-pointer border-none bg-transparent text-xs text-base-content/50 hover:text-base-content"
-					onclick={() => {
-						sqlQuery = 'SELECT name, type FROM _collections ORDER BY name';
-						sqlResults = null;
-						sqlError = '';
-					}}
-				>
-					Reset
-				</button>
-			</div>
+			{/if}
 		</div>
 
-		{#if sqlError}
-			<div class="mt-3 rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
-				{sqlError}
-			</div>
-		{/if}
+		<!-- SQL Console is full-width -->
+		{#if activeSection === 'sql'}
+			<div class="mx-auto" style="max-width:100%">
+				<h2 class="mb-4 text-lg font-semibold">SQL Console</h2>
+				<div class="rounded-box border border-base-300 bg-base-100 p-6">
+					<p class="mb-3 text-xs text-base-content/60">
+						Run read-only SQL queries against the database. Only SELECT, EXPLAIN, and WITH
+						statements are allowed.
+					</p>
+					<textarea
+						class="input w-full font-mono text-xs outline-none focus:outline-none"
+						rows="12"
+						placeholder="SELECT * FROM _collections"
+						bind:value={sqlQuery}></textarea>
+					<div class="mt-2 flex items-center gap-2">
+						<Button class="btn-primary" loading={sqlRunning} onclick={runSql}>Run Query</Button>
+						<button
+							class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
+							onclick={() => {
+								sqlQuery = 'SELECT name, type FROM _collections ORDER BY name';
+								sqlResults = null;
+								sqlError = '';
+							}}
+						>
+							Reset
+						</button>
+					</div>
+				</div>
 
-		{#if sqlResults}
-			<div class="mt-3 overflow-x-auto rounded-box border border-base-300 bg-base-100">
-				<table class="w-full border-collapse text-xs">
-					<thead>
-						<tr class="bg-base-200 text-left text-xs font-semibold text-base-content/60 uppercase">
-							{#each sqlResults.columns as col (col)}
-								<th class="border-b border-base-300 px-3 py-2 font-mono">{col}</th>
-							{/each}
-						</tr>
-					</thead>
-					<tbody>
-						{#each sqlResults.rows as row, i (String(i))}
-							<tr class="hover:bg-base-200 {i % 2 === 1 ? 'bg-base-100/50' : ''}">
-								{#each row as cell (cell)}
-									<td class="max-w-60 truncate border-b border-base-200 px-3 py-1.5 font-mono">
-										{cell == null ? 'NULL' : String(cell)}
-									</td>
+				{#if sqlError}
+					<div class="mt-3 rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
+						{sqlError}
+					</div>
+				{/if}
+
+				{#if sqlResults}
+					<div class="mt-3 overflow-x-auto rounded-box border border-base-300 bg-base-100">
+						<table class="w-full border-collapse text-xs">
+							<thead>
+								<tr
+									class="bg-base-200 text-left text-xs font-semibold text-base-content/60 uppercase"
+								>
+									{#each sqlResults.columns as col (col)}
+										<th class="border-b border-base-300 px-3 py-2 font-mono">{col}</th>
+									{/each}
+								</tr>
+							</thead>
+							<tbody>
+								{#each sqlResults.rows as row, i (String(i))}
+									<tr class="hover:bg-base-200 {i % 2 === 1 ? 'bg-base-100/50' : ''}">
+										{#each row as cell, j (j)}
+											<td class="max-w-60 truncate border-b border-base-200 px-3 py-1.5 font-mono">
+												{cell == null ? 'NULL' : String(cell)}
+											</td>
+										{/each}
+									</tr>
 								{/each}
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+							</tbody>
+						</table>
+					</div>
+				{/if}
 			</div>
 		{/if}
-	</div>
-{/if}
+	</main>
+</div>
 
 <style>
 	/* input[type='radio'] {

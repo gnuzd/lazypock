@@ -20,6 +20,9 @@ defmodule Lazypock.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
+        # Run Ecto migrations (idempotent — only applies pending ones)
+        migrate!()
+
         # Boot-time setup: create _superusers table + auto-create from env
         Lazypock.Auth.Setup.ensure_superusers_table!()
         Lazypock.Auth.Setup.create_from_env!()
@@ -32,7 +35,8 @@ defmodule Lazypock.Application do
 
         # Keep the BEAM alive — Burrito's Go wrapper exits the process when the
         # boot script returns. In test, ExUnit manages the lifecycle itself.
-        unless Mix.env() == :test do
+        # Code.ensure_loaded? avoids calling Mix.env() which crashes in releases.
+        unless Code.ensure_loaded?(ExUnit) do
           Process.sleep(:infinity)
         end
 
@@ -40,6 +44,19 @@ defmodule Lazypock.Application do
 
       error ->
         error
+    end
+  end
+
+  # Runs all pending Ecto migrations. Uses `Ecto.Migrator` which is available
+  # at runtime (not a compile-time dependency). Works in both Mix and release mode.
+  defp migrate! do
+    migrations_path = Application.app_dir(:lazypock, "priv/repo/migrations")
+
+    if Code.ensure_loaded?(Ecto.Migrator) and File.dir?(migrations_path) do
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(Lazypock.Repo, fn repo ->
+          Ecto.Migrator.run(repo, migrations_path, :up, all: true)
+        end)
     end
   end
 

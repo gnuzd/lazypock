@@ -40,8 +40,8 @@ defmodule Lazypock.MixProject do
         burrito: [
           targets: [
             # macos: [os: :darwin, cpu: :x86_64],
-            macos_silicon: [os: :darwin, cpu: :aarch64]
-            # linux: [os: :linux, cpu: :x86_64],
+            macos_silicon: [os: :darwin, cpu: :aarch64],
+            linux: [os: :linux, cpu: :x86_64]
             # windows: [os: :windows, cpu: :x86_64]
           ]
         ]
@@ -72,7 +72,9 @@ defmodule Lazypock.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:bcrypt_elixir, "~> 3.0"},
-      {:burrito, "~> 1.0"}
+      {:burrito, "~> 1.0"},
+      {:swoosh, "~> 1.17"},
+      {:gen_smtp, "~> 1.2"}
     ]
   end
 
