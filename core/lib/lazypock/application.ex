@@ -35,7 +35,10 @@ defmodule Lazypock.Application do
 
         # Keep the BEAM alive — Burrito's Go wrapper exits the process when the
         # boot script returns. In test, ExUnit manages the lifecycle itself.
-        Process.sleep(:infinity)
+        # Code.ensure_loaded? avoids calling Mix.env() which crashes in releases.
+        unless Code.ensure_loaded?(ExUnit) do
+          Process.sleep(:infinity)
+        end
 
         {:ok, pid}
 
