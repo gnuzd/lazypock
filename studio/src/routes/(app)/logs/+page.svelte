@@ -266,7 +266,7 @@
 </script>
 
 <!-- Chart -->
-<div class="mb-4">
+<div class="mb-4 bg-primary">
 	<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
 		{#if chartLoading}
 			<div class="absolute inset-0 z-50 flex items-center justify-center">
@@ -281,28 +281,8 @@
 	</div>
 </div>
 
-<!-- Stats cards -->
-<div class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-2xl font-bold">{statsTotal.toLocaleString()}</div>
-		<div class="text-xs text-base-content/60">All time</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-2xl font-bold">{statsLast24h.toLocaleString()}</div>
-		<div class="text-xs text-base-content/60">Last 24h</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-2xl font-bold text-error">{statsErrors24h.toLocaleString()}</div>
-		<div class="text-xs text-base-content/60">Errors (24h)</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-2xl font-bold">{formatDuration(statsAvgDuration)}</div>
-		<div class="text-xs text-base-content/60">Avg duration (24h)</div>
-	</div>
-</div>
-
 <!-- Filters bar -->
-<div class="mb-4 flex items-center justify-between gap-2">
+<div class="mb-4 flex items-center justify-between gap-2 p-4">
 	<h1 class="text-xl font-semibold">Request Logs</h1>
 	<div class="flex items-center gap-2">
 		{#if collections.length > 0}
