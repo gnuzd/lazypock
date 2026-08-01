@@ -1,1 +1,0 @@
-import{M as e,P as t,mt as n}from"../chunks/BA3v15vO.js";import"../chunks/xihTtKlq.js";var r=t(`<h2 class="mb-4 text-lg font-semibold">Cron</h2> <div class="rounded-box border border-base-300 bg-base-100 p-6"><p class="text-sm text-base-content/60">Cron job scheduling coming soon.</p></div>`,1);function i(t){var i=r();n(2),e(t,i)}export{i as component};

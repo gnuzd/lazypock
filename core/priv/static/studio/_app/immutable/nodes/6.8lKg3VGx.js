@@ -1,1 +1,0 @@
-import{n as e}from"../chunks/QTnfLwEv.js";import{r as t}from"../chunks/BuFlayix.js";function n(e,n){throw new t(e,n.toString())}var r=e({load:()=>i});function i(){throw n(307,`/settings/application`)}export{r as universal};

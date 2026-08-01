@@ -1,104 +1,50 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
-	import { slide } from 'svelte/transition';
-	import Dropdown from '$lib/components/Dropdown.svelte';
-	import { Folder, Plus, Settings } from '@lucide/svelte';
-	import Sidebar from '$lib/components/Sidebar.svelte';
-	import DataTable from '$lib/components/DataTable.svelte';
-	import SidePane from '$lib/components/SidePane.svelte';
-	import FieldSettings from '$lib/components/FieldSettings.svelte';
-	import IndexesModal from '$lib/components/IndexesModal.svelte';
-	import NewFieldButton from '$lib/components/NewFieldButton.svelte';
-	import RuleField from '$lib/components/RuleField.svelte';
-	import { slugify } from '$lib/fieldTypes';
-	import type { FieldDefinition } from '$lib/fieldTypes';
-	import RecordForm from '$lib/components/RecordForm.svelte';
-	import { buildRecordSchema, cleanRecordData, collectionSchema } from '$lib/validation';
-	import type { z } from 'zod';
-	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { Settings, Plus } from '@lucide/svelte';
 	import Button from '$lib/components/Button.svelte';
-	let collections = $state<Record<string, unknown>[]>([]);
+	import DataTable from '$lib/components/DataTable.svelte';
+	import RecordSidePane from '$lib/components/RecordSidePane.svelte';
+	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
+	import { activeName, collections } from '$lib/collectionsStore';
+
 	let collection = $state<Record<string, unknown> | null>(null);
 	let rows = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
-	let activeName = $state('');
-	let search = $state('');
-	let showSystem = $state(false);
-	let showIndexesModal = $state(false);
 	// ── Record CRUD state ──
 	let showRecordPane = $state(false);
 	let recordData = $state<Record<string, unknown>>({});
 	let editingRecordId = $state<string | null>(null);
-	let recordSaving = $state(false);
-	let recordError = $state('');
-	let recordFieldErrors = $state<Record<string, string>>({});
-	// ── Password change state (edit mode only) ──
-	let passwordSaving = $state(false);
-	let passwordError = $state('');
-
-	let filtered = $derived.by(() => {
-		if (!search) return collections;
-		const q = search.toLowerCase();
-		return collections.filter((c) => (c.name as string)?.toLowerCase().includes(q));
-	});
-
-	onMount(async () => {
-		try {
-			const result = await client.listCollections('page=1&perPage=200');
-			collections = result?.items || [];
-			const params = new URLSearchParams(window.location.search);
-			activeName = params.get('collection') ?? (collections?.[0]?.name as string | undefined) ?? '';
-			if (activeName) loadCollection(activeName);
-		} catch {
-			// ignore
-		}
-
-		// Subscribe to collections topic for collection CRUD events
-		client.realtime.subscribe('collections', (e) => {
-			if (e.event === 'create' || e.event === 'update' || e.event === 'delete') {
-				// Reload the collection list on any collection change
-				client.listCollections('page=1&perPage=200').then((res) => {
-					collections = res?.items || [];
-				});
-			}
-		});
-	});
 
 	/** Track which collection topic we're subscribed to for record events */
 	let subscribedRecordTopic = $state('');
+	/** Last collection name the effect processed (avoids duplicate loads/subscribes). */
+	let lastHandledName = $state('');
 
-	function selectCollection(name: string) {
-		activeName = name;
-		loadCollection(name);
+	function formatValue(field: Record<string, unknown>, value: unknown): string {
+		if (value == null) return '—';
+		if (field.type === 'bool') return value ? '✓' : '✗';
+		if (typeof value === 'object') return JSON.stringify(value).slice(0, 50);
+		return String(value);
 	}
 
-	/** Sync URL param when active collection changes (without full navigation) */
-	$effect(() => {
-		if (!activeName) return;
-		const url = '?collection=' + encodeURIComponent(activeName);
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
-		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
-	});
-
-	/** Subscribe to record events when active collection changes */
-	$effect(() => {
-		if (!activeName) return;
-
-		// Unsubscribe from previous topic
-		if (subscribedRecordTopic) {
-			client.realtime.unsubscribe(subscribedRecordTopic);
+	let columns = $derived.by(() => {
+		const cols: { key: string; label: string; render: (r: Record<string, unknown>) => string }[] = [
+			{ key: 'id', label: 'ID', render: (r) => (r.id as string) ?? '' }
+		];
+		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
+			.filter((f) => !f.hidden && f.type !== 'password')
+			.toSorted((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0));
+		for (const f of fields) {
+			cols.push({
+				key: f.name as string,
+				label: f.name as string,
+				render: (r) => formatValue(f, r[f.name as string])
+			});
 		}
-
-		const topic = 'collection:' + activeName;
-		subscribedRecordTopic = topic;
-
-		client.realtime.subscribe(topic, (e) => {
-			if (e.event === 'record_change') {
-				// Reload records for the active collection
-				loadCollection(activeName);
-			}
-		});
+		return cols;
 	});
 
 	async function loadCollection(name: string) {
@@ -117,280 +63,47 @@
 		}
 	}
 
-	function formatValue(field: Record<string, unknown>, value: unknown): string {
-		if (value == null) return '—';
-		if (field.type === 'bool') return value ? '✓' : '✗';
-		if (typeof value === 'object') return JSON.stringify(value).slice(0, 50);
-		return String(value);
-	}
-
-	let columns = $derived.by(() => {
-		const cols: { key: string; label: string; render: (r: Record<string, unknown>) => string }[] = [
-			{ key: 'id', label: 'ID', render: (r) => (r.id as string) ?? '' }
-		];
-		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
-			.filter((f) => !f.hidden)
-			.toSorted((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0));
-		for (const f of fields) {
-			cols.push({
-				key: f.name as string,
-				label: f.name as string,
-				render: (r) => formatValue(f, r[f.name as string])
-			});
-		}
-		return cols;
+	// Sync activeName from URL param (or first collection)
+	onMount(async () => {
+		const params = new URLSearchParams(window.location.search);
+		const fromParam = params.get('collection');
+		const list = $collections.length > 0 ? $collections : [];
+		$activeName = fromParam ?? (list[0]?.name as string | undefined) ?? '';
 	});
 
-	// ── New/Edit Collection form ──
-	let showCollectionPane = $state(false);
-	let editingCollectionId = $state<string | null>(null);
-	let newName = $state('');
-	let newType = $state('base');
-	let typeOpen = $state(false);
-	let newFields = $state<FieldDefinition[]>([]);
-	let newIndexes = $state<string[]>([]);
-	let activeTab = $state('Fields');
-	let saving = $state(false);
-	let error = $state('');
-	let fieldsListEl = $state<HTMLDivElement | undefined>(undefined);
-	let dragIndex = $state<number | null>(null);
-	let dropIndex = $state<number | null>(null);
-	let listRule = $state<string | null>(null);
-	let viewRule = $state<string | null>(null);
-	let createRule = $state<string | null>(null);
-	let updateRule = $state<string | null>(null);
-	let deleteRule = $state<string | null>(null);
-	let manageRule = $state<string | null>(null);
-	let showRulesInfo = $state(false);
-	const collectionTypes = [
-		{ value: 'base', label: 'Base collection' },
-		{ value: 'view', label: 'View collection' },
-		{ value: 'auth', label: 'Auth collection' }
-	];
-
-	function getTypeLabel(val: string) {
-		return collectionTypes.find((t) => t.value === val)?.label ?? val;
-	}
-
-	function handleNameInput(e: Event) {
-		if ((e as InputEvent).isComposing) return;
-		const raw = (e.target as HTMLInputElement).value;
-		const slugged = slugify(raw);
-		if (slugged && slugged !== newName) {
-			newName = slugged;
-		} else if (!slugged) {
-			newName = raw;
-		}
-	}
-
-	function handleNameCompositionEnd(e: Event) {
-		newName = (e.target as HTMLInputElement).value;
-	}
-
-	function handleKeydown(e: KeyboardEvent) {
-		if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-			e.preventDefault();
-			handleSave();
-		}
-	}
-
-	function closestChild(parent: HTMLElement, node: Node | null): HTMLElement | null {
-		if (!node || !node.parentNode) return null;
-		if (node.parentNode === parent) return node as HTMLElement;
-		return closestChild(parent, node.parentNode);
-	}
-
+	// Re-load when the URL param or active collection changes
 	$effect(() => {
-		const el = fieldsListEl;
-		if (!el) return;
+		const name = page.url.searchParams.get('collection') ?? $activeName;
+		if (!name) return;
 
-		/** Get where to insert: index in the array (e.g. 0 = before first, length = after last). */
-		function getInsertIndex(clientY: number): number {
-			const _el = el as HTMLElement;
-			const items = [..._el.children].filter((c) => c.hasAttribute('data-sortable-child'));
-			for (let i = 0; i < items.length; i++) {
-				const rect = items[i].getBoundingClientRect();
-				const mid = rect.top + rect.height / 2;
-				if (clientY < mid) return i;
+		if (name !== $activeName) {
+			$activeName = name;
+		}
+
+		// Only reload + resubscribe when the collection actually changed
+		if (name === lastHandledName) return;
+		lastHandledName = name;
+
+		loadCollection(name);
+
+		// Subscribe to record events for this collection
+		if (subscribedRecordTopic) {
+			client.realtime.unsubscribe(subscribedRecordTopic);
+		}
+		const topic = 'collection:' + name;
+		subscribedRecordTopic = topic;
+		client.realtime.subscribe(topic, (e) => {
+			if (e.event === 'record_change') {
+				// Reload records for the active collection
+				loadCollection(name);
 			}
-			return items.length;
-		}
-
-		function onDragStart(e: DragEvent) {
-			const _el = el as HTMLElement;
-			const items = [..._el.children].filter((c) => c.hasAttribute('data-sortable-child'));
-			e.dataTransfer!.setData('text/plain', '');
-			e.dataTransfer!.effectAllowed = 'move';
-			const child = closestChild(_el, e.target as Node);
-			dragIndex = child ? items.indexOf(child) : -1;
-		}
-		function onDragOver(e: DragEvent) {
-			e.preventDefault();
-			e.dataTransfer!.dropEffect = 'move';
-			dropIndex = getInsertIndex(e.clientY);
-		}
-		function onDragLeave(e: DragEvent) {
-			// Only clear when actually leaving the container, not between children
-			if (!e.relatedTarget || !(el as HTMLElement).contains(e.relatedTarget as Node)) {
-				dropIndex = null;
-			}
-		}
-		function onDrop() {
-			if (dragIndex == null || dropIndex == null || dragIndex === dropIndex) {
-				reset();
-				return;
-			}
-			const clone = [...newFields];
-			const [moved] = clone.splice(dragIndex, 1);
-			clone.splice(dropIndex, 0, moved);
-			newFields = clone;
-			reset();
-		}
-		function reset() {
-			dragIndex = null;
-			dropIndex = null;
-		}
-
-		const _el = el as HTMLElement;
-		_el.addEventListener('dragstart', onDragStart);
-		_el.addEventListener('dragover', onDragOver);
-		_el.addEventListener('dragleave', onDragLeave);
-		_el.addEventListener('drop', onDrop);
-		_el.addEventListener('dragend', reset);
-		return () => {
-			_el.removeEventListener('dragstart', onDragStart);
-			_el.removeEventListener('dragover', onDragOver);
-			_el.removeEventListener('dragleave', onDragLeave);
-			_el.removeEventListener('drop', onDrop);
-			_el.removeEventListener('dragend', reset);
-		};
-	});
-
-	function newCollection() {
-		// Reset form state
-		editingCollectionId = null;
-		newName = '';
-		newType = 'base';
-		newFields = [];
-		newIndexes = [];
-		activeTab = 'Fields';
-		error = '';
-		listRule = null;
-		viewRule = null;
-		createRule = null;
-		updateRule = null;
-		deleteRule = null;
-		manageRule = null;
-		showCollectionPane = true;
-	}
-
-	function editCollection(coll: Record<string, unknown>) {
-		editingCollectionId = (coll.id as string) ?? null;
-		newName = (coll.name as string) ?? '';
-		newType = (coll.type as string) ?? 'base';
-		newFields = ((coll.fields as Record<string, unknown>[]) ?? [])
-			.map((f): Record<string, unknown> => ({
-				...f,
-				id: (f.id as string) ?? crypto.randomUUID()
-			}))
-			.sort(
-				(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
-			) as unknown as FieldDefinition[];
-		newIndexes = [];
-		activeTab = 'Fields';
-		error = '';
-		listRule = ((coll.rules as Record<string, unknown>)?.['listRule'] as string | null) ?? null;
-		viewRule = ((coll.rules as Record<string, unknown>)?.['viewRule'] as string | null) ?? null;
-		createRule = ((coll.rules as Record<string, unknown>)?.['createRule'] as string | null) ?? null;
-		updateRule = ((coll.rules as Record<string, unknown>)?.['updateRule'] as string | null) ?? null;
-		deleteRule = ((coll.rules as Record<string, unknown>)?.['deleteRule'] as string | null) ?? null;
-		manageRule = ((coll.rules as Record<string, unknown>)?.['manageRule'] as string | null) ?? null;
-		showCollectionPane = true;
-	}
-
-	async function handleSave() {
-		if (saving) return;
-
-		// Build payload
-		const payload: Record<string, unknown> = {
-			name: newName.trim(),
-			type: newType,
-			fields: newFields
-				.filter((f) => !f['@toDelete'])
-				.map((f) => {
-					const clean = { ...f };
-					delete clean.__focus;
-					delete clean['@toDelete'];
-					delete clean._showChoices;
-					delete clean._choicesInput;
-					return clean;
-				}),
-			listRule,
-			viewRule,
-			createRule,
-			updateRule,
-			deleteRule,
-			manageRule
-		};
-
-		// Validate with zod
-		const result = collectionSchema.safeParse(payload);
-		if (!result.success) {
-			error = result.error.issues[0]?.message || 'Invalid form data';
-			return;
-		}
-
-		saving = true;
-		error = '';
-		try {
-			if (editingCollectionId) {
-				await client.updateCollection(
-					editingCollectionId,
-					result.data as unknown as Record<string, unknown>
-				);
-				// Navigate to the (possibly renamed) collection
-				if (result.data.name !== activeName) {
-					selectCollection(result.data.name);
-				} else {
-					loadCollection(result.data.name);
-				}
-			} else {
-				const created = await client.createCollection(
-					result.data as unknown as Record<string, unknown>
-				);
-				if (created?.name) {
-					selectCollection(created.name as string);
-				}
-			}
-			showCollectionPane = false;
-		} catch (e) {
-			error =
-				(e as Error).message ||
-				(editingCollectionId ? 'Failed to save collection' : 'Failed to create collection');
-		} finally {
-			saving = false;
-		}
-	}
-
-	// ── Dynamic record schema from collection fields ──
-	let recordSchema = $state<z.ZodObject<Record<string, z.ZodTypeAny>> | null>(null);
-
-	$effect(() => {
-		if (!collection) {
-			recordSchema = null;
-			return;
-		}
-		const schemaFields = (collection.fields as Record<string, unknown>[]) ?? [];
-		recordSchema = buildRecordSchema(schemaFields).schema;
+		});
 	});
 
 	// ── Record CRUD ──
-
 	function newRecord() {
 		editingRecordId = null;
 		recordData = {};
-		recordError = '';
-		recordFieldErrors = {};
 		showRecordPane = true;
 	}
 
@@ -406,558 +119,61 @@
 				recordData[name] = row[name];
 			}
 		}
-		recordError = '';
-		recordFieldErrors = {};
 		showRecordPane = true;
 	}
 
-	async function saveRecord() {
-		if (recordSaving || !collection || !recordSchema) return;
-
-		// Validate with zod
-		const result = recordSchema.safeParse(recordData);
-		if (!result.success) {
-			const fieldErrs: Record<string, string> = {};
-			for (const issue of result.error.issues) {
-				const fieldName = issue.path.join('.');
-				if (!fieldErrs[fieldName]) {
-					fieldErrs[fieldName] = issue.message;
-				}
-			}
-			recordFieldErrors = fieldErrs;
-			return;
-		}
-
-		recordFieldErrors = {};
-		recordSaving = true;
-		recordError = '';
-		const collName = collection.name as string;
-		const schemaFields = (collection?.fields as Record<string, unknown>[]) ?? [];
-		const cleaned = cleanRecordData(result.data as Record<string, unknown>, schemaFields);
-		try {
-			if (editingRecordId) {
-				await client.updateRecord(collName, editingRecordId, cleaned);
-			} else {
-				await client.createRecord(collName, cleaned);
-			}
-			showRecordPane = false;
-			loadCollection(collName);
-		} catch (e) {
-			recordError = (e as Error).message || 'Failed to save record';
-		} finally {
-			recordSaving = false;
-		}
+	function reload() {
+		if ($activeName) loadCollection($activeName);
 	}
 
-	async function savePassword(password: string) {
-		if (!collection || !editingRecordId) return;
-		passwordSaving = true;
-		passwordError = '';
-		try {
-			// Find the password fields (e.g. password_hash)
-			const schemaFields = (collection?.fields as Record<string, unknown>[]) ?? [];
-			const pwFields = schemaFields.filter((f) => f.type === 'password');
-			const payload: Record<string, string> = {};
-			for (const f of pwFields) {
-				payload[f.name as string] = password;
-			}
-			await client.updateRecord(collection.name as string, editingRecordId, payload);
-			passwordSaving = false;
-			passwordError = '';
-			loadCollection(collection.name as string);
-		} catch (e) {
-			passwordError = (e as Error).message || 'Failed to save password';
-		} finally {
-			passwordSaving = false;
-		}
-	}
-
-	async function deleteRecord() {
-		if (!collection || !editingRecordId || recordSaving) return;
-		if (!confirm('Delete this record? This action cannot be undone.')) return;
-		recordSaving = true;
-		recordError = '';
-		const collName = collection.name as string;
-		try {
-			await client.deleteRecord(collName, editingRecordId);
-			showRecordPane = false;
-			loadCollection(collName);
-		} catch (e) {
-			recordError = (e as Error).message || 'Failed to delete record';
-		} finally {
-			recordSaving = false;
-		}
+	function editCollection() {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		goto(base + '/collections/' + encodeURIComponent($activeName));
 	}
 </script>
 
-{#snippet headerContent()}
-	<input type="text" class="input input-sm w-full" placeholder="Search..." bind:value={search} />
-{/snippet}
-
-{#snippet bodyContent()}
-	{#if filtered.length === 0}
-		<div class="p-4 text-center text-sm opacity-40">No collections</div>
-	{:else}
-		{@const userCollections = filtered.filter((c) => !c.system)}
-		{@const systemCollections = filtered.filter((c) => c.system)}
-
-		{#if userCollections.length > 0}
-			{#each userCollections as coll (coll.id)}
-				<div
-					class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
-					class:bg-base-200={coll.name === activeName}
-					class:font-medium={coll.name === activeName}
-					role="button"
-					tabindex="0"
-					onclick={() => selectCollection(coll.name as string)}
-					onkeydown={(e) => {
-						if (e.key === 'Enter') selectCollection(coll.name as string);
-					}}
-				>
-					<Folder class="h-4 w-4 shrink-0 opacity-60" />
-					<span class="flex-1 truncate">{coll.name as string}</span>
-					<span class="mr-1 text-xs opacity-40">{(coll.schema as unknown[])?.length ?? 0}</span>
-				</div>
-			{/each}
-		{/if}
-
-		{#if systemCollections.length > 0}
-			<div
-				class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 px-3 py-1.5 text-xs font-medium text-base-content/50 select-none"
-				onclick={() => (showSystem = !showSystem)}
-				role="button"
-				tabindex="0"
-				onkeydown={(e) => {
-					if (e.key === 'Enter') showSystem = !showSystem;
-				}}
-			>
-				<svg
-					class="h-3 w-3 transition-transform duration-150"
-					class:rotate-90={showSystem}
-					fill="none"
-					viewBox="0 0 24 24"
-					stroke="currentColor"
-					stroke-width="2"><polyline points="9 18 15 12 9 6" /></svg
-				>
-				<span>System ({systemCollections.length})</span>
-			</div>
-			{#if showSystem}
-				{#each systemCollections as coll (coll.id)}
-					<div
-						class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
-						class:bg-base-200={coll.name === activeName}
-						class:font-medium={coll.name === activeName}
-						role="button"
-						tabindex="0"
-						onclick={() => selectCollection(coll.name as string)}
-						onkeydown={(e) => {
-							if (e.key === 'Enter') selectCollection(coll.name as string);
-						}}
-					>
-						<svg
-							class="h-4 w-4 shrink-0"
-							fill="none"
-							viewBox="0 0 24 24"
-							stroke="currentColor"
-							stroke-width="2"
-							style="color:var(--color-warning)"
-							><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg
-						>
-						<span class="flex-1 truncate">{coll.name as string}</span>
-						<span class="rounded bg-warning/20 px-1 py-0.5 text-[10px] font-medium text-warning"
-							>system</span
-						>
-					</div>
-				{/each}
-			{/if}
-		{/if}
-	{/if}
-{/snippet}
-
-{#snippet footerContent()}
-	<Button class="btn-primary btn-full" onclick={newCollection}
-		><Plus size={18} /> New Collection</Button
+{#if loading}
+	<div
+		class="flex min-h-[200px] flex-1 flex-col items-center justify-center gap-2 text-base-content/40"
 	>
-{/snippet}
-
-<!-- Layout: sidebar left, main content right -->
-<div class="flex flex-1 overflow-hidden">
-	<Sidebar header={headerContent} body={bodyContent} footer={footerContent} />
-	<main class="flex-1 overflow-auto p-6">
-		{#if loading}
-			<div
-				class="flex min-h-[200px] flex-1 flex-col items-center justify-center gap-2 text-base-content/40"
+		<p class="text-sm">Loading...</p>
+	</div>
+{:else if collection}
+	<div class="mb-3 flex items-center justify-between pb-3">
+		<nav class="flex items-center gap-2">
+			<span class="text-base-content/50">Collections</span>
+			<span class="text-xs opacity-30">/</span>
+			<span class="font-medium">{(collection.name as string) ?? '...'}</span>
+			<button
+				type="button"
+				class="ml-2 cursor-pointer rounded border-none bg-transparent p-0.5 text-base-content opacity-40 transition-opacity hover:opacity-100"
+				onclick={editCollection}
+				title="Edit collection"
 			>
-				<p class="text-sm">Loading...</p>
-			</div>
-		{:else if collection}
-			<div class="mb-3 flex items-center justify-between pb-3">
-				<nav class="flex items-center gap-2">
-					<span class="text-base-content/50">Collections</span>
-					<span class="text-xs opacity-30">/</span>
-					<span class="font-medium">{(collection.name as string) ?? '...'}</span>
-					<button
-						type="button"
-						class="ml-2 cursor-pointer rounded border-none bg-transparent p-0.5 text-base-content opacity-40 transition-opacity hover:opacity-100"
-						onclick={() => editCollection(collection!)}
-						title="Edit collection"
-					>
-						<Settings class="h-4 w-4" />
-					</button>
-				</nav>
-				<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
-			</div>
-			<DataTable
-				{columns}
-				{rows}
-				emptyLabel="No records yet. Create your first record to get started."
-				emptyActionLabel="+ New Record"
-				onemptyaction={newRecord}
-				onrowclick={(row) => editRecord(row)}
-			/>
-		{:else}
-			<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>
-		{/if}
-	</main>
-</div>
+				<Settings class="h-4 w-4" />
+			</button>
+		</nav>
+		<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+	</div>
+	<DataTable
+		{columns}
+		{rows}
+		emptyLabel="No records yet. Create your first record to get started."
+		emptyActionLabel="+ New Record"
+		onemptyaction={newRecord}
+		onrowclick={(row) => editRecord(row)}
+	/>
+{:else}
+	<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>
+{/if}
 
 <!-- Record create/edit SidePane -->
-<SidePane
+<RecordSidePane
 	bind:show={showRecordPane}
-	title={editingRecordId ? 'Edit Record' : 'New Record'}
-	closable={false}
->
-	{#snippet headerExtra()}
-		{#if editingRecordId}
-			<Dropdown>
-				{#snippet trigger()}
-					<button type="button" class="btn btn-ghost btn-sm px-2">
-						<svg
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle
-								cx="12"
-								cy="19"
-								r="1"
-							/></svg
-						>
-					</button>
-				{/snippet}
-				<div class="min-w-[140px] p-1">
-					<button
-						type="button"
-						class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-1.5 text-sm text-error hover:bg-error/10"
-						onclick={deleteRecord}
-					>
-						<svg
-							width="14"
-							height="14"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							><polyline points="3 6 5 6 21 6" /><path
-								d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-							/></svg
-						>
-						Delete
-					</button>
-				</div>
-			</Dropdown>
-		{/if}
-	{/snippet}
-	<div class="flex h-full min-h-0 flex-col">
-		<div class="flex-1 overflow-y-auto p-4">
-			<RecordForm
-				fields={((collection?.fields ?? []) as Record<string, unknown>[]).toSorted(
-					(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
-				)}
-				{collections}
-				bind:data={recordData}
-				disabled={recordSaving}
-				errors={recordFieldErrors}
-				editing={!!editingRecordId}
-				bind:passwordSaving
-				bind:passwordError
-				onPasswordSave={savePassword}
-			/>
-		</div>
-
-		{#if recordError}
-			<div class="shrink-0 border-t border-base-300 bg-error/10 px-4 py-2 text-xs text-error">
-				{recordError}
-			</div>
-		{/if}
-
-		<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-			<Button class="btn-ghost mr-auto" onclick={() => (showRecordPane = false)}>Close</Button>
-			<Button
-				class="btn-primary"
-				loading={recordSaving}
-				disabled={recordSaving}
-				onclick={saveRecord}
-			>
-				{editingRecordId ? 'Update' : 'Create'}
-			</Button>
-		</div>
-	</div>
-</SidePane>
-
-<!-- New/Edit Collection SidePane -->
-<SidePane
-	bind:show={showCollectionPane}
-	title={editingCollectionId ? 'Edit Collection' : 'New Collection'}
->
-	<div class="flex h-full min-h-0 flex-col">
-		<!-- Header: Name + Type row -->
-		<div class="shrink-0 p-4 pb-3">
-			<div class="flex gap-0">
-				<div class="field min-w-0 flex-1">
-					<label for="coll-name" class="mb-1 block text-xs font-medium text-base-content/70"
-						>Name</label
-					>
-					<input
-						id="coll-name"
-						type="text"
-						name="name"
-						required
-						spellcheck="false"
-						class="input input-sm w-full"
-						placeholder="e.g. posts"
-						value={newName}
-						oninput={handleNameInput}
-						oncompositionend={handleNameCompositionEnd}
-						onkeydown={handleKeydown}
-						autofocus
-					/>
-				</div>
-				<Dropdown bind:show={typeOpen} class="shrink-0">
-					{#snippet trigger()}
-						<label class="mb-1 block text-xs font-medium text-base-content/70">&nbsp;</label>
-						<button
-							type="button"
-							class="btn btn-sm flex h-[34px] items-center gap-2 rounded-field border-2 border-current bg-transparent px-3 whitespace-nowrap text-base-content"
-						>
-							<span>Type: {getTypeLabel(newType)}</span>
-							<svg
-								width="16"
-								height="16"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								class="ml-auto"><polyline points="6 9 12 15 18 9" /></svg
-							>
-						</button>
-					{/snippet}
-					<div class="min-w-[200px] py-1">
-						{#each collectionTypes as ct (ct.value)}
-							<button
-								type="button"
-								class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-2 text-left text-sm text-base-content hover:bg-base-200"
-								class:font-medium={ct.value === newType}
-								onmousedown={() => {
-									newType = ct.value;
-									typeOpen = false;
-								}}
-							>
-								<span>{ct.label}</span>
-							</button>
-						{/each}
-					</div>
-				</Dropdown>
-			</div>
-		</div>
-
-		<!-- Header: Tabs (separate section with bottom border) -->
-		<nav class="flex shrink-0 gap-0 border-b border-base-300 px-4">
-			<button
-				type="button"
-				class="cursor-pointer border-b-2 px-3 py-2 text-sm transition-colors {activeTab === 'Fields'
-					? 'border-primary text-primary'
-					: 'border-transparent text-base-content/60'}"
-				onclick={() => (activeTab = 'Fields')}>Fields</button
-			>
-			<button
-				type="button"
-				class="cursor-pointer border-b-2 px-3 py-2 text-sm transition-colors {activeTab ===
-				'API rules'
-					? 'border-primary text-primary'
-					: 'border-transparent text-base-content/60'}"
-				onclick={() => (activeTab = 'API rules')}>API rules</button
-			>
-		</nav>
-
-		<!-- Tab content -->
-		<div class="flex-1 overflow-y-auto p-4">
-			{#if activeTab === 'Fields'}
-				<!-- Fields list with drag-reorder -->
-				<div class="space-y-1" bind:this={fieldsListEl}>
-					{#each newFields as field, i (field)}
-						{#if dropIndex === i}
-							<div class="h-1 rounded-field bg-primary" transition:slide={{ duration: 100 }}></div>
-						{/if}
-						<div data-sortable-child class:opacity-40={dragIndex === i}>
-							<FieldSettings field={newFields[i]} fieldIndex={i} {collections} />
-						</div>
-					{/each}
-					{#if dropIndex === newFields.length}
-						<div class="h-1 rounded-field bg-primary" transition:slide={{ duration: 100 }}></div>
-					{/if}
-				</div>
-
-				{#if newFields.length === 0}
-					<div class="py-6 text-center text-sm opacity-40">
-						No fields configured. Click "Add Field" to start.
-					</div>
-				{/if}
-
-				<NewFieldButton bind:fields={newFields} />
-
-				<hr class="my-3 border-t border-base-300" />
-
-				<button
-					type="button"
-					class="btn btn-ghost btn-xs flex w-full items-center justify-start gap-2 text-left"
-					onclick={() => (showIndexesModal = true)}
-				>
-					<svg
-						width="14"
-						height="14"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg
-					>
-					<span>Unique constraints and indexes ({newIndexes.length})</span>
-				</button>
-			{:else}
-				<!-- API Rules tab -->
-				<div class="flex flex-col gap-2">
-					<div class="flex items-center gap-1 text-xs text-base-content/60">
-						<span
-							>All rules follow the <a
-								target="_blank"
-								rel="noopener noreferrer"
-								href="https://pocketbase.io/docs/api-rules-and-filters/"
-								class="underline">PocketBase filter syntax and operators</a
-							>.</span
-						>
-						<strong
-							tabindex="-1"
-							class="ml-auto cursor-pointer hover:underline"
-							onclick={() => (showRulesInfo = !showRulesInfo)}
-						>
-							{showRulesInfo ? 'Hide available fields' : 'Show available fields'}
-						</strong>
-					</div>
-
-					{#if showRulesInfo}
-						<div class="rounded-field border border-warning/30 bg-warning/10 p-3 text-xs">
-							<p class="mb-1">The following record fields are available:</p>
-							<div class="mb-2 flex flex-wrap gap-1">
-								{#each newFields.filter((f) => !f['@toDelete']) as field (field.name)}
-									<code class="rounded bg-base-300 px-1 py-0.5 text-xs">{field.name}</code>
-								{/each}
-							</div>
-							<hr class="my-2 border-base-300" />
-							<p class="mb-1">
-								The request fields could be accessed with the special <strong>@request</strong> fields:
-							</p>
-							<div class="mb-2 flex flex-wrap gap-1">
-								<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.headers.*</code>
-								<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.query.*</code>
-								<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.body.*</code>
-								<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.auth.*</code>
-							</div>
-							<hr class="my-2 border-base-300" />
-							<p class="mb-1">You could also add constraints using <strong>@collection</strong>:</p>
-							<div class="flex flex-wrap gap-1">
-								<code class="rounded bg-base-300 px-1 py-0.5 text-xs"
-									>@collection.ANY_COLLECTION_NAME.*</code
-								>
-							</div>
-							<hr class="my-2 border-base-300" />
-							<p class="mb-1">Example rule:</p>
-							<code class="rounded bg-base-300 px-1 py-0.5 text-xs">@request.auth.id != ""</code>
-						</div>
-					{/if}
-
-					<RuleField label="List/Search rule" name="listRule" bind:value={listRule} />
-					<RuleField label="View rule" name="viewRule" bind:value={viewRule} />
-					<RuleField label="Create rule" name="createRule" bind:value={createRule} />
-					<RuleField label="Update rule" name="updateRule" bind:value={updateRule} />
-					<RuleField label="Delete rule" name="deleteRule" bind:value={deleteRule} />
-					<RuleField label="Manage rule" name="manageRule" bind:value={manageRule} />
-				</div>
-			{/if}
-		</div>
-
-		{#if error}
-			<div class="shrink-0 border-t border-base-300 bg-error/10 px-4 py-2 text-xs text-error">
-				{error}
-			</div>
-		{/if}
-
-		<!-- Footer -->
-		<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-			<button
-				type="button"
-				class="btn btn-ghost mr-auto"
-				onclick={() => (showCollectionPane = false)}>Close</button
-			>
-			{#if error}
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					class="text-error"
-					><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line
-						x1="12"
-						y1="16"
-						x2="12.01"
-						y2="16"
-					/></svg
-				>
-			{/if}
-			<button
-				type="button"
-				class="btn btn-primary expanded-lg"
-				class:loading={saving}
-				disabled={!newName.trim() || saving}
-				onclick={handleSave}
-			>
-				{editingCollectionId ? 'Save' : 'Create'}
-			</button>
-		</div>
-	</div>
-</SidePane>
-
-<!-- Indexes Modal -->
-<IndexesModal
-	bind:show={showIndexesModal}
-	bind:indexes={newIndexes}
-	fieldNames={newFields
-		.filter((f) => !f['@toDelete'])
-		.map((f) => f.name as string)
-		.filter(Boolean)}
+	{collection}
+	collections={$collections}
+	bind:recordData
+	bind:editingRecordId
+	onSaved={reload}
+	onDeleted={reload}
 />
-
-<style>
-	/* sortable children need pointer-events to catch drag enter/leave */
-	[data-sortable-child] {
-		pointer-events: auto;
-	}
-</style>
