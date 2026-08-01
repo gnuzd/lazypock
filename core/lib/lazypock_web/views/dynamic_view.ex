@@ -120,12 +120,13 @@ defmodule LazypockWeb.DynamicView do
               ids |> Enum.with_index(1) |> Enum.map(fn {_id, i} -> "$#{i}" end) |> Enum.join(", ")
 
             # Convert string UUIDs to binary for uuid column matching
-            id_bins = Enum.map(ids, fn id ->
-              case Ecto.UUID.dump(id) do
-                {:ok, bin} -> bin
-                :error -> id
-              end
-            end)
+            id_bins =
+              Enum.map(ids, fn id ->
+                case Ecto.UUID.dump(id) do
+                  {:ok, bin} -> bin
+                  :error -> id
+                end
+              end)
 
             GenericRecord.all_where(target, "id IN (#{placeholders})", id_bins)
             |> Enum.map(fn r -> {{target, r["id"]}, r} end)
