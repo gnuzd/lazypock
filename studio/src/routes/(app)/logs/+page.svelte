@@ -2,6 +2,7 @@
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
+	import DataTable from '$lib/components/DataTable.svelte';
 
 	let logs = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
@@ -224,10 +225,24 @@
 		return (d / 1000).toFixed(2) + 's';
 	}
 
+	let columns = $derived([
+		{ key: 'method', label: 'Method' },
+		{ key: 'path', label: 'Path' },
+		{ key: 'status', label: 'Status' },
+		{ key: 'duration', label: 'Duration' },
+		{ key: 'ip', label: 'IP' },
+		{ key: 'collection', label: 'Collection' },
+		{ key: 'created_at', label: 'Timestamp' }
+	]);
+
 	function formatTS(ts: unknown): string {
 		if (!ts) return '—';
 		const d = new Date(String(ts));
 		return d.toLocaleString();
+	}
+
+	function methodLabel(method: unknown): string {
+		return String(method ?? '').toUpperCase();
 	}
 
 	async function viewDetail(id: string) {
@@ -266,7 +281,7 @@
 </script>
 
 <!-- Chart -->
-<div class="mb-4">
+<div class="mb-4 bg-primary">
 	<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
 		{#if chartLoading}
 			<div class="absolute inset-0 z-50 flex items-center justify-center">
@@ -281,28 +296,8 @@
 	</div>
 </div>
 
-<!-- Stats cards -->
-<div class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-2xl font-bold">{statsTotal.toLocaleString()}</div>
-		<div class="text-xs text-base-content/60">All time</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-2xl font-bold">{statsLast24h.toLocaleString()}</div>
-		<div class="text-xs text-base-content/60">Last 24h</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-2xl font-bold text-error">{statsErrors24h.toLocaleString()}</div>
-		<div class="text-xs text-base-content/60">Errors (24h)</div>
-	</div>
-	<div class="rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="text-2xl font-bold">{formatDuration(statsAvgDuration)}</div>
-		<div class="text-xs text-base-content/60">Avg duration (24h)</div>
-	</div>
-</div>
-
 <!-- Filters bar -->
-<div class="mb-4 flex items-center justify-between gap-2">
+<div class="mb-4 flex items-center justify-between gap-2 p-4">
 	<h1 class="text-xl font-semibold">Request Logs</h1>
 	<div class="flex items-center gap-2">
 		{#if collections.length > 0}
@@ -369,63 +364,35 @@
 {/if}
 
 <!-- Logs table -->
-<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
-	<table class="w-full border-collapse text-sm">
-		<thead>
-			<tr class="bg-base-200 text-xs font-semibold tracking-wider text-base-content/60 uppercase">
-				<th class="border-b border-base-300 px-3.5 py-2.5 text-left">Method</th>
-				<th class="border-b border-base-300 px-3.5 py-2.5 text-left">Path</th>
-				<th class="border-b border-base-300 px-3.5 py-2.5 text-left">Status</th>
-				<th class="border-b border-base-300 px-3.5 py-2.5 text-left">Duration</th>
-				<th class="border-b border-base-300 px-3.5 py-2.5 text-left">IP</th>
-				<th class="border-b border-base-300 px-3.5 py-2.5 text-left">Collection</th>
-				<th class="border-b border-base-300 px-3.5 py-2.5 text-left">Timestamp</th>
-			</tr>
-		</thead>
-		<tbody>
-			{#if loading}
-				<tr>
-					<td colspan="7" class="py-8 text-center opacity-50">Loading...</td>
-				</tr>
-			{:else if logs.length === 0}
-				<tr>
-					<td colspan="7" class="py-8 text-center opacity-50">No request logs yet.</td>
-				</tr>
-			{:else}
-				{#each logs as log (log.id)}
-					<tr
-						class="cursor-pointer transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
-						onclick={() => viewDetail(log.id as string)}
-					>
-						<td class="border-b border-base-200 px-3.5 py-2">
-							<span class={'font-mono text-xs font-semibold ' + methodClass(log.method)}
-								>{String(log.method ?? '').toUpperCase()}</span
-							>
-						</td>
-						<td class="max-w-60 truncate border-b border-base-200 px-3.5 py-2 font-mono text-xs">
-							{String(log.path ?? '')}
-						</td>
-						<td class={'border-b border-base-200 px-3.5 py-2 font-mono ' + statusClass(log.status)}
-							>{String(log.status ?? '')}</td
-						>
-						<td class="border-b border-base-200 px-3.5 py-2 text-xs text-base-content/60"
-							>{formatDuration(log.duration)}</td
-						>
-						<td class="border-b border-base-200 px-3.5 py-2 font-mono text-xs"
-							>{String(log.ip ?? '—')}</td
-						>
-						<td class="border-b border-base-200 px-3.5 py-2 text-xs"
-							>{String(log.collection ?? '—')}</td
-						>
-						<td class="border-b border-base-200 px-3.5 py-2 text-xs text-base-content/60"
-							>{formatTS(log.created_at)}</td
-						>
-					</tr>
-				{/each}
-			{/if}
-		</tbody>
-	</table>
-</div>
+<DataTable
+	{columns}
+	rows={logs}
+	{loading}
+	emptyLabel="No request logs yet."
+	onrowclick={(row) => viewDetail(row.id as string)}
+>
+	{#snippet cell(row, col)}
+		{#if col.key === 'method'}
+			<span class={'font-mono text-xs font-semibold ' + methodClass(row.method)}
+				>{methodLabel(row.method)}</span
+			>
+		{:else if col.key === 'path'}
+			<span class="font-mono text-xs">{String(row.path ?? '')}</span>
+		{:else if col.key === 'status'}
+			<span class={'font-mono ' + statusClass(row.status)}>{String(row.status ?? '')}</span>
+		{:else if col.key === 'duration'}
+			<span class="text-xs text-base-content/60">{formatDuration(row.duration)}</span>
+		{:else if col.key === 'ip'}
+			<span class="font-mono text-xs">{String(row.ip ?? '—')}</span>
+		{:else if col.key === 'collection'}
+			<span class="text-xs">{String(row.collection ?? '—')}</span>
+		{:else if col.key === 'created_at'}
+			<span class="text-xs text-base-content/60">{formatTS(row.created_at)}</span>
+		{:else}
+			{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
+		{/if}
+	{/snippet}
+</DataTable>
 
 <!-- Pagination -->
 {#if totalPages > 1}

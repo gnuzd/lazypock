@@ -272,9 +272,13 @@ defmodule LazypockWeb.DynamicController do
   # and bcrypt-hash password fields automatically.
   # Empty password values are dropped entirely (keep existing on update).
   defp sanitize_attrs(attrs, collection) do
+    # Map API (camelCase) keys to actual DB column names first.
+    # e.g. emailVisibility (metadata) → emailvisibility (Postgres column).
+    attrs = Lazypock.Schemas.FieldNames.attrs_to_columns(attrs, collection)
+
     field_types =
       (collection.fields || [])
-      |> Enum.map(fn f -> {f.name, f.type} end)
+      |> Enum.map(fn f -> {String.downcase(f.name), f.type} end)
       |> Map.new()
 
     non_text_types = MapSet.new(["number", "bool", "date", "datetime"])
@@ -283,7 +287,9 @@ defmodule LazypockWeb.DynamicController do
     attrs
     |> Map.drop(MapSet.to_list(system_fields))
     |> Enum.reduce(%{}, fn {key, value}, acc ->
-      type = Map.get(field_types, key, "text")
+      # key is now the DB column name (lowercase) — normalize for lookups
+      type_key = String.downcase(key)
+      type = Map.get(field_types, type_key, "text")
 
       cond do
         # Empty password on update → skip entirely (keep existing)

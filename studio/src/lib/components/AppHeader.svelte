@@ -26,7 +26,8 @@
 	}
 
 	function navClass(path: string): string {
-		const active = page.url.pathname.endsWith(path);
+		const full = base + path;
+		const active = page.url.pathname === full || page.url.pathname.startsWith(full + '/');
 		return (
 			'text-sm font-medium btn-sm ' +
 			(active ? 'bg-primary-content/10' : 'hover:bg-primary-content/10')

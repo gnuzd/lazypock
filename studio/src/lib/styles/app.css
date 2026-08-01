@@ -22,9 +22,13 @@
 
 	/* --- Semantic Alerts --- */
 	--color-success: oklch(48% 0.065 145);
+	--color-success-content: oklch(100% 0 0);
 	--color-warning: oklch(69% 0.16 80);
+	--color-warning-content: oklch(20% 0 0);
 	--color-error: oklch(45% 0.14 28);
+	--color-error-content: oklch(100% 0 0);
 	--color-info: oklch(56% 0.11 258);
+	--color-info-content: oklch(100% 0 0);
 
 	/* --- Structural/Component Shapes --- */
 	--radius-selector: 0px;
@@ -65,4 +69,11 @@ h4,
 h5,
 h6 {
 	@apply font-serif;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+	-webkit-box-shadow: 0 0 0px 1000px transparent inset;
+	transition: background-color 5000s ease-in-out 0s;
 }

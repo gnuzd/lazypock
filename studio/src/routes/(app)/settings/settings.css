@@ -1,0 +1,131 @@
+/* Shared styles for settings pages (switch toggle, select field, checkbox). */
+
+/* ── Switch toggle ── */
+.switch-field {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 12px;
+	border-radius: var(--radius-field);
+	background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
+	transition: background var(--animation-speed, 0.2s);
+}
+.switch-field:focus-within {
+	background: color-mix(in oklab, var(--color-base-content) 12%, var(--color-base-100));
+}
+.switch-label {
+	flex: 1;
+	cursor: pointer;
+	font-size: 0.9375rem;
+	color: var(--color-base-content);
+}
+.switch-label .txt {
+	opacity: 0.85;
+}
+.switch {
+	position: relative;
+	display: inline-block;
+	width: 44px;
+	height: 24px;
+	flex-shrink: 0;
+}
+.switch input {
+	opacity: 0;
+	width: 0;
+	height: 0;
+	position: absolute;
+}
+.switch-slider {
+	position: absolute;
+	cursor: pointer;
+	inset: 0;
+	background: color-mix(in oklab, var(--color-base-content) 25%, transparent);
+	border-radius: 24px;
+	transition: 0.2s;
+}
+.switch-slider::before {
+	content: '';
+	position: absolute;
+	height: 18px;
+	width: 18px;
+	left: 3px;
+	bottom: 3px;
+	background: white;
+	border-radius: 50%;
+	transition: 0.2s;
+}
+.switch input:checked + .switch-slider {
+	background: var(--color-primary);
+}
+.switch input:checked + .switch-slider::before {
+	transform: translateX(20px);
+}
+.switch input:disabled + .switch-slider {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+/* ── Select field (for TLS/Auth) ── */
+.field {
+	position: relative;
+	display: block;
+	outline: 0;
+	width: 100%;
+	min-width: 0;
+	border-radius: var(--radius-field);
+	background: color-mix(in oklab, var(--color-base-content) 8%, var(--color-base-100));
+	transition: background var(--animation-speed, 0.2s);
+}
+.field:focus-within {
+	background: color-mix(in oklab, var(--color-base-content) 12%, var(--color-base-100));
+}
+.field-label {
+	display: flex;
+	width: 100%;
+	gap: 5px;
+	align-items: center;
+	min-height: 24px;
+	padding: 9px 12px 1px;
+	font-weight: bold;
+	white-space: normal;
+	opacity: 0.7;
+	font-size: 0.875rem;
+	transition: color var(--animation-speed, 0.2s);
+	color: var(--color-base-content);
+}
+.field-input {
+	display: inline-block;
+	vertical-align: top;
+	outline: 0;
+	border: 0;
+	margin: 0;
+	width: 100%;
+	background: none;
+	font-weight: normal;
+	line-height: 1;
+	letter-spacing: inherit;
+	padding: 10px 12px;
+	color: var(--color-base-content);
+	font-size: 0.9375rem;
+	font-family: var(--font-sans, system-ui, sans-serif);
+}
+.field-input:focus,
+.field-input:focus-visible,
+.field-input:focus-within {
+	outline: 0;
+}
+select.field-input {
+	appearance: none;
+	cursor: pointer;
+}
+
+/* ── Checkbox ── */
+.checkbox {
+	accent-color: var(--color-primary);
+}
+
+/* ── Grid helpers ── */
+.lg\:col-span-4 {
+	grid-column: span 4 / span 4;
+}
