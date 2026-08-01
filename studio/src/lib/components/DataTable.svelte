@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { fly } from 'svelte/transition';
 	import Button from '$lib/components/Button.svelte';
 
 	type Column = {
@@ -20,7 +21,8 @@
 		zebra = false,
 		selectable = false,
 		selectedIds = $bindable([] as string[]),
-		cell
+		cell,
+		selectionActions
 	}: {
 		columns: Column[];
 		rows: Record<string, unknown>[];
@@ -33,6 +35,8 @@
 		selectable?: boolean;
 		selectedIds?: string[];
 		cell?: Snippet<[row: Record<string, unknown>, col: Column]>;
+		/** Extra action buttons rendered inside the floating selection bar. */
+		selectionActions?: Snippet;
 	} = $props();
 
 	const colspan = $derived(columns.length + (selectable ? 1 : 0));
@@ -133,3 +137,19 @@
 		</tbody>
 	</table>
 </div>
+
+{#if selectable && selectedIds.length > 0}
+	<div class="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+		<div
+			transition:fly={{ y: 80, duration: 200 }}
+			class="pointer-events-auto flex items-center gap-2 rounded-box border border-base-300 bg-base-100 px-4 py-2.5 shadow-lg"
+		>
+			<span class="text-sm font-medium">{selectedIds.length} selected</span>
+			{#if selectionActions}
+				<span class="mx-1 h-5 w-px bg-base-300"></span>
+				{@render selectionActions()}
+			{/if}
+			<Button class="btn-ghost btn-sm" onclick={() => (selectedIds = [])}>Reset</Button>
+		</div>
+	</div>
+{/if}

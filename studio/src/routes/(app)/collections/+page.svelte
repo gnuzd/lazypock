@@ -134,6 +134,19 @@
 		goto(base + '/collections/' + encodeURIComponent($activeName));
 	}
 
+	const collName = $derived((collection?.name as string) ?? '');
+
+	function downloadSelected() {
+		const selected = rows.filter((r) => selectedIds.includes(r.id as string));
+		const blob = new Blob([JSON.stringify(selected, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${collName || 'records'}-selected.json`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
 	async function deleteSelected() {
 		if (!collection || selectedIds.length === 0 || deletingSelected) return;
 		if (
@@ -180,14 +193,7 @@
 				<Settings class="h-4 w-4" />
 			</button>
 		</nav>
-		<div class="flex items-center gap-2">
-			{#if selectedIds.length > 0}
-				<Button class="btn-error btn-sm" loading={deletingSelected} onclick={deleteSelected}
-					>Delete Selected ({selectedIds.length})</Button
-				>
-			{/if}
-			<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
-		</div>
+		<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
 	</div>
 	<DataTable
 		{columns}
@@ -198,7 +204,14 @@
 		emptyActionLabel="+ New Record"
 		onemptyaction={newRecord}
 		onrowclick={(row) => editRecord(row)}
-	/>
+	>
+		{#snippet selectionActions()}
+			<Button class="btn-ghost btn-sm" onclick={downloadSelected}>Download JSON</Button>
+			<Button class="btn-error btn-sm" loading={deletingSelected} onclick={deleteSelected}>
+				Delete
+			</Button>
+		{/snippet}
+	</DataTable>
 {:else}
 	<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>
 {/if}
