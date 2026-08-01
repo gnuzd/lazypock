@@ -17,6 +17,9 @@
 	let showRecordPane = $state(false);
 	let recordData = $state<Record<string, unknown>>({});
 	let editingRecordId = $state<string | null>(null);
+	// ── Bulk selection ──
+	let selectedIds = $state<string[]>([]);
+	let deletingSelected = $state(false);
 
 	/** Track which collection topic we're subscribed to for record events */
 	let subscribedRecordTopic = $state('');
@@ -130,6 +133,30 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve
 		goto(base + '/collections/' + encodeURIComponent($activeName));
 	}
+
+	async function deleteSelected() {
+		if (!collection || selectedIds.length === 0 || deletingSelected) return;
+		if (
+			!confirm(
+				`Delete ${selectedIds.length} selected record${selectedIds.length > 1 ? 's' : ''}? This action cannot be undone.`
+			)
+		)
+			return;
+		deletingSelected = true;
+		try {
+			const collName = collection.name as string;
+			for (const id of selectedIds) {
+				await client.deleteRecord(collName, id);
+			}
+			selectedIds = [];
+			reload();
+		} catch (e) {
+			console.error('delete selected:', e);
+			alert('Failed to delete some records: ' + ((e as Error).message ?? String(e)));
+		} finally {
+			deletingSelected = false;
+		}
+	}
 </script>
 
 {#if loading}
@@ -153,11 +180,20 @@
 				<Settings class="h-4 w-4" />
 			</button>
 		</nav>
-		<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+		<div class="flex items-center gap-2">
+			{#if selectedIds.length > 0}
+				<Button class="btn-error btn-sm" loading={deletingSelected} onclick={deleteSelected}
+					>Delete Selected ({selectedIds.length})</Button
+				>
+			{/if}
+			<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+		</div>
 	</div>
 	<DataTable
 		{columns}
 		{rows}
+		selectable
+		bind:selectedIds
 		emptyLabel="No records yet. Create your first record to get started."
 		emptyActionLabel="+ New Record"
 		onemptyaction={newRecord}

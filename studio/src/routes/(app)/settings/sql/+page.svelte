@@ -1,11 +1,23 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import Button from '$lib/components/Button.svelte';
+	import DataTable from '$lib/components/DataTable.svelte';
 
 	let sqlQuery = $state('SELECT name, type FROM _collections ORDER BY name');
 	let sqlResults = $state<{ columns: string[]; rows: unknown[][] } | null>(null);
 	let sqlError = $state('');
 	let sqlRunning = $state(false);
+
+	let tableColumns = $derived((sqlResults?.columns ?? []).map((c) => ({ key: c, label: c })));
+	let tableRows = $derived(
+		(sqlResults?.rows ?? []).map((r, i) => {
+			const obj: Record<string, unknown> = { __index: i };
+			sqlResults?.columns.forEach((c, j) => {
+				obj[c] = r[j];
+			});
+			return obj;
+		})
+	);
 
 	async function runSql() {
 		if (!sqlQuery.trim()) return;
@@ -63,26 +75,15 @@
 {/if}
 
 {#if sqlResults}
-	<div class="mt-3 overflow-x-auto rounded-box border border-base-300 bg-base-100">
-		<table class="w-full border-collapse text-xs">
-			<thead>
-				<tr class="bg-base-200 text-left text-xs font-semibold text-base-content/60 uppercase">
-					{#each sqlResults.columns as col (col)}
-						<th class="border-b border-base-300 px-3 py-2 font-mono">{col}</th>
-					{/each}
-				</tr>
-			</thead>
-			<tbody>
-				{#each sqlResults.rows as row, i (String(i))}
-					<tr class="hover:bg-base-200 {i % 2 === 1 ? 'bg-base-100/50' : ''}">
-						{#each row as cell, j (j)}
-							<td class="max-w-60 truncate border-b border-base-200 px-3 py-1.5 font-mono">
-								{cell == null ? 'NULL' : String(cell)}
-							</td>
-						{/each}
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+	<div class="mt-3">
+		<DataTable columns={tableColumns} rows={tableRows} zebra emptyLabel="No rows returned.">
+			{#snippet cell(row, col)}
+				{#if row[col.key] == null}
+					<span class="opacity-50">NULL</span>
+				{:else}
+					{String(row[col.key])}
+				{/if}
+			{/snippet}
+		</DataTable>
 	</div>
 {/if}
