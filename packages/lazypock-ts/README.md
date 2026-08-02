@@ -71,6 +71,17 @@ await client.collection('posts').create({ title: 'x' });      // ✓
 await client.collection('posts').create({ nope: 1 });          // ✗ compile error
 ```
 
+> **Collection names are strict by design.** The typed client accepts only the
+> literal collection names from your schema (`'posts'`, `'users'`, …) and rejects
+> typos at compile time. If you need a *dynamic* collection name (e.g. a route
+> param), use the base client or a cast:
+>
+> ```typescript
+> const base = new LazypockClient({ baseUrl: 'http://localhost:4000/api' });
+> base.collection(name);                     // dynamic, untyped
+> client.collection(name as keyof LazypockCollections); // typed escape hatch
+> ```
+
 ### 2. Hand-written generics (no codegen)
 
 Pass a record interface to `collection<T>()` or use `.typed<T>()`:

@@ -58,8 +58,21 @@ userSvc.create({ email: "a@b.c", role: "admin" });
 // @ts-expect-error role is union, not arbitrary string
 userSvc.create({ email: "a@b.c", role: "superadmin" });
 
-// @ts-expect-error "users" is not in MyCollections
-typed.collection("nope");
+// @ts-expect-error "nope" is not in MyCollections
+const nopeSvc = typed.collection("nope");
+
+// Positive: literal key resolves to the right type (posts → Post)
+const postSvc = typed.collection("posts");
+postSvc.create({ title: "ok" }); // ✓
+
+// Dynamic collection names: strict keys reject a plain string variable,
+// so use the base client (untyped) or a cast for dynamic access.
+const dynName: string = "posts";
+// @ts-expect-error strict keys: string not assignable to literal
+const dynSvc = typed.collection(dynName);
+// Escape hatch: cast to keyof
+const dynCast = typed.collection(dynName as keyof MyCollections);
+dynCast.create({ title: "ok" }); // ✓
 
 // ── 3. TypedClient direct instantiation ──
 const tc = new TypedClient<MyCollections>({

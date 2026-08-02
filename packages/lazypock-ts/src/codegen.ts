@@ -27,10 +27,7 @@ export function fieldKey(name: string): string {
 	return name.replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
-/** Renders a TS type reference for a member value. */
-function typeRef(type: string): string {
-	return type === "never" ? "never" : type;
-}
+
 
 /**
  * Generate the full TypeScript source for the typed SDK module.
@@ -83,7 +80,7 @@ export function generateTypes(
 		const lines = fields.map((f) => memberLine(f)).filter((l) => l !== "");
 		const body = lines.join("\n");
 		sections.push(
-			`export interface ${typeName}Record ${renderInterface({
+			`export interface ${typeName}Record${renderInterface({
 				extends: includeBaseFields ? "BaseRecord" : undefined,
 				body,
 			})}`,
@@ -131,18 +128,21 @@ export class TypedClient extends LazypockClient {
 	return sections.join("\n\n") + "\n";
 }
 
-/** Render an interface body with optional extends + empty-body handling. */
+/**
+ * Render the interface body including the extends clause.
+ * Empty body → ` extends BaseRecord {}` (valid TS).
+ */
 function renderInterface(opts: { extends?: string; body: string }): string {
 	const ext = opts.extends ? ` extends ${opts.extends}` : "";
-	if (!opts.body) return `{${ext}}`;
-	return `{\n${opts.body}\n}`;
+	if (!opts.body) return `${ext} {}`;
+	return `${ext} {\n${opts.body}\n}`;
 }
 
 /** Render a single interface member line for a field. */
 function memberLine(f: SchemaField): string {
 	const key = fieldKey(f.name);
 	const req = f.required || f.type === "password" ? "" : "?";
-	const type = typeRef(fieldTypeScriptType(f));
+	const type = fieldTypeScriptType(f);
 	// `never` members (passwords) are omitted from read models.
 	if (type === "never") return "";
 	return `  ${JSON.stringify(key)}${req}: ${type};`;

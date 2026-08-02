@@ -135,7 +135,7 @@ export class LazypockClient {
 			this.collectionCache.set(name, svc);
 		}
 		return svc;
-}
+	}
 
 	/**
 	 * Get a typed service whose record shape is derived from the schema
