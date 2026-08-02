@@ -22,9 +22,13 @@
 
 	/* --- Semantic Alerts --- */
 	--color-success: oklch(48% 0.065 145);
+	--color-success-content: oklch(100% 0 0);
 	--color-warning: oklch(69% 0.16 80);
+	--color-warning-content: oklch(20% 0 0);
 	--color-error: oklch(45% 0.14 28);
+	--color-error-content: oklch(100% 0 0);
 	--color-info: oklch(56% 0.11 258);
+	--color-info-content: oklch(100% 0 0);
 
 	/* --- Structural/Component Shapes --- */
 	--radius-selector: 0px;

@@ -17,6 +17,9 @@
 	let showRecordPane = $state(false);
 	let recordData = $state<Record<string, unknown>>({});
 	let editingRecordId = $state<string | null>(null);
+	// ── Bulk selection ──
+	let selectedIds = $state<string[]>([]);
+	let deletingSelected = $state(false);
 
 	/** Track which collection topic we're subscribed to for record events */
 	let subscribedRecordTopic = $state('');
@@ -130,6 +133,43 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve
 		goto(base + '/collections/' + encodeURIComponent($activeName));
 	}
+
+	const collName = $derived((collection?.name as string) ?? '');
+
+	function downloadSelected() {
+		const selected = rows.filter((r) => selectedIds.includes(r.id as string));
+		const blob = new Blob([JSON.stringify(selected, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${collName || 'records'}-selected.json`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
+	async function deleteSelected() {
+		if (!collection || selectedIds.length === 0 || deletingSelected) return;
+		if (
+			!confirm(
+				`Delete ${selectedIds.length} selected record${selectedIds.length > 1 ? 's' : ''}? This action cannot be undone.`
+			)
+		)
+			return;
+		deletingSelected = true;
+		try {
+			const collName = collection.name as string;
+			for (const id of selectedIds) {
+				await client.deleteRecord(collName, id);
+			}
+			selectedIds = [];
+			reload();
+		} catch (e) {
+			console.error('delete selected:', e);
+			alert('Failed to delete some records: ' + ((e as Error).message ?? String(e)));
+		} finally {
+			deletingSelected = false;
+		}
+	}
 </script>
 
 {#if loading}
@@ -158,11 +198,20 @@
 	<DataTable
 		{columns}
 		{rows}
+		selectable
+		bind:selectedIds
 		emptyLabel="No records yet. Create your first record to get started."
 		emptyActionLabel="+ New Record"
 		onemptyaction={newRecord}
 		onrowclick={(row) => editRecord(row)}
-	/>
+	>
+		{#snippet selectionActions()}
+			<Button class="btn-ghost btn-sm" onclick={downloadSelected}>Download JSON</Button>
+			<Button class="btn-error btn-sm" loading={deletingSelected} onclick={deleteSelected}>
+				Delete
+			</Button>
+		{/snippet}
+	</DataTable>
 {:else}
 	<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>
 {/if}
