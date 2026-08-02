@@ -74,7 +74,8 @@ defmodule Lazypock.MixProject do
       {:bcrypt_elixir, "~> 3.0"},
       {:burrito, "~> 1.0"},
       {:swoosh, "~> 1.17"},
-      {:gen_smtp, "~> 1.2"}
+      {:gen_smtp, "~> 1.2"},
+      {:cors_plug, "~> 3.0"}
     ]
   end
 
