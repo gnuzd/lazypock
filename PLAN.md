@@ -2,7 +2,7 @@
 
 > **Your whole backend. In one lazy pocket.** 🦥👖
 
-**Status:** Core backend (Phases 1–7) complete. Auth collections (Phase 3) — superuser + regular auth user JWT, login/refresh, rule integration ✅. Studio SPA (Phase 8) in active development. SDK (Phase 9) shipping. Auth collections (Phase 3) — superuser + regular auth user JWT, login/refresh, rule integration ✅
+**Status:** Core backend (Phases 1–7) complete — DDL engine, dynamic CRUD with relation expansion, auth collections (superuser + user JWT, login/refresh, rule integration), rule engine with Studio syntax validation, realtime, file storage (local + S3), and hook Layer 2 (file-based). Studio SPA (Phase 8) in active development — collections, records, rules, logs, settings shipped. SDK (Phase 9) published as `lazypock-ts` v0.1.1 (npm) with full type safety via codegen CLI.
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**.
 Define collections in an admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
@@ -461,7 +461,7 @@ end
 - [x] `CollectionRegistry` GenServer + ETS cache
 - [x] `GenericRecord` — SQL-based record CRUD helper
 - [x] `FilterCompiler` — PocketBase filter → SQL WHERE
-- [ ] Mix task: `mix lazypock.create_collection`
+- [ ] Mix task: `mix lazypock.create_collection` (TS codegen CLI shipped in `lazypock-ts` instead)
 
 ---
 
@@ -663,10 +663,10 @@ Consistent error format matching PocketBase:
 - [x] `DynamicController` with full CRUD (list/show/create/update/delete)
 - [x] Filter compiler (PocketBase syntax → SQL WHERE clauses)
 - [x] Sort, paginate, field selection
-- [ ] Relation expansion (`expand` parameter)
+- [x] Relation expansion (`expand` parameter) via `DynamicView.expand_records`
 - [x] PocketBase-compatible JSON response format
 - [x] Error handling with canonical error format
-- [ ] Comprehensive ExUnit tests for filter/sort/paginate edge cases
+- [x] Comprehensive ExUnit tests for filter/sort/paginate edge cases (68 filter + 21 controller tests)
 
 ---
 
@@ -939,7 +939,7 @@ end
 - [x] `authorize_manage/2` — manageRule for delegated collection management
 - [x] `@request.auth.*` variable resolution with SQL evaluation
 - [x] Superuser bypass (superusers always pass all rules)
-- [ ] Rule validation in Studio (syntax checking)
+- [x] Rule validation in Studio (syntax checking) — `ruleValidator.ts` + `RuleField.svelte`
 - [x] Sensible defaults per collection type (auth vs base rules in DDL)
 - [x] ExUnit tests for rule scenarios
 
@@ -1567,8 +1567,8 @@ studio/src/routes/
 - [ ] Auth manager (user management)
 - [ ] Hook manager
 - [ ] File browser
-- [ ] Logs / audit trail viewer
-- [ ] Settings page
+- [x] Logs / audit trail viewer (`/logs` with stats + chart)
+- [x] Settings page (application, backups, cron, export, files, import, mail, SQL console)
 
 ---
 
@@ -1634,7 +1634,7 @@ await client.files.delete(fileId);
 - [x] TypeScript types (`ApiRecord`, `ListResult`, `AuthModel`)
 - [x] File upload/download — `FilesService` with `upload()`/`getUrl()`/`delete()`
 - [x] Auto-refresh on token expiry — transparent refresh via `HttpClient.request()` interceptor
-- [ ] README + API docs + examples
+- [x] README + API docs + examples (`packages/lazypock-ts/README.md` + JSDoc)
 
 ---
 
@@ -1712,7 +1712,7 @@ mix lazypock.eject posts  # → lib/my_app/schemas/posts.ex
 | **Unit tests** | DDL engine, type mapper, rule compiler, hook dispatcher |
 | **Integration tests** | Full CRUD lifecycle per collection type |
 | **Channel tests** | Realtime subscription/notification flow |
-| **LiveView tests** | Admin UI forms and flows |
+| **Studio UI tests** | Admin SPA forms and flows |
 | **Property-based tests** | Filter parsing, rule compilation |
 | **Load tests** | Concurrent DDL + CRUD on 100 collections |
 
@@ -1768,7 +1768,7 @@ mix lazypock.eject posts  # → lib/my_app/schemas/posts.ex
 | **DB Library** | Ecto 3.11+ | Composable queries, dynamic sources |
 | **Auth** | Joken + bcrypt_elixir | JWT + hashing |
 | **OAuth2** | Assent | Multi-provider |
-| **Admin UI** | Phoenix LiveView 0.20+ | Real-time UI without JS |
+| **Admin UI** | SvelteKit (Studio SPA) | Admin dashboard served at `/_/*` |
 | **File Processing** | Vix (libvips) | Fast image processing |
 | **File Upload** | Custom | To match PocketBase semantics |
 | **Realtime** | Phoenix PubSub + Channels | Built-in |
