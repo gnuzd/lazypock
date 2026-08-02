@@ -3,13 +3,15 @@
 
 import type { HttpClient } from "./http";
 import type { AuthStore, AuthModel } from "./auth";
-import type { ApiRecord, ListResult, RequestOptions } from "./types";
+import type { ApiRecord, ListResult, RequestOptions, CreateData, UpdateData } from "./types";
 
 /**
  * Typed CRUD service for a single dynamic collection.
  * Get an instance via {@link LazypockClient.collection}.
+ *
+ * @typeParam T — The record shape for this collection. Defaults to {@link ApiRecord}.
  */
-export class CollectionService {
+export class CollectionService<T = ApiRecord> {
 	private http: HttpClient;
 	private collectionName: string;
 	private authStore?: AuthStore;
@@ -30,10 +32,7 @@ export class CollectionService {
 	 * @param params Query parameters including `filter`, `sort`, `page`, `perPage`, `expand`.
 	 * @param options Optional request options.
 	 */
-	list<T = ApiRecord>(
-		params?: Record<string, string>,
-		options?: RequestOptions,
-	): Promise<ListResult<T> | null> {
+	list(params?: Record<string, string>, options?: RequestOptions): Promise<ListResult<T> | null> {
 		const qs = params ? "?" + new URLSearchParams(params).toString() : "";
 		return this.http.get<ListResult<T>>(
 			"/" + this.encodeId(this.collectionName) + qs,
@@ -46,10 +45,7 @@ export class CollectionService {
 	 * @param id Record ID.
 	 * @param options Optional request options.
 	 */
-	getOne<T = ApiRecord>(
-		id: string,
-		options?: RequestOptions,
-	): Promise<T | null> {
+	getOne(id: string, options?: RequestOptions): Promise<T | null> {
 		return this.http.get<T>(
 			"/" + this.encodeId(this.collectionName) + "/" + this.encodeId(id),
 			options,
@@ -58,13 +54,11 @@ export class CollectionService {
 
 	/**
 	 * Create a new record.
-	 * @param data Record fields.
+	 * @param data Record fields. When `T` is a concrete shape (e.g. a generated
+	 * record type), excess/unknown fields are rejected at compile time.
 	 * @param options Optional request options.
 	 */
-	create<T = ApiRecord>(
-		data: Record<string, unknown>,
-		options?: RequestOptions,
-	): Promise<T | null> {
+	create(data: T extends ApiRecord ? Record<string, unknown> : CreateData<T>, options?: RequestOptions): Promise<T | null> {
 		return this.http.post<T>(
 			"/" + this.encodeId(this.collectionName),
 			data,
@@ -75,14 +69,11 @@ export class CollectionService {
 	/**
 	 * Update a record by ID.
 	 * @param id Record ID.
-	 * @param data Updated record fields.
+	 * @param data Updated record fields. When `T` is a concrete shape, `data`
+	 * must be a partial of `T` — unknown fields are rejected.
 	 * @param options Optional request options.
 	 */
-	update<T = ApiRecord>(
-		id: string,
-		data: Record<string, unknown>,
-		options?: RequestOptions,
-	): Promise<T | null> {
+	update(id: string, data: T extends ApiRecord ? Record<string, unknown> : UpdateData<T>, options?: RequestOptions): Promise<T | null> {
 		return this.http.patch<T>(
 			"/" + this.encodeId(this.collectionName) + "/" + this.encodeId(id),
 			data,
@@ -123,6 +114,27 @@ export class CollectionService {
 				field: f.name,
 				targetCollection: f.options!.collection,
 			}));
+	}
+
+	/**
+	 * Cast this service to a specific record shape.
+	 * Use when you have a hand-written or generated interface for the
+	 * collection and want compile-time checking of create/update/list.
+	 *
+	 * @example
+	 * ```ts
+	 * interface Post {
+	 *   id: string;
+	 *   title: string;
+	 *   published: boolean;
+	 * }
+	 * const posts = client.collection("posts").typed<Post>();
+	 * await posts.create({ title: "Hi", published: true }); // ✓
+	 * await posts.create({ nope: 1 }); // ✗ compile error
+	 * ```
+	 */
+	typed<TRecord = ApiRecord>(): CollectionService<TRecord> {
+		return this as unknown as CollectionService<TRecord>;
 	}
 
 	// ── Auth Collection Methods ──
