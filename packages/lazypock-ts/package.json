@@ -23,9 +23,15 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "generate": "node dist/cli.js",
+    "smoke": "npm run build && node smoke-test.mjs && tsc --noEmit --strict --target es2020 --module esnext --moduleResolution bundler type-test.ts",
     "prepublishOnly": "npm run build"
   },
+  "bin": {
+    "lazypock-gen": "./dist/cli.js"
+  },
   "devDependencies": {
+    "@types/node": "^26.1.2",
     "tsup": "^8.4.0",
     "typescript": "^5.9.3"
   }

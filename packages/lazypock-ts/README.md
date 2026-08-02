@@ -36,6 +36,104 @@ const file = await client.files.upload(fileInput.files[0]);
 client.collection('posts').subscribe('*', (e) => console.log(e.action, e.record));
 ```
 
+## Type Safety
+
+The SDK offers three levels of type safety — pick what fits your project.
+
+### 1. Fully typed via codegen (recommended)
+
+Connect to your API once and generate a typed client — every collection becomes
+an interface with the exact field types from your schema (selects become string
+unions, relations become record IDs, etc.).
+
+```bash
+# In your app, after installing lazypock:
+npx lazypock-gen \
+  --url http://localhost:4000/api \
+  --email admin@example.com \
+  --password your-password
+# writes ./lazypock.types.ts
+```
+
+Then in your app:
+
+```typescript
+import { createClient } from './lazypock.types';
+
+const client = createClient({ baseUrl: 'http://localhost:4000/api' });
+await client.login('admin@example.com', 'password');
+
+// Collection access is fully type-checked:
+const post = await client.collection('posts').getOne('abc123');
+// post.title — string, post.published — boolean, …
+
+await client.collection('posts').create({ title: 'x' });      // ✓
+await client.collection('posts').create({ nope: 1 });          // ✗ compile error
+```
+
+> **Collection names are strict by design.** The typed client accepts only the
+> literal collection names from your schema (`'posts'`, `'users'`, …) and rejects
+> typos at compile time. If you need a *dynamic* collection name (e.g. a route
+> param), use the base client or a cast:
+>
+> ```typescript
+> const base = new LazypockClient({ baseUrl: 'http://localhost:4000/api' });
+> base.collection(name);                     // dynamic, untyped
+> client.collection(name as keyof LazypockCollections); // typed escape hatch
+> ```
+
+### 2. Hand-written generics (no codegen)
+
+Pass a record interface to `collection<T>()` or use `.typed<T>()`:
+
+```typescript
+interface Post {
+  id: string;
+  title: string;
+  published: boolean;
+}
+
+const postsSvc = client.collection('posts').typed<Post>();
+const post = await postsSvc.getOne('abc123'); // post.title: string
+
+await postsSvc.create({ title: 'Hi', published: true }); // ✓
+await postsSvc.create({ title: 'Hi', nope: 1 });          // ✗ compile error
+```
+
+### 3. Runtime schema types (experimental)
+
+Fetch schemas at runtime and let the client derive field types:
+
+```typescript
+const res = await fetch('http://localhost:4000/api/collections', {
+  headers: { Authorization: 'Bearer ' + token },
+});
+const { items } = await res.json(); // CollectionSchema[]
+
+const client = new LazypockClient({
+  baseUrl: 'http://localhost:4000/api',
+  types: { schemas: items },
+});
+
+const code = client.generateTypes(); // string — write to lazypock.types.ts
+```
+
+### CLI reference
+
+```bash
+lazypock-gen [options]
+
+Options:
+  --url <url>        API base URL (or LAZYPOCK_URL)
+  --email <email>    Superuser email (or LAZYPOCK_EMAIL)
+  --password <pw>    Superuser password (or LAZYPOCK_PASSWORD)
+  --out <file>       Output file (default: lazypock.types.ts)
+  --package <name>   Package name to import (default: lazypock)
+  --skip-system      Skip system collections
+```
+```
+
+
 ## API Reference
 
 ### LazypockClient
