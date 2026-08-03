@@ -264,6 +264,7 @@ defmodule LazypockWeb.CollectionController do
   # Looks up the collection name stored in options["collection"] and returns its ID.
   defp resolve_collection_id_from_options(opts) do
     coll_name = opts["collection"]
+
     if is_binary(coll_name) and coll_name != "" do
       case CollectionRegistry.get(coll_name) do
         {:ok, coll} -> coll.id
@@ -273,6 +274,7 @@ defmodule LazypockWeb.CollectionController do
       nil
     end
   end
+
   # Resolve a collection name from either a UUID or a name string
   defp resolve_collection_name(id_or_name) do
     case CollectionRegistry.get(id_or_name) do

@@ -7,7 +7,7 @@
 //   1. Superuser email + password:
 //      npx lazypock --url http://localhost:4000/api --email admin@... --password ...
 //   2. API key (recommended, generated from the Settings dashboard):
-//      npx lazypock --url http://localhost:4000/api --api-key <key>
+//      npx lazypock --url http://localhost:4000/api --apikey <key>
 //
 // Or via env vars (no flags):
 //   LAZYPOCK_URL=... LAZYPOCK_API_KEY=... npx lazypock
@@ -48,19 +48,19 @@ function parseArgs(argv: string[]): CliOptions {
 	const url = get("--url", "LAZYPOCK_URL");
 	const email = get("--email", "LAZYPOCK_EMAIL");
 	const password = get("--password", "LAZYPOCK_PASSWORD");
-	const apiKey = get("--api-key", "LAZYPOCK_API_KEY");
+	const apiKey = get("--apikey", "LAZYPOCK_API_KEY") || get("--api-key", "LAZYPOCK_API_KEY");
 
 	if (!url) fail("Missing API URL. Pass --url or set LAZYPOCK_URL.");
 	if (!apiKey) {
 		if (!email)
 			fail(
-				"Missing credentials. Pass --api-key, or --email + --password, or set LAZYPOCK_API_KEY / LAZYPOCK_EMAIL.",
+				"Missing credentials. Pass --apikey, or --email + --password, or set LAZYPOCK_API_KEY / LAZYPOCK_EMAIL.",
 			);
 		if (!password)
 			fail("Missing password. Pass --password, or set LAZYPOCK_PASSWORD.");
 	}
 
-	const out = get("--out", "LAZYPOCK_OUT", "lazypock.types.ts");
+	const out = get("--output", "LAZYPOCK_OUT") || get("--out", "LAZYPOCK_OUT", "lazypock.types.ts");
 	const packageName = get("--package", "LAZYPOCK_PACKAGE", "lazypock");
 
 	return {

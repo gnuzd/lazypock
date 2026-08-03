@@ -66,7 +66,7 @@ npx lazypock-gen \
 > Studio **Settings → API Keys** dashboard, then:
 >
 > ```bash
-> npx lazypock --url http://localhost:4000/api --api-key lazypock_xxxxxxxx
+> npx lazypock --url http://localhost:4000/api --apikey lazypock_xxxxxxxx
 > # or via env: LAZYPOCK_URL=... LAZYPOCK_API_KEY=... npx lazypock
 > ```
 >
@@ -144,10 +144,12 @@ lazypock [options]
 
 Options:
   --url <url>        API base URL (or LAZYPOCK_URL)
-  --api-key <key>    API key (or LAZYPOCK_API_KEY) — recommended, no login round-trip
+  --apikey <key>    API key (or LAZYPOCK_API_KEY) — recommended, no login round-trip
+  --api-key <key>   Deprecated alias for --apikey
   --email <email>    Superuser email (or LAZYPOCK_EMAIL)
   --password <pw>    Superuser password (or LAZYPOCK_PASSWORD)
-  --out <file>       Output file (default: lazypock.types.ts)
+  --output <file>   Output file (default: lazypock.types.ts)
+  --out <file>      Deprecated alias for --output
   --package <name>   Package name to import (default: lazypock)
   --skip-system      Skip system collections
 ```
@@ -156,7 +158,7 @@ Options:
 
 You must provide credentials one of two ways (or via the matching env vars):
 
-1. `--api-key` / `LAZYPOCK_API_KEY` — scoped to collection listing, no login.
+1. `--apikey` / `LAZYPOCK_API_KEY` — scoped to collection listing, no login.
 2. `--email` + `--password` / `LAZYPOCK_EMAIL` + `LAZYPOCK_PASSWORD` — superuser login.
 
 ```

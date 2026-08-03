@@ -55,7 +55,7 @@
 	<div class="mb-4 text-sm text-base-content/60">
 		<p>
 			API keys let you authenticate programmatic access to Lazypock without a browser session — for
-			example running the TypeScript codegen CLI (<code>npx lazypock --url ... --api-key ...</code
+			example running the TypeScript codegen CLI (<code>npx lazypock --url ... --apikey ...</code
 			>).
 		</p>
 		<p class="mt-1">
