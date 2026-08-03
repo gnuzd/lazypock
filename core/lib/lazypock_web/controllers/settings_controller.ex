@@ -31,7 +31,7 @@ defmodule LazypockWeb.SettingsController do
 
   defp do_show(conn) do
     settings = get_settings()
-    json(conn, settings)
+    json(conn, mask_secrets(settings))
   end
 
   defp do_update(conn, params) do
@@ -42,6 +42,65 @@ defmodule LazypockWeb.SettingsController do
     upsert_settings(merged)
 
     json(conn, incoming)
+  end
+
+  # ── API Key management (generated from the Settings dashboard) ──
+  # Keys are stored as a list, each with id/created/expires/revoked.
+  # The raw key is shown exactly once at creation.
+
+  # List all API keys (metadata only — never the raw key).
+  def list_api_keys(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: json(conn, %{items: Lazypock.Settings.list_api_keys()})
+  end
+
+  # Create a new API key. Optional `expiresInDays` body param.
+  def generate_api_key(conn, params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_generate_api_key(conn, params)
+  end
+
+  defp do_generate_api_key(conn, params) do
+    expires_in =
+      case params["expiresInDays"] do
+        days when is_integer(days) and days > 0 -> days
+        _ -> nil
+      end
+
+    {key, meta} = Lazypock.Settings.create_api_key(expires_in)
+
+    json(conn, %{
+      api_key: key,
+      item: meta,
+      created_at: meta["created_at"],
+      expires_at: meta["expires_at"]
+    })
+  end
+
+  # Revoke an API key by id.
+  def revoke_api_key(conn, %{"id" => id}) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_revoke_api_key(conn, id)
+  end
+
+  defp do_revoke_api_key(conn, id) do
+    case Lazypock.Settings.revoke_api_key(id) do
+      :ok -> json(conn, %{ok: true})
+      :error -> conn |> put_status(404) |> json(%{error: "API key not found"})
+    end
+  end
+
+  # Back-compat alias for the previous single-key GET.
+  def get_api_key(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: json(conn, %{items: Lazypock.Settings.list_api_keys()})
+  end
+
+  defp mask_secrets(data) do
+    case Map.has_key?(data, "api_key") do
+      true -> Map.put(data, "api_key", "<hashed>")
+      false -> data
+    end
   end
 
   defp get_settings do

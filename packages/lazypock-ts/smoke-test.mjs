@@ -172,6 +172,47 @@ check(
 	true,
 );
 
+// ── Realtime wiring (PocketBase-style) ──
+import { LazypockClient, RealtimeService } from "./dist/index.js";
+
+// Stub WebSocket so subscribe() doesn't hit the network.
+globalThis.WebSocket = class {
+	static CONNECTING = 0;
+	static OPEN = 1;
+	static CLOSING = 2;
+	static CLOSED = 3;
+	readyState = 1;
+	onopen = null;
+	onmessage = null;
+	onclose = null;
+	onerror = null;
+	constructor() {}
+	send() {}
+	close() {}
+};
+
+(() => {
+	const client = new LazypockClient({ baseUrl: "http://localhost:4000/api" });
+	const svc = client.collection("posts");
+
+	check("collection.subscribe is a function", typeof svc.subscribe, "function");
+	check(
+		"collection.unsubscribe is a function",
+		typeof svc.unsubscribe,
+		"function",
+	);
+
+	const unsub = svc.subscribe((e) => e);
+	check("subscribe returns a function", typeof unsub, "function");
+	unsub();
+
+	check(
+		"client.realtime is a RealtimeService",
+		client.realtime instanceof RealtimeService,
+		true,
+	);
+})();
+
 console.log(
 	failures === 0 ? "\n✅ All smoke tests passed" : `\n❌ ${failures} failures`,
 );

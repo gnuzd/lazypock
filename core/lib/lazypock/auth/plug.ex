@@ -25,45 +25,50 @@ defmodule Lazypock.Auth.Plug do
     |> get_token()
     |> case do
       {:ok, token} ->
-        # Try superuser token first
-        case Token.verify_token(token) do
-          {:ok, claims} ->
-            superuser = Lazypock.Repo.get(Lazypock.Auth.SuperUser, claims["id"])
+        # Try API key first (scoped: collection listing only, e.g. codegen)
+        if Lazypock.Settings.verify_api_key(token) do
+          api_key_identity(conn)
+        else
+          # Try superuser token first
+          case Token.verify_token(token) do
+            {:ok, claims} ->
+              superuser = Lazypock.Repo.get(Lazypock.Auth.SuperUser, claims["id"])
 
-            if superuser do
-              conn
-              |> assign(:current_superuser, superuser)
-              |> assign(:current_superuser_claims, claims)
-              |> assign(:current_user, nil)
-            else
-              conn |> assign_nil()
-            end
+              if superuser do
+                conn
+                |> assign(:current_superuser, superuser)
+                |> assign(:current_superuser_claims, claims)
+                |> assign(:current_user, nil)
+              else
+                conn |> assign_nil()
+              end
 
-          {:error, _reason} ->
-            # Try auth collection user token
-            case Token.verify_user_token(token) do
-              {:ok, claims} ->
-                collection_name = claims["collectionName"]
-                user_id = claims["id"]
+            {:error, _reason} ->
+              # Try auth collection user token
+              case Token.verify_user_token(token) do
+                {:ok, claims} ->
+                  collection_name = claims["collectionName"]
+                  user_id = claims["id"]
 
-                if collection_name && user_id do
-                  user = GenericRecord.get(collection_name, user_id)
+                  if collection_name && user_id do
+                    user = GenericRecord.get(collection_name, user_id)
 
-                  if user do
-                    conn
-                    |> assign(:current_user, user)
-                    |> assign(:current_user_claims, claims)
-                    |> assign(:current_superuser, nil)
+                    if user do
+                      conn
+                      |> assign(:current_user, user)
+                      |> assign(:current_user_claims, claims)
+                      |> assign(:current_superuser, nil)
+                    else
+                      conn |> assign_nil()
+                    end
                   else
                     conn |> assign_nil()
                   end
-                else
-                  conn |> assign_nil()
-                end
 
-              {:error, _reason} ->
-                conn |> assign_nil()
-            end
+                {:error, _reason} ->
+                  conn |> assign_nil()
+              end
+          end
         end
 
       :none ->
@@ -71,11 +76,32 @@ defmodule Lazypock.Auth.Plug do
     end
   end
 
+  # An API key authenticates as a *scoped* identity: it is deliberately NOT a
+  # SuperUser struct (so the rule enforcer grants no superuser bypass), and it
+  # does not set :current_superuser — meaning superuser-only endpoints reject
+  # it by default. Endpoints that intentionally accept API keys (currently
+  # GET /collections for codegen) check `api_key?/1` explicitly.
+  defp api_key_identity(conn) do
+    conn
+    |> assign(:api_key_identity, true)
+    |> assign(:current_superuser, nil)
+    |> assign(:current_superuser_claims, nil)
+    |> assign(:current_user, nil)
+    |> assign(:current_user_claims, nil)
+  end
+
   @doc """
   Returns true if the request is authenticated as a superuser.
   """
   def authenticated?(conn) do
     !!conn.assigns[:current_superuser]
+  end
+
+  @doc """
+  Returns true if the request was authenticated via a valid API key.
+  """
+  def api_key?(conn) do
+    conn.assigns[:api_key_identity] == true
   end
 
   @doc """

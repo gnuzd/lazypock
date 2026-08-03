@@ -109,6 +109,10 @@ export class LazypockClient {
 			options.authStore ?? new AuthStore(options.storage ?? memoryStorage);
 		this.http = new HttpClient(baseUrl, this.authStore);
 		this.realtime = options.realtime ?? new RealtimeService();
+		// Cache the socket URL so collection-level subscribe() can auto-connect.
+		if (!options.realtime) {
+			this.realtime.setUrl(wsUrlFromBaseUrl(baseUrl));
+		}
 		this.files = new FilesService(this.http);
 		if (options.types?.schemas) {
 			this.schemaByName = new Map(
@@ -131,7 +135,12 @@ export class LazypockClient {
 	collection(name: string): CollectionService<unknown> {
 		let svc = this.collectionCache.get(name);
 		if (!svc) {
-			svc = new CollectionService(this.http, name, this.authStore);
+			svc = new CollectionService(
+				this.http,
+				name,
+				this.authStore,
+				this.realtime,
+			);
 			this.collectionCache.set(name, svc);
 		}
 		return svc;

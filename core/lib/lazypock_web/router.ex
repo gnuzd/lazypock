@@ -69,6 +69,14 @@ defmodule LazypockWeb.Router do
     patch("/settings", SettingsController, :update)
     put("/settings", SettingsController, :update)
 
+    # App settings — API key management
+    get("/settings/api-keys", SettingsController, :list_api_keys)
+    post("/settings/api-keys", SettingsController, :generate_api_key)
+    delete("/settings/api-keys/:id", SettingsController, :revoke_api_key)
+    # Back-compat single-key aliases
+    get("/settings/api-key", SettingsController, :get_api_key)
+    post("/settings/api-key", SettingsController, :generate_api_key)
+
     # SQL console — read-only queries (superuser)
     post("/sql/query", SettingsController, :sql_query)
 

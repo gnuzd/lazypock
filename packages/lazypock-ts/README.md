@@ -55,6 +55,25 @@ npx lazypock-gen \
 # writes ./lazypock.types.ts
 ```
 
+> `lazypock-gen` remains as a deprecated alias for backwards compatibility —
+> the canonical command is now simply `lazypock`:
+>
+> ```bash
+> npx lazypock --url http://localhost:4000/api --email admin@example.com --password your-password
+> ```
+>
+> **Use an API key instead of a password** (recommended). Generate one from the
+> Studio **Settings → API Keys** dashboard, then:
+>
+> ```bash
+> npx lazypock --url http://localhost:4000/api --apikey lazypock_xxxxxxxx
+> # or via env: LAZYPOCK_URL=... LAZYPOCK_API_KEY=... npx lazypock
+> ```
+>
+> API keys are stored as a SHA-256 hash (raw value shown once at generation) and
+> are scoped to collection listing — ideal for codegen (they can `GET /collections`
+> without a login round-trip, and cannot read or mutate your records).
+
 Then in your app:
 
 ```typescript
@@ -121,16 +140,27 @@ const code = client.generateTypes(); // string — write to lazypock.types.ts
 ### CLI reference
 
 ```bash
-lazypock-gen [options]
+lazypock [options]
 
 Options:
   --url <url>        API base URL (or LAZYPOCK_URL)
+  --apikey <key>    API key (or LAZYPOCK_API_KEY) — recommended, no login round-trip
+  --api-key <key>   Deprecated alias for --apikey
   --email <email>    Superuser email (or LAZYPOCK_EMAIL)
   --password <pw>    Superuser password (or LAZYPOCK_PASSWORD)
-  --out <file>       Output file (default: lazypock.types.ts)
+  --output <file>   Output file (default: lazypock.types.ts)
+  --out <file>      Deprecated alias for --output
   --package <name>   Package name to import (default: lazypock)
   --skip-system      Skip system collections
 ```
+
+> **Note:** `lazypock-gen` is still available as a deprecated alias.
+
+You must provide credentials one of two ways (or via the matching env vars):
+
+1. `--apikey` / `LAZYPOCK_API_KEY` — scoped to collection listing, no login.
+2. `--email` + `--password` / `LAZYPOCK_EMAIL` + `LAZYPOCK_PASSWORD` — superuser login.
+
 ```
 
 
@@ -317,6 +347,25 @@ client.collection('posts').subscribe('abc123', (event) => { ... });
 
 // Unsubscribe
 client.collection('posts').unsubscribe('*');
+
+// Each subscribe returns an unsubscribe function for one-shot listeners:
+const off = client.collection('posts').subscribe('*', cb);
+// later: off();
+```
+
+### Anonymous / rule-based realtime
+
+Realtime subscriptions honor your API **and list rules** — matching PocketBase
+behavior. This means **non-logged-in users can subscribe** to collections whose
+list rules are public (empty `""` string) or anon-friendly
+(`@request.auth.*` filters). The SDK auto-connects the WebSocket on first use,
+so no token is required to receive public change events:
+
+```typescript
+// Works without logging in, as long as the collection's list rule allows it
+const off = client.collection('public_feed').subscribe('*', (e) => {
+  console.log(e.action, e.record);
+});
 ```
 
 ## License

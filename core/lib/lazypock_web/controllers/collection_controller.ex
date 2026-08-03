@@ -9,8 +9,29 @@ defmodule LazypockWeb.CollectionController do
   # ── Superuser guard ────────────────────────────────
   # list + create operate outside any single collection context,
   # so only superusers can enumerate or create collections.
+  # GET /collections additionally accepts a valid API key (codegen uses
+  # this to fetch schemas without a login round-trip).
   # show / update / delete use Enforcer.authorize_manage to
   # honor manageRule for delegated collection management.
+
+  # Allow real superusers AND API-key identities (scoped to listing only).
+  # API keys are intentionally NOT SuperUser structs, so they cannot
+  # bypass rules on other endpoints.
+  defp require_superuser_or_api_key!(conn) do
+    case {conn.assigns[:current_superuser], conn.assigns[:api_key_identity]} do
+      {nil, nil} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(
+          403,
+          Jason.encode!(%{code: 403, message: "Access denied. Superuser required.", data: %{}})
+        )
+        |> halt()
+
+      _ ->
+        conn
+    end
+  end
 
   defp require_superuser!(conn) do
     case conn.assigns[:current_superuser] do
@@ -30,7 +51,7 @@ defmodule LazypockWeb.CollectionController do
 
   # List all collections
   def list(conn, _params) do
-    conn = require_superuser!(conn)
+    conn = require_superuser_or_api_key!(conn)
     if conn.halted, do: conn, else: do_list(conn)
   end
 
@@ -243,6 +264,7 @@ defmodule LazypockWeb.CollectionController do
   # Looks up the collection name stored in options["collection"] and returns its ID.
   defp resolve_collection_id_from_options(opts) do
     coll_name = opts["collection"]
+
     if is_binary(coll_name) and coll_name != "" do
       case CollectionRegistry.get(coll_name) do
         {:ok, coll} -> coll.id
@@ -252,6 +274,7 @@ defmodule LazypockWeb.CollectionController do
       nil
     end
   end
+
   # Resolve a collection name from either a UUID or a name string
   defp resolve_collection_name(id_or_name) do
     case CollectionRegistry.get(id_or_name) do
