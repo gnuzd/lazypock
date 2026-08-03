@@ -48,7 +48,8 @@ function parseArgs(argv: string[]): CliOptions {
 	const url = get("--url", "LAZYPOCK_URL");
 	const email = get("--email", "LAZYPOCK_EMAIL");
 	const password = get("--password", "LAZYPOCK_PASSWORD");
-	const apiKey = get("--apikey", "LAZYPOCK_API_KEY") || get("--api-key", "LAZYPOCK_API_KEY");
+	const apiKey =
+		get("--apikey", "LAZYPOCK_API_KEY") || get("--api-key", "LAZYPOCK_API_KEY");
 
 	if (!url) fail("Missing API URL. Pass --url or set LAZYPOCK_URL.");
 	if (!apiKey) {
@@ -60,7 +61,9 @@ function parseArgs(argv: string[]): CliOptions {
 			fail("Missing password. Pass --password, or set LAZYPOCK_PASSWORD.");
 	}
 
-	const out = get("--output", "LAZYPOCK_OUT") || get("--out", "LAZYPOCK_OUT", "lazypock.types.ts");
+	const out =
+		get("--output", "LAZYPOCK_OUT") ||
+		get("--out", "LAZYPOCK_OUT", "lazypock.types.ts");
 	const packageName = get("--package", "LAZYPOCK_PACKAGE", "lazypock");
 
 	return {
