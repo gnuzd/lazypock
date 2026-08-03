@@ -1,9 +1,8 @@
 import { LazypockClient } from 'lazypock';
 import { dev } from '$app/environment';
+import { createClient } from './lazypock.types';
 
-export const client = new LazypockClient({
-	baseUrl: '/api'
-});
+export const client = createClient({ baseUrl: '/api' });
 
 /** Connect realtime WebSocket using the current auth token */
 export function connectRealtime(): void {
