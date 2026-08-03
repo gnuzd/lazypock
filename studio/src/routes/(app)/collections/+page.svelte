@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { client } from '$lib/client';
+	import type { LazypockCollections } from '$lib/lazypock.types';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { Settings, Plus } from '@lucide/svelte';
@@ -21,8 +22,8 @@
 	let selectedIds = $state<string[]>([]);
 	let deletingSelected = $state(false);
 
-	/** Track which collection topic we're subscribed to for record events */
-	let subscribedRecordTopic = $state('');
+	/** Unsubscribe fn returned by the SDK for the active collection's record events */
+	let unsubRecordEvents: (() => void) | null = null;
 	/** Last collection name the effect processed (avoids duplicate loads/subscribes). */
 	let lastHandledName = $state('');
 
@@ -89,18 +90,21 @@
 
 		loadCollection(name);
 
-		// Subscribe to record events for this collection
-		if (subscribedRecordTopic) {
-			client.realtime.unsubscribe(subscribedRecordTopic);
+		// Subscribe to record events for this collection using the SDK's
+		// higher-level collection subscription (auto-connects + normalises
+		// events to {action, record}). Returns an unsubscriber we call when
+		// the active collection changes.
+		if (unsubRecordEvents) {
+			unsubRecordEvents();
 		}
-		const topic = 'collection:' + name;
-		subscribedRecordTopic = topic;
-		client.realtime.subscribe(topic, (e) => {
-			if (e.event === 'record_change') {
-				// Reload records for the active collection
-				loadCollection(name);
-			}
-		});
+		unsubRecordEvents = client
+			.collection(name as keyof LazypockCollections)
+			.subscribe((e) => {
+				if (e.action === 'create' || e.action === 'update' || e.action === 'delete') {
+					// Reload records for the active collection
+					loadCollection(name);
+				}
+			});
 	});
 
 	// ── Record CRUD ──
