@@ -93,8 +93,16 @@
 			class: 'w-40',
 			render: (r: Record<string, unknown>) => String(r.id ?? '').slice(0, 8) + '…'
 		},
-		{ key: 'created_at', label: 'Created', render: (r: Record<string, unknown>) => formatDate(r.created_at as string | null) },
-		{ key: 'expires_at', label: 'Expires', render: (r: Record<string, unknown>) => formatDate(r.expires_at as string | null) },
+		{
+			key: 'created_at',
+			label: 'Created',
+			render: (r: Record<string, unknown>) => formatDate(r.created_at as string | null)
+		},
+		{
+			key: 'expires_at',
+			label: 'Expires',
+			render: (r: Record<string, unknown>) => formatDate(r.expires_at as string | null)
+		},
 		{ key: 'status', label: 'Status', class: 'w-28' },
 		{ key: 'actions', label: '', class: 'w-24 text-right' }
 	];
@@ -107,8 +115,8 @@
 		example running the TypeScript codegen CLI (<code>npx lazypock --url ... --apikey ...</code>).
 	</p>
 	<p class="mt-1">
-		Keys are stored as a SHA-256 hash (the raw key is shown only once, when generated). Each key
-		has an optional expiry and can be revoked individually. Treat them like passwords.
+		Keys are stored as a SHA-256 hash (the raw key is shown only once, when generated). Each key has
+		an optional expiry and can be revoked individually. Treat them like passwords.
 	</p>
 </div>
 
@@ -151,7 +159,8 @@
 		{#if col.key === 'id'}
 			<span class="font-mono text-xs">{String(row.id ?? '').slice(0, 8)}…</span>
 		{:else if col.key === 'created_at'}
-			<span class="text-xs text-base-content/60">{formatDate(row.created_at as string | null)}</span>
+			<span class="text-xs text-base-content/60">{formatDate(row.created_at as string | null)}</span
+			>
 		{:else if col.key === 'expires_at'}
 			<span class="text-xs">{formatDate(row.expires_at as string | null)}</span>
 		{:else if col.key === 'status'}

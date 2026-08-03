@@ -91,11 +91,11 @@
 		<div
 			class="mx-auto"
 			style="max-width: {page.url.pathname.endsWith('/export') ||
-				page.url.pathname.endsWith('/import')
-					? '1200px'
-					: page.url.pathname.endsWith('/sql') || page.url.pathname.endsWith('/api-keys')
-						? '100%'
-						: '870px'}"
+			page.url.pathname.endsWith('/import')
+				? '1200px'
+				: page.url.pathname.endsWith('/sql') || page.url.pathname.endsWith('/api-keys')
+					? '100%'
+					: '870px'}"
 		>
 			{@render children()}
 		</div>
