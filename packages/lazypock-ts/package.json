@@ -28,6 +28,7 @@
     "prepublishOnly": "npm run build"
   },
   "bin": {
+    "lazypock": "./dist/cli.js",
     "lazypock-gen": "./dist/cli.js"
   },
   "devDependencies": {

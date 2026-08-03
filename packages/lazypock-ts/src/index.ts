@@ -41,3 +41,4 @@ export type {
 	LazypockClientOptions,
 } from "./lazypock";
 export type { LazypockCollections } from "./client";
+export type { RealtimeMessage, RealtimeCallback } from "./collection";

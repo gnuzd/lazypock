@@ -68,6 +68,44 @@ export class RealtimeService {
 	private url: string = "";
 	private token: string | undefined;
 
+	/** Whether the WebSocket is currently open. */
+	get isOpen(): boolean {
+		return this.ws?.readyState === WebSocket.OPEN;
+	}
+
+	/**
+	 * The most recently used WebSocket URL (set on {@link connect}).
+	 * Useful for SDK convenience methods that auto-connect before subscribing.
+	 */
+	get lastUrl(): string {
+		return this.url;
+	}
+
+	/** The auth token configured for this connection (set on connect). */
+	get lastToken(): string | undefined {
+		return this.token;
+	}
+
+	/**
+	 * Set the socket URL. Useful before subscribing so the SDK can
+	 * auto-connect on the first {@link subscribe}.
+	 */
+	setUrl(url: string): void {
+		this.url = url;
+	}
+
+	/*
+	 * Ensure the socket is connected, then subscribe.
+	 * Used by collection-level convenience wrappers so a connection is opened
+	 * automatically on the first subscribe (matching PocketBase behaviour —
+	 * works for anonymous/public collections too).
+	 */
+	ensureConnected(): void {
+		if (this.isOpen || !this.url) return;
+		if (typeof WebSocket === "undefined") return;
+		this.doConnect();
+	}
+
 	connect(opts: RealtimeConnectOpts): void {
 		this.url = opts.url;
 		this.token = opts.token;

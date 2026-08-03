@@ -31,7 +31,7 @@ defmodule LazypockWeb.SettingsController do
 
   defp do_show(conn) do
     settings = get_settings()
-    json(conn, settings)
+    json(conn, mask_secrets(settings))
   end
 
   defp do_update(conn, params) do
@@ -42,6 +42,49 @@ defmodule LazypockWeb.SettingsController do
     upsert_settings(merged)
 
     json(conn, incoming)
+  end
+
+  # ── API Key management (generated from the Settings dashboard) ──
+
+  # Generate a new API key (replaces any existing one).
+  def generate_api_key(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_generate_api_key(conn)
+  end
+
+  defp do_generate_api_key(conn) do
+    key = Lazypock.Settings.new_api_key()
+    Lazypock.Settings.set_api_key(key)
+    json(conn, %{api_key: key, created_at: DateTime.utc_now() |> DateTime.to_iso8601()})
+  end
+
+  # Retrieve whether an API key exists. The raw key is never stored — only
+  # its SHA-256 hash — so we cannot (and must not) return a masked preview.
+  def get_api_key(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_get_api_key(conn)
+  end
+
+  defp do_get_api_key(conn) do
+    json(conn, %{api_key: nil, has_api_key: Lazypock.Settings.has_api_key?()})
+  end
+
+  # Revoke (delete) the API key.
+  def revoke_api_key(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_revoke_api_key(conn)
+  end
+
+  defp do_revoke_api_key(conn) do
+    Lazypock.Settings.clear_api_key()
+    json(conn, %{api_key: nil, has_api_key: false})
+  end
+
+  defp mask_secrets(data) do
+    case Map.has_key?(data, "api_key") do
+      true -> Map.put(data, "api_key", "<hashed>")
+      false -> data
+    end
   end
 
   defp get_settings do

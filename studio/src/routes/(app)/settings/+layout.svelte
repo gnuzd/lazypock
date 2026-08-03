@@ -4,7 +4,16 @@
 	import { goto } from '$app/navigation';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import { RefreshCw } from '@lucide/svelte';
-	import { Archive, Cog, Database, Download, HardDrive, Mail, Upload } from '@lucide/svelte';
+	import {
+		Archive,
+		Cog,
+		Database,
+		Download,
+		HardDrive,
+		KeyRound,
+		Mail,
+		Upload
+	} from '@lucide/svelte';
 
 	let { children } = $props();
 
@@ -19,6 +28,7 @@
 		{ id: 'application', label: 'Application', icon: Cog, href: '/settings/application' },
 		{ id: 'mail', label: 'Mail', icon: Mail, href: '/settings/mail' },
 		{ id: 'files', label: 'Files Storage', icon: HardDrive, href: '/settings/files' },
+		{ id: 'api-keys', label: 'API Keys', icon: KeyRound, href: '/settings/api-keys' },
 		{ id: 'backups', label: 'Backups', icon: Archive, href: '/settings/backups' },
 		{ id: 'cron', label: 'Cron', icon: RefreshCw, href: '/settings/cron' }
 	];

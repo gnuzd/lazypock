@@ -3,7 +3,51 @@
 
 import type { HttpClient } from "./http";
 import type { AuthStore, AuthModel } from "./auth";
-import type { ApiRecord, ListResult, RequestOptions, CreateData, UpdateData } from "./types";
+import type {
+	ApiRecord,
+	ListResult,
+	RequestOptions,
+	CreateData,
+	UpdateData,
+} from "./types";
+import type { RealtimeService } from "./realtime";
+
+/**
+ * A realtime record-change event delivered to subscription callbacks.
+ * Mirrors PocketBase's RealtimeService result shape (`action` + `record`).
+ */
+export interface RealtimeMessage {
+	action: "create" | "update" | "delete";
+	record: Record<string, unknown>;
+	topic?: string;
+}
+
+/** Subscription callback for a collection's realtime events. */
+export type RealtimeCallback = (e: RealtimeMessage) => void;
+
+/** Raw event passed by the low-level realtime service. */
+interface RealtimeEventLike {
+	event: string;
+	topic: string;
+	payload?: Record<string, unknown>;
+}
+
+/** Map a raw event/action to a normalised create/update/delete action. */
+function normalizeAction(
+	event: string,
+	rawAction?: unknown,
+): RealtimeMessage["action"] {
+	if (typeof rawAction === "string") {
+		const a = rawAction.toLowerCase();
+		if (a === "create" || a === "update" || a === "delete") {
+			return a;
+		}
+	}
+	if (event === "record_change") return "update";
+	if (event === "create" || event === "record_create") return "create";
+	if (event === "delete" || event === "record_delete") return "delete";
+	return "update";
+}
 
 /**
  * Typed CRUD service for a single dynamic collection.
@@ -15,12 +59,19 @@ export class CollectionService<T = ApiRecord> {
 	private http: HttpClient;
 	private collectionName: string;
 	private authStore?: AuthStore;
+	private realtime?: RealtimeService;
 
 	/** @internal */
-	constructor(http: HttpClient, collectionName: string, authStore?: AuthStore) {
+	constructor(
+		http: HttpClient,
+		collectionName: string,
+		authStore?: AuthStore,
+		realtime?: RealtimeService,
+	) {
 		this.http = http;
 		this.collectionName = collectionName;
 		this.authStore = authStore;
+		this.realtime = realtime;
 	}
 
 	private encodeId(id: string): string {
@@ -32,7 +83,10 @@ export class CollectionService<T = ApiRecord> {
 	 * @param params Query parameters including `filter`, `sort`, `page`, `perPage`, `expand`.
 	 * @param options Optional request options.
 	 */
-	list(params?: Record<string, string>, options?: RequestOptions): Promise<ListResult<T> | null> {
+	list(
+		params?: Record<string, string>,
+		options?: RequestOptions,
+	): Promise<ListResult<T> | null> {
 		const qs = params ? "?" + new URLSearchParams(params).toString() : "";
 		return this.http.get<ListResult<T>>(
 			"/" + this.encodeId(this.collectionName) + qs,
@@ -58,7 +112,10 @@ export class CollectionService<T = ApiRecord> {
 	 * record type), excess/unknown fields are rejected at compile time.
 	 * @param options Optional request options.
 	 */
-	create(data: T extends ApiRecord ? Record<string, unknown> : CreateData<T>, options?: RequestOptions): Promise<T | null> {
+	create(
+		data: T extends ApiRecord ? Record<string, unknown> : CreateData<T>,
+		options?: RequestOptions,
+	): Promise<T | null> {
 		return this.http.post<T>(
 			"/" + this.encodeId(this.collectionName),
 			data,
@@ -73,7 +130,11 @@ export class CollectionService<T = ApiRecord> {
 	 * must be a partial of `T` — unknown fields are rejected.
 	 * @param options Optional request options.
 	 */
-	update(id: string, data: T extends ApiRecord ? Record<string, unknown> : UpdateData<T>, options?: RequestOptions): Promise<T | null> {
+	update(
+		id: string,
+		data: T extends ApiRecord ? Record<string, unknown> : UpdateData<T>,
+		options?: RequestOptions,
+	): Promise<T | null> {
 		return this.http.patch<T>(
 			"/" + this.encodeId(this.collectionName) + "/" + this.encodeId(id),
 			data,
@@ -102,11 +163,12 @@ export class CollectionService<T = ApiRecord> {
 		options?: RequestOptions,
 	): Promise<{ field: string; targetCollection: string }[] | null> {
 		const data = await this.http.get<{
-			fields?: { name: string; type: string; options?: Record<string, string> }[];
-		}>(
-			"/collections/" + this.encodeId(this.collectionName),
-			options,
-		);
+			fields?: {
+				name: string;
+				type: string;
+				options?: Record<string, string>;
+			}[];
+		}>("/collections/" + this.encodeId(this.collectionName), options);
 		if (!data?.fields) return null;
 		return data.fields
 			.filter((f) => f.type === "relation" && f.options?.collection)
@@ -137,6 +199,50 @@ export class CollectionService<T = ApiRecord> {
 		return this as unknown as CollectionService<TRecord>;
 	}
 
+	// ── Realtime Subscriptions (PocketBase-style) ──
+
+	/**
+	 * Subscribe to realtime changes for this collection.
+	 * The event's `action` is one of `"create" | "update" | "delete"`.
+	 *
+	 * Access is governed by the collection's `listRule` (PocketBase semantics):
+	 * public collections allow anonymous subscriptions; other collections
+	 * require a matching logged-in user or superuser.
+	 *
+	 * @param callback Received on every record change.
+	 * @param recordId Optional — subscribe to a single record instead of `*`.
+	 * @returns A function that unsubscribes this callback.
+	 */
+	subscribe(callback: RealtimeCallback, recordId?: string): () => void {
+		if (!this.realtime) {
+			console.warn("[lazypock] No realtime service configured.");
+			return () => {};
+		}
+		const topic =
+			"collection:" + this.collectionName + (recordId ? ":" + recordId : "");
+		const handler = (raw: RealtimeEventLike) => {
+			const record = (raw.payload?.["record"] ?? {}) as Record<string, unknown>;
+			callback({
+				action: normalizeAction(raw.event, raw.payload?.["action"]),
+				record,
+				topic: raw.topic,
+			});
+		};
+		this.realtime.ensureConnected();
+		this.realtime.subscribe(topic, handler as never);
+		return () => this.realtime?.unsubscribe(topic, handler as never);
+	}
+
+	/**
+	 * Unsubscribe all callbacks from this collection (or a specific record).
+	 * @param recordId Optional record id; omitting it unsubs everything.
+	 */
+	unsubscribe(recordId?: string): void {
+		const topic =
+			"collection:" + this.collectionName + (recordId ? ":" + recordId : "");
+		this.realtime?.unsubscribe(topic);
+	}
+
 	// ── Auth Collection Methods ──
 
 	/**
@@ -147,7 +253,9 @@ export class CollectionService<T = ApiRecord> {
 		identity: string,
 		password: string,
 		options?: RequestOptions,
-	): Promise<({ token: string; record: ApiRecord } & Record<string, unknown>) | null> {
+	): Promise<
+		({ token: string; record: ApiRecord } & Record<string, unknown>) | null
+	> {
 		const data = await this.http.post<
 			{ token: string; record: ApiRecord } & Record<string, unknown>
 		>(
@@ -168,7 +276,9 @@ export class CollectionService<T = ApiRecord> {
 	 */
 	async authRefresh(
 		options?: RequestOptions,
-	): Promise<({ token: string; record: ApiRecord } & Record<string, unknown>) | null> {
+	): Promise<
+		({ token: string; record: ApiRecord } & Record<string, unknown>) | null
+	> {
 		const data = await this.http.post<
 			{ token: string; record: ApiRecord } & Record<string, unknown>
 		>(
@@ -186,6 +296,8 @@ export class CollectionService<T = ApiRecord> {
 	/**
 	 * Get available auth methods for this collection.
 	 */
+	// ── end Realtime ──
+
 	async authMethods(
 		options?: RequestOptions,
 	): Promise<Record<string, unknown> | null> {
