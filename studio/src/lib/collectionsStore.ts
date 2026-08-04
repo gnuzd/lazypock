@@ -1,6 +1,6 @@
 import { client } from '$lib/client';
-import { get } from 'svelte/store';
-import { writable } from 'svelte/store';
+import type { CollectionsMessage } from 'lazypock';
+import { get, writable } from 'svelte/store';
 
 /**
  * Shared collections state used by the collections layout, list page,
@@ -22,13 +22,12 @@ export async function loadCollections(): Promise<Record<string, unknown>[]> {
 }
 
 export function subscribeToCollectionChanges(): () => void {
-	const cb = (e: { event: string }) => {
-		if (e.event === 'create' || e.event === 'update' || e.event === 'delete') {
+	const cb = (e: CollectionsMessage) => {
+		if (e.action === 'create' || e.action === 'update' || e.action === 'delete') {
 			loadCollections();
 		}
 	};
-	client.realtime.subscribe('collections', cb);
-	return () => client.realtime.unsubscribe('collections', cb);
+	return client.collections.subscribe(cb);
 }
 
 export function getCollections(): Record<string, unknown>[] {

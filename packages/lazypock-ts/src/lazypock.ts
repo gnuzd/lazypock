@@ -22,6 +22,7 @@ import {
 } from "./types";
 import { RealtimeService, wsUrlFromBaseUrl } from "./realtime";
 import { FilesService, getFileUrl, type FileRecord } from "./files";
+import { CollectionsService } from "./collections";
 import type { CollectionSchema, SchemaField } from "./schema";
 import { generateTypes, collectionTypeName } from "./codegen";
 import { fieldTypeScriptType, fieldTypeKind, schemaFieldType } from "./typegen";
@@ -34,6 +35,7 @@ export {
 	FilesService,
 	getFileUrl,
 	CollectionService,
+	CollectionsService,
 	generateTypes,
 	collectionTypeName,
 	fieldTypeScriptType,
@@ -95,6 +97,7 @@ export class LazypockClient {
 	readonly http: HttpClient;
 	readonly authStore: AuthStore;
 	readonly realtime: RealtimeService;
+	readonly collections: CollectionsService;
 	readonly files: FilesService;
 	private collectionCache = new Map<string, CollectionService>();
 	private schemaByName?: Map<string, CollectionSchema>;
@@ -114,6 +117,7 @@ export class LazypockClient {
 			this.realtime.setUrl(wsUrlFromBaseUrl(baseUrl));
 		}
 		this.files = new FilesService(this.http);
+		this.collections = new CollectionsService(this.realtime);
 		if (options.types?.schemas) {
 			this.schemaByName = new Map(
 				options.types.schemas.map((s) => [s.name, s]),

@@ -211,6 +211,26 @@ globalThis.WebSocket = class {
 		client.realtime instanceof RealtimeService,
 		true,
 	);
+
+	// Registry channel — PocketBase-style pb.collections.subscribe()
+	const reg = client.collections;
+	check(
+		"client.collections.subscribe is a function",
+		typeof reg.subscribe,
+		"function",
+	);
+	check(
+		"client.collections.unsubscribe is a function",
+		typeof reg.unsubscribe,
+		"function",
+	);
+	const unsubReg = reg.subscribe((e) => e);
+	check(
+		"collections.subscribe returns a function",
+		typeof unsubReg,
+		"function",
+	);
+	unsubReg();
 })();
 
 console.log(
