@@ -201,6 +201,21 @@ globalThis.WebSocket = class {
 		typeof svc.unsubscribe,
 		"function",
 	);
+	check("collection.getList is a function", typeof svc.getList, "function");
+	check(
+		"collection.getFullList is a function",
+		typeof svc.getFullList,
+		"function",
+	);
+	check(
+		"collection.getFirstListItem is a function",
+		typeof svc.getFirstListItem,
+		"function",
+	);
+	check("collection.getOne is a function", typeof svc.getOne, "function");
+	check("collection.create is a function", typeof svc.create, "function");
+	check("collection.update is a function", typeof svc.update, "function");
+	check("collection.delete is a function", typeof svc.delete, "function");
 
 	const unsub = svc.subscribe((e) => e);
 	check("subscribe returns a function", typeof unsub, "function");
@@ -222,6 +237,36 @@ globalThis.WebSocket = class {
 	check(
 		"client.collections.unsubscribe is a function",
 		typeof reg.unsubscribe,
+		"function",
+	);
+	check(
+		"client.collections.getFullList is a function",
+		typeof reg.getFullList,
+		"function",
+	);
+	check(
+		"client.collections.getList is a function",
+		typeof reg.getList,
+		"function",
+	);
+	check(
+		"client.collections.getOne is a function",
+		typeof reg.getOne,
+		"function",
+	);
+	check(
+		"client.collections.create is a function",
+		typeof reg.create,
+		"function",
+	);
+	check(
+		"client.collections.update is a function",
+		typeof reg.update,
+		"function",
+	);
+	check(
+		"client.collections.delete is a function",
+		typeof reg.delete,
 		"function",
 	);
 	const unsubReg = reg.subscribe((e) => e);

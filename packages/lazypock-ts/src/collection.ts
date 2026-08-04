@@ -79,20 +79,74 @@ export class CollectionService<T = ApiRecord> {
 	}
 
 	/**
-	 * List records with optional filter/sort/pagination.
-	 * @param params Query parameters including `filter`, `sort`, `page`, `perPage`, `expand`.
-	 * @param options Optional request options.
+	 * Fetch a paginated list of records (PocketBase `getList`).
+	 *
+	 * @param page Page number (default 1).
+	 * @param perPage Records per page (default 30).
+	 * @param options Query params (`filter`, `sort`, `expand`, `fields`) + request options.
 	 */
-	list(
-		params?: Record<string, string>,
-		options?: RequestOptions,
-	): Promise<ListResult<T> | null> {
-		const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-		return this.http.get<ListResult<T>>(
-			"/" + this.encodeId(this.collectionName) + qs,
+	getList<T2 = T>(
+		page = 1,
+		perPage = 30,
+		options?: Record<string, unknown> & RequestOptions,
+	): Promise<ListResult<T2> | null> {
+		const { ...rest } = options ?? {};
+		const qs = new URLSearchParams(
+			Object.fromEntries(
+				Object.entries({ page: String(page), perPage: String(perPage), ...rest }).map(
+					([k, v]) => [k, String(v)],
+				),
+			),
+		).toString();
+		return this.http.get<ListResult<T2>>(
+			"/" + this.encodeId(this.collectionName) + "?" + qs,
 			options,
 		);
 	}
+
+	/**
+	 * Fetch all records at once (auto-paginates). Mirrors PocketBase's
+	 * `pb.collection(name).getFullList()`.
+	 *
+	 * @param options Query params (`sort`, `filter`, `batch`, etc.) + request options.
+	 */
+	async getFullList<T2 = T>(
+		options?: Record<string, unknown> & RequestOptions,
+	): Promise<Array<T2>> {
+		const { batch = 1000, ...rest } = options ?? {};
+		const items: T2[] = [];
+		let page = 1;
+		for (;;) {
+			const res = await this.getList<T2>(
+				page,
+				batch as number,
+				rest as Record<string, unknown> & RequestOptions,
+			);
+			if (!res || !res.items || res.items.length === 0) break;
+			items.push(...(res.items as T2[]));
+			if (page >= (res.totalPages ?? page)) break;
+			page += 1;
+		}
+		return items;
+	}
+
+	/**
+	 * Fetch the first record matching a filter (PocketBase `getFirstListItem`).
+	 *
+	 * @param filter Filter expression (e.g. `title = 'x'`).
+	 * @param options Optional request options.
+	 */
+	async getFirstListItem<T2 = T>(
+		filter: string,
+		options?: RequestOptions,
+	): Promise<T2 | null> {
+		const res = await this.getList<T2>(1, 1, {
+			...options,
+			filter,
+		});
+		return res?.items?.[0] ?? null;
+	}
+
 
 	/**
 	 * Get a single record by ID.

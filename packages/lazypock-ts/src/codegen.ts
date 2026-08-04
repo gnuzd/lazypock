@@ -119,11 +119,13 @@ export function createClient(options: LazypockClientOptions): TypedClient {
 }
 
 export class TypedClient extends LazypockClient {
-  override collection<K extends keyof LazypockCollections>(name: K): CollectionService<LazypockCollections[K]>;
-  override collection(name: string): CollectionService<unknown> {
-    return super.collection(name) as unknown as CollectionService<unknown>;
+  override collection<T extends string>(name: T): T extends keyof LazypockCollections
+    ? CollectionService<LazypockCollections[T]>
+    : CollectionService<unknown> {
+    return super.collection(name) as T extends keyof LazypockCollections ? CollectionService<LazypockCollections[T]> : CollectionService<unknown>;
   }
-}`);
+}
+`);
 
 	return sections.join("\n\n") + "\n";
 }

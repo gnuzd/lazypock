@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { client } from '$lib/client';
-	import type { LazypockCollections } from '$lib/lazypock.types';
+
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { Settings, Plus } from '@lucide/svelte';
@@ -55,8 +55,8 @@
 		loading = true;
 		try {
 			const [coll, recs] = await Promise.all([
-				client.getCollection(name),
-				client.listRecords(name, { page: '1', perPage: '50' })
+				client.collections.getOne(name),
+				client.collection(name).getList(1, 50)
 			]);
 			collection = coll;
 			rows = (recs?.items as Record<string, unknown>[]) || [];
@@ -97,9 +97,7 @@
 		if (unsubRecordEvents) {
 			unsubRecordEvents();
 		}
-		unsubRecordEvents = client
-			.collection(name as keyof LazypockCollections)
-			.subscribe((e) => {
+		unsubRecordEvents = client.collection(name).subscribe((e) => {
 				if (e.action === 'create' || e.action === 'update' || e.action === 'delete') {
 					// Reload records for the active collection
 					loadCollection(name);
@@ -163,7 +161,7 @@
 		try {
 			const collName = collection.name as string;
 			for (const id of selectedIds) {
-				await client.deleteRecord(collName, id);
+				await client.collection(collName).delete(id);
 			}
 			selectedIds = [];
 			reload();
