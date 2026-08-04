@@ -67,7 +67,7 @@
 	onMount(async () => {
 		if (!editingCollectionId) return;
 		try {
-			const coll = await client.getCollection(editingCollectionId);
+			const coll = await client.collections.getOne(editingCollectionId);
 			if (!coll) return;
 			newName = (coll.name as string) ?? '';
 			newType = (coll.type as string) ?? 'base';
@@ -224,12 +224,14 @@
 		error = '';
 		try {
 			if (editingCollectionId) {
-				await client.updateCollection(
+				await client.collections.update(
 					editingCollectionId,
 					result.data as unknown as Record<string, unknown>
 				);
 			} else {
-				await client.createCollection(result.data as unknown as Record<string, unknown>);
+				await client.collections.create(
+					result.data as unknown as Record<string, unknown>
+				);
 			}
 			await loadCollections();
 			// Navigate to the collection list (or the renamed collection)

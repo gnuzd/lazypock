@@ -73,7 +73,9 @@
 		}
 		// Fetch records from target collection
 		try {
-			const result = await client.listRecords(targetColl, { page: '1', perPage: '200' });
+			const result = await client
+				.collection(targetColl)
+				.getList(1, 200);
 			relationCache[targetColl] = (result?.items ?? []) as Record<string, unknown>[];
 			relationCache = { ...relationCache };
 			relationOpen[fieldName] = true;

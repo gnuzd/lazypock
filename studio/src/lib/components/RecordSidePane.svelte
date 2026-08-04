@@ -80,9 +80,9 @@
 		const cleaned = cleanRecordData(result.data as Record<string, unknown>, schemaFields);
 		try {
 			if (editingRecordId) {
-				await client.updateRecord(collName, editingRecordId, cleaned);
+				await client.collection(collName).update(editingRecordId, cleaned);
 			} else {
-				await client.createRecord(collName, cleaned);
+				await client.collection(collName).create(cleaned);
 			}
 			show = false;
 			onSaved?.();
@@ -105,7 +105,9 @@
 			for (const f of pwFields) {
 				payload[f.name as string] = password;
 			}
-			await client.updateRecord(collection.name as string, editingRecordId, payload);
+			await client
+				.collection(collection.name as string)
+				.update(editingRecordId, payload);
 			passwordSaving = false;
 			passwordError = '';
 			onSaved?.();
@@ -123,7 +125,7 @@
 		recordError = '';
 		const collName = collection.name as string;
 		try {
-			await client.deleteRecord(collName, editingRecordId);
+			await client.collection(collName).delete(editingRecordId);
 			show = false;
 			onDeleted?.();
 		} catch (e) {

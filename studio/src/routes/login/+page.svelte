@@ -80,7 +80,7 @@
 			await client.setup(result.data.email, result.data.password);
 			await client.login(result.data.email, result.data.password);
 			await client.me();
-			const res = await client.listCollections('page=1&perPage=200');
+			const res = await client.collections.getList({ page: 1, perPage: 200 });
 			const name = res?.items?.[0]?.name ?? '';
 			if (browser) window.location.href = base + '/collections?collection=' + name;
 		} catch (err) {

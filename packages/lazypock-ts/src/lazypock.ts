@@ -90,7 +90,7 @@ export interface LazypockClientOptions {
  * ```ts
  * const client = new LazypockClient({ baseUrl: 'http://localhost:4000/api' });
  * await client.login('admin@example.com', 'password');
- * const posts = await client.collection('posts').list();
+ * const posts = await client.collection('posts').getList();
  * ```
  */
 export class LazypockClient {
@@ -117,7 +117,7 @@ export class LazypockClient {
 			this.realtime.setUrl(wsUrlFromBaseUrl(baseUrl));
 		}
 		this.files = new FilesService(this.http);
-		this.collections = new CollectionsService(this.realtime);
+		this.collections = new CollectionsService(this.http, this.realtime);
 		if (options.types?.schemas) {
 			this.schemaByName = new Map(
 				options.types.schemas.map((s) => [s.name, s]),
@@ -323,172 +323,4 @@ export class LazypockClient {
 		return this.http.get<Record<string, unknown>>("/health", options);
 	}
 
-	// ── Collection Management (admin) ──
-
-	/**
-	 * List all collections (admin).
-	 * @param q URL query string (e.g. `page=1&perPage=200`).
-	 * @param options Optional request options.
-	 */
-	listCollections(
-		q?: string,
-		options?: RequestOptions,
-	): Promise<ListResult<ApiRecord> | null> {
-		return this.http.get<ListResult<ApiRecord>>(
-			"/collections" + (q ? "?" + q : ""),
-			options,
-		);
-	}
-
-	/**
-	 * Get a single collection by ID or name.
-	 * @param id Collection ID or name.
-	 * @param options Optional request options.
-	 */
-	getCollection(
-		id: string,
-		options?: RequestOptions,
-	): Promise<ApiRecord | null> {
-		return this.http.get<ApiRecord>(
-			"/collections/" + encodeURIComponent(id),
-			options,
-		);
-	}
-
-	/**
-	 * Create a new collection (admin).
-	 * @param data Collection definition (name, type, fields, options, rules, etc.).
-	 * @param options Optional request options.
-	 */
-	createCollection(
-		data: Record<string, unknown>,
-		options?: RequestOptions,
-	): Promise<ApiRecord | null> {
-		return this.http.post<ApiRecord>("/collections", data, options);
-	}
-
-	/**
-	 * Update an existing collection (admin).
-	 * @param id Collection ID or name.
-	 * @param data Updated collection fields.
-	 * @param options Optional request options.
-	 */
-	updateCollection(
-		id: string,
-		data: Record<string, unknown>,
-		options?: RequestOptions,
-	): Promise<ApiRecord | null> {
-		return this.http.patch<ApiRecord>(
-			"/collections/" + encodeURIComponent(id),
-			data,
-			options,
-		);
-	}
-
-	/**
-	 * Delete a collection (admin).
-	 * @param id Collection ID or name.
-	 * @param options Optional request options.
-	 */
-	deleteCollection(id: string, options?: RequestOptions): Promise<null> {
-		return this.http.delete("/collections/" + encodeURIComponent(id), options);
-	}
-
-	// ── Records (dynamic collection) ──
-
-	/**
-	 * List records from a dynamic collection with optional filter/sort/pagination.
-	 *
-	 * @param coll Collection name.
-	 * @param params Query parameters including:
-	 *   - `filter` — PocketBase filter syntax (e.g. `title~'hello' && published=true`)
-	 *   - `sort` — Comma-separated, `-` prefix for DESC (e.g. `-created,title`)
-	 *   - `page` — Page number (default: 1)
-	 *   - `perPage` — Items per page (default: 30, max: 200)
-	 *   - `expand` — Comma-separated relation fields (e.g. `author,category`)
-	 * @param options Optional request options.
-	 */
-	listRecords(
-		coll: string,
-		params?: Record<string, string>,
-		options?: RequestOptions,
-	): Promise<ListResult<ApiRecord> | null> {
-		const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-		return this.http.get<ListResult<ApiRecord>>(
-			"/" + encodeURIComponent(coll) + qs,
-			options,
-		);
-	}
-
-	/**
-	 * Get a single record by ID.
-	 * @param coll Collection name.
-	 * @param id Record ID.
-	 * @param options Optional request options.
-	 */
-	getRecord(
-		coll: string,
-		id: string,
-		options?: RequestOptions,
-	): Promise<ApiRecord | null> {
-		return this.http.get<ApiRecord>(
-			"/" + encodeURIComponent(coll) + "/" + encodeURIComponent(id),
-			options,
-		);
-	}
-
-	/**
-	 * Create a record in a dynamic collection.
-	 * @param coll Collection name.
-	 * @param data Record fields.
-	 * @param options Optional request options.
-	 */
-	createRecord(
-		coll: string,
-		data: Record<string, unknown>,
-		options?: RequestOptions,
-	): Promise<ApiRecord | null> {
-		return this.http.post<ApiRecord>(
-			"/" + encodeURIComponent(coll),
-			data,
-			options,
-		);
-	}
-
-	/**
-	 * Update a record in a dynamic collection.
-	 * @param coll Collection name.
-	 * @param id Record ID.
-	 * @param data Updated record fields.
-	 * @param options Optional request options.
-	 */
-	updateRecord(
-		coll: string,
-		id: string,
-		data: Record<string, unknown>,
-		options?: RequestOptions,
-	): Promise<ApiRecord | null> {
-		return this.http.patch<ApiRecord>(
-			"/" + encodeURIComponent(coll) + "/" + encodeURIComponent(id),
-			data,
-			options,
-		);
-	}
-
-	/**
-	 * Delete a record from a dynamic collection.
-	 * @param coll Collection name.
-	 * @param id Record ID.
-	 * @param options Optional request options.
-	 */
-	deleteRecord(
-		coll: string,
-		id: string,
-		options?: RequestOptions,
-	): Promise<null> {
-		return this.http.delete(
-			"/" + encodeURIComponent(coll) + "/" + encodeURIComponent(id),
-			options,
-		);
-	}
 }

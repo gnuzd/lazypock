@@ -81,8 +81,8 @@ const tc = new TypedClient<MyCollections>({
 // @ts-expect-error posts collection has no email
 tc.collection("posts").create({ email: "x" });
 
-// ── 4. list() typing ──
-const postList = await postsSvc.list();
+// ── 4. getList() typing ──
+const postList = await postsSvc.getList();
 if (postList) {
 	// @ts-expect-error items are Post[], title is string not number
 	const n: number = postList.items[0].title;

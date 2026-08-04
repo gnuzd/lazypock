@@ -55,8 +55,8 @@
 		loading = true;
 		try {
 			const [coll, recs] = await Promise.all([
-				client.getCollection(name),
-				client.listRecords(name, { page: '1', perPage: '50' })
+				client.collections.getOne(name),
+				client.collection(name).getList(1, 50)
 			]);
 			collection = coll;
 			rows = (recs?.items as Record<string, unknown>[]) || [];
@@ -163,7 +163,7 @@
 		try {
 			const collName = collection.name as string;
 			for (const id of selectedIds) {
-				await client.deleteRecord(collName, id);
+				await client.collection(collName).delete(id);
 			}
 			selectedIds = [];
 			reload();

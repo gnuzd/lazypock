@@ -12,8 +12,11 @@ export const activeName = writable('');
 
 export async function loadCollections(): Promise<Record<string, unknown>[]> {
 	try {
-		const res = await client.listCollections('page=1&perPage=200');
-		const items = res?.items ?? [];
+		const res = await client.collections.getList({
+			page: 1,
+			perPage: 200
+		});
+		const items = (res?.items ?? []) as Record<string, unknown>[];
 		collections.set(items);
 		return items;
 	} catch {

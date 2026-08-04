@@ -24,7 +24,9 @@ await client.login('user@example.com', 'password', 'users');
 await client.authWithPassword('users', 'user@example.com', 'password');
 
 // List records
-const posts = await client.collection('posts').list({ filter: 'published=true' });
+const posts = await client.collection('posts').getList(1, 30);
+// or fetch all pages:
+const all = await client.collection('posts').getFullList();
 
 // Create a record
 const newPost = await client.collection('posts').create({ title: 'Hello', published: true });
@@ -32,8 +34,8 @@ const newPost = await client.collection('posts').create({ title: 'Hello', publis
 // File upload
 const file = await client.files.upload(fileInput.files[0]);
 
-// Real-time subscriptions
-client.collection('posts').subscribe('*', (e) => console.log(e.action, e.record));
+// Real-time subscriptions (PocketBase-style: callback-first)
+client.collection('posts').subscribe((e) => console.log(e.action, e.record));
 ```
 
 ## Type Safety
@@ -90,15 +92,14 @@ await client.collection('posts').create({ title: 'x' });      // ✓
 await client.collection('posts').create({ nope: 1 });          // ✗ compile error
 ```
 
-> **Collection names are strict by design.** The typed client accepts only the
-> literal collection names from your schema (`'posts'`, `'users'`, …) and rejects
-> typos at compile time. If you need a *dynamic* collection name (e.g. a route
-> param), use the base client or a cast:
+> **Dynamic collection names are fully supported.** The typed client accepts any
+> runtime string for `collection(name)` and still returns the typed service for
+> known collection names. So route params and dynamic lookups work naturally:
 >
 > ```typescript
-> const base = new LazypockClient({ baseUrl: 'http://localhost:4000/api' });
-> base.collection(name);                     // dynamic, untyped
-> client.collection(name as keyof LazypockCollections); // typed escape hatch
+> function load(name: string) {
+>  return client.collection(name).getList(); // ✓ works for any string
+> }
 > ```
 
 ### 2. Hand-written generics (no codegen)
@@ -189,22 +190,18 @@ The main client class.
 - `logout()` — Clear auth state
 - `me(options?)` — Get current superuser profile
 
-#### Record Methods
+#### Collections Service (`client.collections`)
 
-- `listRecords(collection, params?, options?)` — List records with filter/sort/pagination
-- `getRecord(collection, id, options?)` — Get single record
-- `createRecord(collection, data, options?)` — Create record
-- `updateRecord(collection, id, data, options?)` — Update record
-- `deleteRecord(collection, id, options?)` — Delete record
+PocketBase-style service for the collections themselves (admin):
 
-#### Collection Management
-
-- `listCollections(query?, options?)` — List all collections
-- `getCollection(id, options?)` — Get collection details
-- `createCollection(data, options?)` — Create new collection
-- `updateCollection(id, data, options?)` — Update collection
-- `deleteCollection(id, options?)` — Delete collection
-
+- `collections.getList(params?)` — Paginated list of collections
+- `collections.getFullList(options?)` — Fetch all collections (auto-paginates)
+- `collections.getOne(id, options?)` — Get collection by ID/name
+- `collections.create(data, options?)` — Create collection
+- `collections.update(id, data, options?)` — Update collection
+- `collections.delete(id, options?)` — Delete collection
+- `collections.subscribe(cb)` — Subscribe to collection create/update/delete events (returns unsubscribe fn)
+- `collections.unsubscribe()` — Unsubscribe from registry events
 #### File Operations
 
 - `files.upload(file, filename?, options?, meta?)` — Upload a file
@@ -216,20 +213,24 @@ The main client class.
 
 - `realtime.connect(opts)` — Connect to WebSocket
 - `realtime.disconnect()` — Disconnect
-- `realtime.subscribe(topic, callback)` — Subscribe to collection changes
-- `realtime.unsubscribe(topic, callback?)` — Unsubscribe
-- `collection(name).subscribe(pattern, callback)` — Convenience subscription on collection service
-- `collection(name).unsubscribe(pattern, callback?)` — Convenience unsubscription
+- `realtime.subscribe(topic, callback)` — Low-level subscribe (topic like `collection:posts`)
+- `realtime.unsubscribe(topic, callback?)` — Low-level unsubscribe
+- `collection(name).subscribe(callback, recordId?)` — Subscribe to record changes; callback receives `{ action, record }`; returns unsubscribe fn
+- `collection(name).unsubscribe(recordId?)` — Unsubscribe from record changes
 
 ### CollectionService
 
 Returned by `client.collection(name)`.
 
-- `list(params?, options?)` — List records
+- `getList(page, perPage, options?)` — Paginated list of records
+- `getFullList(options?)` — Fetch all records (auto-paginates)
+- `getFirstListItem(filter, options?)` — Fetch first record matching filter
 - `getOne(id, options?)` — Get record by ID
 - `create(data, options?)` — Create record
 - `update(id, data, options?)` — Update record
 - `delete(id, options?)` — Delete record
+- `subscribe(callback, recordId?)` — Subscribe to record changes (PocketBase-style)
+- `unsubscribe(recordId?)` — Unsubscribe
 - `authWithPassword(identity, password, options?)` — Login to this auth collection
 - `authRefresh(options?)` — Refresh token for this auth collection
 - `authMethods(options?)` — Get available auth methods
@@ -336,21 +337,20 @@ The SDK automatically refreshes expired auth tokens. When a token expires, the n
 ## Real-time Subscriptions
 
 ```typescript
-// Subscribe to all changes in a collection
-client.collection('posts').subscribe('*', (event) => {
+// Subscribe to all changes in a collection (PocketBase-style: callback-first)
+const off = client.collection('posts').subscribe((event) => {
   console.log(event.action); // 'create' | 'update' | 'delete'
   console.log(event.record);
 });
 
-// Subscribe to a specific record
-client.collection('posts').subscribe('abc123', (event) => { ... });
+// Subscribe to a specific record only
+client.collection('posts').subscribe((event) => { ... }, 'abc123');
 
 // Unsubscribe
-client.collection('posts').unsubscribe('*');
+client.collection('posts').unsubscribe();
 
-// Each subscribe returns an unsubscribe function for one-shot listeners:
-const off = client.collection('posts').subscribe('*', cb);
-// later: off();
+// ...or call the returned unsubscribe function for one-shot listeners:
+off();
 ```
 
 ### Anonymous / rule-based realtime
@@ -363,7 +363,7 @@ so no token is required to receive public change events:
 
 ```typescript
 // Works without logging in, as long as the collection's list rule allows it
-const off = client.collection('public_feed').subscribe('*', (e) => {
+const off = client.collection('public_feed').subscribe((e) => {
   console.log(e.action, e.record);
 });
 ```
