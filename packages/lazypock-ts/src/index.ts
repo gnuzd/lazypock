@@ -14,6 +14,7 @@ export {
 	getFileUrl,
 	LazypockClient,
 	CollectionService,
+	CollectionsService,
 	generateTypes,
 	collectionTypeName,
 	fieldTypeScriptType,
@@ -42,3 +43,4 @@ export type {
 } from "./lazypock";
 export type { LazypockCollections } from "./client";
 export type { RealtimeMessage, RealtimeCallback } from "./collection";
+export type { CollectionsMessage } from "./collections";
