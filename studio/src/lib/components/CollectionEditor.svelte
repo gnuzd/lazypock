@@ -20,12 +20,19 @@
 	 */
 	let {
 		editingCollectionId = null as string | null,
-		existingName = ''
+		existingName = '',
+		onClose
 	}: {
 		/** The collection id when editing an existing collection, null when creating. */
 		editingCollectionId?: string | null;
 		/** The current name (used to detect renames). */
 		existingName?: string;
+		/**
+		 * When set (embedded in a side pane), Close button and a successful save
+		 * call this instead of navigating away. When unset (page route), the
+		 * editor keeps its current navigate-on-save behavior.
+		 */
+		onClose?: () => void;
 	} = $props();
 
 	// ── Form state ──
@@ -229,14 +236,17 @@
 					result.data as unknown as Record<string, unknown>
 				);
 			} else {
-				await client.collections.create(
-					result.data as unknown as Record<string, unknown>
-				);
+				await client.collections.create(result.data as unknown as Record<string, unknown>);
 			}
 			await loadCollections();
-			// Navigate to the collection list (or the renamed collection)
-			// eslint-disable-next-line svelte/no-navigation-without-resolve
-			goto(base + '/collections?collection=' + encodeURIComponent(result.data.name));
+			// When embedded in a pane, close it on success instead of navigating away.
+			if (onClose) {
+				onClose();
+			} else {
+				// Navigate to the collection list (or the renamed collection)
+				// eslint-disable-next-line svelte/no-navigation-without-resolve
+				goto(base + '/collections?collection=' + encodeURIComponent(result.data.name));
+			}
 		} catch (e) {
 			error =
 				(e as Error).message ||
@@ -441,8 +451,10 @@
 
 	<!-- Footer -->
 	<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-		<button type="button" class="btn btn-ghost mr-auto" onclick={() => _goto('/collections')}
-			>Close</button
+		<button
+			type="button"
+			class="btn btn-ghost mr-auto"
+			onclick={() => (onClose ? onClose() : _goto('/collections'))}>Close</button
 		>
 		{#if error}
 			<svg
