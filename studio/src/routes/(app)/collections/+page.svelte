@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { client } from '$lib/client';
-	import type { LazypockCollections } from '$lib/lazypock.types';
+
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { Settings, Plus } from '@lucide/svelte';
@@ -97,9 +97,7 @@
 		if (unsubRecordEvents) {
 			unsubRecordEvents();
 		}
-		unsubRecordEvents = client
-			.collection(name as keyof LazypockCollections)
-			.subscribe((e) => {
+		unsubRecordEvents = client.collection(name).subscribe((e) => {
 				if (e.action === 'create' || e.action === 'update' || e.action === 'delete') {
 					// Reload records for the active collection
 					loadCollection(name);

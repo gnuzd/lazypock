@@ -60,9 +60,7 @@ export class CollectionsService {
 					),
 				).toString()
 			: "";
-		return (
-			this.http?.get<ListResult<T>>("/collections" + qs, options) ?? null
-		);
+		return this.http?.get<ListResult<T>>("/collections" + qs, options) ?? null;
 	}
 
 	/**
@@ -80,9 +78,11 @@ export class CollectionsService {
 		let page = 1;
 		// Auto-paginate until empty (bounded by perPage and totalPages).
 		for (;;) {
-			const res = await this.getList<T>(
-				{ ...rest, page, perPage: batch } as Record<string, unknown>,
-			);
+			const res = await this.getList<T>({
+				...rest,
+				page,
+				perPage: batch,
+			} as Record<string, unknown>);
 			if (!res || !res.items || res.items.length === 0) break;
 			items.push(...(res.items as T[]));
 			if (page >= (res.totalPages ?? page)) break;
@@ -101,10 +101,10 @@ export class CollectionsService {
 		id: string,
 		options?: RequestOptions,
 	): Promise<T | null> {
-		return this.http?.get<T>(
-			"/collections/" + encodeURIComponent(id),
-			options,
-		) ?? null;
+		return (
+			this.http?.get<T>("/collections/" + encodeURIComponent(id), options) ??
+			null
+		);
 	}
 
 	/**
@@ -132,11 +132,13 @@ export class CollectionsService {
 		data: Record<string, unknown>,
 		options?: RequestOptions,
 	): Promise<T | null> {
-		return this.http?.patch<T>(
-			"/collections/" + encodeURIComponent(id),
-			data,
-			options,
-		) ?? null;
+		return (
+			this.http?.patch<T>(
+				"/collections/" + encodeURIComponent(id),
+				data,
+				options,
+			) ?? null
+		);
 	}
 
 	/**
@@ -146,7 +148,10 @@ export class CollectionsService {
 	 * @param options Optional request options.
 	 */
 	async delete(id: string, options?: RequestOptions): Promise<boolean> {
-		const res = this.http?.delete("/collections/" + encodeURIComponent(id), options);
+		const res = this.http?.delete(
+			"/collections/" + encodeURIComponent(id),
+			options,
+		);
 		return res == null ? false : true;
 	}
 

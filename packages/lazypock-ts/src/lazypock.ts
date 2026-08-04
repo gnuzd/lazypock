@@ -322,5 +322,4 @@ export class LazypockClient {
 	health(options?: RequestOptions): Promise<Record<string, unknown> | null> {
 		return this.http.get<Record<string, unknown>>("/health", options);
 	}
-
 }
