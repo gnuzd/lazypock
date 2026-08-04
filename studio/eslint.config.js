@@ -36,6 +36,10 @@ export default defineConfig(
 	{
 		// Override or add rule settings here, such as:
 		// 'svelte/button-has-type': 'error'
-		rules: {}
+		rules: {
+			// File-field links open external file URLs in a new tab (not SvelteKit
+			// internal navigation), so skip the href check but keep goto()/pushState() checks.
+			'svelte/no-navigation-without-resolve': ['error', { ignoreLinks: true }]
+		}
 	}
 );

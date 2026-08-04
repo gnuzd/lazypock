@@ -4,10 +4,12 @@
 	import SelectField from '$lib/components/SelectField.svelte';
 
 	import { client } from '$lib/client';
+	import { getFileUrl } from 'lazypock';
 
 	let {
 		fields,
 		collections = [] as Record<string, unknown>[],
+		collectionName = '',
 		data = $bindable({}),
 		disabled = false,
 		errors = {},
@@ -20,6 +22,8 @@
 		fields: Record<string, unknown>[];
 		/** All collections list (for resolving relation targets) */
 		collections?: Record<string, unknown>[];
+		/** Current collection name (for file-ownership metadata). */
+		collectionName?: string;
 		/** Bindable form data — mutated in-place */
 		data: Record<string, unknown>;
 		/** Disable all inputs (e.g. during save) */
@@ -73,9 +77,7 @@
 		}
 		// Fetch records from target collection
 		try {
-			const result = await client
-				.collection(targetColl)
-				.getList(1, 200);
+			const result = await client.collection(targetColl).getList(1, 200);
 			relationCache[targetColl] = (result?.items ?? []) as Record<string, unknown>[];
 			relationCache = { ...relationCache };
 			relationOpen[fieldName] = true;
@@ -135,6 +137,88 @@
 	function update(fieldName: string, value: unknown) {
 		data[fieldName] = value;
 		data = { ...data };
+	}
+
+	// ── File upload state ──
+	let fileUploading = $state<Record<string, boolean>>({});
+	let fileError = $state<Record<string, string>>({});
+	/** Uploaded file metadata keyed by file ID (for display of name/url). */
+	let fileMeta = $state<Record<string, { filename: string; url: string }>>({});
+
+	function rememberFile(fileId: string, filename: string, url: string) {
+		fileMeta[fileId] = { filename, url };
+		fileMeta = { ...fileMeta };
+	}
+
+	function recordValue(fieldName: string): string[] {
+		const v = data[fieldName];
+		if (Array.isArray(v)) return (v as string[]).filter(Boolean);
+		return v ? [v as string] : [];
+	}
+
+	/**
+	 * Upload a file via the SDK's FilesService and store its ID in the
+	 * record's file/multi_file field. Uploads immediately on selection.
+	 */
+	async function uploadFile(fieldName: string, rawFiles: FileList | null) {
+		if (!rawFiles || rawFiles.length === 0) return;
+		const files = Array.from(rawFiles);
+		fileUploading[fieldName] = true;
+		fileError[fieldName] = '';
+		fileUploading = { ...fileUploading };
+
+		const field = fields.find((f) => f.name === fieldName);
+		const recordId = editing ? ((data['id'] as string) ?? undefined) : undefined;
+
+		try {
+			const uploaded: string[] = [];
+			for (const f of files) {
+				const res = await client.files.upload(f, f.name, undefined, {
+					collectionName,
+					fieldName,
+					recordId
+				});
+				if (res?.id) {
+					uploaded.push(res.id);
+					rememberFile(res.id, res.filename, res.url);
+				}
+			}
+
+			if (uploaded.length === 0) throw new Error('Upload failed — no file returned');
+			const isMulti = (field?.type as string) === 'multi_file';
+			if (isMulti) {
+				update(fieldName, [...recordValue(fieldName), ...uploaded]);
+			} else {
+				update(fieldName, uploaded[0]);
+			}
+		} catch (e) {
+			fileError[fieldName] = (e as Error).message || 'Upload failed';
+		} finally {
+			fileUploading[fieldName] = false;
+			fileUploading = { ...fileUploading };
+		}
+	}
+
+	async function removeFile(fieldName: string, fileId: string) {
+		const current = recordValue(fieldName);
+		if (current.length > 0 && current[0] === fileId && !Array.isArray(data[fieldName])) {
+			update(fieldName, null);
+		} else {
+			update(
+				fieldName,
+				current.filter((id) => id !== fileId)
+			);
+		}
+		// Best-effort cleanup of the stored file (ignore failures).
+		try {
+			await client.files.delete(fileId);
+		} catch {
+			// ignore
+		}
+	}
+
+	function displayUrl(fileId: string): string {
+		return fileMeta[fileId]?.url ?? getFileUrl('/api', fileId);
 	}
 </script>
 
@@ -227,24 +311,54 @@
 
 			<!-- ═══ FILE ═══ -->
 		{:else if type === 'file' || type === 'multi_file'}
+			{@const isMulti = type === 'multi_file'}
+			{@const currentFiles = recordValue(name)}
 			<div class="field" class:required>
 				<label>{name}</label>
-				{#if data[name]}
-					<div class="file-row">
-						<span class="file-name">{String(data[name])}</span>
-						<button
-							type="button"
-							{disabled}
-							class="btn-text danger"
-							onclick={() => update(name, null)}>Remove</button
-						>
-					</div>
-				{:else}
-					<div class="file-placeholder">
-						<span>Upload file</span>
+
+				{#if currentFiles.length > 0}
+					<div class="file-list">
+						{#each currentFiles as fileId (fileId)}
+							<div class="file-row">
+								<a
+									href={displayUrl(fileId)}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="file-name">{fileMeta[fileId]?.filename ?? fileId}</a
+								>
+								<button
+									type="button"
+									{disabled}
+									class="btn-text danger"
+									onclick={() => removeFile(name, fileId)}>Remove</button
+								>
+							</div>
+						{/each}
 					</div>
 				{/if}
-				<span class="field-help">File upload (drag & drop or click)</span>
+
+				<label class="file-upload" class:disabled={disabled || fileUploading[name]}>
+					<input
+						type="file"
+						{disabled}
+						{...isMulti ? { multiple: true } : {}}
+						onchange={(e) => uploadFile(name, (e.target as HTMLInputElement).files)}
+					/>
+					<span
+						>{fileUploading[name]
+							? 'Uploading…'
+							: currentFiles.length
+								? 'Add file'
+								: 'Upload file'}</span
+					>
+				</label>
+
+				<span class="field-help"
+					>File upload ({isMulti ? 'multi-file' : 'single-file'}) — click to choose</span
+				>
+				{#if fileError[name]}
+					<span class="field-error">{fileError[name]}</span>
+				{/if}
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
 				{/if}
@@ -721,11 +835,17 @@
 	}
 
 	/* ── FILE ── */
+	.file-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
 	.file-row {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 8px 12px;
+		padding: 4px 12px;
 	}
 
 	.file-name {
@@ -735,6 +855,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		max-width: 180px;
+		text-decoration: underline;
 	}
 
 	.btn-text {
@@ -749,10 +870,33 @@
 		color: var(--color-error);
 	}
 
-	.file-placeholder {
+	.file-upload {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
 		padding: 8px 12px;
+		border: 1px dashed var(--color-base-300);
+		border-radius: var(--radius-field);
 		font-size: 0.875rem;
+		color: var(--color-base-content);
+		opacity: 0.8;
+		cursor: pointer;
+		margin-top: 4px;
+		transition:
+			opacity 0.15s ease,
+			border-color 0.15s ease;
+	}
+	.file-upload:hover {
+		opacity: 1;
+		border-color: var(--color-base-content);
+	}
+	.file-upload.disabled {
 		opacity: 0.4;
+		pointer-events: none;
+	}
+	.file-upload input[type='file'] {
+		display: none;
 	}
 
 	/* ── RELATION DROPDOWN ── */
