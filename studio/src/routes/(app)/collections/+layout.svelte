@@ -5,6 +5,8 @@
 	import { Folder, Plus } from '@lucide/svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import CollectionEditor from '$lib/components/CollectionEditor.svelte';
+	import SidePane from '$lib/components/SidePane.svelte';
 	import {
 		activeName,
 		collections,
@@ -39,10 +41,8 @@
 		});
 	}
 
-	function _goto(path: string) {
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
-		goto(base + path);
-	}
+	// ── New-Collection side pane state ──
+	let showNewPane = $state(false);
 </script>
 
 {#snippet headerContent()}
@@ -130,8 +130,11 @@
 {/snippet}
 
 {#snippet footerContent()}
-	<Button class="btn-primary btn-full" onclick={() => _goto('/collections/new')}
-		><Plus size={18} /> New Collection</Button
+	<Button
+		class="btn-primary btn-full"
+		onclick={() => {
+			showNewPane = true;
+		}}><Plus size={18} /> New Collection</Button
 	>
 {/snippet}
 
@@ -142,3 +145,14 @@
 		{@render children()}
 	</main>
 </div>
+
+<!-- New collection SidePane (right-side pane instead of a full page) -->
+<SidePane bind:show={showNewPane} title="New Collection" closable={false}>
+	<CollectionEditor
+		editingCollectionId={null}
+		existingName=""
+		onClose={() => {
+			showNewPane = false;
+		}}
+	/>
+</SidePane>

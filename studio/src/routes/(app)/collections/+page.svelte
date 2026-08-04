@@ -7,13 +7,16 @@
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import RecordSidePane from '$lib/components/RecordSidePane.svelte';
-	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
+	import CollectionEditor from '$lib/components/CollectionEditor.svelte';
+	import SidePane from '$lib/components/SidePane.svelte';
 	import { activeName, collections } from '$lib/collectionsStore';
 
 	let collection = $state<Record<string, unknown> | null>(null);
 	let rows = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
+	// ── Collection edit pane state ──
+	let showCollectionPane = $state(false);
+	let collectionEditName = $state('');
 	// ── Record CRUD state ──
 	let showRecordPane = $state(false);
 	let recordData = $state<Record<string, unknown>>({});
@@ -98,11 +101,11 @@
 			unsubRecordEvents();
 		}
 		unsubRecordEvents = client.collection(name).subscribe((e) => {
-				if (e.action === 'create' || e.action === 'update' || e.action === 'delete') {
-					// Reload records for the active collection
-					loadCollection(name);
-				}
-			});
+			if (e.action === 'create' || e.action === 'update' || e.action === 'delete') {
+				// Reload records for the active collection
+				loadCollection(name);
+			}
+		});
 	});
 
 	// ── Record CRUD ──
@@ -132,8 +135,9 @@
 	}
 
 	function editCollection() {
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
-		goto(base + '/collections/' + encodeURIComponent($activeName));
+		// Open the collection editor in a right-side pane (not a full page).
+		collectionEditName = $activeName;
+		showCollectionPane = true;
 	}
 
 	const collName = $derived((collection?.name as string) ?? '');
@@ -228,3 +232,15 @@
 	onSaved={reload}
 	onDeleted={reload}
 />
+
+<!-- Collection edit SidePane (right-side pane instead of a full page) -->
+<SidePane bind:show={showCollectionPane} title="Edit Collection" closable={false}>
+	<CollectionEditor
+		editingCollectionId={collectionEditName || null}
+		existingName={collectionEditName}
+		onClose={() => {
+			showCollectionPane = false;
+			reload();
+		}}
+	/>
+</SidePane>
