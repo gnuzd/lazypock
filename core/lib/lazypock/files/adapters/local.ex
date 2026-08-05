@@ -4,7 +4,14 @@ defmodule Lazypock.Files.Adapters.Local do
 
   Stores files in `priv/uploads/` organized by date:
     priv/uploads/YYYY/MM/DD/{uuid}.{ext}
+
+  Thumbnail generation uses ImageMagick (`magick` or `convert`). If it is not
+  installed, uploads still work but no thumbnails are generated (a warning is
+  logged once). Set the env var `LAZYPOCK_THUMBNAILS=0` to disable generation
+  entirely.
   """
+
+  require Logger
 
   @behaviour Lazypock.Files.Adapter
 
@@ -68,23 +75,63 @@ defmodule Lazypock.Files.Adapters.Local do
 
   @impl true
   def thumbs(binary, filename, sizes) do
-    with true <- image?(filename),
-         {:ok, geometry} <- parse_sizes(sizes),
-         {:ok, magick} <- find_magick() do
-      tmp_in = temp_path("lazypock-in")
-      tmp_dir = Path.dirname(tmp_in)
-      File.write!(tmp_in, binary)
+    cond do
+      not image?(filename) ->
+        {:ok, []}
 
-      results =
-        geometry
-        |> Enum.map(fn {size, geom} -> make_thumb(magick, tmp_in, tmp_dir, size, geom) end)
-        |> Enum.reject(&is_nil/1)
+      thumbnails_disabled?() ->
+        {:ok, []}
 
-      File.rm(tmp_in)
-      {:ok, results}
-    else
-      _ -> {:ok, []}
+      true ->
+        case parse_sizes(sizes) do
+          {:error, _} ->
+            {:ok, []}
+
+          {:ok, geometry} ->
+            case find_magick() do
+              {:ok, magick} ->
+                generate_with_magick(magick, binary, filename, geometry)
+
+              :error ->
+                warn_missing_magick()
+                {:ok, []}
+            end
+        end
     end
+  end
+
+  defp generate_with_magick(magick, binary, _filename, geometry) do
+    tmp_in = temp_path("lazypock-in")
+    tmp_dir = Path.dirname(tmp_in)
+    File.write!(tmp_in, binary)
+
+    results =
+      geometry
+      |> Enum.map(fn {size, geom} -> make_thumb(magick, tmp_in, tmp_dir, size, geom) end)
+      |> Enum.reject(&is_nil/1)
+
+    File.rm(tmp_in)
+    {:ok, results}
+  end
+
+  # Logged once per VM so users notice thumbnails are silently skipped.
+  @warning_sent_key {__MODULE__, :missing_magick_warned}
+
+  defp warn_missing_magick do
+    if not :persistent_term.get(@warning_sent_key, false) do
+      :persistent_term.put(@warning_sent_key, true)
+
+      Logger.warning(
+        "ImageMagick not found — thumbnail generation disabled. " <>
+          "Install it (brew install imagemagick / apt install imagemagick) or set " <>
+          "LAZYPOCK_THUMBNAILS=0 to silence this warning."
+      )
+    end
+  end
+
+  # Set LAZYPOCK_THUMBNAILS=0 to disable thumbnail generation entirely.
+  defp thumbnails_disabled? do
+    System.get_env("LAZYPOCK_THUMBNAILS") == "0"
   end
 
   def thumb_get(_file_record, thumb) do

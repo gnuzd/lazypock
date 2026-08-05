@@ -148,6 +148,7 @@ MIX_ENV=prod mix release
 | `POOL_SIZE` | DB connection pool size (optional, defaults to `10`) | `10` |
 | `LAZYPOCK_SUPERUSER_EMAIL` | Auto-create superuser on boot | `admin@lazypock.app` |
 | `LAZYPOCK_SUPERUSER_PASSWORD` | Auto-create superuser on boot | `your-password` |
+| `LAZYPOCK_THUMBNAILS` | Set to `0` to disable thumbnail generation (see [File Storage & Thumbnails](#file-storage--thumbnails)) | `0` |
 
 **Minimal production example:**
 
@@ -161,6 +162,42 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
 ```
 
 Note: The release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
+
+---
+
+## File Storage & Thumbnails
+
+Uploaded files are stored on disk under `core/priv/uploads/YYYY/MM/DD/{uuid}.{ext}`
+(date-based directories). The `_files` table records metadata (filename, mime type,
+size, storage backend, and the collection/record/field the file belongs to).
+
+### Thumbnails (optional — requires ImageMagick)
+
+When a **file** or **multi_file** field has **Thumb sizes** configured in the
+collection editor (e.g. `50x50, 480x720`), LazyPock generates WebP thumbnails
+server-side on upload.
+
+- Thumbnails are stored under `priv/uploads/YYYY/MM/DD/thumbs/`
+- Served at `GET /api/files/:id/thumbs/:size`
+- The upload response includes a `thumbs` map: `{"50x50": "/api/files/<id>/thumbs/50x50"}`
+- The TypeScript SDK exposes `getThumbUrl(baseUrl, fileId, size)` and
+  `FileRecord.thumbs`
+
+**Dependency:** thumbnail generation requires the **ImageMagick** CLI
+(`magick`/`convert`).
+
+```bash
+# macOS
+brew install imagemagick
+
+# Debian/Ubuntu
+sudo apt install imagemagick
+```
+
+If ImageMagick is **not** installed, uploads still work — the file is stored
+normally, but no thumbnails are generated and a one-time warning is logged.
+Set `LAZYPOCK_THUMBNAILS=0` to disable thumbnail generation entirely (and
+silence the warning).
 
 ---
 
