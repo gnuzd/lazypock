@@ -57,21 +57,10 @@
 				render: (r) => formatValue(f, r[f.name as string]),
 				...(isFile && thumbSize
 					? {
-							renderHtml: (r: Record<string, unknown>) => {
+							thumbs: (r: Record<string, unknown>) => {
 								const v = r[f.name as string];
 								const ids = Array.isArray(v) ? (v as string[]) : v ? [v as string] : [];
-								if (ids.length === 0) return '';
-								return (
-									'<div class="file-thumbs">' +
-									ids
-										.slice(0, 3)
-										.map(
-											(fid) =>
-												`<img src="${getThumbUrl('/api', fid, thumbSize)}" alt="" title="${fid}" class="file-thumb" />`
-										)
-										.join('') +
-									'</div>'
-								);
+								return ids.slice(0, 3).map((fid) => getThumbUrl('/api', fid, thumbSize));
 							}
 						}
 					: {})
