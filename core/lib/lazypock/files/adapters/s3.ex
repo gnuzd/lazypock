@@ -33,4 +33,13 @@ defmodule Lazypock.Files.Adapters.S3 do
   def delete(_file_record) do
     {:error, "S3 adapter not yet implemented"}
   end
+
+  @impl true
+  def thumbs(_binary, _filename, _sizes) do
+    {:ok, []}
+  end
+
+  def thumb_get(_file_record, _thumb) do
+    {:error, "S3 adapter not yet implemented"}
+  end
 end

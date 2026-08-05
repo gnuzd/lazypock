@@ -18,8 +18,9 @@ defmodule LazypockWeb.FileController do
   """
   def upload(conn, %{"file" => upload}) do
     max_size = resolve_max_file_size(conn.params)
+    size = file_size(upload)
 
-    if upload.size > max_size do
+    if size > max_size do
       conn
       |> put_status(413)
       |> json(%{
@@ -43,7 +44,16 @@ defmodule LazypockWeb.FileController do
         |> json(%{"code" => 400, "message" => "File type not allowed", "data" => %{}})
 
       true ->
-        case Store.store(upload) do
+        thumb_sizes = resolve_thumb_sizes(conn.params)
+
+        opts = %{
+          collection_name: conn.params["collection_name"],
+          record_id: conn.params["record_id"],
+          field_name: conn.params["field_name"],
+          thumb_sizes: thumb_sizes
+        }
+
+        case Store.store(upload, opts) do
           {:ok, file_record} ->
             conn
             |> put_status(201)
@@ -88,6 +98,48 @@ defmodule LazypockWeb.FileController do
   end
 
   @doc """
+  GET /api/files/:id/thumbs/:size
+  Serve a generated thumbnail.
+  """
+  def show_thumb(conn, %{"id" => id, "size" => size}) do
+    case Store.get(id) do
+      {:ok, file_record} ->
+        case file_record["thumbs"] do
+          thumbs when is_map(thumbs) and map_size(thumbs) > 0 ->
+            case Map.get(thumbs, size) do
+              nil ->
+                conn
+                |> put_status(404)
+                |> json(%{"code" => 404, "message" => "Thumbnail not found", "data" => %{}})
+
+              thumb ->
+                case Store.read_thumb(file_record, thumb) do
+                  {:ok, binary} ->
+                    conn
+                    |> put_resp_header("content-type", thumb["mime_type"] || "image/webp")
+                    |> send_resp(200, binary)
+
+                  {:error, reason} ->
+                    conn
+                    |> put_status(500)
+                    |> json(%{"code" => 500, "message" => inspect(reason), "data" => %{}})
+                end
+            end
+
+          _ ->
+            conn
+            |> put_status(404)
+            |> json(%{"code" => 404, "message" => "No thumbnails", "data" => %{}})
+        end
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
+    end
+  end
+
+  @doc """
   DELETE /api/files/:id
   Delete a file.
   """
@@ -104,6 +156,14 @@ defmodule LazypockWeb.FileController do
   end
 
   # ── Size limit helpers ────────────────────────────────
+
+  # %Plug.Upload{} has path/content_type/filename but no size — derive it from disk.
+  defp file_size(%Plug.Upload{} = upload) do
+    case File.stat(upload.path) do
+      {:ok, %File.Stat{size: size}} -> size
+      {:error, _} -> 0
+    end
+  end
 
   defp resolve_max_file_size(params) do
     case params["collection_name"] do
@@ -126,6 +186,27 @@ defmodule LazypockWeb.FileController do
       end
     else
       _ -> nil
+    end
+  end
+
+  # Resolve thumbnail sizes configured on the file field of the collection.
+  defp resolve_thumb_sizes(params) do
+    case params["collection_name"] do
+      collection_name when is_binary(collection_name) and collection_name != "" ->
+        with {:ok, collection} <- Registry.get(collection_name),
+             fields <- collection.fields || [],
+             file_field <- Enum.find(fields, fn f -> f.type in ~w(file multi_file) end),
+             opts <- file_field.options || %{} do
+          case opts["thumbs"] do
+            thumbs when is_list(thumbs) -> thumbs
+            _ -> []
+          end
+        else
+          _ -> []
+        end
+
+      _ ->
+        []
     end
   end
 
@@ -166,7 +247,17 @@ defmodule LazypockWeb.FileController do
       "filename" => file_record["filename"],
       "mimeType" => file_record["mime_type"],
       "size" => file_record["size"],
-      "url" => Store.url(file_record)
+      "url" => Store.url(file_record),
+      "thumbs" => normalize_thumbs(file_record["thumbs"], file_record["id"])
     }
   end
+
+  # thumbs JSONB column is a map of {size => meta}; convert to a map of
+  # {size => url} for clients, e.g. {"50x50" => "/api/files/<id>/thumbs/50x50"}.
+  defp normalize_thumbs(thumbs, id) when is_map(thumbs) do
+    Map.new(thumbs, fn {size, _meta} -> {size, "/api/files/#{id}/thumbs/#{size}"} end)
+  end
+
+  defp normalize_thumbs(_, _), do: %{}
 end
+

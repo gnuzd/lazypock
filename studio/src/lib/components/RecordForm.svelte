@@ -4,7 +4,7 @@
 	import SelectField from '$lib/components/SelectField.svelte';
 
 	import { client } from '$lib/client';
-	import { getFileUrl } from 'lazypock';
+	import { getFileUrl, getThumbUrl } from 'lazypock';
 
 	let {
 		fields,
@@ -142,11 +142,18 @@
 	// ── File upload state ──
 	let fileUploading = $state<Record<string, boolean>>({});
 	let fileError = $state<Record<string, string>>({});
-	/** Uploaded file metadata keyed by file ID (for display of name/url). */
-	let fileMeta = $state<Record<string, { filename: string; url: string }>>({});
+	/** Uploaded file metadata keyed by file ID (for display of name/url/thumb). */
+	let fileMeta = $state<
+		Record<string, { filename: string; url: string; thumbs?: Record<string, string> }>
+	>({});
 
-	function rememberFile(fileId: string, filename: string, url: string) {
-		fileMeta[fileId] = { filename, url };
+	function rememberFile(
+		fileId: string,
+		filename: string,
+		url: string,
+		thumbs?: Record<string, string>
+	) {
+		fileMeta[fileId] = { filename, url, thumbs };
 		fileMeta = { ...fileMeta };
 	}
 
@@ -180,7 +187,7 @@
 				});
 				if (res?.id) {
 					uploaded.push(res.id);
-					rememberFile(res.id, res.filename, res.url);
+					rememberFile(res.id, res.filename, res.url, res.thumbs);
 				}
 			}
 
@@ -219,6 +226,21 @@
 
 	function displayUrl(fileId: string): string {
 		return fileMeta[fileId]?.url ?? getFileUrl('/api', fileId);
+	}
+
+	/** Pick the smallest thumbnail URL for a file, or null if none. */
+	function thumbUrl(fileId: string): string | null {
+		const thumbs = fileMeta[fileId]?.thumbs;
+		if (!thumbs || Object.keys(thumbs).length === 0) return null;
+		const size = Object.keys(thumbs).sort((a, b) => a.length - b.length)[0];
+		return thumbs[size] ?? getThumbUrl('/api', fileId, size);
+	}
+
+	/** True when the file is an image (from mime or filename extension). */
+	function isImageFile(fileId: string): boolean {
+		const meta = fileMeta[fileId];
+		const fn = (meta?.filename ?? '').toLowerCase();
+		return /(\.png|\.jpe?g|\.gif|\.webp|\.svg)$/.test(fn);
 	}
 </script>
 
@@ -319,13 +341,19 @@
 				{#if currentFiles.length > 0}
 					<div class="file-list">
 						{#each currentFiles as fileId (fileId)}
+							{@const turl = thumbUrl(fileId)}
 							<div class="file-row">
 								<a
 									href={displayUrl(fileId)}
 									target="_blank"
 									rel="noopener noreferrer"
-									class="file-name">{fileMeta[fileId]?.filename ?? fileId}</a
+									class="file-name file-link"
 								>
+									{#if turl && isImageFile(fileId)}
+										<img src={turl} alt={fileMeta[fileId]?.filename ?? fileId} class="file-thumb" />
+									{/if}
+									<span>{fileMeta[fileId]?.filename ?? fileId}</span>
+								</a>
 								<button
 									type="button"
 									{disabled}
@@ -401,7 +429,7 @@
 								}}
 							/>
 							<div class="relation-options">
-								{#each filtered as opt}
+								{#each filtered as opt (opt.value)}
 									<button
 										type="button"
 										class="relation-option"
@@ -856,6 +884,22 @@
 		white-space: nowrap;
 		max-width: 180px;
 		text-decoration: underline;
+	}
+
+	.file-link {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+	}
+
+	.file-thumb {
+		width: 40px;
+		height: 40px;
+		object-fit: cover;
+		border-radius: 6px;
+		flex-shrink: 0;
+		background: var(--color-base-200, #f0f0f0);
 	}
 
 	.btn-text {

@@ -26,9 +26,20 @@ defmodule Lazypock.Files.Store do
         collection_name TEXT DEFAULT '',
         record_id       TEXT DEFAULT '',
         field_name      TEXT DEFAULT '',
+        field_name      TEXT DEFAULT '',
+        thumbs          JSONB DEFAULT '{}'::jsonb,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
       )
+      """,
+      []
+    )
+
+    # Add thumbs column to existing tables (idempotent)
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      ALTER TABLE _files ADD COLUMN IF NOT EXISTS thumbs JSONB DEFAULT '{}'::jsonb
       """,
       []
     )
@@ -58,9 +69,9 @@ defmodule Lazypock.Files.Store do
   def get(id) do
     query = "SELECT * FROM _files WHERE id = $1::uuid"
 
-    case Ecto.Adapters.SQL.query(Repo, query, [id]) do
+    case Ecto.Adapters.SQL.query(Repo, query, [to_uuid_binary(id)]) do
       {:ok, %{rows: [row], columns: cols}} ->
-        {:ok, Enum.zip(cols, row) |> Map.new()}
+        {:ok, cols |> Enum.zip(row) |> Map.new() |> normalize_uuid() |> normalize_thumbs()}
 
       {:ok, _} ->
         {:error, :not_found}
@@ -70,12 +81,56 @@ defmodule Lazypock.Files.Store do
     end
   end
 
+  # Accept a UUID as string ("…-…-…") or as Postgrex raw 16-byte binary, and
+  # always hand the query the raw binary form Postgrex expects for uuid columns.
+  defp to_uuid_binary(id) when is_binary(id) and byte_size(id) == 16, do: id
+  defp to_uuid_binary(id) when is_binary(id), do: Ecto.UUID.dump!(id)
+  defp to_uuid_binary(id), do: id
+
+  # Postgrex returns UUID columns as 16-byte raw binaries; convert to strings
+  # so consumers (JSON encoding, URL interpolation) get a readable UUID.
+  defp normalize_uuid(file_record) do
+    case Map.fetch(file_record, "id") do
+      {:ok, id} when is_binary(id) and byte_size(id) == 16 ->
+        case Ecto.UUID.load(id) do
+          {:ok, str} -> Map.put(file_record, "id", str)
+          :error -> file_record
+        end
+
+      _ ->
+        file_record
+    end
+  end
+
+  # Postgrex returns JSONB columns as JSON strings; decode to maps so
+  # consumers (controller, adapter) get plain Elixir maps.
+  defp normalize_thumbs(file_record) do
+    case Map.fetch(file_record, "thumbs") do
+      {:ok, thumbs} when is_binary(thumbs) ->
+        case Jason.decode(thumbs) do
+          {:ok, map} -> Map.put(file_record, "thumbs", map)
+          _ -> file_record
+        end
+
+      _ ->
+        file_record
+    end
+  end
+
   @doc """
   Returns the file binary.
   """
   def read(file_record) do
     mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
     mod.get(file_record)
+  end
+
+  @doc """
+  Reads a generated thumbnail binary for a file record.
+  """
+  def read_thumb(file_record, thumb) do
+    mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
+    mod.thumb_get(file_record, thumb)
   end
 
   @doc """
@@ -122,7 +177,7 @@ defmodule Lazypock.Files.Store do
         mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
         mod.delete(file_record)
 
-        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [file_record["id"]])
+        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [to_uuid_binary(file_record["id"])])
         :ok
 
       {:error, reason} ->
@@ -130,7 +185,7 @@ defmodule Lazypock.Files.Store do
     end
   end
 
-  defp do_store(binary, filename, content_type, _opts) do
+  defp do_store(binary, filename, content_type, opts) do
     # always local by default
     adapter_mod = Lazypock.Files.Adapters.Local
 
@@ -138,22 +193,62 @@ defmodule Lazypock.Files.Store do
       {:ok, meta} ->
         ext = Path.extname(filename)
         mime = content_type || meta[:mime_type]
+        thumb_sizes = opts[:thumb_sizes] || []
 
         {:ok, %{rows: [[id]]}} =
           Ecto.Adapters.SQL.query(
             Repo,
             """
-            INSERT INTO _files (filename, extension, mime_type, size, storage_path, storage_backend)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO _files (filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id
             """,
-            [filename, ext, mime, meta[:size], meta[:path], "local"]
+            [
+              filename,
+              ext,
+              mime,
+              meta[:size],
+              meta[:path],
+              "local",
+              opts[:collection_name] || "",
+              to_string(opts[:record_id] || ""),
+              opts[:field_name] || ""
+            ]
           )
+
+        thumbs =
+          if thumb_sizes != [] do
+            safe_generate_thumbs(adapter_mod, binary, filename, thumb_sizes)
+          else
+            []
+          end
+
+        if thumbs != [] do
+          thumbs_map = Map.new(thumbs, fn t -> {t["size"], t} end)
+          thumbs_json = Jason.encode!(thumbs_map)
+
+          Ecto.Adapters.SQL.query!(
+            Repo,
+            "UPDATE _files SET thumbs = $1::jsonb WHERE id = $2::uuid",
+            [thumbs_json, to_uuid_binary(id)]
+          )
+        end
 
         get(id)
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # Thumbnail generation is best-effort: any failure (missing ImageMagick,
+  # non-image file, resize error) must not break the upload.
+  defp safe_generate_thumbs(adapter_mod, binary, filename, thumb_sizes) do
+    {:ok, thumbs} = adapter_mod.thumbs(binary, filename, thumb_sizes)
+    thumbs
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
   end
 end

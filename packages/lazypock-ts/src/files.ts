@@ -11,6 +11,8 @@ export interface FileRecord {
 	mimeType: string;
 	size: number;
 	url: string;
+	/** Map of thumbnail size => URL, e.g. { "50x50": "/api/files/<id>/thumbs/50x50" } */
+	thumbs?: Record<string, string>;
 	[key: string]: unknown;
 }
 
@@ -19,6 +21,20 @@ export interface FileRecord {
  */
 export function getFileUrl(baseUrl: string, fileId: string): string {
 	return baseUrl.replace(/\/+$/, "") + "/files/" + encodeURIComponent(fileId);
+}
+
+/**
+ * Construct a thumbnail URL from the API base URL, file ID, and thumb size.
+ * @param size e.g. "50x50"
+ */
+export function getThumbUrl(baseUrl: string, fileId: string, size: string): string {
+	return (
+		baseUrl.replace(/\/+$/, "") +
+		"/files/" +
+		encodeURIComponent(fileId) +
+		"/thumbs/" +
+		encodeURIComponent(size)
+	);
 }
 
 /**

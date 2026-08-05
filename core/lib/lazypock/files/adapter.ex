@@ -23,6 +23,13 @@ defmodule Lazypock.Files.Adapter do
   @callback get(map()) :: {:ok, binary()} | {:error, term()}
   @callback delete(map()) :: :ok | {:error, term()}
 
+  # Optional: generate thumbnails from an image binary. Returns a list of thumb
+  # meta maps (each with :size, :path, :width, :height, :mime_type) or [] if
+  # unsupported. Only implemented by adapters that can resize images.
+  @callback thumbs(binary(), String.t(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
+
+  @optional_callbacks thumbs: 3
+
   @doc """
   Returns the adapter for a given backend name from _files.storage_backend.
   Always defaults to local adapter.
