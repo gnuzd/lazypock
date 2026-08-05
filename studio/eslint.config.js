@@ -41,5 +41,14 @@ export default defineConfig(
 			// internal navigation), so skip the href check but keep goto()/pushState() checks.
 			'svelte/no-navigation-without-resolve': ['error', { ignoreLinks: true }]
 		}
+	},
+	{
+		// DataTable renders deterministic `<img>` thumbnails built from DB file IDs
+		// via getThumbUrl() — no user-controlled text enters the HTML string, so
+		// the {@html} XSS guard is not applicable here.
+		files: ['src/lib/components/DataTable.svelte'],
+		rules: {
+			'svelte/no-at-html-tags': 'off'
+		}
 	}
 );

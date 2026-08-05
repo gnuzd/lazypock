@@ -229,11 +229,20 @@
 	}
 
 	/** Pick the smallest thumbnail URL for a file, or null if none. */
-	function thumbUrl(fileId: string): string | null {
+	function thumbUrl(fileId: string, fieldName?: string): string | null {
 		const thumbs = fileMeta[fileId]?.thumbs;
-		if (!thumbs || Object.keys(thumbs).length === 0) return null;
-		const size = Object.keys(thumbs).sort((a, b) => a.length - b.length)[0];
-		return thumbs[size] ?? getThumbUrl('/api', fileId, size);
+		if (thumbs && Object.keys(thumbs).length > 0) {
+			const size = Object.keys(thumbs).sort((a, b) => a.length - b.length)[0];
+			return thumbs[size] ?? getThumbUrl('/api', fileId, size);
+		}
+		// Pre-existing file (no upload meta): derive from the field's configured
+		// thumb sizes in the collection schema — the URL is deterministic.
+		const field = fields.find((f) => f.name === fieldName);
+		const opts = (field?.options ?? {}) as Record<string, unknown>;
+		const sizes = Array.isArray(opts.thumbs) ? (opts.thumbs as string[]) : [];
+		if (sizes.length === 0) return null;
+		const smallest = [...sizes].sort((a, b) => a.length - b.length)[0];
+		return getThumbUrl('/api', fileId, smallest);
 	}
 
 	/** True when the file is an image (from mime or filename extension). */
@@ -341,7 +350,7 @@
 				{#if currentFiles.length > 0}
 					<div class="file-list">
 						{#each currentFiles as fileId (fileId)}
-							{@const turl = thumbUrl(fileId)}
+							{@const turl = thumbUrl(fileId, name)}
 							<div class="file-row">
 								<a
 									href={displayUrl(fileId)}

@@ -8,6 +8,8 @@
 		label: string;
 		class?: string;
 		render?: (row: Record<string, unknown>) => string;
+		/** Optional rich cell renderer (e.g. thumbnails) returning an HTML string; takes precedence over render. */
+		renderHtml?: (row: Record<string, unknown>) => string;
 	};
 
 	let {
@@ -124,7 +126,9 @@
 								role={onrowclick ? 'button' : undefined}
 								onclick={onrowclick ? () => onrowclick(row) : undefined}
 							>
-								{#if cell}
+								{#if col.renderHtml}
+									{@html col.renderHtml(row)}
+								{:else if cell}
 									{@render cell(row, col)}
 								{:else}
 									{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
