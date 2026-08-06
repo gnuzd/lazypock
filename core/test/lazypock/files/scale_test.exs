@@ -5,7 +5,12 @@ defmodule Lazypock.Files.ScaleTest do
 
   # A 300x180 PNG (generated with ImageMagick at test setup time).
   defp tiny_png do
-    path = Path.join(System.tmp_dir!(), "lazypock-test-scale-#{System.unique_integer([:positive])}.png")
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "lazypock-test-scale-#{System.unique_integer([:positive])}.png"
+      )
+
     System.cmd("magick", ["-size", "300x180", "gradient:navy-orange", path])
     binary = File.read!(path)
     File.rm(path)

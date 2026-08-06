@@ -5,10 +5,10 @@ defmodule Lazypock.Files.Adapters.Local do
   Stores files in `priv/uploads/` organized by date:
     priv/uploads/YYYY/MM/DD/{uuid}.{ext}
 
-  Thumbnail generation uses ImageMagick (`magick` or `convert`). If it is not
-  installed, uploads still work but no thumbnails are generated (a warning is
-  logged once). Set the env var `LAZYPOCK_THUMBNAILS=0` to disable generation
-  entirely.
+  Image resizing (thumbnails and on-demand scaling) uses ImageMagick
+  (`magick` or `convert`). If it is not installed, uploads still work but no
+  thumbnails/scaling are generated (a warning is logged once). Set the env var
+  `LAZYPOCK_THUMBNAILS=0` to disable image resizing entirely.
   """
 
   require Logger
