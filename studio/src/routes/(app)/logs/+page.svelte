@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
+	import type { Chart as ChartType } from 'chart.js';
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 
@@ -15,17 +16,12 @@
 	let detailId = $state<string | null>(null);
 	let detail = $state<Record<string, unknown> | null>(null);
 
-	// Stats
-	let statsTotal = $state(0);
-	let statsLast24h = $state(0);
-	let statsErrors24h = $state(0);
-	let statsAvgDuration = $state(0);
 	// Chart (created in onMount to avoid SSR window issues)
 	let chartCanvas: HTMLCanvasElement | undefined = $state();
-	let chartInst: any = $state();
+	let chartInst: ChartType | null = $state(null);
 	let chartData: { x: Date; y: number }[] = $state([]);
 	let chartLoading = $state(false);
-	let ChartRef: any = $state();
+	let ChartRef: typeof ChartType | null = $state(null);
 
 	onMount(async () => {
 		// Dynamically import chart.js only on client-side
@@ -49,14 +45,13 @@
 		);
 		Chart.register(zoomPlugin);
 
-		await loadStats();
 		await loadChart(Chart);
 		loadCollections();
 		loadLogs();
 		ChartRef = Chart;
 	});
 
-	function initChart(Chart: any) {
+	function initChart(Chart: typeof ChartType) {
 		if (!chartCanvas || chartInst) return;
 
 		chartInst = new Chart(chartCanvas, {
@@ -98,12 +93,14 @@
 					},
 					x: {
 						type: 'time',
+						min: Date.now() - 24 * 3600 * 1000,
+						max: Date.now(),
 						time: {
 							unit: 'hour',
 							tooltipFormat: 'DD h a'
 						},
 						grid: {
-							color: (c: any) => (c.tick?.major ? '#edf0f3' : '')
+							color: (c: { tick?: { major?: boolean } }) => (c.tick?.major ? '#edf0f3' : '')
 						},
 						border: { color: '#e4e9ec' },
 						ticks: {
@@ -111,7 +108,7 @@
 							autoSkip: true,
 							maxRotation: 0,
 							major: { enabled: true },
-							color: (c: any) => (c.tick?.major ? '#16161a' : '#666f75')
+							color: (c: { tick?: { major?: boolean } }) => (c.tick?.major ? '#16161a' : '#666f75')
 						}
 					}
 				},
@@ -137,25 +134,13 @@
 		// Update chart data reactively
 		$effect(() => {
 			if (chartInst && chartData.length > 0) {
-				chartInst.data.datasets[0].data = chartData;
+				chartInst.data.datasets[0].data = chartData as never;
 				chartInst.update('none');
 			}
 		});
 	}
 
-	async function loadStats() {
-		try {
-			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
-			statsTotal = (res?.total as number) ?? 0;
-			statsLast24h = (res?.last_24h as number) ?? 0;
-			statsErrors24h = (res?.errors_24h as number) ?? 0;
-			statsAvgDuration = (res?.avg_duration as number) ?? 0;
-		} catch {
-			// ignore
-		}
-	}
-
-	async function loadChart(Chart: any) {
+	async function loadChart(Chart: typeof ChartType) {
 		chartLoading = true;
 		try {
 			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
@@ -241,6 +226,16 @@
 		return d.toLocaleString();
 	}
 
+	function prettyJSON(body: unknown): string {
+		if (!body) return '';
+		try {
+			const parsed = typeof body === 'string' ? JSON.parse(body) : body;
+			return JSON.stringify(parsed, null, 2);
+		} catch {
+			return String(body);
+		}
+	}
+
 	function methodLabel(method: unknown): string {
 		return String(method ?? '').toUpperCase();
 	}
@@ -260,9 +255,8 @@
 		if (!confirm('Delete all request logs? This cannot be undone.')) return;
 		try {
 			await client.http.delete('/logs?all=true');
-			loadStats();
 			loadLogs();
-			loadChart(ChartRef);
+			if (ChartRef) loadChart(ChartRef);
 		} catch {
 			// ignore
 		}
@@ -271,9 +265,8 @@
 	async function clearOldLogs() {
 		try {
 			await client.http.delete('/logs');
-			loadStats();
 			loadLogs();
-			loadChart(ChartRef);
+			if (ChartRef) loadChart(ChartRef);
 		} catch {
 			// ignore
 		}
@@ -356,6 +349,15 @@
 				{/if}
 				<div class="text-base-content/60">Timestamp</div>
 				<div>{formatTS(detail.created_at)}</div>
+				{#if detail.body}
+					<div class="col-span-2 mt-2">
+						<div class="mb-1 text-base-content/60">Request Body</div>
+						<pre
+							class="max-h-64 overflow-auto rounded-lg border border-base-300 bg-base-200/50 p-3 font-mono text-xs break-all whitespace-pre-wrap">{prettyJSON(
+								detail.body
+							)}</pre>
+					</div>
+				{/if}
 			</div>
 		{:else}
 			<div class="text-sm opacity-50">Loading...</div>

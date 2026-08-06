@@ -91,7 +91,7 @@ defmodule LazypockWeb.LogsController do
     items =
       case Ecto.Adapters.SQL.query(
              Repo,
-             "SELECT id, method, path, status, duration, ip, user_agent, referer, collection, error, created_at FROM _request_logs #{select_where}",
+             "SELECT id, method, path, status, duration, ip, user_agent, referer, collection, error, body, created_at FROM _request_logs #{select_where}",
              select_params
            ) do
         {:ok, result} ->
@@ -107,6 +107,7 @@ defmodule LazypockWeb.LogsController do
               referer,
               collection,
               error,
+              body,
               created_at
             ] =
               row
@@ -122,6 +123,7 @@ defmodule LazypockWeb.LogsController do
               "referer" => referer,
               "collection" => collection,
               "error" => error,
+              "body" => body,
               "created_at" => maybe_iso8601(created_at)
             }
           end)
@@ -144,7 +146,7 @@ defmodule LazypockWeb.LogsController do
 
     case Ecto.Adapters.SQL.query(
            Repo,
-           "SELECT id, method, path, status, duration, ip, user_agent, referer, collection, error, created_at FROM _request_logs WHERE id = $1",
+           "SELECT id, method, path, status, duration, ip, user_agent, referer, collection, error, body, created_at FROM _request_logs WHERE id = $1",
            [id_bin]
          ) do
       {:ok,
@@ -161,6 +163,7 @@ defmodule LazypockWeb.LogsController do
              referer,
              collection,
              error,
+             body,
              created_at
            ]
          ]
@@ -176,6 +179,7 @@ defmodule LazypockWeb.LogsController do
           "referer" => referer,
           "collection" => collection,
           "error" => error,
+          "body" => body,
           "created_at" => maybe_iso8601(created_at)
         })
 
@@ -211,10 +215,31 @@ defmodule LazypockWeb.LogsController do
       end
 
     # Hourly request volume for the last 24 hours (for chart)
+    # Always returns a full 24-bucket series (zero-filled) so the chart
+    # renders a complete 24h window even when there is little/no data.
     hourly =
       case Ecto.Adapters.SQL.query(
              Repo,
-             "SELECT date_trunc('hour', created_at) AS hour, COUNT(*) AS cnt FROM _request_logs WHERE created_at > now() - interval '24 hours' GROUP BY hour ORDER BY hour",
+             """
+             WITH hours AS (
+               SELECT date_trunc('hour', gs) AS hour
+               FROM generate_series(
+                 date_trunc('hour', now() - interval '23 hours'),
+                 date_trunc('hour', now()),
+                 interval '1 hour'
+               ) AS gs
+             ),
+             counts AS (
+               SELECT date_trunc('hour', created_at) AS hour, COUNT(*) AS cnt
+               FROM _request_logs
+               WHERE created_at > now() - interval '24 hours'
+               GROUP BY hour
+             )
+             SELECT h.hour, COALESCE(c.cnt, 0) AS cnt
+             FROM hours h
+             LEFT JOIN counts c ON c.hour = h.hour
+             ORDER BY h.hour
+             """,
              []
            ) do
         {:ok, result} ->
