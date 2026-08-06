@@ -105,9 +105,7 @@
 			for (const f of pwFields) {
 				payload[f.name as string] = password;
 			}
-			await client
-				.collection(collection.name as string)
-				.update(editingRecordId, payload);
+			await client.collection(collection.name as string).update(editingRecordId, payload);
 			passwordSaving = false;
 			passwordError = '';
 			onSaved?.();
@@ -191,6 +189,7 @@
 					(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
 				)}
 				{collections}
+				collectionName={(collection?.name as string) ?? ''}
 				bind:data={recordData}
 				disabled={recordSaving}
 				errors={recordFieldErrors}

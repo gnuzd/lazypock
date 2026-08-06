@@ -4,7 +4,7 @@
 
 	import favicon from '$lib/assets/favicon.svg';
 	import { onMount } from 'svelte';
-	import { client, connectRealtime } from '$lib/client';
+	import { client } from '$lib/client';
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
 
@@ -23,8 +23,6 @@
 				// Verify the token is actually valid before redirecting
 				try {
 					await client.me();
-					// Token is good — connect realtime and stay
-					connectRealtime();
 
 					if (
 						path.startsWith(base + '/collections') ||

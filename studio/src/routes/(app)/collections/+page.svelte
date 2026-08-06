@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { Settings, Plus } from '@lucide/svelte';
+	import { getThumbUrl } from 'lazypock';
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import RecordSidePane from '$lib/components/RecordSidePane.svelte';
@@ -45,10 +46,24 @@
 			.filter((f) => !f.hidden && f.type !== 'password')
 			.toSorted((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0));
 		for (const f of fields) {
+			const isFile = f.type === 'file' || f.type === 'multi_file';
+			const opts = (f.options ?? {}) as Record<string, unknown>;
+			const thumbs = Array.isArray(opts.thumbs) ? (opts.thumbs as string[]) : [];
+			// Smallest thumb size (shortest string) — e.g. "50x50"
+			const thumbSize = thumbs.length ? [...thumbs].sort((a, b) => a.length - b.length)[0] : null;
 			cols.push({
 				key: f.name as string,
 				label: f.name as string,
-				render: (r) => formatValue(f, r[f.name as string])
+				render: (r) => formatValue(f, r[f.name as string]),
+				...(isFile && thumbSize
+					? {
+							thumbs: (r: Record<string, unknown>) => {
+								const v = r[f.name as string];
+								const ids = Array.isArray(v) ? (v as string[]) : v ? [v as string] : [];
+								return ids.slice(0, 3).map((fid) => getThumbUrl('/api', fid, thumbSize));
+							}
+						}
+					: {})
 			});
 		}
 		return cols;
@@ -244,3 +259,19 @@
 		}}
 	/>
 </SidePane>
+
+<style>
+	.file-thumbs {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.file-thumb {
+		width: 32px;
+		height: 32px;
+		object-fit: cover;
+		border-radius: 6px;
+		background: var(--color-base-200, #f0f0f0);
+	}
+</style>

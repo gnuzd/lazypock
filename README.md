@@ -70,7 +70,7 @@ LazyPock/
 | 🔐 **Auth System** | Superuser JWT (setup/login/verify) + **auth collection JWT** (`/:collection/auth-with-password`, `/:collection/auth-refresh`, `/:collection/auth-methods`). Dual token verification in Plug. ✅ | Login page. Auth guard. Token persistence. Auto-redirect. ✅ | `client.login/me/logout`, `AuthStore` with localStorage ✅ |
 | 🛡️ **Rules** | Three-state (nil=superuser, ""=public, filter). Enforcer for all CRUD + manageRule. Auth user support (non-superusers evaluated against rules). ✅ | Rule editor with lock/unlock per field. `manageRule` field. ✅ | — |
 | ⚡ **Realtime** | Phoenix Channels. Broadcaster wired into DynamicController. Rule-enforced join (anonymous allowed on public/rule-based collections). ✅ | Real-time record updates via `client.realtime.subscribe()`. ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`; auto-connects without a token for anon/rule-based access ✅ |
-| 📁 **File Storage** | Upload, serve, delete. Local + S3 adapters. ✅ | — | — (via REST API) |
+| 📁 **File Storage** | Upload, serve, delete. Local + S3 adapters. ✅ | Upload in record form, image library picker, thumbnails in list/form. ✅ | `files.upload/list/delete`, `getThumbUrl`, `getScaleUrl` ✅ |
 | 🪝 **Hooks** | File-based Elixir hooks. Lifecycle behavior. Dispatcher wired into controller. ✅ | — | — |
 | 🎨 **Admin Dashboard** | Serves Svelte SPA at `/_/*`. Proxy support in dev. ✅ | Collections sidebar. Record CRUD. Field editor. Rules. Indexes. API key management (Settings → API Keys). ✅ | — |
 
@@ -88,6 +88,9 @@ LazyPock/
 - **Elixir 1.17+** + **Erlang/OTP 26+**
 - **PostgreSQL 15+**
 - **Node.js 20+** (for Studio admin UI)
+- **ImageMagick 7+** (`magick`/`convert`) — required for image thumbnails and
+  on-demand scaling (see [File Storage & Thumbnails](#file-storage--thumbnails));
+  uploads work without it but no resizing is available
 - `zig` and `xz` installed (for Burrito release builds)
 
 ### Development
@@ -148,6 +151,7 @@ MIX_ENV=prod mix release
 | `POOL_SIZE` | DB connection pool size (optional, defaults to `10`) | `10` |
 | `LAZYPOCK_SUPERUSER_EMAIL` | Auto-create superuser on boot | `admin@lazypock.app` |
 | `LAZYPOCK_SUPERUSER_PASSWORD` | Auto-create superuser on boot | `your-password` |
+| `LAZYPOCK_THUMBNAILS` | Set to `0` to disable thumbnail/scaling generation (see [File Storage & Thumbnails](#file-storage--thumbnails)) | `0` |
 
 **Minimal production example:**
 
@@ -161,6 +165,72 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
 ```
 
 Note: The release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
+
+---
+
+## File Storage & Thumbnails
+
+Uploaded files are stored on disk under `core/priv/uploads/YYYY/MM/DD/{uuid}.{ext}`
+(date-based directories). The `_files` table records metadata (filename, mime type,
+size, storage backend, and the collection/record/field the file belongs to).
+
+### Thumbnails & on-demand scaling (requires ImageMagick)
+
+When a **file** or **multi_file** field has **Thumb sizes** configured in the
+collection editor (e.g. `50x50, 480x720`), LazyPock generates WebP thumbnails
+server-side on upload.
+
+- Thumbnails are stored under `priv/uploads/YYYY/MM/DD/thumbs/`
+- Served at `GET /api/files/:id/thumbs/:size`
+- The upload response includes a `thumbs` map: `{"50x50": "/api/files/<id>/thumbs/50x50"}`
+- The TypeScript SDK exposes `getThumbUrl(baseUrl, fileId, size)` and
+  `FileRecord.thumbs`
+
+**Dependency:** all image resizing (thumbnails **and** on-demand scaling) requires
+the **ImageMagick** CLI (`magick`/`convert`). Install it on the server:
+
+```bash
+# macOS
+brew install imagemagick
+
+# Debian/Ubuntu
+sudo apt install imagemagick
+```
+
+If ImageMagick is **not** installed, uploads still work — the file is stored
+normally, but no thumbnails/scaling are available and a one-time warning is
+logged. Set `LAZYPOCK_THUMBNAILS=0` to disable image resizing entirely (and
+silence the warning).
+
+### On-demand image scaling
+
+Any uploaded **image** can be resized on request (no pre-configuration needed):
+
+```
+GET /api/files/:id/scale/:size
+```
+
+`:size` is an ImageMagick geometry:
+
+| Size | Behavior |
+| --- | --- |
+| `100` | width 100px, height auto (keep aspect) |
+| `100x` | width 100px (same as `100`) |
+| `x100` | height 100px, width auto |
+| `100x100` | fit **within** 100×100 box (no upscale) |
+| `100x100!` | exact 100×100 (crop/stretch) |
+
+Examples:
+
+```html
+<img src="/api/files/<id>/scale/100x100" alt="">
+<img src="/api/files/<id>/scale/400x" alt="">
+```
+
+- Sizes are validated (max 4 digits per dimension) to prevent abuse.
+- Results are **cached** on disk under `priv/uploads/YYYY/MM/DD/thumbs/` — the
+  first request generates, subsequent requests are served instantly.
+- The TypeScript SDK exposes `getScaleUrl(baseUrl, fileId, size)`.
 
 ---
 

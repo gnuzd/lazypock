@@ -4,10 +4,13 @@
 	import SelectField from '$lib/components/SelectField.svelte';
 
 	import { client } from '$lib/client';
+	import Modal from '$lib/components/Modal.svelte';
+	import { getFileUrl, getThumbUrl, type FileRecord } from 'lazypock';
 
 	let {
 		fields,
 		collections = [] as Record<string, unknown>[],
+		collectionName = '',
 		data = $bindable({}),
 		disabled = false,
 		errors = {},
@@ -20,6 +23,8 @@
 		fields: Record<string, unknown>[];
 		/** All collections list (for resolving relation targets) */
 		collections?: Record<string, unknown>[];
+		/** Current collection name (for file-ownership metadata). */
+		collectionName?: string;
 		/** Bindable form data — mutated in-place */
 		data: Record<string, unknown>;
 		/** Disable all inputs (e.g. during save) */
@@ -73,9 +78,7 @@
 		}
 		// Fetch records from target collection
 		try {
-			const result = await client
-				.collection(targetColl)
-				.getList(1, 200);
+			const result = await client.collection(targetColl).getList(1, 200);
 			relationCache[targetColl] = (result?.items ?? []) as Record<string, unknown>[];
 			relationCache = { ...relationCache };
 			relationOpen[fieldName] = true;
@@ -135,6 +138,166 @@
 	function update(fieldName: string, value: unknown) {
 		data[fieldName] = value;
 		data = { ...data };
+	}
+
+	// ── File upload state ──
+	let fileUploading = $state<Record<string, boolean>>({});
+	let fileError = $state<Record<string, string>>({});
+	/** Uploaded file metadata keyed by file ID (for display of name/url/thumb). */
+	let fileMeta = $state<
+		Record<string, { filename: string; url: string; thumbs?: Record<string, string> }>
+	>({});
+
+	function rememberFile(
+		fileId: string,
+		filename: string,
+		url: string,
+		thumbs?: Record<string, string>
+	) {
+		fileMeta[fileId] = { filename, url, thumbs };
+		fileMeta = { ...fileMeta };
+	}
+
+	function recordValue(fieldName: string): string[] {
+		const v = data[fieldName];
+		if (Array.isArray(v)) return (v as string[]).filter(Boolean);
+		return v ? [v as string] : [];
+	}
+
+	/**
+	 * Upload a file via the SDK's FilesService and store its ID in the
+	 * record's file/multi_file field. Uploads immediately on selection.
+	 */
+	async function uploadFile(fieldName: string, rawFiles: FileList | null) {
+		if (!rawFiles || rawFiles.length === 0) return;
+		const files = Array.from(rawFiles);
+		fileUploading[fieldName] = true;
+		fileError[fieldName] = '';
+		fileUploading = { ...fileUploading };
+
+		const field = fields.find((f) => f.name === fieldName);
+		const recordId = editing ? ((data['id'] as string) ?? undefined) : undefined;
+
+		try {
+			const uploaded: string[] = [];
+			for (const f of files) {
+				const res = await client.files.upload(f, f.name, undefined, {
+					collectionName,
+					fieldName,
+					recordId
+				});
+				if (res?.id) {
+					uploaded.push(res.id);
+					rememberFile(res.id, res.filename, res.url, res.thumbs);
+				}
+			}
+
+			if (uploaded.length === 0) throw new Error('Upload failed — no file returned');
+			const isMulti = (field?.type as string) === 'multi_file';
+			if (isMulti) {
+				update(fieldName, [...recordValue(fieldName), ...uploaded]);
+			} else {
+				update(fieldName, uploaded[0]);
+			}
+		} catch (e) {
+			fileError[fieldName] = (e as Error).message || 'Upload failed';
+		} finally {
+			fileUploading[fieldName] = false;
+			fileUploading = { ...fileUploading };
+		}
+	}
+
+	// ── File library picker state ──
+	let pickerOpen = $state(false);
+	let pickerField = $state('');
+	let pickerItems = $state<FileRecord[]>([]);
+	let pickerLoading = $state(false);
+	let pickerError = $state('');
+
+	async function openPicker(fieldName: string) {
+		pickerField = fieldName;
+		pickerOpen = true;
+		pickerError = '';
+		pickerLoading = true;
+		try {
+			const res = await client.files.list({ mime: 'image/', perPage: 200 });
+			pickerItems = res?.items ?? [];
+		} catch (e) {
+			pickerError = (e as Error).message || 'Failed to load library';
+			pickerItems = [];
+		} finally {
+			pickerLoading = false;
+		}
+	}
+
+	function closePicker() {
+		pickerOpen = false;
+		pickerField = '';
+		pickerItems = [];
+	}
+
+	function pickFile(fileId: string) {
+		const isMulti =
+			pickerField && fields.find((f) => f.name === pickerField)?.type === 'multi_file';
+		if (isMulti) {
+			const cur = recordValue(pickerField);
+			if (!cur.includes(fileId)) update(pickerField, [...cur, fileId]);
+		} else {
+			update(pickerField, fileId);
+		}
+		closePicker();
+	}
+
+	async function deleteFromLibrary(fileId: string) {
+		if (!confirm('Delete this file permanently? This cannot be undone.')) return;
+		try {
+			await client.files.delete(fileId);
+			pickerItems = pickerItems.filter((f) => f.id !== fileId);
+		} catch (e) {
+			pickerError = (e as Error).message || 'Delete failed';
+		}
+	}
+
+	async function removeFile(fieldName: string, fileId: string) {
+		// Unlink-only (PocketBase model): the physical file stays in the library.
+		// Delete from the library (permanent) happens via the picker's delete button.
+		const current = recordValue(fieldName);
+		if (current.length > 0 && current[0] === fileId && !Array.isArray(data[fieldName])) {
+			update(fieldName, null);
+		} else {
+			update(
+				fieldName,
+				current.filter((id) => id !== fileId)
+			);
+		}
+	}
+
+	function displayUrl(fileId: string): string {
+		return fileMeta[fileId]?.url ?? getFileUrl('/api', fileId);
+	}
+
+	/** Pick the smallest thumbnail URL for a file, or null if none. */
+	function thumbUrl(fileId: string, fieldName?: string): string | null {
+		const thumbs = fileMeta[fileId]?.thumbs;
+		if (thumbs && Object.keys(thumbs).length > 0) {
+			const size = Object.keys(thumbs).sort((a, b) => a.length - b.length)[0];
+			return thumbs[size] ?? getThumbUrl('/api', fileId, size);
+		}
+		// Pre-existing file (no upload meta): derive from the field's configured
+		// thumb sizes in the collection schema — the URL is deterministic.
+		const field = fields.find((f) => f.name === fieldName);
+		const opts = (field?.options ?? {}) as Record<string, unknown>;
+		const sizes = Array.isArray(opts.thumbs) ? (opts.thumbs as string[]) : [];
+		if (sizes.length === 0) return null;
+		const smallest = [...sizes].sort((a, b) => a.length - b.length)[0];
+		return getThumbUrl('/api', fileId, smallest);
+	}
+
+	/** True when the file is an image (from mime or filename extension). */
+	function isImageFile(fileId: string): boolean {
+		const meta = fileMeta[fileId];
+		const fn = (meta?.filename ?? '').toLowerCase();
+		return /(\.png|\.jpe?g|\.gif|\.webp|\.svg)$/.test(fn);
 	}
 </script>
 
@@ -227,24 +390,66 @@
 
 			<!-- ═══ FILE ═══ -->
 		{:else if type === 'file' || type === 'multi_file'}
+			{@const isMulti = type === 'multi_file'}
+			{@const currentFiles = recordValue(name)}
 			<div class="field" class:required>
 				<label>{name}</label>
-				{#if data[name]}
-					<div class="file-row">
-						<span class="file-name">{String(data[name])}</span>
-						<button
-							type="button"
-							{disabled}
-							class="btn-text danger"
-							onclick={() => update(name, null)}>Remove</button
-						>
-					</div>
-				{:else}
-					<div class="file-placeholder">
-						<span>Upload file</span>
+
+				{#if currentFiles.length > 0}
+					<div class="file-list">
+						{#each currentFiles as fileId (fileId)}
+							{@const turl = thumbUrl(fileId, name)}
+							<div class="file-row">
+								<a
+									href={displayUrl(fileId)}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="file-name file-link"
+								>
+									{#if turl && isImageFile(fileId)}
+										<img src={turl} alt={fileMeta[fileId]?.filename ?? fileId} class="file-thumb" />
+									{/if}
+									<span>{fileMeta[fileId]?.filename ?? fileId}</span>
+								</a>
+								<button
+									type="button"
+									{disabled}
+									class="btn-text danger"
+									onclick={() => removeFile(name, fileId)}>Remove</button
+								>
+							</div>
+						{/each}
 					</div>
 				{/if}
-				<span class="field-help">File upload (drag & drop or click)</span>
+
+				<div class="file-actions">
+					<label class="file-upload" class:disabled={disabled || fileUploading[name]}>
+						<input
+							type="file"
+							{disabled}
+							{...isMulti ? { multiple: true } : {}}
+							onchange={(e) => uploadFile(name, (e.target as HTMLInputElement).files)}
+						/>
+						<span
+							>{fileUploading[name]
+								? 'Uploading…'
+								: currentFiles.length
+									? 'Add file'
+									: 'Upload file'}</span
+						>
+					</label>
+					<button type="button" class="btn-text" {disabled} onclick={() => openPicker(name)}
+						>Library</button
+					>
+				</div>
+
+				<span class="field-help"
+					>File upload ({isMulti ? 'multi-file' : 'single-file'}) — click to choose, or pick from
+					Library</span
+				>
+				{#if fileError[name]}
+					<span class="field-error">{fileError[name]}</span>
+				{/if}
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
 				{/if}
@@ -287,7 +492,7 @@
 								}}
 							/>
 							<div class="relation-options">
-								{#each filtered as opt}
+								{#each filtered as opt (opt.value)}
 									<button
 										type="button"
 										class="relation-option"
@@ -457,6 +662,44 @@
 		</div>
 	{/each}
 </div>
+
+<!-- ═══ FILE LIBRARY PICKER ═══ -->
+<Modal show={pickerOpen} title="Image Library">
+	{#if pickerLoading}
+		<div class="picker-status">Loading images…</div>
+	{:else if pickerError}
+		<div class="picker-status picker-error">{pickerError}</div>
+	{:else if pickerItems.length === 0}
+		<div class="picker-status">No images uploaded yet. Upload files to build the library.</div>
+	{:else}
+		<div class="picker-grid">
+			{#each pickerItems as item (item.id)}
+				{@const t = item.thumbs
+					? Object.keys(item.thumbs).sort((a, b) => a.length - b.length)[0]
+					: undefined}
+				<div class="picker-cell" role="button" tabindex="0" onclick={() => pickFile(item.id)}>
+					{#if t && item.thumbs}
+						<img src={item.thumbs[t]} alt={item.filename} class="picker-img" loading="lazy" />
+					{:else}
+						<div class="picker-img picker-img-empty">
+							<span class="picker-no-thumb">No thumb</span>
+						</div>
+					{/if}
+					<span class="picker-name">{item.filename}</span>
+					<button
+						type="button"
+						class="picker-delete"
+						aria-label="Delete {item.filename}"
+						onclick={(e) => {
+							e.stopPropagation();
+							deleteFromLibrary(item.id);
+						}}>×</button
+					>
+				</div>
+			{/each}
+		</div>
+	{/if}
+</Modal>
 
 <style>
 	/* ── Container ── */
@@ -721,11 +964,17 @@
 	}
 
 	/* ── FILE ── */
+	.file-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
 	.file-row {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 8px 12px;
+		padding: 4px 12px;
 	}
 
 	.file-name {
@@ -735,6 +984,23 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		max-width: 180px;
+		text-decoration: underline;
+	}
+
+	.file-link {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+	}
+
+	.file-thumb {
+		width: 40px;
+		height: 40px;
+		object-fit: cover;
+		border-radius: 6px;
+		flex-shrink: 0;
+		background: var(--color-base-200, #f0f0f0);
 	}
 
 	.btn-text {
@@ -749,10 +1015,33 @@
 		color: var(--color-error);
 	}
 
-	.file-placeholder {
+	.file-upload {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
 		padding: 8px 12px;
+		border: 1px dashed var(--color-base-300);
+		border-radius: var(--radius-field);
 		font-size: 0.875rem;
+		color: var(--color-base-content);
+		opacity: 0.8;
+		cursor: pointer;
+		margin-top: 4px;
+		transition:
+			opacity 0.15s ease,
+			border-color 0.15s ease;
+	}
+	.file-upload:hover {
+		opacity: 1;
+		border-color: var(--color-base-content);
+	}
+	.file-upload.disabled {
 		opacity: 0.4;
+		pointer-events: none;
+	}
+	.file-upload input[type='file'] {
+		display: none;
 	}
 
 	/* ── RELATION DROPDOWN ── */
@@ -819,5 +1108,93 @@
 		font-size: 0.8125rem;
 		opacity: 0.4;
 		text-align: center;
+	}
+
+	/* ── File library picker ── */
+	.file-actions {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+	}
+
+	.picker-status {
+		padding: 24px;
+		text-align: center;
+		opacity: 0.5;
+		font-size: 0.8125rem;
+	}
+
+	.picker-error {
+		color: var(--color-error);
+		opacity: 1;
+	}
+
+	.picker-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+		gap: 10px;
+		max-height: 60vh;
+		overflow-y: auto;
+	}
+
+	.picker-cell {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 6px;
+		border: 1px solid var(--color-base-300);
+		border-radius: var(--radius-box, 8px);
+		cursor: pointer;
+	}
+
+	.picker-cell:hover {
+		border-color: var(--color-primary);
+	}
+
+	.picker-img {
+		width: 100%;
+		height: 80px;
+		object-fit: cover;
+		border-radius: 4px;
+		background: var(--color-base-200);
+	}
+
+	.picker-img-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.picker-no-thumb {
+		font-size: 0.6875rem;
+		opacity: 0.4;
+	}
+
+	.picker-name {
+		font-size: 0.6875rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.picker-delete {
+		position: absolute;
+		top: 4px;
+		right: 4px;
+		width: 20px;
+		height: 20px;
+		line-height: 1;
+		border: none;
+		border-radius: 50%;
+		background: color-mix(in oklab, var(--color-error) 80%, #000);
+		color: #fff;
+		font-size: 0.75rem;
+		cursor: pointer;
+		opacity: 0;
+	}
+
+	.picker-cell:hover .picker-delete {
+		opacity: 1;
 	}
 </style>

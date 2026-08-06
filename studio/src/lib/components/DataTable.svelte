@@ -8,6 +8,8 @@
 		label: string;
 		class?: string;
 		render?: (row: Record<string, unknown>) => string;
+		/** Return thumbnail URLs for this cell; rendered as <img> rows (no {@html}). */
+		thumbs?: (row: Record<string, unknown>) => string[];
 	};
 
 	let {
@@ -124,7 +126,18 @@
 								role={onrowclick ? 'button' : undefined}
 								onclick={onrowclick ? () => onrowclick(row) : undefined}
 							>
-								{#if cell}
+								{#if col.thumbs}
+									{@const thumbUrls = col.thumbs(row)}
+									{#if thumbUrls.length}
+										<div class="file-thumbs">
+											{#each thumbUrls as url (url)}
+												<img src={url} alt="" class="file-thumb" />
+											{/each}
+										</div>
+									{:else}
+										<span class="opacity-50">—</span>
+									{/if}
+								{:else if cell}
 									{@render cell(row, col)}
 								{:else}
 									{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}

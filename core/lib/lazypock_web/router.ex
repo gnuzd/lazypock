@@ -53,7 +53,12 @@ defmodule LazypockWeb.Router do
     delete("/collections/:id", CollectionController, :delete)
 
     # File routes — must be BEFORE dynamic :collection routes
+    # File routes — must be BEFORE dynamic :collection routes
+    get("/files", FileController, :index)
     post("/files", FileController, :upload)
+    get("/files/:id/thumbs/:size", FileController, :show_thumb)
+    get("/files/:id/scale/:size", FileController, :show_scaled)
+    get("/files/:id", FileController, :show)
     get("/files/:id", FileController, :show)
     delete("/files/:id", FileController, :delete)
 

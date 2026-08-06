@@ -12,6 +12,8 @@ export {
 	wsUrlFromBaseUrl,
 	FilesService,
 	getFileUrl,
+	getThumbUrl,
+	getScaleUrl,
 	LazypockClient,
 	CollectionService,
 	CollectionsService,

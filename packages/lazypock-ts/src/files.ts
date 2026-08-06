@@ -11,6 +11,8 @@ export interface FileRecord {
 	mimeType: string;
 	size: number;
 	url: string;
+	/** Map of thumbnail size => URL, e.g. { "50x50": "/api/files/<id>/thumbs/50x50" } */
+	thumbs?: Record<string, string>;
 	[key: string]: unknown;
 }
 
@@ -20,6 +22,39 @@ export interface FileRecord {
 export function getFileUrl(baseUrl: string, fileId: string): string {
 	return baseUrl.replace(/\/+$/, "") + "/files/" + encodeURIComponent(fileId);
 }
+
+/**
+ * Construct a thumbnail URL from the API base URL, file ID, and thumb size.
+ * @param size e.g. "50x50"
+ */
+export function getThumbUrl(baseUrl: string, fileId: string, size: string): string {
+	return (
+		baseUrl.replace(/\/+$/, "") +
+		"/files/" +
+		encodeURIComponent(fileId) +
+		"/thumbs/" +
+		encodeURIComponent(size)
+	);
+}
+
+/**
+ * Construct an on-demand scaled image URL from the API base URL, file ID, and size.
+ *
+ * The size is an ImageMagick geometry: "100" (width, keep aspect), "100x100"
+ * (fit within box), "100x100!" (exact crop), "x200" (height). The server
+ * generates and caches the scaled image on first request.
+ * @param size e.g. "100x100"
+ */
+export function getScaleUrl(baseUrl: string, fileId: string, size: string): string {
+	return (
+		baseUrl.replace(/\/+$/, "") +
+		"/files/" +
+		encodeURIComponent(fileId) +
+		"/scale/" +
+		encodeURIComponent(size)
+	);
+}
+
 
 /**
  * Service for file upload, retrieval, and deletion.
@@ -64,6 +99,46 @@ export class FilesService {
 
 		return data as FileRecord | null;
 	}
+
+	/**
+	 * List uploaded files (newest first), with optional filters.
+	 *
+	 * @param options Filters and pagination.
+	 */
+	async list(options?: {
+		page?: number;
+		perPage?: number;
+		collectionName?: string;
+		fieldName?: string;
+		mime?: string;
+	}): Promise<{ items: FileRecord[]; page: number; perPage: number; total: number }> {
+		const params: Record<string, string> = {};
+		if (options?.page !== undefined) params["page"] = String(options.page);
+		if (options?.perPage !== undefined) params["perPage"] = String(options.perPage);
+		if (options?.collectionName) params["collectionName"] = options.collectionName;
+		if (options?.fieldName) params["fieldName"] = options.fieldName;
+		if (options?.mime) params["mime"] = options.mime;
+
+		const data = await this.http.request<{
+			items: FileRecord[];
+			page: number;
+			perPage: number;
+			total: number;
+		}>("GET", "/files", undefined, { params });
+		return (
+			data ?? { items: [], page: 1, perPage: 50, total: 0 }
+		) as {
+			items: FileRecord[];
+			page: number;
+			perPage: number;
+			total: number;
+		};
+	}
+
+	/**
+	 * Fetch file metadata including URL.
+	 * @param fileId The file ID.
+	 */
 
 	/**
 	 * Fetch file metadata including URL.
