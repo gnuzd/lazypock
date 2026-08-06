@@ -82,6 +82,46 @@ export class FilesService {
 	}
 
 	/**
+	 * List uploaded files (newest first), with optional filters.
+	 *
+	 * @param options Filters and pagination.
+	 */
+	async list(options?: {
+		page?: number;
+		perPage?: number;
+		collectionName?: string;
+		fieldName?: string;
+		mime?: string;
+	}): Promise<{ items: FileRecord[]; page: number; perPage: number; total: number }> {
+		const params: Record<string, string> = {};
+		if (options?.page !== undefined) params["page"] = String(options.page);
+		if (options?.perPage !== undefined) params["perPage"] = String(options.perPage);
+		if (options?.collectionName) params["collectionName"] = options.collectionName;
+		if (options?.fieldName) params["fieldName"] = options.fieldName;
+		if (options?.mime) params["mime"] = options.mime;
+
+		const data = await this.http.request<{
+			items: FileRecord[];
+			page: number;
+			perPage: number;
+			total: number;
+		}>("GET", "/files", undefined, { params });
+		return (
+			data ?? { items: [], page: 1, perPage: 50, total: 0 }
+		) as {
+			items: FileRecord[];
+			page: number;
+			perPage: number;
+			total: number;
+		};
+	}
+
+	/**
+	 * Fetch file metadata including URL.
+	 * @param fileId The file ID.
+	 */
+
+	/**
 	 * Fetch file metadata including URL.
 	 * @param fileId The file ID.
 	 */

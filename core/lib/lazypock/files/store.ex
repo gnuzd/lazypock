@@ -81,6 +81,84 @@ defmodule Lazypock.Files.Store do
     end
   end
 
+  @doc """
+  Lists file records, newest first, with optional filters.
+
+  ## Options
+
+    * `:page` — 1-based page (default 1)
+    * `:per_page` — page size (default 50, max 200)
+    * `:collection_name` — only files belonging to a collection
+    * `:field_name` — only files for a field
+    * `:mime` — only files whose mime_type starts with this prefix (e.g. `image/`)
+  """
+  def list(opts \\ []) do
+    page = max(opts[:page] || 1, 1)
+    per_page = min(max(opts[:per_page] || 50, 1), 200)
+
+    {clauses, args} = build_filters(opts)
+    where_sql = if clauses == [], do: "", else: " WHERE " <> Enum.join(clauses, " AND ")
+
+    {:ok, %{rows: [[total]]}} =
+      Ecto.Adapters.SQL.query(
+        Repo,
+        "SELECT COUNT(*) FROM _files" <> where_sql,
+        args
+      )
+
+    offset = (page - 1) * per_page
+
+    {:ok, %{rows: rows, columns: cols}} =
+      Ecto.Adapters.SQL.query(
+        Repo,
+        """
+        SELECT * FROM _files
+        """ <>
+          where_sql <>
+          " ORDER BY created_at DESC, id DESC LIMIT #{per_page} OFFSET #{offset}",
+        args
+      )
+
+    items =
+      Enum.map(rows, fn row ->
+        cols
+        |> Enum.zip(row)
+        |> Map.new()
+        |> normalize_uuid()
+        |> normalize_thumbs()
+      end)
+
+    {:ok, %{items: items, page: page, per_page: per_page, total: total}}
+  end
+
+  # Build WHERE clauses and args with sequential placeholders ($1, $2, …) for
+  # whichever filters are present, so Postgres never sees a gap in $n.
+  defp build_filters(opts) do
+    filters = [
+      {:collection_name, opts[:collection_name], "collection_name"},
+      {:field_name, opts[:field_name], "field_name"},
+      {:mime, opts[:mime], "mime_type"}
+    ]
+
+    {clauses, args} =
+      filters
+      |> Enum.filter(fn {_, v, _} -> is_binary(v) and v != "" end)
+      |> Enum.with_index(1)
+      |> Enum.map_reduce([], fn {{key, value, column}, i}, acc ->
+        clause =
+          if key == :mime do
+            "#{column} LIKE $#{i}::text"
+          else
+            "#{column} = $#{i}"
+          end
+
+        arg = if key == :mime, do: value <> "%", else: value
+        {clause, [arg | acc]}
+      end)
+
+    {clauses, Enum.reverse(args)}
+  end
+
   # Accept a UUID as string ("…-…-…") or as Postgrex raw 16-byte binary, and
   # always hand the query the raw binary form Postgrex expects for uuid columns.
   defp to_uuid_binary(id) when is_binary(id) and byte_size(id) == 16, do: id

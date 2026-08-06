@@ -7,6 +7,54 @@ defmodule LazypockWeb.FileController do
   @default_max_file_size 10 * 1024 * 1024
 
   @doc """
+  GET /api/files
+  List uploaded files (newest first), with optional filters.
+
+  Query params:
+    * `page` / `perPage` — pagination
+    * `collectionName` — only files for a collection
+    * `fieldName` — only files for a field
+    * `mime` — only files whose mime_type starts with this prefix (e.g. `image/`)
+  """
+  def index(conn, params) do
+    page = parse_int(params["page"], 1)
+    per_page = parse_int(params["perPage"], 50)
+
+    opts = [
+      page: page,
+      per_page: per_page,
+      collection_name: blank_to_nil(params["collectionName"]),
+      field_name: blank_to_nil(params["fieldName"]),
+      mime: blank_to_nil(params["mime"])
+    ]
+
+    {:ok, %{items: items, page: page, per_page: per_page, total: total}} = Store.list(opts)
+
+    conn
+    |> put_status(200)
+    |> json(%{
+      "items" => Enum.map(items, &format_file/1),
+      "page" => page,
+      "perPage" => per_page,
+      "total" => total
+    })
+  end
+
+  defp parse_int(nil, default), do: default
+  defp parse_int(s, default) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, _} -> n
+      :error -> default
+    end
+  end
+  defp parse_int(_, default), do: default
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(s) when is_binary(s) and s == "", do: nil
+  defp blank_to_nil(s), do: s
+
+
+  @doc """
   POST /api/files
   Upload a file (multipart/form-data).
 
