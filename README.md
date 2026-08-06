@@ -199,6 +199,37 @@ normally, but no thumbnails are generated and a one-time warning is logged.
 Set `LAZYPOCK_THUMBNAILS=0` to disable thumbnail generation entirely (and
 silence the warning).
 
+### On-demand image scaling
+
+Any uploaded **image** can be resized on request (no pre-configuration needed):
+
+```
+GET /api/files/:id/scale/:size
+```
+
+`:size` is an ImageMagick geometry:
+
+| Size | Behavior |
+| --- | --- |
+| `100` | width 100px, height auto (keep aspect) |
+| `100x` | width 100px (same as `100`) |
+| `x100` | height 100px, width auto |
+| `100x100` | fit **within** 100×100 box (no upscale) |
+| `100x100!` | exact 100×100 (crop/stretch) |
+
+Examples:
+
+```html
+<img src="/api/files/<id>/scale/100x100" alt="">
+<img src="/api/files/<id>/scale/400x" alt="">
+```
+
+- Sizes are validated (max 4 digits per dimension) to prevent abuse.
+- Results are **cached** on disk under `priv/uploads/YYYY/MM/DD/thumbs/` — the
+  first request generates, subsequent requests are served instantly.
+- The TypeScript SDK exposes `getScaleUrl(baseUrl, fileId, size)`.
+
+---
 ---
 
 ## Quick Preview

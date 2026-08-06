@@ -203,6 +203,40 @@ defmodule LazypockWeb.FileController do
     end
   end
 
+  @doc """
+  GET /api/files/:id/scale/:size
+  Serve an on-demand resized version of an image (cached).
+
+  `:size` is an ImageMagick geometry: `100`, `100x`, `x100`, `100x200`, `100x200!`.
+  """
+  def show_scaled(conn, %{"id" => id, "size" => size}) do
+    case Store.get(id) do
+      {:ok, file_record} ->
+        case Store.scale(file_record, size) do
+          {:ok, binary, mime_type} ->
+            conn
+            |> put_resp_header("content-type", mime_type)
+            |> put_resp_header("cache-control", "public, max-age=31536000, immutable")
+            |> send_resp(200, binary)
+
+          {:error, reason} ->
+            conn
+            |> put_status(400)
+            |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+        end
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
+
+      {:error, reason} ->
+        conn
+        |> put_status(400)
+        |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+    end
+  end
+
   # ── Size limit helpers ────────────────────────────────
 
   # %Plug.Upload{} has path/content_type/filename but no size — derive it from disk.

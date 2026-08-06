@@ -173,7 +173,7 @@ check(
 );
 
 // ── Realtime wiring (PocketBase-style) ──
-import { LazypockClient, RealtimeService } from "./dist/index.js";
+import { LazypockClient, RealtimeService, getScaleUrl } from "./dist/index.js";
 
 // Stub WebSocket so subscribe() doesn't hit the network.
 globalThis.WebSocket = class {
@@ -276,6 +276,12 @@ globalThis.WebSocket = class {
 		"function",
 	);
 	unsubReg();
+
+	check(
+		"getScaleUrl builds a scale URL",
+		getScaleUrl("/api", "abc-123", "100x100"),
+		"/api/files/abc-123/scale/100x100",
+	);
 })();
 
 console.log(

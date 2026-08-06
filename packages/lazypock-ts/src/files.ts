@@ -38,6 +38,25 @@ export function getThumbUrl(baseUrl: string, fileId: string, size: string): stri
 }
 
 /**
+ * Construct an on-demand scaled image URL from the API base URL, file ID, and size.
+ *
+ * The size is an ImageMagick geometry: "100" (width, keep aspect), "100x100"
+ * (fit within box), "100x100!" (exact crop), "x200" (height). The server
+ * generates and caches the scaled image on first request.
+ * @param size e.g. "100x100"
+ */
+export function getScaleUrl(baseUrl: string, fileId: string, size: string): string {
+	return (
+		baseUrl.replace(/\/+$/, "") +
+		"/files/" +
+		encodeURIComponent(fileId) +
+		"/scale/" +
+		encodeURIComponent(size)
+	);
+}
+
+
+/**
  * Service for file upload, retrieval, and deletion.
  * Access via {@link LazypockClient.files}.
  */

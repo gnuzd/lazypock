@@ -212,6 +212,15 @@ defmodule Lazypock.Files.Store do
   end
 
   @doc """
+  Scales a file to an arbitrary size on demand (cached).
+  Returns `{:ok, binary, mime_type}`.
+  """
+  def scale(file_record, size) do
+    mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
+    mod.scale(file_record, size)
+  end
+
+  @doc """
   Returns the URL for a file.
   """
   def url(file_record) do

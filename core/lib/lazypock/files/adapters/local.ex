@@ -144,6 +144,90 @@ defmodule Lazypock.Files.Adapters.Local do
     end
   end
 
+  @impl true
+  def scale(file_record, size) do
+    with {:ok, geometry} <- parse_scale_size(size),
+         true <- image?(file_record["filename"] || "") || {:error, :not_an_image},
+         {:ok, magick} <- find_magick() do
+      cache_key = "scale-#{size}"
+      cache_dir = Path.join([base_path(), date_based_path(), "thumbs"])
+      File.mkdir_p!(cache_dir)
+
+      cached_path = Path.join(cache_dir, "#{thumb_basename_for(file_record)}-#{cache_key}.webp")
+
+      case File.read(cached_path) do
+        {:ok, binary} ->
+          {:ok, binary, "image/webp"}
+
+        {:error, _} ->
+          case read_original(file_record) do
+            {:ok, original} ->
+              tmp_in = temp_path("lazypock-scale-in")
+              tmp_out = temp_path("lazypock-scale-out")
+              File.write!(tmp_in, original)
+
+              try do
+                args = [tmp_in, "-auto-orient", "-resize", geometry, "-quality", "85", tmp_out]
+
+                case System.cmd(magick, args, stderr_to_stdout: true) do
+                  {_, 0} ->
+                    File.cp(tmp_out, cached_path)
+                    binary = File.read!(tmp_out)
+                    {:ok, binary, "image/webp"}
+
+                  {_, _} ->
+                    {:error, :resize_failed}
+                end
+              rescue
+                _ -> {:error, :resize_failed}
+              after
+                File.rm(tmp_in)
+                File.rm(tmp_out)
+              end
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      false -> {:error, :not_an_image}
+      :error -> {:error, :magick_not_found}
+    end
+  end
+
+  defp read_original(file_record) do
+    full_path = Path.join(base_path(), file_record["storage_path"])
+
+    case File.read(full_path) do
+      {:ok, binary} -> {:ok, binary}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp thumb_basename_for(file_record) do
+    file_record["id"]
+    |> to_string()
+    |> String.replace("-", "")
+    |> String.slice(0, 16)
+  end
+
+  defp parse_scale_size(size) when is_binary(size) do
+    # ImageMagick geometry: 300 | 300x | x300 | 300x200 | 300x200! (exact)
+    s = String.trim(size)
+
+    cond do
+      Regex.match?(~r/^\d{1,4}x\d{1,4}!$/, s) -> {:ok, s}
+      Regex.match?(~r/^\d{1,4}x\d{1,4}$/, s) -> {:ok, s}
+      Regex.match?(~r/^\d{1,4}x$/, s) -> {:ok, s}
+      Regex.match?(~r/^x\d{1,4}$/, s) -> {:ok, s}
+      Regex.match?(~r/^\d{1,4}$/, s) -> {:ok, s}
+      true -> {:error, :invalid_size}
+    end
+  end
+
+  defp parse_scale_size(_), do: {:error, :invalid_size}
+
   # ── Thumbnail helpers ────────────────────────────────
 
   defp image?(filename), do: Path.extname(filename) in @image_exts

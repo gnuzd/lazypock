@@ -21,7 +21,7 @@ import {
 	type RequestOptions,
 } from "./types";
 import { RealtimeService, wsUrlFromBaseUrl } from "./realtime";
-import { FilesService, getFileUrl, getThumbUrl, type FileRecord } from "./files";
+import { FilesService, getFileUrl, getThumbUrl, getScaleUrl, type FileRecord } from "./files";
 import { CollectionsService } from "./collections";
 import type { CollectionSchema, SchemaField } from "./schema";
 import { generateTypes, collectionTypeName } from "./codegen";
@@ -35,6 +35,7 @@ export {
 	FilesService,
 	getFileUrl,
 	getThumbUrl,
+	getScaleUrl,
 	CollectionService,
 	CollectionsService,
 	generateTypes,

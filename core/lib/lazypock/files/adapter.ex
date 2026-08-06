@@ -28,7 +28,13 @@ defmodule Lazypock.Files.Adapter do
   # unsupported. Only implemented by adapters that can resize images.
   @callback thumbs(binary(), String.t(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
 
-  @optional_callbacks thumbs: 3
+  # Optional: on-demand scale an image to an arbitrary size. Reads the original
+  # file binary, generates a resized version (cached), and returns the resized
+  # binary + mime type. Used by GET /api/files/:id/scale/:size.
+  @callback scale(map(), String.t()) ::
+              {:ok, binary(), String.t()} | {:error, term()}
+
+  @optional_callbacks thumbs: 3, scale: 2
 
   @doc """
   Returns the adapter for a given backend name from _files.storage_backend.
