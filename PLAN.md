@@ -33,10 +33,7 @@ LazyPock/
 │   │   └── lib/components/      # Reusable Svelte components
 │   └── package.json
 │
-├── packages/
-│   └── lazypock-ts/       # TypeScript SDK → npm
-│       ├── src/            # LazypockClient, auth, CRUD, realtime
-│       └── package.json
+└── lazypock-ts/            # separate repo: github.com/gnuzd/lazypock-ts
 │
 ├── PLAN.md
 └── README.md
@@ -461,7 +458,7 @@ end
 - [x] `CollectionRegistry` GenServer + ETS cache
 - [x] `GenericRecord` — SQL-based record CRUD helper
 - [x] `FilterCompiler` — PocketBase filter → SQL WHERE
-- [ ] Mix task: `mix lazypock.create_collection` (TS codegen CLI shipped in `lazypock-ts` instead)
+- [ ] Mix task: `mix lazypock.create_collection` (TS codegen CLI shipped in the `lazypock-ts` repo instead)
 
 ---
 
@@ -1634,7 +1631,7 @@ await client.files.delete(fileId);
 - [x] TypeScript types (`ApiRecord`, `ListResult`, `AuthModel`)
 - [x] File upload/download — `FilesService` with `upload()`/`getUrl()`/`delete()`
 - [x] Auto-refresh on token expiry — transparent refresh via `HttpClient.request()` interceptor
-- [x] README + API docs + examples (`packages/lazypock-ts/README.md` + JSDoc)
+- [x] README + API docs + examples (README + JSDoc in the `lazypock-ts` repo)
 
 ---
 

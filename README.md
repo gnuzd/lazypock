@@ -46,14 +46,8 @@ LazyPock/
 │   │       └── client.ts        # LazypockClient singleton
 │   └── package.json
 │
-├── packages/
-│   └── lazypock-ts/       # TypeScript SDK → npm: lazypock
-│       ├── src/
-│       │   ├── index.ts    # LazypockClient class
-│       │   ├── auth.ts     # AuthStore, JWT management
-│       │   ├── collection.ts # Typed collection CRUD
-│       │   └── realtime.ts # Phoenix Channel WebSocket client
-│       └── package.json
+└── lazypock-ts/            # separate repo: github.com/gnuzd/lazypock-ts
+    └── (TypeScript SDK → npm: lazypock, kept out of this repo)
 │
 ├── PLAN.md                # Full architecture & development plan
 └── README.md
@@ -79,7 +73,7 @@ LazyPock/
 > **API keys** can be generated from the Studio **Settings → API Keys** dashboard.
 > Keys are stored as a SHA-256 hash (raw value shown once at generation) and are
 > scoped to collection listing — enough for codegen (`GET /collections`) without
-> a login round-trip. See `packages/lazypock-ts/README.md`.
+> a login round-trip. See the [lazypock-ts repo](https://github.com/gnuzd/lazypock-ts).
 
 ## How to Run
 
@@ -119,7 +113,8 @@ npm run dev         # Starts Vite dev server on http://localhost:5173
 #### 3. TypeScript SDK
 
 ```bash
-cd packages/lazypock-ts
+git clone git@github.com:gnuzd/lazypock-ts.git
+cd lazypock-ts
 npm install
 npm run build
 ```
@@ -339,7 +334,7 @@ See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 | Auth | Joken + bcrypt_elixir |
 | Admin UI | **SvelteKit SPA** (`studio/`) — built to `core/priv/static/studio/` |
 | Image Processing | Vix (libvips) |
-| JS SDK | TypeScript (`packages/lazypock-ts/`) |
+| JS SDK | TypeScript — separate repo: [gnuzd/lazypock-ts](https://github.com/gnuzd/lazypock-ts) |
 | CSS | Tailwind CSS (Studio), none (core) |
 
 ---
