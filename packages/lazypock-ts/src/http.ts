@@ -8,10 +8,28 @@ import type { AuthStore } from "./auth";
  * Low-level HTTP client wrapping `fetch` with automatic auth token injection.
  * Only relies on `globalThis.fetch` — works in browser, React Native, and Node 18+.
  */
+/** Detect whether an unknown thrown value is an abort/`AbortError`-style error. */
+function isAbortError(err: unknown): boolean {
+	return (
+		err instanceof Error &&
+		(err.name === "AbortError" || err.message === "Aborted")
+	);
+}
+
 export class HttpClient {
 	private baseUrl: string;
 	private authStore: AuthStore;
 	private defaultFetch: typeof globalThis.fetch;
+
+	/**
+	 * Abort controllers for in-flight requests, keyed by their cancellation key
+	 * (default `METHOD path`). A new request with the same key aborts the
+	 * previous one — PocketBase-style auto-cancellation of duplicated requests.
+	 */
+	private cancelControllers: Record<string, AbortController> = {};
+
+	/** Global toggle for the auto-cancellation behaviour (default: on). */
+	private enableAutoCancellation = true;
 
 	/**
 	 * @param baseUrl The API base URL (e.g. `http://localhost:4000/api`). Trailing slash stripped.
@@ -61,14 +79,51 @@ export class HttpClient {
 	}
 
 	/**
+	 * Globally enable or disable auto-cancellation of duplicated pending requests.
+	 * Fluent — returns `this` for chaining.
+	 */
+	autoCancellation(enable: boolean): this {
+		this.enableAutoCancellation = !!enable;
+		return this;
+	}
+
+	/**
+	 * Abort a pending request identified by its cancellation key
+	 * (default `METHOD path`, e.g. `"GET /api/posts"`). No-op if not pending.
+	 */
+	cancelRequest(requestKey: string): this {
+		const controller = this.cancelControllers[requestKey];
+		if (controller) {
+			controller.abort();
+			delete this.cancelControllers[requestKey];
+		}
+		return this;
+	}
+
+	/** Abort all pending requests. */
+	cancelAllRequests(): this {
+		for (const key in this.cancelControllers) {
+			this.cancelControllers[key].abort();
+		}
+		this.cancelControllers = {};
+		return this;
+	}
+
+	/**
 	 * Make an HTTP request with automatic auth token injection and optional auto-refresh.
+	 *
+	 * Auto-cancellation: a request keyed by `options.requestKey` (default
+	 * `METHOD path`) aborts any previous pending request with the same key,
+	 * so only the last duplicate executes. Set `requestKey: null` or
+	 * `autoCancel: false` to opt out per request.
 	 *
 	 * @param method HTTP method.
 	 * @param path URL path (appended to baseUrl).
 	 * @param body JSON-serializable body, or FormData for file uploads.
 	 * @param options Optional request options.
 	 * @returns Parsed JSON response, or null for 204 No Content.
-	 * @throws {ApiError} On non-2xx responses.
+	 * @throws {ApiError} On non-2xx responses or when the request is aborted
+	 * (aborted requests throw an `ApiError` with `isAbort === true`).
 	 */
 	async request<T = unknown>(
 		method: Method,
@@ -80,6 +135,39 @@ export class HttpClient {
 		if (this.authStore.isExpired && this.authStore.collectionName) {
 			await this.refreshAuth();
 		}
+
+		// Resolve the auto-cancellation key (PocketBase `requestKey` semantics):
+		// - options.requestKey null  → disabled for this request
+		// - options.requestKey string → use it verbatim
+		// - options.autoCancel false → disabled (legacy compat)
+		// - options.cancelKey string → use it verbatim (legacy compat)
+		// - otherwise → default to `${method} ${path}`
+		let requestKey: string | null =
+			options?.requestKey === undefined
+				? (options?.cancelKey ?? `${method} ${path}`)
+				: options.requestKey;
+		if (options?.autoCancel === false) requestKey = null;
+
+		// Wire a fresh AbortController for this request, merging any caller signal.
+		// When auto-cancellation is enabled, the previous pending request sharing
+		// our key is aborted first (only the last duplicate executes).
+		let controller: AbortController | null = null;
+		const externalSignal = options?.signal;
+		if (requestKey !== null) {
+			if (this.enableAutoCancellation) {
+				this.cancelRequest(requestKey);
+			}
+			controller = new AbortController();
+			this.cancelControllers[requestKey] = controller;
+			if (externalSignal?.aborted) {
+				controller.abort();
+			} else if (externalSignal) {
+				externalSignal.addEventListener("abort", () => controller?.abort(), {
+					once: true,
+				});
+			}
+		}
+		const signal = controller?.signal ?? externalSignal;
 
 		let url = this.baseUrl + path;
 		if (options?.params) {
@@ -104,7 +192,7 @@ export class HttpClient {
 		const init: RequestInit = {
 			method,
 			headers,
-			signal: options?.signal,
+			signal,
 		};
 
 		if (body != null && method !== "GET" && method !== "DELETE") {
@@ -115,10 +203,34 @@ export class HttpClient {
 			}
 		}
 
+		let res: Response | null = null;
 		const fetcher = options?.fetch ?? this.defaultFetch;
-		const res = await fetcher(url, init);
+		try {
+			res = await fetcher(url, init);
+		} catch (err) {
+			// Aborted (auto-cancelled duplicate, manual cancel, or external signal)
+			// → normalized ApiError with isAbort === true, like PocketBase.
+			if (isAbortError(err)) {
+				throw new ApiError(
+					"The request was aborted (most likely auto-cancelled by a newer request with the same requestKey)",
+					{},
+					0,
+					true,
+				);
+			}
+			throw err;
+		} finally {
+			// The request has settled — no longer pending, so drop the controller
+			// unless a newer request already replaced it (same key).
+			if (
+				requestKey !== null &&
+				this.cancelControllers[requestKey] === controller
+			) {
+				delete this.cancelControllers[requestKey];
+			}
+		}
 
-		if (res.status === 204) return null;
+		if (res!.status === 204) return null;
 
 		// Safely parse JSON — some errored responses may have empty or non-JSON bodies
 		let bodyText = "";
@@ -132,12 +244,12 @@ export class HttpClient {
 			// Not JSON — keep data as empty object
 		}
 
-		if (!res.ok) {
+		if (!res!.ok) {
 			throw new ApiError(
-				(typeof data.message === "string" ? data.message : res.statusText) ||
-					`Request failed with status ${res.status}`,
+				(typeof data.message === "string" ? data.message : res!.statusText) ||
+					`Request failed with status ${res!.status}`,
 				data,
-				res.status,
+				res!.status,
 			);
 		}
 

@@ -90,17 +90,19 @@ export class CollectionService<T = ApiRecord> {
 		perPage = 30,
 		options?: Record<string, unknown> & RequestOptions,
 	): Promise<ListResult<T2> | null> {
-		const { ...rest } = options ?? {};
+		const { requestKey, autoCancel, cancelKey, ...rest } = options ?? {};
 		const qs = new URLSearchParams(
 			Object.fromEntries(
-				Object.entries({ page: String(page), perPage: String(perPage), ...rest }).map(
-					([k, v]) => [k, String(v)],
-				),
+				Object.entries({
+					page: String(page),
+					perPage: String(perPage),
+					...rest,
+				}).map(([k, v]) => [k, String(v)]),
 			),
 		).toString();
 		return this.http.get<ListResult<T2>>(
 			"/" + this.encodeId(this.collectionName) + "?" + qs,
-			options,
+			{ requestKey, autoCancel, cancelKey },
 		);
 	}
 
@@ -120,7 +122,11 @@ export class CollectionService<T = ApiRecord> {
 			const res = await this.getList<T2>(
 				page,
 				batch as number,
-				rest as Record<string, unknown> & RequestOptions,
+				{
+					// disable auto-cancellation across pages — each page request is unique
+					...rest,
+					requestKey: null,
+				} as Record<string, unknown> & RequestOptions,
 			);
 			if (!res || !res.items || res.items.length === 0) break;
 			items.push(...(res.items as T2[]));
@@ -146,7 +152,6 @@ export class CollectionService<T = ApiRecord> {
 		});
 		return res?.items?.[0] ?? null;
 	}
-
 
 	/**
 	 * Get a single record by ID.

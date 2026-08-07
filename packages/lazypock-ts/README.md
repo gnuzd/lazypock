@@ -180,6 +180,12 @@ The main client class.
 | `authStore` | `AuthStore` | auto-created | Explicit auth store instance |
 | `realtime` | `RealtimeService` | auto-created | Real-time service for WebSocket subscriptions |
 
+#### Auto-Cancellation Methods
+
+- `autoCancellation(enable)` — Globally enable/disable auto-cancellation of duplicated pending requests
+- `cancelRequest(requestKey)` — Abort a single pending request by key (default `HTTP_METHOD + path`)
+- `cancelAllRequests()` — Abort all pending requests
+
 #### Authentication Methods
 
 - `login(email, password, collection?)` — Login as superuser or auth collection user
@@ -289,6 +295,58 @@ interface RequestOptions {
   fetch?: typeof fetch;
   headers?: Record<string, string>;
 }
+```
+
+## Auto Cancellation
+
+The SDK auto-cancels duplicated pending requests for you (PocketBase-compatible
+behaviour). When a new request is issued with the same request key as a
+still-pending request, the previous one is aborted — only the last request
+executes:
+
+```typescript
+// Only the last call will execute; the first two are auto-cancelled
+await client.collection('posts').getList(1, 20); // cancelled
+await client.collection('posts').getList(2, 20); // cancelled
+await client.collection('posts').getList(3, 20); // executed
+```
+
+By default the request key is `HTTP_METHOD + path` (e.g. `"GET /api/posts?page=1"`), so
+duplicate calls with identical URLs cancel each other. Cancelled requests reject
+with an `ApiError` whose `isAbort` is `true`:
+
+```typescript
+try {
+  await client.collection('posts').getList(1, 20);
+} catch (err) {
+  if (err instanceof ApiError && err.isAbort) {
+    // superseded by a newer request — safe to ignore
+  }
+}
+```
+
+#### Per-request control
+
+Pass `requestKey` in the request options to customize the key, or disable
+auto-cancellation for a specific request:
+
+```typescript
+await client.collection('posts').getList(1, 20, { requestKey: 'my-list' }); // cancelled
+await client.collection('posts').getList(1, 20, { requestKey: 'my-list' }); // executed
+
+await client.collection('posts').getList(1, 20, { requestKey: null });   // executed
+await client.collection('posts').getList(1, 20, { requestKey: null });   // executed
+```
+
+#### Global control
+
+```typescript
+// Disable auto-cancellation globally
+client.autoCancellation(false);
+
+// Manually cancel pending requests
+client.cancelRequest('GET /api/posts?page=1');
+client.cancelAllRequests();
 ```
 
 ## Error Handling
