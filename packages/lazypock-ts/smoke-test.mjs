@@ -174,6 +174,7 @@ check(
 
 // ── Realtime wiring (PocketBase-style) ──
 import { LazypockClient, RealtimeService, getScaleUrl } from "./dist/index.js";
+import { HttpClient, ApiError } from "./dist/index.js";
 
 // Stub WebSocket so subscribe() doesn't hit the network.
 globalThis.WebSocket = class {
@@ -282,6 +283,157 @@ globalThis.WebSocket = class {
 		getScaleUrl("/api", "abc-123", "100x100"),
 		"/api/files/abc-123/scale/100x100",
 	);
+})();
+
+// ── Auto-cancellation tests ──
+// Exercise the PocketBase-style autoCancel behaviour with a fake fetch:
+// duplicated pending requests cancel each other; only the last executes.
+
+await (async () => {
+	const store = {
+		token: "",
+		collectionName: null,
+		isExpired: false,
+		set() {},
+		setCollectionName() {},
+		clear() {},
+	};
+
+	// controllable fetch: requests stay pending until explicitly settled
+	function controllableFetch(pool) {
+		return (url, init) =>
+			new Promise((resolve, reject) => {
+				const d = { url, init, resolve, reject };
+				pool.push(d);
+				init.signal?.addEventListener("abort", () =>
+					reject(new DOMException("Aborted", "AbortError")),
+				);
+			});
+	}
+	const ok200 = {
+		ok: true,
+		status: 200,
+		text: async () => JSON.stringify({ ok: true }),
+	};
+
+	check("HttpClient exported", typeof HttpClient, "function");
+	check(
+		"ApiError.isAbort defaults to false",
+		new ApiError("x", {}, 0).isAbort,
+		false,
+	);
+
+	// ── 1. duplicate GETs: only the last executes ──
+	{
+		const h = new HttpClient("http://x/api", store);
+		const pool = [];
+		const req1 = h.request("GET", "/posts", undefined, {
+			fetch: controllableFetch(pool),
+		});
+		const req2 = h.request("GET", "/posts", undefined, {
+			fetch: controllableFetch(pool),
+		});
+		pool[1].resolve(ok200); // settle the winner
+		const r2 = await req2;
+		check("second duplicate executes", r2?.ok, true);
+		let firstErr = null;
+		try {
+			await req1;
+		} catch (e) {
+			firstErr = e;
+		}
+		check(
+			"first duplicate auto-cancelled (ApiError)",
+			firstErr instanceof ApiError,
+			true,
+		);
+		check("first duplicate isAbort === true", firstErr?.isAbort, true);
+	}
+
+	// ── 2. requestKey override groups requests across paths ──
+	{
+		const h = new HttpClient("http://x/api", store);
+		const pool = [];
+		const a = h.request("GET", "/a", undefined, {
+			fetch: controllableFetch(pool),
+			requestKey: "same",
+		});
+		const b = h.request("GET", "/b", undefined, {
+			fetch: controllableFetch(pool),
+			requestKey: "same",
+		});
+		pool[1].resolve(ok200);
+		await b;
+		let aborted2 = false;
+		try {
+			await a;
+		} catch (e) {
+			aborted2 = e?.isAbort === true;
+		}
+		check("requestKey groups different paths", aborted2, true);
+	}
+
+	// ── 3. requestKey: null disables auto-cancel ──
+	{
+		const h = new HttpClient("http://x/api", store);
+		const pool = [];
+		const a = h.request("GET", "/same", undefined, {
+			fetch: controllableFetch(pool),
+			requestKey: null,
+		});
+		const b = h.request("GET", "/same", undefined, {
+			fetch: controllableFetch(pool),
+			requestKey: null,
+		});
+		pool[0].resolve(ok200);
+		pool[1].resolve(ok200);
+		const ra = await a;
+		const rb = await b;
+		check(
+			"requestKey null keeps both",
+			ra?.ok === true && rb?.ok === true,
+			true,
+		);
+	}
+
+	// ── 4. cancelAllRequests aborts in-flight ──
+	{
+		const h = new HttpClient("http://x/api", store);
+		const pool = [];
+		const p = h.request("GET", "/pending", undefined, {
+			fetch: controllableFetch(pool),
+		});
+		h.cancelAllRequests();
+		let err = null;
+		try {
+			await p;
+		} catch (e) {
+			err = e;
+		}
+		check("cancelAllRequests aborts", err?.isAbort, true);
+	}
+
+	// ── 5. autoCancellation(false) disables globally ──
+	{
+		const h = new HttpClient("http://x/api", store);
+		h.autoCancellation(false);
+		const pool = [];
+		const a = h.request("GET", "/p", undefined, {
+			fetch: controllableFetch(pool),
+		});
+		const b = h.request("GET", "/p", undefined, {
+			fetch: controllableFetch(pool),
+		});
+		pool[0].resolve(ok200);
+		pool[1].resolve(ok200);
+		const ra = await a;
+		const rb = await b;
+		check(
+			"autoCancellation(false) keeps both",
+			ra?.ok === true && rb?.ok === true,
+			true,
+		);
+	}
 })();
 
 console.log(

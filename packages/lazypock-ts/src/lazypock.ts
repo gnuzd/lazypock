@@ -21,7 +21,13 @@ import {
 	type RequestOptions,
 } from "./types";
 import { RealtimeService, wsUrlFromBaseUrl } from "./realtime";
-import { FilesService, getFileUrl, getThumbUrl, getScaleUrl, type FileRecord } from "./files";
+import {
+	FilesService,
+	getFileUrl,
+	getThumbUrl,
+	getScaleUrl,
+	type FileRecord,
+} from "./files";
 import { CollectionsService } from "./collections";
 import type { CollectionSchema, SchemaField } from "./schema";
 import { generateTypes, collectionTypeName } from "./codegen";
@@ -30,6 +36,7 @@ import { fieldTypeScriptType, fieldTypeKind, schemaFieldType } from "./typegen";
 export {
 	AuthStore,
 	ApiError,
+	HttpClient,
 	RealtimeService,
 	wsUrlFromBaseUrl,
 	FilesService,
@@ -171,6 +178,41 @@ export class LazypockClient {
 	generateTypes(options?: { packageName?: string }): string {
 		const schemas = this.schemaByName ? [...this.schemaByName.values()] : [];
 		return generateTypes(schemas, options);
+	}
+
+	// ── Auto-cancellation (PocketBase `autoCancellation` parity) ──
+
+	/**
+	 * Globally enable or disable auto-cancellation of duplicated pending requests.
+	 *
+	 * When enabled (default), a new request whose `requestKey` (default
+	 * `HTTP_METHOD + path`) matches a still-pending request aborts the previous
+	 * one — only the last duplicate executes.
+	 *
+	 * @example
+	 * ```ts
+	 * client.autoCancellation(false); // keep every request
+	 * ```
+	 */
+	autoCancellation(enable: boolean): this {
+		this.http.autoCancellation(enable);
+		return this;
+	}
+
+	/**
+	 * Abort a single pending request by its cancellation key
+	 * (default `HTTP_METHOD + path`, e.g. `"GET /api/posts?page=1"`).
+	 * The request rejects with an `ApiError` whose `isAbort` is `true`.
+	 */
+	cancelRequest(requestKey: string): this {
+		this.http.cancelRequest(requestKey);
+		return this;
+	}
+
+	/** Abort all pending requests. */
+	cancelAllRequests(): this {
+		this.http.cancelAllRequests();
+		return this;
 	}
 
 	// ── Auth ──

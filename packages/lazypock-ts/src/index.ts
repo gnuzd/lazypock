@@ -8,6 +8,7 @@ export {
 	// LazypockClient + options + everything it re-exports
 	AuthStore,
 	ApiError,
+	HttpClient,
 	RealtimeService,
 	wsUrlFromBaseUrl,
 	FilesService,
