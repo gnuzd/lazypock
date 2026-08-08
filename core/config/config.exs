@@ -41,6 +41,15 @@ config :lazypock, Lazypock.Mailer, adapter: Swoosh.Adapters.Test
 # Disable Swoosh's default API client (we only use SMTP)
 config :swoosh, :api_client, false
 
+# OAuth2 providers (PocketBase parity). Each provider is a map with
+# `client_id`, `client_secret`, and optional `authorize_url` / `token_url` /
+# `user_url` / `scope` overrides for generic providers.
+#
+# Providers are also configurable at runtime via the admin Settings UI
+# (Lazypock.Settings) under the "oauth2.providers" key, which takes
+# precedence over this static config.
+config :lazypock, :oauth2_providers, []
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

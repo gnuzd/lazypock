@@ -212,25 +212,39 @@ defmodule Lazypock.Schemas.GenericRecord do
 
   # Coerce a raw result row (cols + row data) into JSON-safe map.
   # Postgrex returns binary UUIDs, Decimal, Date, NaiveDateTime etc.
+  # UUID binary coercion is applied only to columns that are actually UUID
+  # (name is `id` or ends with `_id`/`_ref`) to avoid hex-encoding 16-char
+  # text values (e.g. emails) stored in TEXT columns.
   defp row_to_map(cols, row) do
     cols
     |> Enum.zip(row)
     |> Enum.map(fn {col, val} ->
-      {col, coerce_value(val)}
+      {col, coerce_value(col, val)}
     end)
     |> Map.new()
   end
 
   defp coerce_row(map) do
-    Map.new(map, fn {k, v} -> {k, coerce_value(v)} end)
+    Map.new(map, fn {k, v} -> {k, coerce_value(k, v)} end)
   end
 
-  defp coerce_value(v) when is_binary(v) and byte_size(v) == 16, do: Ecto.UUID.cast!(v)
-  defp coerce_value(%Decimal{} = d), do: Decimal.to_float(d)
-  defp coerce_value(%Date{} = d), do: Date.to_iso8601(d)
-  defp coerce_value(%NaiveDateTime{} = dt), do: NaiveDateTime.to_iso8601(dt)
-  defp coerce_value(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-  defp coerce_value(v), do: v
+  defp coerce_value(col, v) when is_binary(v) and byte_size(v) == 16 do
+    if uuid_column?(col) do
+      Ecto.UUID.cast!(v)
+    else
+      v
+    end
+  end
+
+  defp coerce_value(_col, %Decimal{} = d), do: Decimal.to_float(d)
+  defp coerce_value(_col, %Date{} = d), do: Date.to_iso8601(d)
+  defp coerce_value(_col, %NaiveDateTime{} = dt), do: NaiveDateTime.to_iso8601(dt)
+  defp coerce_value(_col, %DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp coerce_value(_col, v), do: v
+
+  defp uuid_column?(col) do
+    col == "id" or String.ends_with?(col, "_id") or String.ends_with?(col, "_ref")
+  end
 
   # Parse string date/datetime values into Elixir structs before sending to Postgrex.
   defp coerce_values_for_db(map) do

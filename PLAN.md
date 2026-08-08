@@ -739,7 +739,8 @@ end
 | `POST` | `/api/auth/confirm-password-reset` | (planned) Reset password with token |
 | `POST` | `/api/auth/request-verification` | (planned) Send verification email |
 | `POST` | `/api/auth/confirm-verification` | (planned) Verify email |
-| `GET` | `/api/auth/oauth2/{provider}` | (planned) OAuth2 flow |
+| `GET` | `/api/oauth2-redirect` | ✅ OAuth2 popup callback (postMessage to opener) |
+| `POST` | `/:collection/auth-with-oauth2` | ✅ OAuth2 direct code exchange (PKCE) |
 
 ### 3.4 Auth Plug Pipeline
 
@@ -799,7 +800,7 @@ config :lazypock, :oauth2_providers, [
 - [x] PocketBase-compatible auth endpoints (`/:collection/auth-with-password`, `/:collection/auth-refresh`, `/:collection/auth-methods`)
 - [x] AuthController (`auth_with_password`, `auth_refresh`, `auth_methods`)
 - [x] Dynamic email/password field resolution from collection schema
-- [ ] OAuth2 provider support
+- [x] OAuth2 provider support (auth-with-oauth2, oauth2-redirect, `_external_auths` linking via Assent)
 - [x] Rate limiting on login attempts
 
 ---
