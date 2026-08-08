@@ -10,7 +10,7 @@ defmodule LazypockWeb.CollectionChannel do
   use Phoenix.Channel
 
   @impl true
-  def join("collection:" <> topic, _payload, socket) do
+  def join("collection:" <> topic, payload, socket) do
     # topic can be: "posts", "posts:abc123", "posts:*"
     {collection_name, _record_id} = parse_topic(topic)
 
@@ -21,7 +21,19 @@ defmodule LazypockWeb.CollectionChannel do
 
         case Lazypock.Rules.Enforcer.authorize_list(collection_name, user) do
           {:ok, _} ->
-            {:ok, assign(socket, :collection_name, collection_name)}
+            # Fire onRealtimeSubscribeRequest (PocketBase parity) —
+            # handlers can reject via {:error, reason}
+            case Lazypock.Hooks.Realtime.trigger_subscribe(
+                   socket,
+                   socket,
+                   payload
+                 ) do
+              {:ok, _event, _after_funs} ->
+                {:ok, assign(socket, :collection_name, collection_name)}
+
+              {:error, reason} ->
+                {:error, %{reason: format_reason(reason)}}
+            end
 
           {:error, _reason} ->
             {:error, %{reason: "Access denied"}}
@@ -44,4 +56,7 @@ defmodule LazypockWeb.CollectionChannel do
       [collection, id | _] -> {collection, id}
     end
   end
+
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
 end

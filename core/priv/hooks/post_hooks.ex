@@ -1,22 +1,35 @@
 defmodule PostHooks do
-  use Lazypock.Hooks.Lifecycle, collection: "posts"
+  @moduledoc """
+  Example LazyPock hook using the PocketBase-parity event API.
 
-  @impl true
-  def on_create(record, _context) do
+  Mirrors `onRecordCreate((e) => { e.record.slug = ...; e.next() })` from
+  https://pocketbase.io/docs/js-event-hooks/ — the handler receives an event
+  `e`, mutates it, then calls `Lazypock.Hooks.Event.next(e)` to continue the
+  chain. Returning `{:error, reason}` stops the chain.
+  """
+  use Lazypock.Hooks.Hook, collection: "posts"
+
+  alias Lazypock.Hooks.Event
+  require Logger
+
+  # PocketBase: onRecordCreate
+  def on_record_create(%Event{} = e) do
     # Auto-generate slug from title
     slug =
-      record["title"]
+      e.record["title"]
       |> to_string()
       |> String.downcase()
       |> String.replace(~r/[^a-z0-9]+/, "-")
       |> String.trim("-")
 
-    {:ok, Map.put(record, "slug", slug)}
+    e = Event.put(e, :record, Map.put(e.record, "slug", slug))
+    Event.next(e)
   end
 
-  @impl true
-  def after_create(_record, _context) do
+  # PocketBase: onRecordAfterCreateSuccess
+  def on_record_after_create_success(%Event{} = e) do
     # Log the creation (fire-and-forget)
-    :ok
+    Logger.info("post created: #{e.record["id"]}")
+    Event.next(e)
   end
 end

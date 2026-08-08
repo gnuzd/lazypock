@@ -57,7 +57,13 @@ defmodule LazypockWeb.CollectionController do
 
   defp do_list(conn) do
     collections = CollectionRegistry.list()
-    json(conn, %{items: Enum.map(collections, &collection_json/1)})
+    items = Enum.map(collections, &collection_json/1)
+    result = %{items: items}
+
+    case Lazypock.Hooks.Request.trigger_collections_list(conn, items, result) do
+      {:ok, _event} -> json(conn, result)
+      {:error, reason} -> conn |> put_status(400) |> json(%{error: reason})
+    end
   end
 
   # Create a new collection
@@ -70,10 +76,18 @@ defmodule LazypockWeb.CollectionController do
     type = params["type"] || "base"
     fields = params["fields"] || []
 
-    case DDL.create_collection(name, type: type, fields: fields) do
-      {:ok, collection} ->
-        Broadcaster.broadcast_collection_event("create", collection_json(collection))
-        conn |> put_status(201) |> json(collection_json(collection))
+    # Fire onCollectionCreateRequest (PocketBase parity)
+    case Lazypock.Hooks.Request.trigger_collection_create(conn, %{name: name, type: type}) do
+      {:ok, _event} ->
+        case DDL.create_collection(name, type: type, fields: fields) do
+          {:ok, collection} ->
+            Lazypock.Hooks.Collection.trigger_after_create_success(collection)
+            Broadcaster.broadcast_collection_event("create", collection_json(collection))
+            conn |> put_status(201) |> json(collection_json(collection))
+
+          {:error, reason} ->
+            conn |> put_status(400) |> json(%{error: reason})
+        end
 
       {:error, reason} ->
         conn |> put_status(400) |> json(%{error: reason})
@@ -177,10 +191,17 @@ defmodule LazypockWeb.CollectionController do
               |> maybe_put(:options, params["options"])
               |> maybe_put(:hooks, params["hooks"])
 
-            case DDL.update_collection(coll_name, opts) do
-              {:ok, collection} ->
-                Broadcaster.broadcast_collection_event("update", collection_json(collection))
-                json(conn, collection_json(collection))
+            case Lazypock.Hooks.Request.trigger_collection_update(conn, %{name: coll_name}) do
+              {:ok, _event} ->
+                case DDL.update_collection(coll_name, opts) do
+                  {:ok, collection} ->
+                    Lazypock.Hooks.Collection.trigger_after_update_success(collection)
+                    Broadcaster.broadcast_collection_event("update", collection_json(collection))
+                    json(conn, collection_json(collection))
+
+                  {:error, reason} ->
+                    conn |> put_status(400) |> json(%{error: reason})
+                end
 
               {:error, reason} ->
                 conn |> put_status(400) |> json(%{error: reason})
@@ -206,10 +227,16 @@ defmodule LazypockWeb.CollectionController do
           conn |> put_status(403) |> json(%{error: reason})
 
         :ok ->
-          case DDL.drop_collection(coll_name) do
-            :ok ->
-              Broadcaster.broadcast_collection_event("delete", %{id: id})
-              conn |> put_status(204) |> json(%{ok: true})
+          case Lazypock.Hooks.Request.trigger_collection_delete(conn, %{name: coll_name}) do
+            {:ok, _event} ->
+              case DDL.drop_collection(coll_name) do
+                :ok ->
+                  Broadcaster.broadcast_collection_event("delete", %{id: id})
+                  conn |> put_status(204) |> json(%{ok: true})
+
+                {:error, reason} ->
+                  conn |> put_status(400) |> json(%{error: reason})
+              end
 
             {:error, reason} ->
               conn |> put_status(400) |> json(%{error: reason})

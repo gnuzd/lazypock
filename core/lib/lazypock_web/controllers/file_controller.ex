@@ -120,28 +120,37 @@ defmodule LazypockWeb.FileController do
   Serve a file.
   """
   def show(conn, %{"id" => id}) do
-    case Store.get(id) do
-      {:ok, file_record} ->
-        case Store.read(file_record) do
-          {:ok, binary} ->
-            conn
-            |> put_resp_header("content-type", file_record["mime_type"])
-            |> put_resp_header(
-              "content-disposition",
-              ~s(inline; filename="#{file_record["filename"]}")
-            )
-            |> send_resp(200, binary)
+    # Fire onFileDownloadRequest (PocketBase parity)
+    case Lazypock.Hooks.Request.trigger_file_download(conn, id, nil) do
+      {:ok, _event} ->
+        case Store.get(id) do
+          {:ok, file_record} ->
+            case Store.read(file_record) do
+              {:ok, binary} ->
+                conn
+                |> put_resp_header("content-type", file_record["mime_type"])
+                |> put_resp_header(
+                  "content-disposition",
+                  ~s(inline; filename="#{file_record["filename"]}")
+                )
+                |> send_resp(200, binary)
 
-          {:error, reason} ->
+              {:error, reason} ->
+                conn
+                |> put_status(500)
+                |> json(%{"code" => 500, "message" => inspect(reason), "data" => %{}})
+            end
+
+          {:error, :not_found} ->
             conn
-            |> put_status(500)
-            |> json(%{"code" => 500, "message" => inspect(reason), "data" => %{}})
+            |> put_status(404)
+            |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
         end
 
-      {:error, :not_found} ->
+      {:error, reason} ->
         conn
-        |> put_status(404)
-        |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
+        |> put_status(400)
+        |> json(%{"code" => 400, "message" => to_string(reason), "data" => %{}})
     end
   end
 

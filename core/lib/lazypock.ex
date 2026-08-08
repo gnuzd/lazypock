@@ -2,8 +2,11 @@ defmodule Lazypock do
   @moduledoc """
   Lazypock keeps the contexts that define your domain
   and business logic.
-
-  Contexts are also responsible for managing your data, regardless
-  if it comes from the database, an external API or others.
   """
+
+  @doc """
+  Returns the current app context (the application module).
+  Mirrors PocketBase's `$app` reference available in every hook event.
+  """
+  def app, do: __MODULE__
 end
