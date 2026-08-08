@@ -21,7 +21,7 @@ LazyPock/
 │   │   │   ├── schema/          # DDL engine + type mapper
 │   │   │   ├── schemas/         # GenericRecord + FilterCompiler
 │   │   │   ├── rules/           # Rule enforcer (PocketBase-compatible)
-│   │   │   ├── hooks/           # Hook discovery & dispatcher
+│   │   │   ├── hooks/           # PocketBase-parity event hooks (Event, Registry, Router)
 │   │   │   ├── auth/            # Superuser JWT auth + token
 │   │   │   ├── files/           # File storage (local + S3 adapters)
 │   │   │   └── realtime/        # Broadcaster (Phoenix PubSub)
@@ -65,7 +65,7 @@ LazyPock/
 | 🛡️ **Rules** | Three-state (nil=superuser, ""=public, filter). Enforcer for all CRUD + manageRule. Auth user support (non-superusers evaluated against rules). ✅ | Rule editor with lock/unlock per field. `manageRule` field. ✅ | — |
 | ⚡ **Realtime** | Phoenix Channels. Broadcaster wired into DynamicController. Rule-enforced join (anonymous allowed on public/rule-based collections). ✅ | Real-time record updates via `client.realtime.subscribe()`. ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`; auto-connects without a token for anon/rule-based access ✅ |
 | 📁 **File Storage** | Upload, serve, delete. Local + S3 adapters. ✅ | Upload in record form, image library picker, thumbnails in list/form. ✅ | `files.upload/list/delete`, `getThumbUrl`, `getScaleUrl` ✅ |
-| 🪝 **Hooks** | PocketBase-compatible event hooks (Event + `e.next()` chain). Lifecycle + Dispatcher + Registry. Wired into controllers. ✅ | — | — |
+| 🪝 **Hooks** | PocketBase-compatible event hooks: `use Lazypock.Hooks.Hook` modules in `priv/hooks/`, `function(e)` + `e.next()` chain, ~70 hooks (App/Record/Collection/BaseModel/Request/Mailer/Realtime), custom API routes via `on_before_serve` + `Router.add`. Legacy Lifecycle/Dispatcher still work (deprecated). ✅ | — | — |
 | 🎨 **Admin Dashboard** | Serves Svelte SPA at `/_/*`. Proxy support in dev. ✅ | Collections sidebar. Record CRUD. Field editor. Rules. Indexes. API key management (Settings → API Keys). ✅ | — |
 
 ---
@@ -308,7 +308,7 @@ See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 | 4 | Rule Engine (Enforcer, three-state, manageRule) | ✅ Complete |
 | 5 | Realtime (Phoenix Channels, Broadcaster) | ✅ Complete |
 | 6 | File Storage (upload, serve, local + S3) | ✅ Complete |
-| 7 | Hook System (Lifecycle, Dispatcher, Registry) | ✅ Complete |
+| 7 | Hook System (PocketBase-parity event hooks: Event + `e.next()` chain, Router for custom API routes) | ✅ Complete |
 | 8 | Studio Admin SPA (SvelteKit) | 🚧 In Progress |
 | 9 | TypeScript SDK | 🚧 Shipping |
 | 10 | Polish & Release | ⏳ Planned |

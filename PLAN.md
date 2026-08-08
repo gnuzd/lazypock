@@ -2,7 +2,7 @@
 
 > **Your whole backend. In one lazy pocket.** 🦥👖
 
-**Status:** Core backend (Phases 1–7) complete — DDL engine, dynamic CRUD with relation expansion, auth collections (superuser + user JWT, login/refresh, rule integration), rule engine with Studio syntax validation, realtime, file storage (local + S3), and hook Layer 2 (file-based). Studio SPA (Phase 8) in active development — collections, records, rules, logs, settings shipped. SDK (Phase 9) published as `lazypock-ts` v0.1.1 (npm) with full type safety via codegen CLI.
+**Status:** Core backend (Phases 1–7) complete — DDL engine, dynamic CRUD with relation expansion, auth collections (superuser + user JWT, login/refresh, rule integration), rule engine with Studio syntax validation, realtime, file storage (local + S3), and a PocketBase-parity event hook system (`use Lazypock.Hooks.Hook` modules, `e.next()` chain, custom API routes via `on_before_serve`). Studio SPA (Phase 8) in active development — collections, records, rules, logs, settings shipped. SDK (Phase 9) published as `lazypock-ts` v0.1.1 (npm) with full type safety via codegen CLI.
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**.
 Define collections in an admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
@@ -18,7 +18,7 @@ LazyPock/
 │   │   │   ├── schema/          # DDL engine + type mapper
 │   │   │   ├── schemas/         # GenericRecord + FilterCompiler
 │   │   │   ├── rules/           # Rule enforcer
-│   │   │   ├── hooks/           # Hook dispatcher + lifecycle
+│   │   │   ├── hooks/           # PocketBase-parity event hooks (Event, Registry, Router)
 │   │   │   ├── auth/            # Superuser JWT auth
 │   │   │   ├── files/           # File storage (local + S3)
 │   │   │   └── realtime/        # Channel broadcaster
@@ -1296,17 +1296,17 @@ end
 
 #### Available hooks (full PocketBase surface)
 
-* **App**: `on_bootstrap`, `on_settings_reload`, `on_backup_create`,
+- **App**: `on_bootstrap`, `on_settings_reload`, `on_backup_create`,
   `on_backup_restore`, `on_terminate`, `on_before_serve` (custom API routes)
-* **Record model**: `on_record_enrich`, `on_record_validate` + the
+- **Record model**: `on_record_enrich`, `on_record_validate` + the
   create/update/delete × execute/after-success/after-error matrix
-* **Collection model**: same 12-hook matrix
-* **Base model**: `on_model_validate` + create/update/delete matrix
-* **Request**: records CRUD, auth (auth, auth-refresh, auth-with-password,
+- **Collection model**: same 12-hook matrix
+- **Base model**: `on_model_validate` + create/update/delete matrix
+- **Request**: records CRUD, auth (auth, auth-refresh, auth-with-password,
   OAuth2, OTP, password-reset, verification, email-change), batch, file,
   collections, settings
-* **Mailer**: `on_mailer_send` + `on_mailer_record_*Send` variants
-* **Realtime**: `on_realtime_connect_request`, `on_realtime_subscribe_request`,
+- **Mailer**: `on_mailer_send` + `on_mailer_record_*Send` variants
+- **Realtime**: `on_realtime_connect_request`, `on_realtime_subscribe_request`,
   `on_realtime_message_send`
 
 Hook modules are scoped to a collection with `use Lazypock.Hooks.Hook,
@@ -1455,13 +1455,13 @@ Scans `priv/hooks/` at boot, maps collection names to hook modules, supports hot
 
 ### 7.6 Deliverables (Phase 7)
 
-- [x] Layer 2: File-based Elixir hook behaviour + auto-discovery (`Lifecycle` + `Registry`)
-- [x] Hook dispatcher pipeline wired into DynamicController
+- [x] Layer 2: File-based Elixir hooks — PocketBase-parity event API (`use Lazypock.Hooks.Hook`, `e.next()` chain, `Router.add` custom API routes) + auto-discovery (`Registry.discover!()`)
+- [x] Hook dispatcher pipeline wired into DynamicController (+ Auth/Collection/Settings/File controllers, CollectionChannel, Mailer)
+- [x] ExUnit: hook pipeline tests (Event chain semantics, Registry, Router, custom-routes end-to-end)
 - [ ] Layer 1: Declarative hook engine with built-in actions (set_field, webhook, etc.) — skeleton exists (`run_declarative_hooks/4` returns `{:ok, data}` unchanged)
 - [ ] Layer 3: Runtime eval hooks (Studio admin UI)
 - [ ] Template variable system (`{{record.title}}`, `{{now}}`, `{{env.VAR}}`)
 - [ ] Hook execution logging/tracing
-- [ ] ExUnit: hook pipeline tests
 
 ---
 
