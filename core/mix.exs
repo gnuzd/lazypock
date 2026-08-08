@@ -75,7 +75,8 @@ defmodule Lazypock.MixProject do
       {:burrito, "~> 1.0"},
       {:swoosh, "~> 1.17"},
       {:gen_smtp, "~> 1.2"},
-      {:cors_plug, "~> 3.0"}
+      {:cors_plug, "~> 3.0"},
+      {:assent, "~> 0.3.1"}
     ]
   end
 

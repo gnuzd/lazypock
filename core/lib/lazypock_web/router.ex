@@ -36,6 +36,9 @@ defmodule LazypockWeb.Router do
     pipe_through(:api)
 
     get("/health", HealthController, :index)
+    # OAuth2 provider redirect callback (PocketBase parity)
+    get("/oauth2-redirect", AuthController, :oauth2_redirect)
+
 
     # Superuser auth (no auth required)
     get("/superusers/check", SuperUserController, :check)
@@ -103,6 +106,7 @@ defmodule LazypockWeb.Router do
 
     # No auth required (public login/methods)
     post("/:collection/auth-with-password", AuthController, :auth_with_password)
+    post("/:collection/auth-with-oauth2", AuthController, :auth_with_oauth2)
     get("/:collection/auth-methods", AuthController, :auth_methods)
 
     # Email verification & password reset (public — no auth)
