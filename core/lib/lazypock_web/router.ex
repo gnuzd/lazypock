@@ -12,12 +12,16 @@ defmodule LazypockWeb.Router do
   pipeline :api do
     plug(:accepts, ["json"])
     plug(LazypockWeb.Plugs.RequestLogger)
+    # Custom API routes registered via on_before_serve hooks (PocketBase routerAdd)
+    plug(LazypockWeb.Plugs.CustomRoutes)
   end
 
   pipeline :auth do
     plug(:accepts, ["json"])
     plug(LazypockWeb.Plugs.RequestLogger)
     plug(Lazypock.Auth.Plug)
+    # Custom API routes registered via on_before_serve hooks (PocketBase routerAdd)
+    plug(LazypockWeb.Plugs.CustomRoutes)
   end
 
   # Admin SPA — catch-all for /_/*

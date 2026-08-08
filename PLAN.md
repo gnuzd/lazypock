@@ -2,7 +2,7 @@
 
 > **Your whole backend. In one lazy pocket.** 🦥👖
 
-**Status:** Core backend (Phases 1–7) complete — DDL engine, dynamic CRUD with relation expansion, auth collections (superuser + user JWT, login/refresh, rule integration), rule engine with Studio syntax validation, realtime, file storage (local + S3), and hook Layer 2 (file-based). Studio SPA (Phase 8) in active development — collections, records, rules, logs, settings shipped. SDK (Phase 9) published as `lazypock-ts` v0.1.1 (npm) with full type safety via codegen CLI.
+**Status:** Core backend (Phases 1–7) complete — DDL engine, dynamic CRUD with relation expansion, auth collections (superuser + user JWT, login/refresh, rule integration), rule engine with Studio syntax validation, realtime, file storage (local + S3), and a PocketBase-parity event hook system (`use Lazypock.Hooks.Hook` modules, `e.next()` chain, custom API routes via `on_before_serve`). Studio SPA (Phase 8) in active development — collections, records, rules, logs, settings shipped. SDK (Phase 9) published as `lazypock-ts` v0.1.1 (npm) with full type safety via codegen CLI.
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**.
 Define collections in an admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
@@ -18,7 +18,7 @@ LazyPock/
 │   │   │   ├── schema/          # DDL engine + type mapper
 │   │   │   ├── schemas/         # GenericRecord + FilterCompiler
 │   │   │   ├── rules/           # Rule enforcer
-│   │   │   ├── hooks/           # Hook dispatcher + lifecycle
+│   │   │   ├── hooks/           # PocketBase-parity event hooks (Event, Registry, Router)
 │   │   │   ├── auth/            # Superuser JWT auth
 │   │   │   ├── files/           # File storage (local + S3)
 │   │   │   └── realtime/        # Channel broadcaster
@@ -1229,51 +1229,102 @@ end
 | `validate` | Custom validation with error message |
 | `block` | Block the operation with a reason |
 
-### 7.2 Layer 2: File-Based Elixir Hooks (Full Power)
+### 7.2 Layer 2: File-Based Elixir Hooks (PocketBase Event Hooks API)
 
-Users create `.ex` files in `priv/hooks/`:
+The hook system mirrors the [PocketBase JS event hooks](https://pocketbase.io/docs/js-event-hooks/)
+API — same hook names, same `function(e)` + `e.next()` event-chain semantics,
+adapted to Elixir.
+
+Users create `.ex` files in `priv/hooks/` (auto-discovered at boot):
 
 ```elixir
 # priv/hooks/posts_hooks.ex
-defmodule MyApp.Hooks.PostsHooks do
-  use LazyPock.Hooks.Lifecycle, collection: "posts"
+defmodule PostsHooks do
+  use Lazypock.Hooks.Hook, collection: "posts"
+  alias Lazypock.Hooks.Event
 
-  @impl true
-  def on_create(record, context) do
-    # Auto-generate slug from title
-    record = Map.put(record, :slug, Slug.slugify(record.title))
+  # PocketBase: onRecordCreate((e) => { e.record.slug = ...; e.next() })
+  def on_record_create(%Event{} = e) do
+    slug =
+      e.record["title"]
+      |> to_string()
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "-")
+      |> String.trim("-")
 
-    # Send to analytics
-    Task.start(fn ->
-      Req.post!("https://analytics.example.com/events", json: %{
-        event: "post.created", post_id: record.id
-      })
-    end)
-
-    {:ok, record}
+    e = Event.put(e, :record, Map.put(e.record, "slug", slug))
+    Event.next(e)
   end
 
-  @impl true
-  def on_delete(record, context) do
-    # Clean up associated files
-    if record.cover_image_id do
-      LazyPock.Files.Store.delete(record.cover_image_id)
-    end
-    :ok
-  end
-
-  @impl true
-  def validate(record, context) do
-    if String.length(record.body) < 10 do
-      {:error, body: "Post body must be at least 10 characters"}
+  # PocketBase: onRecordValidate — reject if empty title
+  def on_record_validate(%Event{} = e) do
+    if e.record["title"] == "" do
+      {:error, "title is required"}
     else
-      :ok
+      Event.next(e)
     end
+  end
+
+  # PocketBase: onRecordAfterCreateSuccess
+  def on_record_after_create_success(%Event{} = e) do
+    Logger.info("post created: #{e.record["id"]}")
+    Event.next(e)
   end
 end
 ```
 
-#### Lifecycle Behaviour
+#### Event-chain semantics (PocketBase parity)
+
+Every handler has the same `function(e)` signature. Calling `Event.next(e)`
+(or returning `{:ok, e}`) proceeds with the chain. Returning `{:error, reason}`
+(or raising) — or **not calling `e.next()`** — stops the chain, exactly like
+PocketBase.
+
+Handlers that need to run code **after** the DB action pass a callback to
+`Event.next/2` (PocketBase's "operations AFTER `e.next()`"):
+
+```elixir
+def on_record_create(%Event{} = e) do
+  e = Event.put(e, :record, Map.put(e.record, "slug", slugify(e.record["title"])))
+  Event.next(e, fn e ->
+    # runs after the record is persisted
+    Logger.info("created #{e.record["id"]}")
+    :ok
+  end)
+end
+```
+
+#### Available hooks (full PocketBase surface)
+
+- **App**: `on_bootstrap`, `on_settings_reload`, `on_backup_create`,
+  `on_backup_restore`, `on_terminate`, `on_before_serve` (custom API routes)
+- **Record model**: `on_record_enrich`, `on_record_validate` + the
+  create/update/delete × execute/after-success/after-error matrix
+- **Collection model**: same 12-hook matrix
+- **Base model**: `on_model_validate` + create/update/delete matrix
+- **Request**: records CRUD, auth (auth, auth-refresh, auth-with-password,
+  OAuth2, OTP, password-reset, verification, email-change), batch, file,
+  collections, settings
+- **Mailer**: `on_mailer_send` + `on_mailer_record_*Send` variants
+- **Realtime**: `on_realtime_connect_request`, `on_realtime_subscribe_request`,
+  `on_realtime_message_send`
+
+Hook modules are scoped to a collection with `use Lazypock.Hooks.Hook,
+collection: "posts"` (PocketBase's trailing collection args).
+
+#### Custom API routes (PocketBase `onBeforeServe` / `routerAdd`)
+
+```elixir
+def on_before_serve(%Event{} = e) do
+  routes = Lazypock.Hooks.Router.add(e, "GET", "/hello/{name}", fn ctx ->
+    Lazypock.Hooks.Router.json(ctx, 200, %{"message" => "Hello #{ctx.params["name"]}"})
+  end)
+  e = Event.put(e, :routes, routes)
+  Event.next(e)
+end
+```
+
+#### Lifecycle Behaviour (deprecated, still supported)
 
 ```elixir
 defmodule LazyPock.Hooks.Lifecycle do
@@ -1404,13 +1455,13 @@ Scans `priv/hooks/` at boot, maps collection names to hook modules, supports hot
 
 ### 7.6 Deliverables (Phase 7)
 
-- [x] Layer 2: File-based Elixir hook behaviour + auto-discovery (`Lifecycle` + `Registry`)
-- [x] Hook dispatcher pipeline wired into DynamicController
+- [x] Layer 2: File-based Elixir hooks — PocketBase-parity event API (`use Lazypock.Hooks.Hook`, `e.next()` chain, `Router.add` custom API routes) + auto-discovery (`Registry.discover!()`)
+- [x] Hook dispatcher pipeline wired into DynamicController (+ Auth/Collection/Settings/File controllers, CollectionChannel, Mailer)
+- [x] ExUnit: hook pipeline tests (Event chain semantics, Registry, Router, custom-routes end-to-end)
 - [ ] Layer 1: Declarative hook engine with built-in actions (set_field, webhook, etc.) — skeleton exists (`run_declarative_hooks/4` returns `{:ok, data}` unchanged)
 - [ ] Layer 3: Runtime eval hooks (Studio admin UI)
 - [ ] Template variable system (`{{record.title}}`, `{{now}}`, `{{env.VAR}}`)
 - [ ] Hook execution logging/tracing
-- [ ] ExUnit: hook pipeline tests
 
 ---
 

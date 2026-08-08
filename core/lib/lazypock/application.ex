@@ -33,6 +33,12 @@ defmodule Lazypock.Application do
         # Create ETS rate limiter table (owned by the Application process)
         Lazypock.Auth.RateLimiter.ensure_table()
 
+        # Discover + register user hooks (priv/hooks/*.ex)
+        Lazypock.Hooks.Registry.discover!()
+
+        # Fire onBootstrap (PocketBase parity)
+        Lazypock.Hooks.App.trigger_bootstrap()
+
         # Keep the BEAM alive — Burrito's Go wrapper exits the process when the
         # boot script returns. In test, ExUnit manages the lifecycle itself.
         # Code.ensure_loaded? avoids calling Mix.env() which crashes in releases.

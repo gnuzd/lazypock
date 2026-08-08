@@ -41,6 +41,9 @@ defmodule LazypockWeb.SettingsController do
 
     upsert_settings(merged)
 
+    # Fire onSettingsReload (PocketBase parity)
+    Lazypock.Hooks.App.trigger_settings_reload(merged)
+
     json(conn, incoming)
   end
 

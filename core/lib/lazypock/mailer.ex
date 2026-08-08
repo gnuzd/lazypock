@@ -34,11 +34,21 @@ defmodule Lazypock.Mailer do
       |> subject(subject_for(template, assigns))
       |> html_body(render_body(template, assigns))
 
-    smtp_config = build_smtp_config()
+    # Fire onMailerSend (PocketBase parity) — handlers can modify or drop
+    case Lazypock.Hooks.Mailer.trigger_send(email) do
+      {:ok, email} ->
+        smtp_config = build_smtp_config()
 
-    case Lazypock.Mailer.deliver(email, smtp_config) do
-      {:ok, _result} -> :ok
-      {:error, reason} -> {:error, reason}
+        case Lazypock.Mailer.deliver(email, smtp_config) do
+          {:ok, _result} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      :skip ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

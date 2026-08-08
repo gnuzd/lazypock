@@ -71,9 +71,26 @@ defmodule LazypockWeb.DynamicController do
       items = DynamicView.format_items(records, name)
       items = DynamicView.expand_records(items, params["expand"], name)
 
-      conn
-      |> put_resp_header("x-total-count", to_string(total))
-      |> json(DynamicView.paginated_response(items, total, page, per_page))
+      # Fire onRecordsListRequest + onRecordEnrich (PocketBase parity)
+      items =
+        Enum.map(items, fn item ->
+          {:ok, enriched} = Lazypock.Hooks.Record.trigger_enrich(item, name, %{conn: conn, user: user})
+          enriched
+        end)
+
+      result = DynamicView.paginated_response(items, total, page, per_page)
+
+      case Lazypock.Hooks.Request.trigger_records_list(conn, name, collection, items, result) do
+        {:ok, _event} ->
+          conn
+          |> put_resp_header("x-total-count", to_string(total))
+          |> json(result)
+
+        {:error, reason} ->
+          conn
+          |> put_status(400)
+          |> json(error_response(400, reason))
+      end
     else
       {:error, :not_found} ->
         conn
@@ -92,12 +109,20 @@ defmodule LazypockWeb.DynamicController do
   def show(conn, %{"collection" => name, "id" => id} = params) do
     user = resolve_user(conn)
 
-    with {:ok, _collection} <- Registry.get(name),
+    with {:ok, collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_view(name, user, record) do
       item = DynamicView.format_item(record, name)
       [item] = DynamicView.expand_records([item], params["expand"], name)
-      conn |> json(item)
+
+      # Fire onRecordEnrich
+      {:ok, item} = Lazypock.Hooks.Record.trigger_enrich(item, name, %{conn: conn, user: user})
+
+      # Fire onRecordViewRequest
+      case Lazypock.Hooks.Request.trigger_record_view(conn, name, collection, item) do
+        {:ok, _event} -> conn |> json(item)
+        {:error, reason} -> conn |> put_status(400) |> json(error_response(400, reason))
+      end
     else
       nil ->
         conn
@@ -120,21 +145,38 @@ defmodule LazypockWeb.DynamicController do
 
   def create(conn, %{"collection" => name} = params) do
     user = resolve_user(conn)
-    context = %{collection_name: name, user: user, conn: conn}
 
     with {:ok, collection} <- Registry.get(name),
          raw_attrs = Map.get(params, "data") || Map.drop(params, ["collection"]),
          attrs = sanitize_attrs(raw_attrs, collection),
-         :ok <- Enforcer.authorize_create(name, user, attrs),
-         {:ok, enriched_attrs} <- Hooks.dispatch_create(attrs, context) do
-      case GenericRecord.insert(name, Map.drop(enriched_attrs, ["id"])) do
-        {:ok, record} ->
-          Broadcaster.broadcast_create(name, record)
-          Hooks.dispatch_after_create(record, context)
+         :ok <- Enforcer.authorize_create(name, user, attrs) do
+      context = %{collection_name: name, collection: collection, user: user, conn: conn}
 
-          conn
-          |> put_status(201)
-          |> json(DynamicView.format_item(record, name))
+      # Request hook + model create pipeline (PocketBase: onRecordCreateRequest ->
+      # onRecordCreate -> onRecordValidate -> onRecordCreateExecute)
+      case Hooks.dispatch_create(attrs, context) do
+        {:ok, enriched_attrs, after_funs} ->
+          case GenericRecord.insert(name, Map.drop(enriched_attrs, ["id"])) do
+            {:ok, record} ->
+              # Run post-insert "after e.next()" work, then after-create-success hook
+              Hooks.run_after_funs(after_funs, %Lazypock.Hooks.Event{
+                event: :on_record_create,
+                data: %{record: record}
+              })
+              Hooks.dispatch_after_create(record, context)
+              Broadcaster.broadcast_create(name, record)
+
+              conn
+              |> put_status(201)
+              |> json(DynamicView.format_item(record, name))
+
+            {:error, reason} ->
+              Hooks.dispatch_after_create_error(attrs, reason, context)
+
+              conn
+              |> put_status(400)
+              |> json(error_response(400, reason))
+          end
 
         {:error, reason} ->
           conn
@@ -158,22 +200,46 @@ defmodule LazypockWeb.DynamicController do
 
   def update(conn, %{"collection" => name, "id" => id} = params) do
     user = resolve_user(conn)
-    context = %{collection_name: name, user: user, conn: conn}
 
     with {:ok, collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
-         :ok <- Enforcer.authorize_update(name, user, record),
-         raw_attrs = params["data"] || params,
-         attrs = sanitize_attrs(raw_attrs, collection),
-         {:ok, enriched_attrs} <- Hooks.dispatch_update(record, attrs, context),
-         updated_record when not is_nil(updated_record) <-
-           GenericRecord.update(
-             name,
-             id,
-             Map.drop(enriched_attrs, ["id", "created_at", "updated_at", "collectionName"])
-           ) do
-      Broadcaster.broadcast_update(name, updated_record)
-      conn |> json(DynamicView.format_item(updated_record, name))
+         :ok <- Enforcer.authorize_update(name, user, record) do
+      context = %{collection_name: name, collection: collection, user: user, conn: conn}
+      raw_attrs = params["data"] || params
+      attrs = sanitize_attrs(raw_attrs, collection)
+
+      # Request hook + model update pipeline
+      case Hooks.dispatch_update(record, attrs, context) do
+        {:ok, enriched_attrs, after_funs} ->
+          updated_record =
+            GenericRecord.update(
+              name,
+              id,
+              Map.drop(enriched_attrs, ["id", "created_at", "updated_at", "collectionName"])
+            )
+
+          if updated_record do
+            Hooks.run_after_funs(after_funs, %Lazypock.Hooks.Event{
+              event: :on_record_update,
+              data: %{record: updated_record}
+            })
+
+            Hooks.dispatch_after_update(updated_record, context)
+            Broadcaster.broadcast_update(name, updated_record)
+            conn |> json(DynamicView.format_item(updated_record, name))
+          else
+            Hooks.dispatch_after_update_error(attrs, :update_failed, context)
+
+            conn
+            |> put_status(400)
+            |> json(error_response(400, "Update failed"))
+          end
+
+        {:error, reason} ->
+          conn
+          |> put_status(400)
+          |> json(error_response(400, reason))
+      end
     else
       nil ->
         conn
@@ -196,17 +262,35 @@ defmodule LazypockWeb.DynamicController do
 
   def delete(conn, %{"collection" => name, "id" => id}) do
     user = resolve_user(conn)
-    context = %{collection_name: name, user: user, conn: conn}
 
-    with {:ok, _collection} <- Registry.get(name),
+    with {:ok, collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
-         :ok <- Enforcer.authorize_delete(name, user, record),
-         :ok <- Hooks.dispatch_delete(record, context),
-         :ok <- GenericRecord.delete(name, id) do
-      Store.delete_by_record(name, id)
-      Broadcaster.broadcast_delete(name, id)
-      Hooks.dispatch_after_delete(record, context)
-      conn |> put_status(204) |> json(nil)
+         :ok <- Enforcer.authorize_delete(name, user, record) do
+      context = %{collection_name: name, collection: collection, user: user, conn: conn}
+
+      # Request hook + model delete pipeline
+      case Hooks.dispatch_delete(record, context) do
+        :ok ->
+          case GenericRecord.delete(name, id) do
+            :ok ->
+              Store.delete_by_record(name, id)
+              Broadcaster.broadcast_delete(name, id)
+              Hooks.dispatch_after_delete(record, context)
+              conn |> put_status(204) |> json(nil)
+
+            {:error, reason} ->
+              Hooks.dispatch_after_delete_error(record, reason, context)
+
+              conn
+              |> put_status(400)
+              |> json(error_response(400, reason))
+          end
+
+        {:error, reason} ->
+          conn
+          |> put_status(400)
+          |> json(error_response(400, reason))
+      end
     else
       nil ->
         conn

@@ -91,16 +91,31 @@ defmodule LazypockWeb.AuthController do
     case Registry.get(collection_name) do
       {:ok, %{type: "auth"} = collection} ->
         user = conn.assigns[:current_user]
-        password_field = find_password_field(collection)
-        safe_user = Map.drop(user, [password_field])
-        {:ok, token} = Token.generate_user_token(user, collection_name)
 
-        conn
-        |> put_status(200)
-        |> json(%{
-          "token" => token,
-          "record" => safe_user
-        })
+        # Fire onRecordAuthRefreshRequest (PocketBase parity)
+        case Lazypock.Hooks.Request.trigger_record_auth_refresh(
+               conn,
+               collection_name,
+               collection,
+               user
+             ) do
+          {:ok, _event} ->
+            password_field = find_password_field(collection)
+            safe_user = Map.drop(user, [password_field])
+            {:ok, token} = Token.generate_user_token(user, collection_name)
+
+            conn
+            |> put_status(200)
+            |> json(%{
+              "token" => token,
+              "record" => safe_user
+            })
+
+          {:error, reason} ->
+            conn
+            |> put_status(400)
+            |> json(%{"code" => 400, "message" => to_string(reason), "data" => %{}})
+        end
 
       {:ok, _} ->
         conn
@@ -147,8 +162,24 @@ defmodule LazypockWeb.AuthController do
     # First check the collection exists and is auth type
     case Registry.get(collection_name) do
       {:ok, %{type: "auth"} = collection} ->
-        # Find user by email in this collection
-        find_user_by_email(conn, collection_name, email, collection, password, ip)
+        # Fire onRecordAuthWithPasswordRequest (PocketBase parity)
+        case Lazypock.Hooks.Request.trigger_record_auth_with_password(
+               conn,
+               collection_name,
+               collection,
+               nil,
+               email,
+               find_email_field(collection),
+               password
+             ) do
+          {:ok, _event} ->
+            find_user_by_email(conn, collection_name, email, collection, password, ip)
+
+          {:error, reason} ->
+            conn
+            |> put_status(400)
+            |> json(%{"code" => 400, "message" => to_string(reason), "data" => %{}})
+        end
 
       {:ok, _} ->
         conn

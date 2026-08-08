@@ -1,173 +1,243 @@
 defmodule Lazypock.Hooks.Dispatcher do
   @moduledoc """
-  Orchestrates hook execution across all layers.
+  Orchestrates hook execution for CRUD operations — the entry point the
+  controllers call. Delegates to the PocketBase-parity hook modules:
 
-  ## Pipeline
+    * `Lazypock.Hooks.Record` — record model hooks
+    * `Lazypock.Hooks.Collection` — collection model hooks
+    * `Lazypock.Hooks.BaseModel` — base model hooks
+    * `Lazypock.Hooks.Request` — request hooks (API-only)
+    * `Lazypock.Hooks.Mailer` — mailer hooks
+    * `Lazypock.Hooks.Realtime` — realtime hooks
+    * `Lazypock.Hooks.App` — app-level hooks
 
-  For each CRUD action:
-    1. Layer 1 Declarative hooks (pre) — modify attrs or reject
-    2. Layer 2 File-based hooks (pre) — modify attrs or reject
-    3. Database operation
-    4. Layer 1 Declarative hooks (after) — fire-and-forget
-    5. Layer 2 File-based hooks (after) — fire-and-forget
-
-  All functions require a context map with at least `:collection_name`.
+  Each hook follows the PocketBase event-chain convention: handlers receive
+  an event `e` and call `e.next()` (return `{:ok, e}`) to proceed, or return
+  `{:error, reason}` to abort. Handlers can also schedule "after" work via
+  `Event.next(e, post_fun)` which runs after the DB action (PocketBase's
+  documented "operations AFTER `e.next()`").
   """
 
-  alias Lazypock.Hooks.Registry
+  alias Lazypock.Hooks.{Record, Collection, Registry, Event}
+  alias Lazypock.Hooks.Mailer, as: MailerHooks
+
+  # ── Record CRUD pipeline ────────────────────────────────
 
   @doc """
-  Runs pre-create hooks. Returns `{:ok, modified_attrs}` or `{:error, reason}`.
+  Runs the full record-create hook pipeline:
+
+    1. `on_record_create` (before validation + INSERT)
+    2. `on_record_validate` (skipped with `saveNoValidate` equivalent)
+    3. `on_record_create_execute` (right before INSERT)
+
+  Returns `{:ok, record, after_funs}` or `{:error, reason}`.
   """
   def dispatch_create(attrs, context) do
-    collection_name = context.collection_name
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
 
-    pipeline = [
-      &run_declarative_hooks(:onCreate, collection_name, &1, &2),
-      &run_file_hooks(:on_create, collection_name, &1, &2)
-    ]
+    record = attrs
 
-    run_pipeline(pipeline, attrs, context)
+    with {:ok, event, after1} <- Record.trigger_create(record, collection, collection_name),
+         {:ok, event2, after2} <-
+           Record.trigger_validate(record_of(event), collection, collection_name),
+         {:ok, event3, after3} <-
+           Record.trigger_create_execute(record_of(event2), collection, collection_name) do
+      {:ok, record_of(event3), after1 ++ after2 ++ after3}
+    else
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  @doc """
-  Runs after-create hooks (fire-and-forget).
-  """
+  @doc "Runs `on_record_after_create_success` (post-commit)."
   def dispatch_after_create(record, context) do
-    collection_name = context.collection_name
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
+    Record.trigger_after_create_success(record, collection, collection_name)
+  end
 
-    Task.start(fn ->
-      run_declarative_hooks(:afterCreate, collection_name, record, context)
-      run_file_hooks(:after_create, collection_name, record, context)
-    end)
-
-    :ok
+  @doc "Runs `on_record_after_create_error`."
+  def dispatch_after_create_error(record, error, context) do
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
+    Record.trigger_after_create_error(record, error, collection, collection_name)
   end
 
   @doc """
-  Runs pre-update hooks. Returns `{:ok, modified_attrs}` or `{:error, reason}`.
+  Runs the record-update hook pipeline:
+
+    1. `on_record_update` (before validation + UPDATE)
+    2. `on_record_validate`
+    3. `on_record_update_execute` (right before UPDATE)
+
+  Returns `{:ok, record, after_funs}` or `{:error, reason}`.
   """
   def dispatch_update(old_record, new_attrs, context) do
-    collection_name = context.collection_name
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
 
-    pipeline = [
-      &run_declarative_hooks(:onUpdate, collection_name, &1, &2),
-      &run_file_hooks(:on_update, collection_name, &1, &2)
-    ]
+    # on_record_update carries the merged record (old + new attrs).
+    merged = Map.merge(old_record, new_attrs)
 
-    run_pipeline(pipeline, {old_record, new_attrs}, context)
+    with {:ok, event, after1} <- Record.trigger_update(merged, collection, collection_name),
+         {:ok, event2, after2} <-
+           Record.trigger_validate(record_of(event), collection, collection_name),
+         {:ok, event3, after3} <-
+           Record.trigger_update_execute(record_of(event2), collection, collection_name) do
+      {:ok, record_of(event3), after1 ++ after2 ++ after3}
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "Runs `on_record_after_update_success` (post-commit)."
+  def dispatch_after_update(record, context) do
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
+    Record.trigger_after_update_success(record, collection, collection_name)
+  end
+
+  @doc "Runs `on_record_after_update_error`."
+  def dispatch_after_update_error(record, error, context) do
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
+    Record.trigger_after_update_error(record, error, collection, collection_name)
   end
 
   @doc """
-  Runs pre-delete hooks. Returns `:ok` or `{:error, reason}`.
+  Runs the record-delete hook pipeline:
+
+    1. `on_record_delete` (before internal checks)
+    2. `on_record_delete_execute` (right before DELETE)
+
+  Returns `:ok` or `{:error, reason}`.
   """
   def dispatch_delete(record, context) do
-    collection_name = context.collection_name
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
 
-    # Declarative hooks first
-    run_declarative_hooks(:onDelete, collection_name, record, context)
-
-    # File-based hooks
-    modules = Registry.get(collection_name)
-
-    Enum.reduce_while(modules, :ok, fn module, _acc ->
-      case module.on_delete(record, context) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+    with {:ok, _event, _after} <- Record.trigger_delete(record, collection, collection_name),
+         {:ok, _event2, _after2} <-
+           Record.trigger_delete_execute(record, collection, collection_name) do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  @doc """
-  Runs after-delete hooks (fire-and-forget).
-  """
+  @doc "Runs `on_record_after_delete_success` (post-commit)."
   def dispatch_after_delete(record, context) do
-    collection_name = context.collection_name
-
-    Task.start(fn ->
-      run_declarative_hooks(:afterDelete, collection_name, record, context)
-
-      Registry.get(collection_name)
-      |> Enum.each(fn module ->
-        module.after_delete(record, context)
-      end)
-    end)
-
-    :ok
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
+    Record.trigger_after_delete_success(record, collection, collection_name)
   end
 
-  # ── Pipeline runner ─────────────────────────────────
-
-  defp run_pipeline(steps, initial_data, context) do
-    Enum.reduce_while(steps, {:ok, initial_data}, fn step, {:ok, data} ->
-      case step.(data, context) do
-        {:ok, modified} -> {:cont, {:ok, modified}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+  @doc "Runs `on_record_after_delete_error`."
+  def dispatch_after_delete_error(record, error, context) do
+    collection = context.collection
+    collection_name = collection.name || context.collection_name
+    Record.trigger_after_delete_error(record, error, collection, collection_name)
   end
 
-  # ── Layer 1: Declarative hooks ──────────────────────
-
-  defp run_declarative_hooks(_event, _collection_name, data, _context) do
-    # Declarative hooks stored in _collections.hooks JSONB
-    # For now, return data unchanged — will be implemented fully
-    # when the Admin UI (Phase 8) provides a builder for these
-    {:ok, data}
+  @doc "Runs `on_record_enrich` on a record (for API responses)."
+  def dispatch_enrich(record, collection_name, request_info \\ nil) do
+    Record.trigger_enrich(record, collection_name, request_info)
   end
 
-  # ── Layer 2: File-based hooks ───────────────────────
+  # ── Collection CRUD pipeline ────────────────────────────
 
-  defp run_file_hooks(:on_create, collection_name, attrs, context) do
-    modules = Registry.get(collection_name)
-
-    Enum.reduce_while(modules, {:ok, attrs}, fn module, {:ok, current_attrs} ->
-      case module.on_create(current_attrs, context) do
-        {:ok, modified} -> {:cont, {:ok, modified}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+  @doc "Runs the collection-create hook pipeline."
+  def dispatch_collection_create(collection) do
+    with {:ok, _e, _a} <- Collection.trigger_create(collection),
+         {:ok, _e2, _a2} <- Collection.trigger_validate(collection),
+         {:ok, _e3, _a3} <- Collection.trigger_create_execute(collection) do
+      :ok
+    end
   end
 
-  defp run_file_hooks(:after_create, collection_name, record, context) do
-    Registry.get(collection_name)
-    |> Enum.each(fn module ->
-      module.after_create(record, context)
-    end)
-
-    {:ok, record}
+  @doc "Runs `on_collection_after_create_success`."
+  def dispatch_collection_after_create(collection) do
+    Collection.trigger_after_create_success(collection)
   end
 
-  defp run_file_hooks(:on_update, collection_name, {old_record, new_attrs}, context) do
-    modules = Registry.get(collection_name)
-
-    Enum.reduce_while(modules, {:ok, new_attrs}, fn module, {:ok, current_attrs} ->
-      case module.on_update(old_record, current_attrs, context) do
-        {:ok, modified} -> {:cont, {:ok, modified}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+  @doc "Runs the collection-update hook pipeline."
+  def dispatch_collection_update(collection) do
+    with {:ok, _e, _a} <- Collection.trigger_update(collection),
+         {:ok, _e2, _a2} <- Collection.trigger_validate(collection),
+         {:ok, _e3, _a3} <- Collection.trigger_update_execute(collection) do
+      :ok
+    end
   end
 
-  # after_update not yet wired in the controller — add when needed
+  @doc "Runs `on_collection_after_update_success`."
+  def dispatch_collection_after_update(collection) do
+    Collection.trigger_after_update_success(collection)
+  end
 
-  # ── Email hooks ────────────────────────────────────────
+  @doc "Runs the collection-delete hook pipeline."
+  def dispatch_collection_delete(collection) do
+    with {:ok, _e, _a} <- Collection.trigger_delete(collection),
+         {:ok, _e2, _a2} <- Collection.trigger_delete_execute(collection) do
+      :ok
+    end
+  end
+
+  @doc "Runs `on_collection_after_delete_success`."
+  def dispatch_collection_after_delete(collection) do
+    Collection.trigger_after_delete_success(collection)
+  end
 
   @doc """
-  Dispatches email interception hooks for a given collection.
+  Dispatches email interception hooks (backwards-compatible with the old
+  dispatcher API used by `Lazypock.Emails`).
 
   Returns `{:ok, modified_email_data}`, `{:error, reason}`, or `:skip`.
   """
-  def dispatch_email(_template, email_data, context) do
-    collection_name = context.collection.collection_name || context.collection.name
-    modules = Registry.get(collection_name)
+  def dispatch_email(template, email_data, context) do
+    collection = context.collection
+    collection_name = collection.name || collection.collection_name
+    record = context.user || %{}
 
-    Enum.reduce_while(modules, {:ok, email_data}, fn module, {:ok, current_data} ->
-      case module.on_email(current_data, context) do
-        {:ok, modified} -> {:cont, {:ok, modified}}
-        {:error, reason} -> {:halt, {:error, reason}}
-        :skip -> {:halt, :skip}
+    # Build a Swoosh-style message from the email_data map (PocketBase e.message)
+    message = %{
+      subject: template |> Atom.to_string() |> String.replace("_", " ") |> String.capitalize(),
+      to: {email_data.to_name, email_data.to_address},
+      html: "",
+      data: email_data
+    }
+
+    meta = %{token: Keyword.get(email_data.assigns || [], :token)}
+
+    event =
+      case template do
+        :verification -> :on_mailer_record_verification_send
+        :password_reset -> :on_mailer_record_password_reset_send
+        _ -> :on_mailer_send
       end
-    end)
+
+    result =
+      case event do
+        :on_mailer_send ->
+          MailerHooks.trigger_send(message, nil)
+
+        _ ->
+          MailerHooks.trigger_record_verification_send(message, record, meta, collection_name)
+      end
+
+    case result do
+      {:ok, %{data: email_data}} -> {:ok, email_data}
+      {:ok, _} -> {:ok, email_data}
+      :skip -> :skip
+      {:error, reason} -> {:error, reason}
+    end
   end
+
+  # ── Helpers ─────────────────────────────────────────────
+
+  @doc false
+  def run_after_funs(after_funs, event) do
+    Registry.run_after(after_funs, event)
+  end
+
+  defp record_of(%Event{} = event), do: Event.get(event, :record) || %{}
 end
