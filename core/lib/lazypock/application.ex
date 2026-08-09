@@ -7,6 +7,44 @@ defmodule Lazypock.Application do
 
   @impl true
   def start(_type, _args) do
+    # CLI commands run before the app boots (migrations don't need the full
+    # supervision tree, and Ecto.Migrator starts the repo itself).
+    case System.argv() do
+      ["migrate"] ->
+        Lazypock.Migrations.run()
+        System.halt(0)
+
+      ["migrations"] ->
+        Lazypock.Migrations.status()
+        System.halt(0)
+
+      ["seed"] ->
+        Lazypock.Migrations.seed(force: true)
+        System.halt(0)
+
+      ["seed", "--force"] ->
+        Lazypock.Migrations.seed(force: true)
+        System.halt(0)
+
+      _ ->
+        start_app()
+    end
+  end
+
+  defp start_app do
+    # Run Ecto migrations BEFORE starting any children that touch the DB.
+    # Lazypock.Collections.Registry does a SELECT on _collections in its
+    # init/1, so on a fresh database it crashes if migrations haven't run.
+    # Set LAZYPOCK_AUTOMIGRATE=0 to skip (then use `lazypock migrate`).
+    if System.get_env("LAZYPOCK_AUTOMIGRATE") != "0" do
+      Lazypock.Migrations.run()
+    end
+
+    # Run seeds once (idempotent, after migrations).
+    if System.get_env("LAZYPOCK_AUTOSEED") != "0" do
+      Lazypock.Migrations.seed()
+    end
+
     children = [
       LazypockWeb.Telemetry,
       Lazypock.Repo,
@@ -20,9 +58,6 @@ defmodule Lazypock.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
-        # Run Ecto migrations (idempotent — only applies pending ones)
-        migrate!()
-
         # Boot-time setup: create _superusers table + auto-create from env
         Lazypock.Auth.Setup.ensure_superusers_table!()
         Lazypock.Auth.Setup.create_from_env!()
@@ -38,7 +73,10 @@ defmodule Lazypock.Application do
         # Create ETS rate limiter table (owned by the Application process)
         Lazypock.Auth.RateLimiter.ensure_table()
 
-        # Discover + register user hooks (priv/hooks/*.ex)
+        # Load user hooks (PocketBase pb_hooks style — ~/.lazypock/hooks/*.ex)
+        Lazypock.Hooks.User.load!()
+
+        # Discover + register built-in hooks (priv/hooks/*.ex)
         Lazypock.Hooks.Registry.discover!()
 
         # Fire onBootstrap (PocketBase parity)
@@ -55,19 +93,6 @@ defmodule Lazypock.Application do
 
       error ->
         error
-    end
-  end
-
-  # Runs all pending Ecto migrations. Uses `Ecto.Migrator` which is available
-  # at runtime (not a compile-time dependency). Works in both Mix and release mode.
-  defp migrate! do
-    migrations_path = Application.app_dir(:lazypock, "priv/repo/migrations")
-
-    if Code.ensure_loaded?(Ecto.Migrator) and File.dir?(migrations_path) do
-      {:ok, _, _} =
-        Ecto.Migrator.with_repo(Lazypock.Repo, fn repo ->
-          Ecto.Migrator.run(repo, migrations_path, :up, all: true)
-        end)
     end
   end
 

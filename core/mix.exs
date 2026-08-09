@@ -4,7 +4,7 @@ defmodule Lazypock.MixProject do
   def project do
     [
       app: :lazypock,
-      version: "0.1.0",
+      version: "0.2.0",
       license: "MIT",
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -38,6 +38,9 @@ defmodule Lazypock.MixProject do
       lazypock: [
         steps: [:assemble, &Burrito.wrap/1],
         burrito: [
+          # Burrito plugin: clears stale cached install dirs on launch so a new
+          # binary always re-extracts fresh code (migrate! runs on first boot).
+          plugin: "burrito_plugin.zig",
           targets: [
             # macos: [os: :darwin, cpu: :x86_64],
             macos_silicon: [os: :darwin, cpu: :aarch64],

@@ -147,6 +147,10 @@ MIX_ENV=prod mix release
 | `LAZYPOCK_SUPERUSER_EMAIL` | Auto-create superuser on boot | `admin@lazypock.app` |
 | `LAZYPOCK_SUPERUSER_PASSWORD` | Auto-create superuser on boot | `your-password` |
 | `LAZYPOCK_THUMBNAILS` | Set to `0` to disable thumbnail/scaling generation (see [File Storage & Thumbnails](#file-storage--thumbnails)) | `0` |
+| `LAZYPOCK_MIGRATIONS_DIR` | Directory for migrations (default: `~/.lazypock/migrations`) | `/data/lazypock/migrations` |
+| `LAZYPOCK_AUTOMIGRATE` | Set to `0` to disable auto-migrate on boot (then use `lazypock migrate`) | `0` |
+| `LAZYPOCK_HOOKS_DIR` | Directory for user hooks (default: `~/.lazypock/hooks`) | `/data/lazypock/hooks` |
+| `LAZYPOCK_SEEDS_FILE` | Seed file path (default: `~/.lazypock/seeds.exs`) | `/data/lazypock/seeds.exs` |
 
 **Minimal production example:**
 
@@ -160,6 +164,74 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
 ```
 
 Note: The release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
+
+### Migrations (PocketBase-style)
+
+Migrations live in a **user-writable directory on disk** — `~/.lazypock/migrations/`
+by default (override with `LAZYPOCK_MIGRATIONS_DIR`). They do NOT live inside
+the binary.
+
+- **On first boot**, the bundled migrations (from `priv/repo/migrations/`) are
+  copied into that directory (only if they don't already exist — user files are
+  never overwritten), then applied automatically.
+- **To add a migration after a release** (no rebuild needed):
+
+  ```bash
+  # 1. Drop a new migration file into the migrations dir
+  cat > ~/.lazypock/migrations/20260915000000_add_custom_table.exs << 'EOF'
+  defmodule Lazypock.Repo.Migrations.AddCustomTable do
+    use Ecto.Migration
+    def up do
+      create table(:custom_things) do
+        add :name, :text
+      end
+    end
+    def down, do: drop table(:custom_things)
+  end
+  EOF
+
+  # 2. Apply it (either works)
+  lazypock migrate          # apply pending migrations, then exit
+  # or restart the server — auto-migrate runs on boot
+  ```
+
+- **Check status**: `lazypock migrations`
+- **Disable auto-migrate on boot**: `LAZYPOCK_AUTOMIGRATE=0 lazypock`
+  (then apply manually with `lazypock migrate`)
+
+### User Hooks (PocketBase `pb_hooks` style)
+
+Hooks live in a **user-writable directory** — `~/.lazypock/hooks/` (override with
+`LAZYPOCK_HOOKS_DIR`). They are Elixir `.ex` files that `use Lazypock.Hooks.Hook`,
+compiled at runtime on boot and registered alongside the built-in hooks.
+
+```bash
+# ~/.lazypock/hooks/posts_hooks.ex
+cat > ~/.lazypock/hooks/posts_hooks.ex << 'EOF'
+defmodule PostsHooks do
+  use Lazypock.Hooks.Hook, collection: "posts"
+
+  # PocketBase: onRecordCreate((e) => { e.record.slug = ...; e.next() })
+  def on_record_create(e) do
+    slug = e.record["title"] |> to_string() |> String.downcase()
+    e = Lazypock.Hooks.Event.put(e, :record, Map.put(e.record, "slug", slug))
+    Lazypock.Hooks.Event.next(e)
+  end
+end
+EOF
+# restart the server to pick it up (an example post_hooks.ex is copied on first boot)
+```
+
+### Seeds
+
+A seed file lives at `~/.lazypock/seeds.exs` (override with `LAZYPOCK_SEEDS_FILE`).
+On first boot the bundled `priv/repo/seeds.exs` is copied there and run once after
+migrations (tracked in `_seeds_run`). Edit it and re-run anytime:
+
+```bash
+lazypock seed            # run seeds (idempotent — skips if already run)
+lazypock seed --force    # force re-run
+```
 
 ---
 

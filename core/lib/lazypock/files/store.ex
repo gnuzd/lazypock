@@ -26,7 +26,6 @@ defmodule Lazypock.Files.Store do
         collection_name TEXT DEFAULT '',
         record_id       TEXT DEFAULT '',
         field_name      TEXT DEFAULT '',
-        field_name      TEXT DEFAULT '',
         thumbs          JSONB DEFAULT '{}'::jsonb,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -264,7 +263,10 @@ defmodule Lazypock.Files.Store do
         mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
         mod.delete(file_record)
 
-        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [to_uuid_binary(file_record["id"])])
+        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [
+          to_uuid_binary(file_record["id"])
+        ])
+
         :ok
 
       {:error, reason} ->
