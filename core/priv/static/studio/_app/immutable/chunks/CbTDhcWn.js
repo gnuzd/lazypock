@@ -1,0 +1,1 @@
+import"./TIirl3q1.js";
