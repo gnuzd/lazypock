@@ -11,6 +11,11 @@
 		name = '',
 		id = '',
 		autofocus = false,
+		oninput,
+		onkeydown,
+		oncompositionstart,
+		oncompositionend,
+		spellcheck = true,
 		class: className = ''
 	}: {
 		value?: string;
@@ -24,6 +29,11 @@
 		name?: string;
 		id?: string;
 		autofocus?: boolean;
+		oninput?: (e: Event) => void;
+		onkeydown?: (e: KeyboardEvent) => void;
+		oncompositionstart?: (e: CompositionEvent) => void;
+		oncompositionend?: (e: CompositionEvent) => void;
+		spellcheck?: boolean;
 		class?: string;
 	} = $props();
 
@@ -49,10 +59,15 @@
 		{placeholder}
 		{disabled}
 		{required}
+		{spellcheck}
 		class="field-input"
 		oninput={(e) => {
 			value = (e.target as HTMLInputElement).value;
+			oninput?.(e);
 		}}
+		onkeydown={onkeydown}
+		oncompositionstart={oncompositionstart}
+		oncompositionend={oncompositionend}
 	/>
 	{#if help && !error}
 		<span class="field-help">{help}</span>

@@ -1,17 +1,23 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
+	import { z } from 'zod';
 	import Button from '$lib/components/Button.svelte';
+	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
 
-	let importSchemas = $state('');
+	const importSchema = z.object({
+		schemas: z.string(),
+		deleteMissing: z.boolean()
+	});
+
+	let importForm = $state(createForm(importSchema, { schemas: '', deleteMissing: true }));
 	let importFileInput: HTMLInputElement | undefined = $state();
 	const importPlaceholder = '[{ "id": "...", "name": "...", "type": "base", "fields": [] }]';
 	let importLoadingFile = $state(false);
 	let parsedCollections: { id: string; name: string; type: string }[] = [];
 	let oldCollections: { id: string; name: string; type: string }[] = [];
 	let loadingOldCollections = $state(false);
-	let deleteMissing = $state(true);
 	let importing = $state(false);
 	let importResult = $state<string | null>(null);
 
@@ -34,7 +40,7 @@
 		const reader = new FileReader();
 		reader.onload = async (event) => {
 			importLoadingFile = false;
-			importSchemas = (event.target?.result as string) ?? '';
+			importForm.values.schemas = (event.target?.result as string) ?? '';
 			if (importFileInput) importFileInput.value = '';
 			parseImport();
 		};
@@ -50,7 +56,7 @@
 		parsedCollections = [];
 		importResult = null;
 		try {
-			const data = JSON.parse(importSchemas);
+			const data = JSON.parse(importForm.values.schemas);
 			if (!Array.isArray(data)) {
 				importResult = 'Invalid format. Expected an array of collections.';
 				return;
@@ -69,13 +75,15 @@
 	}
 
 	function clearImport() {
-		importSchemas = '';
+		importForm.reset();
 		parsedCollections = [];
 		importResult = null;
 		if (importFileInput) importFileInput.value = '';
 	}
 
-	let isValidImport = $derived(!!importSchemas && parsedCollections.length > 0 && !importResult);
+	let isValidImport = $derived(
+		!!importForm.values.schemas && parsedCollections.length > 0 && !importResult
+	);
 
 	// Detect changes
 	let importChanges = $derived.by(() => {
@@ -88,7 +96,7 @@
 
 		for (const c of oldCollections) {
 			if (!newIds.has(c.id)) {
-				if (deleteMissing) removed.push(c.name);
+				if (importForm.values.deleteMissing) removed.push(c.name);
 			}
 		}
 
@@ -114,10 +122,10 @@
 		importing = true;
 		importResult = null;
 		try {
-			const data = JSON.parse(importSchemas);
+			const data = JSON.parse(importForm.values.schemas);
 			const res = (await client.http.post('/import', {
 				collections: data,
-				deleteMissing: deleteMissing
+				deleteMissing: importForm.values.deleteMissing
 			})) as { imported?: unknown[]; errors?: unknown[] } | null;
 			if (res?.errors && (res.errors as unknown[]).length > 0) {
 				importResult = `Imported ${(res.imported as unknown[]).length} collections with ${(res.errors as unknown[]).length} errors.`;
@@ -169,13 +177,13 @@
 			<textarea
 				id="import-schemas"
 				class="field-input font-mono text-xs"
-				class:border-error={importSchemas && !isValidImport}
+				class:border-error={importForm.values.schemas && !isValidImport}
 				spellcheck="false"
 				rows="16"
 				placeholder={importPlaceholder}
-				bind:value={importSchemas}
+				bind:value={importForm.values.schemas}
 				oninput={parseImport}></textarea>
-			{#if importSchemas && !isValidImport}
+			{#if importForm.values.schemas && !isValidImport}
 				<p class="mt-1 text-xs text-error">
 					{importResult || 'Invalid collections configuration.'}
 				</p>
@@ -190,7 +198,7 @@
 				<input
 					id="delete-missing"
 					type="checkbox"
-					bind:checked={deleteMissing}
+					bind:checked={importForm.values.deleteMissing}
 					disabled={!isValidImport}
 				/>
 				<span class="switch-slider"></span>
@@ -234,7 +242,7 @@
 		{/if}
 
 		<div class="flex items-center justify-between">
-			{#if importSchemas}
+			{#if importForm.values.schemas}
 				<button
 					type="button"
 					class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"

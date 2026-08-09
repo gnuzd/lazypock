@@ -5,6 +5,7 @@
 	import Dropdown from '$lib/components/Dropdown.svelte';
 	import FieldSettings from '$lib/components/FieldSettings.svelte';
 	import IndexesModal from '$lib/components/IndexesModal.svelte';
+	import Input from '$lib/components/Input.svelte';
 	import NewFieldButton from '$lib/components/NewFieldButton.svelte';
 	import RuleField from '$lib/components/RuleField.svelte';
 	import { slugify } from '$lib/fieldTypes';
@@ -262,18 +263,14 @@
 	<div class="shrink-0 p-4 pb-3">
 		<div class="flex gap-0">
 			<div class="field min-w-0 flex-1">
-				<label for="coll-name" class="mb-1 block text-xs font-medium text-base-content/70"
-					>Name</label
-				>
-				<input
+				<Input
 					id="coll-name"
-					type="text"
+					label="Name"
+					placeholder="e.g. posts"
 					name="name"
 					required
-					spellcheck="false"
-					class="input input-sm w-full"
-					placeholder="e.g. posts"
-					value={newName}
+					spellcheck={false}
+					bind:value={newName}
 					oninput={handleNameInput}
 					oncompositionend={handleNameCompositionEnd}
 					onkeydown={handleKeydown}
