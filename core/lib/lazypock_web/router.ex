@@ -79,6 +79,8 @@ defmodule LazypockWeb.Router do
     get("/settings", SettingsController, :show)
     patch("/settings", SettingsController, :update)
     put("/settings", SettingsController, :update)
+    # Force-refresh the CORS origins cache after a settings change
+    post("/settings/refresh-cors", SettingsController, :refresh_cors)
 
     # App settings — API key management
     get("/settings/api-keys", SettingsController, :list_api_keys)

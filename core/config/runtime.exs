@@ -72,23 +72,11 @@ if config_env() == :prod do
 
   config :lazypock, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
-  # Origins allowed for CORS + Phoenix websocket (check_origin). Comma-separated
-  # from LAZYPOCK_CORS_ORIGINS. The app's own HTTP origin (from the endpoint
-  # url/port below) is ALWAYS added: the lazypock-ts SDK connects its realtime
-  # socket to the API host, so browsers send that host as the websocket Origin.
-  allowed_origins =
-    System.get_env("LAZYPOCK_CORS_ORIGINS") || "http://localhost:4000,http://localhost:5173"
-
-  # docker-compose may pass the value with literal quotes — strip them.
-  allowed_origins = String.trim(allowed_origins, "\"")
-
+  # Websocket check_origin delegates to Lazypock.CORS (MFA), which resolves
+  # origins per-request from LAZYPOCK_CORS_ORIGINS env + Settings (Studio UI)
+  # + own origin. The app's own host is always allowed (the lazypock-ts SDK
+  # connects its socket to baseUrl's host, so browsers send that as Origin).
   port = String.to_integer(System.get_env("PORT", "4000"))
-
-  origins_list =
-    ["http://localhost:#{port}"] ++ (allowed_origins |> String.split(",") |> Enum.map(&String.trim/1))
-
-  # Keep list unique (same host may appear twice).
-  origins_list = origins_list |> Enum.uniq()
 
   config :lazypock, LazypockWeb.Endpoint,
     url: [host: host, port: port, scheme: "http"],
@@ -101,7 +89,9 @@ if config_env() == :prod do
       port: port
     ],
     secret_key_base: secret_key_base,
-    check_origin: origins_list
+    check_origin: {Lazypock.CORS, :origin_allowed?, [:any]}
+
+
 
   # ## SSL Support
   #

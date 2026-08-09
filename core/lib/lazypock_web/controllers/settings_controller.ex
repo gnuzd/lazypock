@@ -41,10 +41,26 @@ defmodule LazypockWeb.SettingsController do
 
     upsert_settings(merged)
 
+    # If CORS origins changed, refresh the in-memory cache immediately.
+    if Map.has_key?(incoming, "cors_origins") do
+      Lazypock.CORS.refresh_origins()
+    end
+
     # Fire onSettingsReload (PocketBase parity)
     Lazypock.Hooks.App.trigger_settings_reload(merged)
 
     json(conn, incoming)
+  end
+
+  # Force-refresh the CORS origins cache (called by the Studio UI after saving).
+  def refresh_cors(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_refresh_cors(conn)
+  end
+
+  defp do_refresh_cors(conn) do
+    origins = Lazypock.CORS.refresh_origins()
+    json(conn, %{ok: true, origins: origins})
   end
 
   # ── API Key management (generated from the Settings dashboard) ──

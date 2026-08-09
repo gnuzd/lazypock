@@ -35,6 +35,11 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Plugs must init at RUNTIME (not compile) so CORSPlug.init/1 can read
+# `config :cors_plug` from runtime.exs at boot (env-driven origins).
+# Without this, CORS origins are baked into the beam at build time.
+config :phoenix, :plug_init_mode, :runtime
+
 # Swoosh mailer config
 config :lazypock, Lazypock.Mailer, adapter: Swoosh.Adapters.Test
 
