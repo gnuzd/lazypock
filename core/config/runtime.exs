@@ -72,6 +72,17 @@ if config_env() == :prod do
 
   config :lazypock, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  # Origins allowed for CORS + Phoenix websocket (check_origin). Comma-separated
+  # from LAZYPOCK_CORS_ORIGINS. Default: local dev origins. Allows e.g. a Tauri
+  # app at http://localhost:1420 to both fetch and use the realtime socket.
+  allowed_origins =
+    System.get_env("LAZYPOCK_CORS_ORIGINS") || "http://localhost:4000,http://localhost:5173"
+
+  # docker-compose may pass the value with literal quotes — strip them.
+  allowed_origins = String.trim(allowed_origins, "\"")
+
+  origins_list = allowed_origins |> String.split(",") |> Enum.map(&String.trim/1)
+
   config :lazypock, LazypockWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
@@ -82,7 +93,7 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
     secret_key_base: secret_key_base,
-    check_origin: ["http://localhost:5173"]
+    check_origin: origins_list
 
   # ## SSL Support
   #

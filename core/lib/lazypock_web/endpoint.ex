@@ -44,6 +44,24 @@ defmodule LazypockWeb.Endpoint do
   plug Plug.MethodOverride
   plug Plug.Head
   plug Plug.Session, @session_options
-  plug CORSPlug, origin: ["http://localhost:4000", "http://localhost:5173"]
+  # CORS: comma-separated origins from LAZYPOCK_CORS_ORIGINS (default: local dev origins).
+  # e.g. LAZYPOCK_CORS_ORIGINS="https://app.example.com,http://localhost:5173"
+  #      LAZYPOCK_CORS_ORIGINS="*" (allow all; requires LAZYPOCK_CORS_CREDENTIALS=0)
+  cors_origins =
+    System.get_env("LAZYPOCK_CORS_ORIGINS") || "http://localhost:4000,http://localhost:5173"
+
+  # docker-compose may pass the value with literal quotes — strip them.
+  cors_origins = String.trim(cors_origins, "\"")
+
+  cors_credentials = System.get_env("LAZYPOCK_CORS_CREDENTIALS", "true") == "true"
+
+  cors_plug_opts = [
+    origin: cors_origins |> String.split(",") |> Enum.map(&String.trim/1)
+  ]
+
+  cors_plug_opts =
+    if cors_credentials, do: Keyword.put(cors_plug_opts, :credentials, true), else: cors_plug_opts
+
+  plug CORSPlug, cors_plug_opts
   plug LazypockWeb.Router
 end
