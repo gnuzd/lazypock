@@ -48,13 +48,36 @@ defmodule Lazypock.CORS do
         |> Conn.put_resp_header("access-control-allow-origin", raw_origin)
         |> maybe_credentials()
         |> Conn.put_resp_header("access-control-expose-headers", "Content-Disposition")
+        |> maybe_preflight()
 
       "*" in origins ->
         conn
         |> Conn.put_resp_header("access-control-allow-origin", "*")
+        |> maybe_preflight()
 
       true ->
         conn
+    end
+  end
+
+  # CORS preflight requests (OPTIONS + Access-Control-Request-Method) must be
+  # answered with 204 + allow headers, otherwise browsers reject the real
+  # request before it is even sent.
+  defp maybe_preflight(conn) do
+    requested_method =
+      conn
+      |> Conn.get_req_header("access-control-request-method")
+      |> List.first()
+
+    if conn.method == "OPTIONS" and requested_method != nil do
+      conn
+      |> Conn.put_resp_header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+      |> Conn.put_resp_header("access-control-allow-headers", "Content-Type, Authorization")
+      |> Conn.put_resp_header("access-control-max-age", "86400")
+      |> Conn.send_resp(204, "")
+      |> Conn.halt()
+    else
+      conn
     end
   end
 
@@ -65,8 +88,14 @@ defmodule Lazypock.CORS do
   Receives the parsed `%URI{}` and returns whether the origin is allowed.
   """
   def origin_allowed?(%URI{} = uri, _any) do
-    origin = origin_string(uri)
-    origin != nil and origin in allowed_origins()
+    origins = allowed_origins()
+
+    if "*" in origins do
+      true
+    else
+      origin = origin_string(uri)
+      origin != nil and origin in origins
+    end
   end
 
   def origin_allowed?(_other, _any), do: false
@@ -122,6 +151,9 @@ defmodule Lazypock.CORS do
 
   # Normalize a stored origin string to "scheme://host:port" so it matches
   # what origin_string/1 produces for websocket URIs (default ports filled in).
+  # The "*" wildcard passes through unchanged.
+  defp normalize_origin("*"), do: "*"
+
   defp normalize_origin(origin) when is_binary(origin) do
     case URI.parse(String.trim(origin)) do
       %URI{scheme: scheme, host: host} when is_binary(scheme) and is_binary(host) ->
