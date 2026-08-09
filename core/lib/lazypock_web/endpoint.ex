@@ -53,10 +53,17 @@ defmodule LazypockWeb.Endpoint do
   # docker-compose may pass the value with literal quotes — strip them.
   cors_origins = String.trim(cors_origins, "\"")
 
+  # Always allow the app's own origin (the lazypock-ts SDK derives its
+  # realtime socket + API calls from baseUrl, so the browser sends the
+  # API host as Origin).
+  own_origin = "http://localhost:#{System.get_env("PORT", "4000")}"
+
   cors_credentials = System.get_env("LAZYPOCK_CORS_CREDENTIALS", "true") == "true"
 
   cors_plug_opts = [
-    origin: cors_origins |> String.split(",") |> Enum.map(&String.trim/1)
+    origin:
+      [own_origin | (cors_origins |> String.split(",") |> Enum.map(&String.trim/1))]
+      |> Enum.uniq()
   ]
 
   cors_plug_opts =

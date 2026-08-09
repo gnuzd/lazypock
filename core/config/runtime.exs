@@ -73,24 +73,32 @@ if config_env() == :prod do
   config :lazypock, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   # Origins allowed for CORS + Phoenix websocket (check_origin). Comma-separated
-  # from LAZYPOCK_CORS_ORIGINS. Default: local dev origins. Allows e.g. a Tauri
-  # app at http://localhost:1420 to both fetch and use the realtime socket.
+  # from LAZYPOCK_CORS_ORIGINS. The app's own HTTP origin (from the endpoint
+  # url/port below) is ALWAYS added: the lazypock-ts SDK connects its realtime
+  # socket to the API host, so browsers send that host as the websocket Origin.
   allowed_origins =
     System.get_env("LAZYPOCK_CORS_ORIGINS") || "http://localhost:4000,http://localhost:5173"
 
   # docker-compose may pass the value with literal quotes — strip them.
   allowed_origins = String.trim(allowed_origins, "\"")
 
-  origins_list = allowed_origins |> String.split(",") |> Enum.map(&String.trim/1)
+  port = String.to_integer(System.get_env("PORT", "4000"))
+
+  origins_list =
+    ["http://localhost:#{port}"] ++ (allowed_origins |> String.split(",") |> Enum.map(&String.trim/1))
+
+  # Keep list unique (same host may appear twice).
+  origins_list = origins_list |> Enum.uniq()
 
   config :lazypock, LazypockWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: [host: host, port: port, scheme: "http"],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
       # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
       # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
+      ip: {0, 0, 0, 0, 0, 0, 0, 0},
+      port: port
     ],
     secret_key_base: secret_key_base,
     check_origin: origins_list
