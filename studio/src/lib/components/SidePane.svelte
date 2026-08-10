@@ -1,23 +1,27 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
 
-	let {
-		show = $bindable(false),
-		title = '',
-		closable = true,
-		headerExtra,
-		children
-	}: {
-		show: boolean;
-		title?: string;
-		closable?: boolean;
-		headerExtra?: import('svelte').Snippet;
-		children?: import('svelte').Snippet;
-	} = $props();
+let {
+	show = $bindable(false),
+	title = '',
+	closable = true,
+	onCloseRequest,
+	headerExtra,
+	children
+}: {
+	show: boolean;
+	title?: string;
+	closable?: boolean;
+	/** Called before closing; return false to prevent the close. */
+	onCloseRequest?: () => boolean | void;
+	headerExtra?: import('svelte').Snippet;
+	children?: import('svelte').Snippet;
+} = $props();
 
-	function close() {
-		show = false;
-	}
+function close() {
+	if (onCloseRequest && onCloseRequest() === false) return;
+	show = false;
+}
 </script>
 
 <svelte:body

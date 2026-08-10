@@ -21,12 +21,14 @@ defmodule Lazypock.Schema.DDL do
 
     * `:type` - Collection type: `"base"` (default) or `"auth"`
     * `:fields` - List of field definition maps (see README for format)
+    * `:indexes` - List of custom index expressions (e.g. `["UNIQUE email", "created_at DESC"]`)
   """
   @spec create_collection(String.t(), keyword()) ::
           {:ok, Lazypock.Collections.Collection.t()} | {:error, term()}
   def create_collection(name, opts \\ []) when is_binary(name) do
     type = Keyword.get(opts, :type, "base")
     fields = Keyword.get(opts, :fields, [])
+    indexes = Keyword.get(opts, :indexes, [])
 
     result =
       Repo.transaction(fn ->
@@ -36,12 +38,13 @@ defmodule Lazypock.Schema.DDL do
           lock_key = :erlang.phash2({:create_collection, name})
           Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
-          collection = create_collection_metadata!(name, type, fields)
+          collection = create_collection_metadata!(name, type, fields, indexes)
 
           sql = build_create_table_sql(name, fields)
           Ecto.Adapters.SQL.query!(Repo, sql, [])
 
           create_indexes(name, fields)
+          apply_custom_indexes!(name, indexes)
           create_field_metadata!(collection.id, fields)
 
           Repo.preload(collection, :fields)
@@ -86,6 +89,10 @@ defmodule Lazypock.Schema.DDL do
 
           if field_def["indexed"] do
             create_index(collection_name, field_def["name"])
+          end
+
+          if field_def["unique"] do
+            create_unique_index(collection_name, field_def["name"])
           end
 
           create_field_metadata_entry!(collection.id, field_def)
@@ -170,12 +177,16 @@ defmodule Lazypock.Schema.DDL do
 
   @doc """
   Updates a collection: renames the table, changes type, adds/removes fields.
+
+  Accepts `:indexes` (list of custom index expressions). When provided,
+  custom DB indexes are diffed against the stored list and synced.
   """
   @spec update_collection(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_collection(old_name, opts \\ []) when is_binary(old_name) do
     new_name = Keyword.get(opts, :name, old_name)
     type = Keyword.get(opts, :type)
     fields = Keyword.get(opts, :fields, [])
+    new_indexes = Keyword.get(opts, :indexes)
 
     result =
       Repo.transaction(fn ->
@@ -232,6 +243,21 @@ defmodule Lazypock.Schema.DDL do
             |> Repo.update!()
           end
 
+          # Sync custom indexes (options["indexes"]) with actual DB indexes.
+          if not is_nil(new_indexes) do
+            old_options = collection.options || %{}
+            old_indexes = Map.get(old_options, "indexes", []) || []
+
+            sync_custom_indexes!(new_name, old_indexes, new_indexes)
+
+            # Persist the new list in options (merged with any other option keys).
+            merged_opts = Map.put(old_options, "indexes", new_indexes)
+
+            collection
+            |> Ecto.Changeset.change(%{options: merged_opts})
+            |> Repo.update!()
+          end
+
           existing_fields =
             Repo.all(
               from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
@@ -272,17 +298,32 @@ defmodule Lazypock.Schema.DDL do
                 Map.get(f, "options", %{})
               end
 
+            old = Enum.find(existing_fields, &(&1.name == f["name"]))
+            new_unique = Map.get(f, "unique", false)
+            new_indexed = Map.get(f, "indexed", false)
+
+            # Sync actual DB indexes with the requested unique/indexed flags:
+            # drop the old index(es) when the flags change, then recreate.
+            if old do
+              if old.unique != new_unique or old.indexed != new_indexed do
+                drop_index_if_exists(new_name, f["name"])
+              end
+
+              if new_indexed, do: create_index(new_name, f["name"])
+              if new_unique, do: create_unique_index(new_name, f["name"])
+            end
+
             Repo.update_all(
               from(fld in Lazypock.Collections.Field,
                 where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
               ),
               set: [
                 required: Map.get(f, "required", false),
-                unique: Map.get(f, "unique", false),
+                unique: new_unique,
                 hidden: Map.get(f, "hidden", false),
                 system: Map.get(f, "system", false),
                 options: opts,
-                indexed: Map.get(f, "indexed", false),
+                indexed: new_indexed,
                 sort_order: f["sort_order"]
               ]
             )
@@ -298,6 +339,7 @@ defmodule Lazypock.Schema.DDL do
 
             Ecto.Adapters.SQL.query!(Repo, sql, [])
             if f["indexed"], do: create_index(new_name, f["name"])
+            if f["unique"], do: create_unique_index(new_name, f["name"])
             create_field_metadata_entry!(collection.id, f)
           end
 
@@ -484,7 +526,91 @@ defmodule Lazypock.Schema.DDL do
     )
   end
 
-  defp create_collection_metadata!(name, type, fields) do
+  defp drop_index_if_exists(table, column) do
+    for suffix <- ["_idx", "_unq"] do
+      index_name = "#{table}_#{column}#{suffix}"
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "DROP INDEX IF EXISTS #{TypeMapper.quote_ident(index_name)}",
+        []
+      )
+    end
+  end
+
+  # ── Custom (multi-column) indexes ────────────────────
+
+  # Custom indexes are expressions like "UNIQUE email" or "created_at DESC, id"
+  # stored in the collection's options["indexes"] as a list of strings.
+  # A deterministic index name is derived from the expression so we can
+  # drop-and-recreate when the list changes.
+  defp apply_custom_indexes!(table, indexes) do
+    Enum.each(indexes || [], fn expr ->
+      index_name = custom_index_name(expr)
+      {unique, columns} = parse_custom_index_expr(expr)
+
+      sql =
+        "CREATE #{if unique, do: "UNIQUE ", else: ""}INDEX IF NOT EXISTS #{TypeMapper.quote_ident(index_name)} ON #{TypeMapper.quote_ident(table)} (#{columns})"
+
+      Ecto.Adapters.SQL.query!(Repo, sql, [])
+    end)
+  end
+
+  defp drop_custom_index!(_table, expr) do
+    index_name = custom_index_name(expr)
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "DROP INDEX IF EXISTS #{TypeMapper.quote_ident(index_name)}",
+      []
+    )
+  end
+
+  defp custom_index_name(expr) do
+    hash =
+      expr
+      |> String.replace(~r/\s+/, "")
+      |> :erlang.phash2()
+
+    "_cx_#{:erlang.integer_to_binary(hash) |> String.replace("-", "n")}"
+  end
+
+  # "UNIQUE col1, col2" -> {true, "\"col1\", \"col2\""}
+  # "col1, col2 DESC"   -> {false, "\"col1\", \"col2\" DESC"}
+  defp parse_custom_index_expr(expr) do
+    {unique, rest} =
+      case String.trim(expr) do
+        "UNIQUE " <> cols -> {true, cols}
+        other -> {false, other}
+      end
+
+    columns =
+      rest
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.map(fn col ->
+        case String.split(col, ~r/\s+/, parts: 2) do
+          [name, suffix] -> "#{TypeMapper.quote_ident(name)} #{suffix}"
+          [name] -> TypeMapper.quote_ident(name)
+        end
+      end)
+      |> Enum.join(", ")
+
+    {unique, columns}
+  end
+
+  # Drop all custom indexes not in the new list (used by update_collection).
+  defp sync_custom_indexes!(table, old_indexes, new_indexes) do
+    new_set = MapSet.new(new_indexes || [])
+
+    for expr <- old_indexes || [], not MapSet.member?(new_set, expr) do
+      drop_custom_index!(table, expr)
+    end
+
+    apply_custom_indexes!(table, new_indexes)
+  end
+
+  defp create_collection_metadata!(name, type, fields, indexes) do
     initial_schema =
       Enum.map(fields, fn f ->
         %{
@@ -526,6 +652,7 @@ defmodule Lazypock.Schema.DDL do
       type: type,
       schema: initial_schema,
       rules: default_rules,
+      options: %{"indexes" => indexes || []},
       managed: true
     })
     |> Repo.insert!()
@@ -568,10 +695,12 @@ defmodule Lazypock.Schema.DDL do
     else
       # Try to resolve collectionId (UUID from SPA) to a collection name
       raw_id = field_def["collectionId"] || opts["collectionId"]
+
       if is_binary(raw_id) and raw_id != "" do
         collection =
           Lazypock.Repo.get_by(Lazypock.Collections.Collection, id: raw_id) ||
             Lazypock.Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
+
         if collection do
           Map.put(opts, "collection", collection.name)
         else

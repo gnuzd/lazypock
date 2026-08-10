@@ -43,6 +43,7 @@ export const collectionSchema = z.object({
 		.min(1, 'Collection name is required')
 		.regex(/^[a-z0-9_]+$/, 'Only lowercase letters, numbers, and underscores'),
 	type: z.enum(['base', 'view', 'auth']),
+	indexes: z.array(z.string()).optional(),
 	fields: z.array(collectionFieldSchema),
 	listRule: z.string().nullable().optional(),
 	viewRule: z.string().nullable().optional(),

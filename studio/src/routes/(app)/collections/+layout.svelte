@@ -147,7 +147,12 @@
 </div>
 
 <!-- New collection SidePane (right-side pane instead of a full page) -->
-<SidePane bind:show={showNewPane} title="New Collection" closable={false}>
+<SidePane
+	bind:show={showNewPane}
+	title="New Collection"
+	closable={false}
+	onCloseRequest={() => false}
+>
 	<CollectionEditor
 		editingCollectionId={null}
 		existingName=""

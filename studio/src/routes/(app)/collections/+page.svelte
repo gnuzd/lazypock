@@ -249,7 +249,16 @@
 />
 
 <!-- Collection edit SidePane (right-side pane instead of a full page) -->
-<SidePane bind:show={showCollectionPane} title="Edit Collection" closable={false}>
+<SidePane
+	bind:show={showCollectionPane}
+	title="Edit Collection"
+	closable={false}
+	onCloseRequest={() => {
+		// Block external closes (Esc/backdrop) — the editor decides via its own
+		// dirty-check requestClose. It calls onClose() when it's safe to close.
+		return false;
+	}}
+>
 	<CollectionEditor
 		editingCollectionId={collectionEditName || null}
 		existingName={collectionEditName}

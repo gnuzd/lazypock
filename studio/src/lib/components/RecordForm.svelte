@@ -51,9 +51,16 @@
 
 	function resolveTargetCollection(field: Record<string, unknown>): string | null {
 		const collId = field.collectionId as string | undefined;
-		if (!collId) return null;
-		const coll = collections.find((c) => c.id === collId);
-		return (coll?.name as string) ?? null;
+		if (collId) {
+			const coll = collections.find((c) => c.id === collId);
+			if (coll) return (coll.name as string) ?? null;
+		}
+		// Fall back to options.collection (name) — pre-existing data may not have
+		// collectionId set.
+		const opts = (field.options as Record<string, unknown>) || {};
+		const collName = opts['collection'] as string | undefined;
+		if (collName && collections.some((c) => c.name === collName)) return collName;
+		return null;
 	}
 
 	function getPresentableField(collName: string): string | null {
@@ -115,6 +122,59 @@
 			}));
 	}
 
+	/** Human-readable label for a related record (presentable field, name/email, or id). */
+	function recordLabel(rec: Record<string, unknown>, targetColl: string): string {
+		const presentField = getPresentableField(targetColl);
+		const val = presentField ? ((rec[presentField] as string) ?? '') : '';
+		const id = (rec.id as string) ?? '';
+		if (val) return `${val} (${id.slice(0, 8)}...)`;
+		return id;
+	}
+
+	/** Current value(s) for a field as an array of ids. */
+	function recordValue(fieldName: string): string[] {
+		const v = data[fieldName];
+		if (Array.isArray(v)) return (v as string[]).filter(Boolean);
+		return v ? [v as string] : [];
+	}
+
+	/** Labels for the currently selected value(s). */
+	function selectedLabels(fieldName: string, targetColl: string): string[] {
+		const records = relationCache[targetColl] ?? [];
+		const selected = recordValue(fieldName);
+		if (selected.length === 0) return [];
+		return selected.map((id) => {
+			const rec = records.find((r) => r.id === id);
+			return rec ? recordLabel(rec, targetColl) : id;
+		});
+	}
+
+	async function toggleRelationOption(fieldName: string, value: string, maxSelect: number) {
+		if (maxSelect > 1) {
+			const cur = recordValue(fieldName);
+			if (cur.includes(value)) {
+				update(fieldName, cur.length > 1 ? cur.filter((v) => v !== value) : null);
+			} else {
+				update(fieldName, [...cur, value]);
+			}
+		} else {
+			update(fieldName, value);
+			relationOpen[fieldName] = false;
+			relationSearch[fieldName] = '';
+			relationOpen = { ...relationOpen };
+			relationSearch = { ...relationSearch };
+		}
+	}
+
+	function removeRelationValue(fieldName: string, value: string) {
+		const cur = recordValue(fieldName);
+		if (cur.length <= 1) {
+			update(fieldName, null);
+		} else {
+			update(fieldName, cur.filter((v) => v !== value));
+		}
+	}
+
 	const TEXT_INPUT_TYPES = new Set(['text', 'number', 'email', 'url', 'password']);
 
 	function isTextInput(f: Record<string, unknown>): boolean {
@@ -156,12 +216,6 @@
 	) {
 		fileMeta[fileId] = { filename, url, thumbs };
 		fileMeta = { ...fileMeta };
-	}
-
-	function recordValue(fieldName: string): string[] {
-		const v = data[fieldName];
-		if (Array.isArray(v)) return (v as string[]).filter(Boolean);
-		return v ? [v as string] : [];
 	}
 
 	/**
@@ -458,65 +512,108 @@
 			<!-- ═══ RELATION (searchable dropdown) ═══ -->
 		{:else if type === 'relation'}
 			{@const targetColl = resolveTargetCollection(field)}
+			{@const isMultiRel = (options?.maxSelect as number) > 1}
 			<div class="field" class:required>
 				<label for="f_{name}">{name}</label>
 				<div class="relation-wrap">
-					<input
-						id="f_{name}"
-						type="text"
-						{disabled}
-						value={(data[name] as string) ?? ''}
-						placeholder={targetColl ? 'Search ' + targetColl + '...' : 'Related record ID'}
-						oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
-						onfocus={() => {
-							if (targetColl) openRelationDropdown(name, targetColl);
-						}}
-						onblur={() => {
-							setTimeout(() => {
-								relationOpen[name] = false;
-								relationOpen = { ...relationOpen };
-							}, 200);
-						}}
-					/>
-					{#if targetColl && relationOpen[name]}
-						{@const filtered = getFilteredOptions(name, targetColl)}
-						<div class="relation-dropdown">
-							<input
-								type="text"
-								class="relation-search"
-								placeholder="Type to filter..."
-								value={relationSearch[name] ?? ''}
-								oninput={(e: Event) => {
-									relationSearch[name] = (e.target as HTMLInputElement).value;
-									relationSearch = { ...relationSearch };
-								}}
-							/>
-							<div class="relation-options">
-								{#each filtered as opt (opt.value)}
-									<button
-										type="button"
-										class="relation-option"
-										class:active={data[name] === opt.value}
-										onmousedown={() => {
-											update(name, opt.value);
+					{#if targetColl}
+						<!-- Button-style trigger showing the selected label(s) -->
+						<div
+							class="relation-trigger"
+							class:open={relationOpen[name]}
+							role="button"
+							tabindex="0"
+							{...disabled ? { 'aria-disabled': 'true' } : {}}
+							onclick={() => {
+								if (disabled) return;
+								if (relationOpen[name]) {
+									relationOpen[name] = false;
+									relationOpen = { ...relationOpen };
+								} else {
+									openRelationDropdown(name, targetColl);
+								}
+							}}
+							onkeydown={(e: KeyboardEvent) => {
+								if (e.key === 'Enter' || e.key === ' ') {
+									e.preventDefault();
+									if (!disabled) {
+										if (relationOpen[name]) {
 											relationOpen[name] = false;
-											relationSearch[name] = '';
 											relationOpen = { ...relationOpen };
-											relationSearch = { ...relationSearch };
-										}}>{opt.label}</button
-									>
-								{/each}
-								{#if filtered.length === 0}
-									<div class="relation-empty">No matching records</div>
-								{/if}
+										} else {
+											openRelationDropdown(name, targetColl);
+										}
+									}
+								}
+							}}
+						>
+							{#if (selectedLabels(name, targetColl).length > 0)}
+								<div class="relation-trigger-labels">
+									{#each selectedLabels(name, targetColl) as lbl, li (lbl)}
+										<span class="relation-chip">
+											{lbl}
+											{#if !disabled && isMultiRel}
+												<button
+													type="button"
+													class="relation-chip-x"
+													tabindex="-1"
+													onclick={(e) => {
+														e.stopPropagation();
+														removeRelationValue(name, recordValue(name)[li]);
+													}}
+													>×</button
+												>
+											{/if}
+										</span>
+									{/each}
+								</div>
+							{:else}
+								<span class="relation-trigger-placeholder"
+									>Select {targetColl} record{isMultiRel ? 's' : ''}...</span
+								>
+							{/if}
+							<span class="relation-caret">▾</span>
+						</div>
+						{#if relationOpen[name]}
+							{@const filtered = getFilteredOptions(name, targetColl)}
+							<div class="relation-dropdown">
+								<input
+									type="text"
+									class="relation-search"
+									placeholder="Type to filter..."
+									value={relationSearch[name] ?? ''}
+									oninput={(e: Event) => {
+										relationSearch[name] = (e.target as HTMLInputElement).value;
+										relationSearch = { ...relationSearch };
+									}}
+								/>
+								<div class="relation-options">
+									{#each filtered as opt (opt.value)}
+										<button
+											type="button"
+											class="relation-option"
+											class:active={isMultiRel
+												? recordValue(name).includes(opt.value)
+												: data[name] === opt.value}
+											onmousedown={() => toggleRelationOption(name, opt.value, isMultiRel ? (options?.maxSelect as number) : 1)}
+											>{opt.label}</button
+										>
+									{/each}
+									{#if filtered.length === 0}
+										<div class="relation-empty">No matching records</div>
+									{/if}
+								</div>
 							</div>
+						{/if}
+					{:else}
+						<div class="relation-missing">
+							No target collection configured. Edit the collection to pick one.
 						</div>
 					{/if}
 				</div>
 				<span class="field-help"
-					>Related record{options.maxSelect && (options.maxSelect as number) > 1
-						? 's (multi-select not yet supported in dropdown)'
-						: ''}</span
+					>Related record{isMultiRel ? 's (multi-select)' : ''} from
+					{targetColl ?? 'unknown collection'}</span
 				>
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
@@ -1047,6 +1144,81 @@
 	/* ── RELATION DROPDOWN ── */
 	.relation-wrap {
 		position: relative;
+	}
+
+	.relation-trigger {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		min-height: 38px;
+		padding: 4px 10px;
+		border: 1px solid var(--color-base-300);
+		border-radius: var(--radius-field);
+		background: var(--color-base-100);
+		cursor: pointer;
+		transition: border-color 0.15s;
+		box-sizing: border-box;
+	}
+
+	.relation-trigger:hover {
+		border-color: var(--color-base-content);
+	}
+
+	.relation-trigger.open {
+		border-color: var(--color-primary);
+	}
+
+	.relation-trigger-labels {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+		flex: 1;
+	}
+
+	.relation-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 8px;
+		border-radius: 999px;
+		background: color-mix(in oklab, var(--color-primary) 12%, var(--color-base-100));
+		color: var(--color-base-content);
+		font-size: 0.75rem;
+		max-width: 100%;
+	}
+
+	.relation-chip-x {
+		border: none;
+		background: none;
+		color: inherit;
+		cursor: pointer;
+		font-size: 0.875rem;
+		line-height: 1;
+		padding: 0;
+		opacity: 0.6;
+	}
+
+	.relation-chip-x:hover {
+		opacity: 1;
+	}
+
+	.relation-trigger-placeholder {
+		flex: 1;
+		color: var(--color-base-hint);
+		font-size: 0.8125rem;
+	}
+
+	.relation-caret {
+		opacity: 0.5;
+		font-size: 0.75rem;
+	}
+
+	.relation-missing {
+		padding: 8px 10px;
+		border: 1px dashed var(--color-base-300);
+		border-radius: var(--radius-field);
+		font-size: 0.8125rem;
+		opacity: 0.6;
 	}
 
 	.relation-dropdown {

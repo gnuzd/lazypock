@@ -3,9 +3,11 @@
 	import { onMount } from 'svelte';
 	import { slide } from 'svelte/transition';
 	import Dropdown from '$lib/components/Dropdown.svelte';
+	import Button from '$lib/components/Button.svelte';
 	import FieldSettings from '$lib/components/FieldSettings.svelte';
 	import IndexesModal from '$lib/components/IndexesModal.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import Modal from '$lib/components/Modal.svelte';
 	import NewFieldButton from '$lib/components/NewFieldButton.svelte';
 	import RuleField from '$lib/components/RuleField.svelte';
 	import { slugify } from '$lib/fieldTypes';
@@ -56,6 +58,9 @@
 	let manageRule = $state<string | null>(null);
 	let showRulesInfo = $state(false);
 	let showIndexesModal = $state(false);
+	let showCloseConfirm = $state(false);
+	let showDeleteConfirm = $state(false);
+	let deleting = $state(false);
 	const collectionTypes = [
 		{ value: 'base', label: 'Base collection' },
 		{ value: 'view', label: 'View collection' },
@@ -87,7 +92,7 @@
 				.sort(
 					(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
 				) as unknown as FieldDefinition[];
-			newIndexes = [];
+			newIndexes = ((coll.indexes as string[]) ?? []).filter(Boolean);
 			const rules = (coll.rules as Record<string, unknown>) ?? {};
 			listRule = (rules['listRule'] as string | null) ?? null;
 			viewRule = (rules['viewRule'] as string | null) ?? null;
@@ -95,8 +100,13 @@
 			updateRule = (rules['updateRule'] as string | null) ?? null;
 			deleteRule = (rules['deleteRule'] as string | null) ?? null;
 			manageRule = (rules['manageRule'] as string | null) ?? null;
+
+			// After loading, capture the pristine snapshot for dirty detection.
+			queueMicrotask(() => {
+				loadedSnapshot = snapshot();
+			});
 		} catch {
-			// ignore
+			// failed to load — leave form at defaults
 		}
 	});
 
@@ -120,6 +130,65 @@
 		if ((e.ctrlKey || e.metaKey) && e.key === 's') {
 			e.preventDefault();
 			handleSave();
+		}
+	}
+
+	// ── Dirty tracking + close confirm ──
+	// A snapshot of the loaded state; any divergence means unsaved changes.
+	let loadedSnapshot = $state('');
+
+	function snapshot(): string {
+		return JSON.stringify({
+			name: newName,
+			type: newType,
+			fields: newFields
+				.filter((f) => !f['@toDelete'])
+				.map((f) => {
+					const { id: _id, ...rest } = f as Record<string, unknown>;
+					void _id;
+					return rest;
+				}),
+			indexes: newIndexes,
+			listRule,
+			viewRule,
+			createRule,
+			updateRule,
+			deleteRule,
+			manageRule
+		});
+	}
+
+	const isDirty = $derived(loadedSnapshot !== '' && loadedSnapshot !== snapshot());
+
+	function requestClose() {
+		if (isDirty) {
+			showCloseConfirm = true;
+			return false;
+		}
+		doClose();
+		return true;
+	}
+
+	function doClose() {
+		showCloseConfirm = false;
+		if (onClose) onClose();
+		else _goto('/collections');
+	}
+
+	async function deleteCollection() {
+		if (!editingCollectionId || deleting) return;
+		deleting = true;
+		error = '';
+		try {
+			await client.collections.delete(editingCollectionId);
+			await loadCollections();
+			showDeleteConfirm = false;
+			if (onClose) onClose();
+			else _goto('/collections');
+		} catch (e) {
+			error = (e as Error).message || 'Failed to delete collection';
+		} finally {
+			deleting = false;
 		}
 	}
 
@@ -203,6 +272,7 @@
 		const payload: Record<string, unknown> = {
 			name: newName.trim(),
 			type: newType,
+			indexes: newIndexes,
 			fields: newFields
 				.filter((f) => !f['@toDelete'])
 				.map((f) => {
@@ -266,6 +336,7 @@
 				<Input
 					id="coll-name"
 					label="Name"
+					class="bg-transparent!"
 					placeholder="e.g. posts"
 					name="name"
 					required
@@ -448,11 +519,29 @@
 
 	<!-- Footer -->
 	<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-		<button
-			type="button"
-			class="btn btn-ghost mr-auto"
-			onclick={() => (onClose ? onClose() : _goto('/collections'))}>Close</button
-		>
+		{#if editingCollectionId}
+			<button
+				type="button"
+				class="btn btn-ghost btn-error px-2"
+				title="Delete collection"
+				onclick={() => (showDeleteConfirm = true)}
+			>
+				<svg
+					width="16"
+					height="16"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					><polyline points="3 6 5 6 21 6" /><path
+						d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+					/></svg
+				>
+			</button>
+		{/if}
+		<button type="button" class="btn btn-ghost mr-auto" onclick={requestClose}>Close</button>
 		{#if error}
 			<svg
 				width="16"
@@ -490,6 +579,35 @@
 		.map((f) => f.name as string)
 		.filter(Boolean)}
 />
+
+<!-- Unsaved-changes confirm -->
+<Modal bind:show={showCloseConfirm} title="Discard changes?">
+	<p class="text-sm">
+		You have unsaved changes to this collection. They will be lost if you close without saving.
+	</p>
+	<div class="mt-4 flex justify-end gap-2">
+		<Button type="button" class="btn-ghost btn-sm" onclick={() => (showCloseConfirm = false)}
+			>Keep editing</Button
+		>
+		<Button type="button" class="btn-error btn-sm" onclick={doClose}>Discard</Button>
+	</div>
+</Modal>
+
+<!-- Delete collection confirm -->
+<Modal bind:show={showDeleteConfirm} title="Delete collection?">
+	<p class="text-sm">
+		Delete <strong>{newName}</strong>? The table and all its records will be permanently removed.
+		This cannot be undone.
+	</p>
+	<div class="mt-4 flex justify-end gap-2">
+		<Button type="button" class="btn-ghost btn-sm" onclick={() => (showDeleteConfirm = false)}
+			>Cancel</Button
+		>
+		<Button type="button" class="btn-error btn-sm" loading={deleting} onclick={deleteCollection}
+			>Delete</Button
+		>
+	</div>
+</Modal>
 
 <style>
 	/* sortable children need pointer-events to catch drag enter/leave */

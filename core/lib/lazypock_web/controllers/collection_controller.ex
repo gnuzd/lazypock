@@ -75,11 +75,12 @@ defmodule LazypockWeb.CollectionController do
   defp do_create(conn, name, params) do
     type = params["type"] || "base"
     fields = params["fields"] || []
+    indexes = params["indexes"] || []
 
     # Fire onCollectionCreateRequest (PocketBase parity)
     case Lazypock.Hooks.Request.trigger_collection_create(conn, %{name: name, type: type}) do
       {:ok, _event} ->
-        case DDL.create_collection(name, type: type, fields: fields) do
+        case DDL.create_collection(name, type: type, fields: fields, indexes: indexes) do
           {:ok, collection} ->
             Lazypock.Hooks.Collection.trigger_after_create_success(collection)
             Broadcaster.broadcast_collection_event("create", collection_json(collection))
@@ -190,6 +191,7 @@ defmodule LazypockWeb.CollectionController do
               |> maybe_put(:rules, rules)
               |> maybe_put(:options, params["options"])
               |> maybe_put(:hooks, params["hooks"])
+              |> maybe_put(:indexes, params["indexes"])
 
             case Lazypock.Hooks.Request.trigger_collection_update(conn, %{name: coll_name}) do
               {:ok, _event} ->
@@ -246,12 +248,15 @@ defmodule LazypockWeb.CollectionController do
   end
 
   defp collection_json(collection) do
+    opts = collection.options || %{}
+
     %{
       id: collection.id,
       name: collection.name,
       type: collection.type,
       system: Map.get(collection, :system, false),
       schema: collection.schema,
+      indexes: Map.get(opts, "indexes", []) || [],
       fields:
         (collection.fields || [])
         |> Enum.sort_by(& &1.sort_order, :asc)

@@ -106,8 +106,10 @@
 				{#if field.required}
 					<span class="rounded bg-success/20 px-1 py-0.5 text-success">Required</span>
 				{/if}
+				{#if field.unique}
+					<span class="rounded bg-warning/20 px-1 py-0.5 text-warning">Unique</span>
+				{/if}
 				{#if field.indexed}
-					<span class="rounded bg-info/20 px-1 py-0.5 text-info">Indexed</span>
 				{/if}
 				{#if field.hidden}
 					<span class="rounded bg-error/20 px-1 py-0.5 text-error">Hidden</span>
@@ -154,13 +156,28 @@
 					<option value="multiple">Multiple</option>
 				</select>
 			{:else if field.type === 'relation'}
+				{@const relationColls = collections.filter(
+					(c) => (c.type as string) !== 'view' && !c.system
+				)}
+				{@const relationOpts = (field.options as Record<string, unknown>) || {}}
+				{@const currentCollId =
+					(field.collectionId as string) ||
+					(relationOpts.collection
+						? (relationColls.find((c) => c.name === relationOpts.collection)?.id as string) ||
+							''
+						: '')}
 				<select
 					class="select select-sm max-w-[150px] text-xs"
-					value={(field.collectionId as string) || ''}
-					onchange={(e) => (field.collectionId = (e.target as HTMLSelectElement).value)}
+					value={currentCollId}
+					onchange={(e) => {
+						const id = (e.target as HTMLSelectElement).value;
+						field.collectionId = id;
+						const coll = relationColls.find((c) => c.id === id);
+						if (coll) setOpt('collection', coll.name as string);
+					}}
 				>
 					<option value="" disabled>Select collection*</option>
-					{#each collections.filter((c) => (c.type as string) !== 'view' && !c.system) as coll (coll.id as string)}
+					{#each relationColls as coll (coll.id as string)}
 						<option value={coll.id as string}>{coll.name as string}</option>
 					{/each}
 				</select>
@@ -705,6 +722,16 @@
 								Required
 							</label>
 						{/if}
+						<label class="flex cursor-pointer items-center gap-1">
+							<input
+								type="checkbox"
+								class="checkbox checkbox-sm"
+								id="field-{fieldIndex}-unique"
+								checked={!!field.unique}
+								onchange={(e) => (field.unique = (e.target as HTMLInputElement).checked)}
+							/>
+							Unique
+						</label>
 						<label class="flex cursor-pointer items-center gap-1">
 							<input
 								type="checkbox"

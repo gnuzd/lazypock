@@ -5,6 +5,7 @@
 	import RecordForm from '$lib/components/RecordForm.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import { buildRecordSchema, cleanRecordData } from '$lib/validation';
+	import Modal from '$lib/components/Modal.svelte';
 	import type { z } from 'zod';
 
 	/**
@@ -36,12 +37,13 @@
 		onDeleted?: () => void;
 	} = $props();
 
-	let recordSaving = $state(false);
-	let recordError = $state('');
-	let recordFieldErrors = $state<Record<string, string>>({});
-	// ── Password change state (edit mode only) ──
-	let passwordSaving = $state(false);
-	let passwordError = $state('');
+let recordSaving = $state(false);
+let recordError = $state('');
+let recordFieldErrors = $state<Record<string, string>>({});
+let showDiscardConfirm = $state(false);
+// ── Password change state (edit mode only) ──
+let passwordSaving = $state(false);
+let passwordError = $state('');
 
 	// Dynamic record schema from collection fields
 	let recordSchema = $state<z.ZodObject<Record<string, z.ZodTypeAny>> | null>(null);
@@ -93,6 +95,44 @@
 		}
 	}
 
+	// ── Dirty tracking ──
+	// A snapshot of the record when the pane opened; divergence = unsaved changes.
+	let loadedRecordSnapshot = $state('');
+
+	function recordSnapshot(): string {
+		return JSON.stringify(recordData ?? {});
+	}
+
+	const recordDirty = $derived(
+		show && loadedRecordSnapshot !== '' && loadedRecordSnapshot !== recordSnapshot()
+	);
+
+	$effect(() => {
+		if (show && loadedRecordSnapshot === '') {
+			// First open — capture the pristine state (skip password fields that are
+			// handled separately).
+			queueMicrotask(() => {
+				loadedRecordSnapshot = recordSnapshot();
+			});
+		}
+		if (!show && loadedRecordSnapshot !== '') {
+			loadedRecordSnapshot = '';
+		}
+	});
+
+	function requestClose() {
+		if (recordDirty && !recordSaving) {
+			showDiscardConfirm = true;
+			return false;
+		}
+		return true;
+	}
+
+	function confirmDiscard() {
+		showDiscardConfirm = false;
+		show = false;
+	}
+
 	async function savePassword(password: string) {
 		if (!collection || !editingRecordId) return;
 		passwordSaving = true;
@@ -134,7 +174,12 @@
 	}
 </script>
 
-<SidePane bind:show title={editingRecordId ? 'Edit Record' : 'New Record'} closable={false}>
+<SidePane
+	bind:show
+	title={editingRecordId ? 'Edit Record' : 'New Record'}
+	closable={false}
+	onCloseRequest={requestClose}
+>
 	{#snippet headerExtra()}
 		{#if editingRecordId}
 			<Dropdown>
@@ -207,7 +252,7 @@
 		{/if}
 
 		<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-			<Button class="btn-ghost mr-auto" onclick={() => (show = false)}>Close</Button>
+			<Button class="btn-ghost mr-auto" onclick={requestClose}>Close</Button>
 			<Button
 				class="btn-primary"
 				loading={recordSaving}
@@ -219,3 +264,14 @@
 		</div>
 	</div>
 </SidePane>
+
+<!-- Unsaved-changes confirm -->
+<Modal bind:show={showDiscardConfirm} title="Discard changes?">
+	<p class="text-sm">
+		You have unsaved changes to this record. They will be lost if you close without saving.
+	</p>
+	<div class="mt-4 flex justify-end gap-2">
+		<Button type="button" class="btn-ghost btn-sm" onclick={() => (showDiscardConfirm = false)}>Keep editing</Button>
+		<Button type="button" class="btn-error btn-sm" onclick={confirmDiscard}>Discard</Button>
+	</div>
+</Modal>
