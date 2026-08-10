@@ -39,11 +39,15 @@ defmodule LazypockWeb.Router do
     # OAuth2 provider redirect callback (PocketBase parity)
     get("/oauth2-redirect", AuthController, :oauth2_redirect)
 
-
     # Superuser auth (no auth required)
     get("/superusers/check", SuperUserController, :check)
     post("/superusers/setup", SuperUserController, :setup)
     post("/superusers/login", SuperUserController, :login)
+    # PocketBase parity: superuser login via the _superusers auth collection.
+    # Registered statically because the dynamic /:collection auth routes
+    # currently reject system collections.
+    post("/_superusers/auth-with-password", SuperUserController, :superuser_auth_with_password)
+    get("/_superusers/auth-methods", SuperUserController, :superuser_auth_methods)
   end
 
   # Authenticated API routes — token is verified but NOT hard-blocked here.
@@ -52,6 +56,8 @@ defmodule LazypockWeb.Router do
     pipe_through(:auth)
 
     get("/superusers/me", SuperUserController, :me)
+    # PocketBase parity: /api/me works for both superuser and auth-user tokens.
+    get("/me", SuperUserController, :me)
 
     # Collection management (DDL operations — enforcer checks superuser/rules)
     get("/collections", CollectionController, :list)
