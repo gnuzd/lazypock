@@ -68,13 +68,15 @@ defmodule LazypockWeb.DynamicController do
           combined_params ++ [per_page, offset]
         )
 
-      items = DynamicView.format_items(records, name)
+      items = DynamicView.format_items(records, name, params["fields"])
       items = DynamicView.expand_records(items, params["expand"], name)
 
       # Fire onRecordsListRequest + onRecordEnrich (PocketBase parity)
       items =
         Enum.map(items, fn item ->
-          {:ok, enriched} = Lazypock.Hooks.Record.trigger_enrich(item, name, %{conn: conn, user: user})
+          {:ok, enriched} =
+            Lazypock.Hooks.Record.trigger_enrich(item, name, %{conn: conn, user: user})
+
           enriched
         end)
 
@@ -112,7 +114,7 @@ defmodule LazypockWeb.DynamicController do
     with {:ok, collection} <- Registry.get(name),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_view(name, user, record) do
-      item = DynamicView.format_item(record, name)
+      item = DynamicView.format_item(record, name, params["fields"])
       [item] = DynamicView.expand_records([item], params["expand"], name)
 
       # Fire onRecordEnrich
@@ -163,6 +165,7 @@ defmodule LazypockWeb.DynamicController do
                 event: :on_record_create,
                 data: %{record: record}
               })
+
               Hooks.dispatch_after_create(record, context)
               Broadcaster.broadcast_create(name, record)
 
