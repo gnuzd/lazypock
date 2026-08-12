@@ -8,12 +8,19 @@ defmodule LazypockWeb.DynamicView do
   alias Lazypock.Schemas.FieldNames
   alias Lazypock.Schemas.GenericRecord
 
+  # Keys always kept when projecting fields (PocketBase parity):
+  # id, collection metadata, and timestamps renamed to created/updated.
+  @system_keys ~w(id collectionId collectionName created updated)
+
   @doc """
   Formats a list of records from a collection into PocketBase-compatible items,
   adding collection metadata to each record.
+
+  When `fields` (comma-separated) is given, each item is projected to only the
+  requested fields plus system keys.
   """
-  @spec format_items([map()], String.t()) :: [map()]
-  def format_items(records, collection_name) do
+  @spec format_items([map()], String.t(), String.t() | nil) :: [map()]
+  def format_items(records, collection_name, fields \\ nil) do
     {:ok, collection} = Registry.get(collection_name)
 
     Enum.map(records, fn record ->
@@ -23,16 +30,19 @@ defmodule LazypockWeb.DynamicView do
       |> Map.put("collectionName", collection.name)
       |> rename_timestamps()
       |> strip_password_fields(collection)
+      |> project_fields(fields)
     end)
   end
 
   @doc """
   Formats a single record.
   """
-  @spec format_item(map(), String.t()) :: map()
-  def format_item(nil, _collection_name), do: nil
+  @spec format_item(map(), String.t(), String.t() | nil) :: map()
+  def format_item(record, collection_name, fields \\ nil)
 
-  def format_item(record, collection_name) do
+  def format_item(nil, _collection_name, _fields), do: nil
+
+  def format_item(record, collection_name, fields) do
     {:ok, collection} = Registry.get(collection_name)
 
     record
@@ -41,6 +51,35 @@ defmodule LazypockWeb.DynamicView do
     |> Map.put("collectionName", collection.name)
     |> rename_timestamps()
     |> strip_password_fields(collection)
+    |> project_fields(fields)
+  end
+
+  @doc """
+  Projects an API-style item map to only the requested comma-separated `fields`
+  plus system keys (`id`, `collectionId`, `collectionName`, `created`, `updated`).
+
+  - `nil` or `"*"` → returns the item unchanged (all fields).
+  - Any other string → keeps only requested + system keys.
+  - Should be applied AFTER `strip_password_fields/2` so password fields are
+    already removed and can never leak through projection.
+  """
+  @spec project_fields(map(), String.t() | nil) :: map()
+  def project_fields(item, nil), do: item
+  def project_fields(item, "*"), do: item
+
+  def project_fields(item, fields) when is_binary(fields) do
+    requested =
+      fields
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> MapSet.new()
+
+    Map.take(
+      item,
+      Enum.filter(Map.keys(item), fn key ->
+        key in @system_keys or MapSet.member?(requested, key)
+      end)
+    )
   end
 
   @doc """
