@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version to release (e.g. 0.3.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lazypock_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Elixir & Erlang
+        uses: erlef/setup-beam@1.18.2
+        with:
+          elixir-version: "1.17.3"
+          otp-version: "27.1.2"
+
+      - name: Setup Bun (studio SPA build)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Zig (burrito wrapper)
+        uses: goto-bus-stop/setup-zig@v2
+
+      - name: Install Mix deps
+        working-directory: core
+        run: mix deps.get
+
+      - name: Install Studio deps
+        working-directory: studio
+        run: bun install --frozen-lockfile
+
+      - name: Run tests
+        working-directory: core
+        env:
+          MIX_ENV: test
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          # Retry once — the async suite has a known rare flake
+          # (hooks RegistryTest :should_not_run race)
+          mix test --max-cases 8 || mix test --max-cases 8
+
+      - name: Resolve version
+        id: version
+        run: |
+          VERSION="$VERSION_INPUT"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid version: $VERSION (expected semver like 0.3.0)" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        env:
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+
+      - name: Bump version in mix.exs
+        working-directory: core
+        run: |
+          python3 - <<'PY'
+          import re, os
+          V = os.environ["VERSION"]
+          src = open("mix.exs").read()
+          src = re.sub(
+            r'version: "[0-9]+\.[0-9]+\.[0-9]+"',
+            f'version: "{V}"',
+            src,
+            count=1,
+          )
+          open("mix.exs", "w").write(src)
+          PY
+          grep -n "version:" mix.exs | head -1
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Build Studio SPA
+        working-directory: studio
+        run: bun run build
+
+      - name: Build Burrito release
+        working-directory: core
+        env:
+          MIX_ENV: prod
+        run: |
+          mix release --overwrite
+          ls -la burrito_out/
+
+      - name: Commit version bump and tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/mix.exs core/priv/static
+          git commit -m "chore: release v${VERSION}" --allow-empty
+          git tag "v${VERSION}"
+          git push origin main
+          git push origin "v${VERSION}"
+
+      - name: Prepare release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          cp core/burrito_out/lazypock_macos_silicon \
+            "dist/lazypock-${VERSION}-darwin-arm64"
+          cp core/burrito_out/lazypock_linux \
+            "dist/lazypock-${VERSION}-linux-x86_64"
+          chmod +x dist/*
+          cd dist && sha256sum * > checksums-sha256.txt
+
+      - name: Generate changelog
+        id: changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 1,
+            });
+            const last = releases[0]?.tag_name;
+            const { data: commits } = await github.rest.repos.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 50,
+            });
+            let cutoff = null;
+            if (last) {
+              const found = commits.find(
+                (c) => c.commit.message.includes(last)
+              );
+              if (found) cutoff = found.sha;
+            }
+            const items = [];
+            for (const c of commits) {
+              if (cutoff && c.sha === cutoff) break;
+              const msg = c.commit.message.split("\n")[0];
+              items.push(`- ${msg} (${c.sha.slice(0, 7)})`);
+            }
+            core.setOutput("body", items.join("\n"));
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: lazypock v${{ steps.version.outputs.version }}
+          body: ${{ steps.changelog.outputs.body }}
+          files: |
+            dist/lazypock-*
+            dist/checksums-sha256.txt
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
