@@ -12,15 +12,14 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
     # -- _externalAuths --
     execute "CREATE TABLE IF NOT EXISTS _externalAuths (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      collection_ref TEXT NOT NULL,
-      record_ref TEXT NOT NULL,
+      collection TEXT NOT NULL,
       provider TEXT NOT NULL,
       provider_id TEXT NOT NULL,
+      user_id UUID NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
-    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_record_provider ON _externalAuths (collection_ref, record_ref, provider)"
-    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _externalAuths (collection_ref, provider, provider_id)"
+    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _externalAuths (collection, provider, provider_id)"
 
     execute """
       INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)

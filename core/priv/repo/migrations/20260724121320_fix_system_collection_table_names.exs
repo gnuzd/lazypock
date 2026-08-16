@@ -8,15 +8,14 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
 
     execute "CREATE TABLE IF NOT EXISTS _externalAuths (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      collection_ref TEXT NOT NULL,
-      record_ref TEXT NOT NULL,
+      collection TEXT NOT NULL,
       provider TEXT NOT NULL,
       provider_id TEXT NOT NULL,
+      user_id UUID NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
-    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_record_provider ON _externalAuths (collection_ref, record_ref, provider)"
-    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _externalAuths (collection_ref, provider, provider_id)"
+    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _externalAuths (collection, provider, provider_id)"
 
     execute "CREATE TABLE IF NOT EXISTS _authOrigins (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -60,15 +59,14 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
     execute "DROP TABLE IF EXISTS _authOrigins CASCADE"
     execute "CREATE TABLE IF NOT EXISTS _external_auths (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      collection_ref TEXT NOT NULL,
-      record_ref TEXT NOT NULL,
+      collection TEXT NOT NULL,
       provider TEXT NOT NULL,
       provider_id TEXT NOT NULL,
+      user_id UUID NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
-    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_record_provider ON _external_auths (collection_ref, record_ref, provider)"
-    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _external_auths (collection_ref, provider, provider_id)"
+    execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _external_auths (collection, provider, provider_id)"
     execute "CREATE TABLE IF NOT EXISTS _auth_origins (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       collection_ref TEXT NOT NULL,

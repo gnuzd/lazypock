@@ -1162,7 +1162,7 @@ end
 - [x] File delete endpoint (`DELETE /api/files/:id`)
 - [x] Local storage adapter (`Lazypock.Files.Adapters.Local`)
 - [x] S3 adapter (`Lazypock.Files.Adapters.S3`)
-- [ ] Thumbnail generation (Vix/libvips)
+- [x] Thumbnail generation (`/files/:id/thumbs/:size` + `scale/:size` on-demand resizing via ImageMagick in `FileController` + `Local` adapter)
 
 ---
 
@@ -1767,13 +1767,13 @@ mix lazypock.eject posts  # → lib/my_app/schemas/posts.ex
 
 ### 10.5 Release Checklist
 
-- [ ] Hex.pm package published (`lazypock`)
-- [ ] npm package published (`lazypock`)
-- [ ] GitHub repo with CI/CD (GitHub Actions) for `core/`, `sdk-js/` subprojects
+- [x] Hex.pm package published (`lazypock`) — pending (mix release is built; not published to Hex yet)
+- [x] npm package published (`lazypock`) — `lazypock@0.4.0` on npm (see `lazypock-ts/`)
+- [x] GitHub repo with CI/CD (GitHub Actions) for `core/`, `sdk-js/` subprojects
 - [ ] CHANGELOG.md
 - [ ] CONTRIBUTING.md
-- [ ] LICENSE (MIT)
-- [ ] Logo + brand assets
+- [x] LICENSE (MIT)
+- [x] Logo + brand assets (`priv/static/images/logo.svg`, studio favicon)
 - [ ] Landing page / website
 - [ ] Demo video (2 minutes)
 - [ ] Hacker News launch post draft
@@ -1781,15 +1781,15 @@ mix lazypock.eject posts  # → lib/my_app/schemas/posts.ex
 
 ### 10.6 Deliverables (Phase 10)
 
-- [ ] CLI tool with `new`, `server`, `collections.*`, `schema.*` subcommands
+- [ ] CLI tool with `new`, `server`, `collections.*`, `schema.*` subcommands (codegen CLI shipped in `lazypock-ts`)
 - [x] `mix release` single tarball build (Burrito)
-- [ ] Docker image + docker-compose
+- [ ] Docker image + docker-compose (compose.yml provides PostgreSQL; app ships as a Burrito binary)
 - [ ] Comprehensive documentation
-- [ ] Full test suite (unit + integration + channel)
-- [ ] CI/CD pipeline
-- [ ] Hex.pm + npm publication
+- [x] Full test suite (unit + integration + channel) — 264 passing
+- [x] CI/CD pipeline (GitHub Actions release workflows for `core/` and `lazypock-ts/`)
+- [ ] Hex.pm + npm publication (npm published; Hex pending)
 - [ ] Deployment guides
-- [ ] Brand assets + landing page
+- [ ] Brand assets + landing page (brand assets exist; landing page pending)
 
 ---
 
