@@ -92,6 +92,17 @@ defmodule Lazypock.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      "assets.setup": fn _ ->
+        IO.puts("Studio UI: cd studio && bun install")
+      end,
+      "assets.build": ["compile", "studio.build"],
+      "studio.build": fn _ ->
+        {_, 0} = System.cmd("bun", ["run", "build"], cd: "../studio", into: IO.binstream())
+      end,
+      "assets.deploy": [
+        "studio.build",
+        "phx.digest"
+      ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

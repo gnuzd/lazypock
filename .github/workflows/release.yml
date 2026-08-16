@@ -99,9 +99,9 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
 
-      - name: Build Studio SPA
-        working-directory: studio
-        run: bun run build
+      - name: Deploy assets (studio build + phx.digest)
+        working-directory: core
+        run: mix assets.deploy
 
       - name: Build Burrito release
         working-directory: core
