@@ -4,10 +4,10 @@ defmodule Lazypock.Repo.Migrations.BackfillSystemFields do
   def up do
     # ── _external_auths fields ──
     add_system_fields("_external_auths", [
-      %{name: "collection_ref", type: "text", required: true, sort_order: 0},
-      %{name: "record_ref", type: "text", required: true, sort_order: 1},
-      %{name: "provider", type: "text", required: true, sort_order: 2},
-      %{name: "provider_id", type: "text", required: true, sort_order: 3},
+      %{name: "collection", type: "text", required: true, sort_order: 0},
+      %{name: "provider", type: "text", required: true, sort_order: 1},
+      %{name: "provider_id", type: "text", required: true, sort_order: 2},
+      %{name: "user_id", type: "relation", required: true, sort_order: 3},
       %{name: "created_at", type: "autodate", options: %{onCreate: true}, sort_order: 4},
       %{name: "updated_at", type: "autodate", options: %{onCreate: true, onUpdate: true}, sort_order: 5}
     ])

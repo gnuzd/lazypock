@@ -35,6 +35,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The Studio SPA depends on the lazypock-ts SDK (sibling repo) via a
+      # file: dependency — check it out and build it before the studio build.
+      - name: Checkout lazypock-ts SDK
+        uses: actions/checkout@v4
+        with:
+          repository: gnuzd/lazypock-ts
+          path: lazypock-ts
+          ref: main
+
       - name: Setup Elixir & Erlang
         uses: erlef/setup-beam@1.18.2
         with:
@@ -52,6 +61,12 @@ jobs:
       - name: Install Mix deps
         working-directory: core
         run: mix deps.get
+
+      - name: Build lazypock-ts SDK (studio dependency)
+        working-directory: lazypock-ts
+        run: |
+          bun install --frozen-lockfile
+          bun run build
 
       - name: Install Studio deps
         working-directory: studio

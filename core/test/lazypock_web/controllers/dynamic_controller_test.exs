@@ -31,6 +31,7 @@ defmodule LazypockWeb.DynamicControllerTest do
       email: "admin@test.com",
       password_hash: Bcrypt.hash_pwd_salt("password")
     }
+
     Repo.insert!(superuser)
     {:ok, token} = Token.generate_access_token(superuser)
     token
@@ -111,6 +112,74 @@ defmodule LazypockWeb.DynamicControllerTest do
       assert body["totalItems"] == 0
       assert length(body["items"]) == 1
     end
+
+    test "projects fields with ?fields=title,count" do
+      insert_test_item(%{"title" => "proj", "count" => 7, "active" => false})
+
+      conn = get(build_conn(), list_path(), %{fields: "title,count"})
+      body = json_response(conn, 200)
+
+      assert length(body["items"]) == 1
+      item = hd(body["items"])
+      # requested + system keys only (`created`/`updated` are system keys, kept
+      # per PocketBase parity); `active` must be absent
+      assert Map.keys(item) |> Enum.sort() ==
+               [
+                 "collectionId",
+                 "collectionName",
+                 "count",
+                 "created",
+                 "id",
+                 "title",
+                 "updated"
+               ]
+
+      assert item["title"] == "proj"
+      assert item["count"] == 7
+      refute Map.has_key?(item, "active")
+    end
+
+    test "list without fields returns full records (regression guard)" do
+      insert_test_item(%{"title" => "full", "count" => 1, "active" => true})
+
+      conn = get(build_conn(), list_path())
+      body = json_response(conn, 200)
+      item = hd(body["items"])
+
+      assert item["active"] == true
+      assert Map.has_key?(item, "created")
+      assert Map.has_key?(item, "updated")
+    end
+  end
+
+  # ── Fields projection + password safety ────────────────────
+
+  describe "fields projection safety" do
+    test "password field never leaks even when requested via ?fields" do
+      # Separate collection with a password field
+      coll = "pw_test_items"
+
+      {:ok, _} =
+        DDL.create_collection(coll,
+          type: "base",
+          fields: [
+            %{"name" => "title", "type" => "text", "required" => false, "indexed" => false},
+            %{"name" => "pw", "type" => "password", "required" => false, "indexed" => false}
+          ]
+        )
+
+      Registry.reload!()
+
+      {:ok, _record} =
+        GenericRecord.insert(coll, %{"title" => "secret-item", "pw" => "hunter2"})
+
+      conn = get(build_conn(), "/api/#{coll}?#{URI.encode_query(%{fields: "pw,title"})}")
+      body = json_response(conn, 200)
+      item = hd(body["items"])
+
+      assert item["title"] == "secret-item"
+      refute Map.has_key?(item, "pw")
+    end
   end
 
   # ── Show ─────────────────────────────────────────────────
@@ -125,6 +194,20 @@ defmodule LazypockWeb.DynamicControllerTest do
       assert body["title"] == "show-me"
       assert body["count"] == 10
       assert body["active"] == true
+    end
+
+    test "projects fields with ?fields=title" do
+      record = insert_test_item(%{"title" => "show-proj", "count" => 3, "active" => false})
+
+      conn = get(build_conn(), item_path(record["id"]), %{fields: "title"})
+      body = json_response(conn, 200)
+
+      assert Map.keys(body) |> Enum.sort() ==
+               ["collectionId", "collectionName", "created", "id", "title", "updated"]
+
+      assert body["title"] == "show-proj"
+      refute Map.has_key?(body, "count")
+      refute Map.has_key?(body, "active")
     end
 
     test "returns 404 for unknown id" do
