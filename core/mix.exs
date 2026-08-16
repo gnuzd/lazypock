@@ -11,7 +11,7 @@ defmodule Lazypock.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      compilers: [:phoenix_live_view] ++ Mix.compilers(),
+      compilers: Mix.compilers(),
       listeners: [Phoenix.CodeReloader],
       releases: releases()
     ]
@@ -66,9 +66,6 @@ defmodule Lazypock.MixProject do
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
       {:phoenix_html, "~> 4.1"},
-      {:phoenix_live_reload, "~> 1.2", only: :dev},
-      {:phoenix_live_view, "~> 1.2.0"},
-      {:lazy_html, ">= 0.1.0", only: :test},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
@@ -95,17 +92,6 @@ defmodule Lazypock.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      "assets.setup": fn _ ->
-        IO.puts("Svelte UI: cd studio && npm install")
-      end,
-      "assets.build": ["compile", "ui.build"],
-      "studio.build": fn _ ->
-        {_, 0} = System.cmd("npm", ["run", "build"], cd: "../studio", into: IO.binstream())
-      end,
-      "assets.deploy": [
-        "studio.build",
-        "phx.digest"
-      ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

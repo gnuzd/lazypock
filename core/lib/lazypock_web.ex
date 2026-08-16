@@ -1,12 +1,12 @@
 defmodule LazypockWeb do
   @moduledoc """
   The entrypoint for defining your web interface, such
-  as controllers, components, channels, and so on.
+  as controllers, channels, and so on.
 
   This can be used in your application as:
 
       use LazypockWeb, :controller
-      use LazypockWeb, :html
+      use LazypockWeb, :channel
 
   The definitions below will be executed for every controller,
   component, etc, so keep them short and clean, focused
@@ -17,7 +17,8 @@ defmodule LazypockWeb do
   those modules here.
   """
 
-  def static_paths, do: ~w(assets fonts images favicon.ico robots.txt admin studio)
+  def static_paths, do: ~w(fonts images favicon.ico robots.txt studio)
+
   def router do
     quote do
       use Phoenix.Router, helpers: false
@@ -25,7 +26,6 @@ defmodule LazypockWeb do
       # Import common connection and controller functions to use in pipelines
       import Plug.Conn
       import Phoenix.Controller
-      import Phoenix.LiveView.Router
     end
   end
 
@@ -45,51 +45,6 @@ defmodule LazypockWeb do
     end
   end
 
-  def live_view do
-    quote do
-      use Phoenix.LiveView
-
-      unquote(html_helpers())
-    end
-  end
-
-  def live_component do
-    quote do
-      use Phoenix.LiveComponent
-
-      unquote(html_helpers())
-    end
-  end
-
-  def html do
-    quote do
-      use Phoenix.Component
-
-      # Import convenience functions from controllers
-      import Phoenix.Controller,
-        only: [get_csrf_token: 0, view_module: 1, view_template: 1]
-
-      # Include general helpers for rendering HTML
-      unquote(html_helpers())
-    end
-  end
-
-  defp html_helpers do
-    quote do
-      # HTML escaping functionality
-      import Phoenix.HTML
-      # Core UI components
-      import LazypockWeb.CoreComponents
-
-      # Common modules used in templates
-      alias Phoenix.LiveView.JS
-      alias LazypockWeb.Layouts
-
-      # Routes generation with the ~p sigil
-      unquote(verified_routes())
-    end
-  end
-
   def verified_routes do
     quote do
       use Phoenix.VerifiedRoutes,
@@ -100,7 +55,7 @@ defmodule LazypockWeb do
   end
 
   @doc """
-  When used, dispatch to the appropriate controller/live_view/etc.
+  When used, dispatch to the appropriate controller/channel/etc.
   """
   defmacro __using__(which) when is_atom(which) do
     apply(__MODULE__, which, [])

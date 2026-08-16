@@ -2,7 +2,7 @@ defmodule LazypockWeb.Router do
   use LazypockWeb, :router
 
   # Serve the Svelte SPA admin UI (static files)
-  # In production: priv/static/admin/ is built by the Svelte project
+  # In production: priv/static/studio/ is built by the studio (bun) project
   # In dev: the Svelte dev server proxies to avoid CORS issues
   pipeline :spa do
     plug(:accepts, ["html", "json"])

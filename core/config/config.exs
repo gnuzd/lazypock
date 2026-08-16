@@ -16,16 +16,10 @@ config :lazypock, LazypockWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: LazypockWeb.ErrorHTML, json: LazypockWeb.ErrorJSON],
+    formats: [json: LazypockWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Lazypock.PubSub,
-  live_view: [signing_salt: "cNwwzWsH"]
-
-# Configure LiveView
-config :phoenix_live_view,
-  # the attribute set on all root tags. Used for Phoenix.LiveView.ColocatedCSS.
-  root_tag_attribute: "phx-r"
+  pubsub_server: Lazypock.PubSub
 
 # Configure Elixir's Logger
 config :logger, :default_formatter,

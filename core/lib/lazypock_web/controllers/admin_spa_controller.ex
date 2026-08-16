@@ -3,7 +3,7 @@ defmodule LazypockWeb.AdminSpaController do
 
   @doc """
   Serves the Svelte SPA for all /_/* routes.
-  In production, the SPA is built to priv/static/admin/.
+  In production, the SPA is built to priv/static/studio/.
   In dev, you run vite dev server separately.
   """
   def index(conn, _params) do
