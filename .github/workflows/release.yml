@@ -35,15 +35,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The Studio SPA depends on the lazypock-ts SDK (sibling repo) via a
-      # file: dependency — check it out and build it before the studio build.
-      - name: Checkout lazypock-ts SDK
-        uses: actions/checkout@v4
-        with:
-          repository: gnuzd/lazypock-ts
-          path: lazypock-ts
-          ref: main
-
       - name: Setup Elixir & Erlang
         uses: erlef/setup-beam@v1.18.2
         with:
