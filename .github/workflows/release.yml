@@ -31,10 +31,6 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Elixir & Erlang
         uses: erlef/setup-beam@v1.18.2
         with:
