@@ -46,8 +46,12 @@ jobs:
         with:
           bun-version: latest
 
+      # Pin the exact Zig version Burrito requires (see core/mix.lock —
+      # burrito 1.6.0 expects 0.16.0; the action's default is a dev build).
       - name: Setup Zig (burrito wrapper)
         uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.16.0
 
       - name: Install Mix deps
         working-directory: core
