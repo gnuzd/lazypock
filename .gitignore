@@ -11,3 +11,5 @@ example
 # lazypock-ts SDK lives in its own repository (github.com/gnuzd/lazypock-ts)
 # This folder is a local convenience checkout, not part of this repo.
 lazypock-ts/
+
+.repowise
