@@ -57,6 +57,11 @@ jobs:
         working-directory: studio
         run: bun install --frozen-lockfile
 
+      - name: Install ImageMagick (thumbnail/scale tests shell out to `magick`)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+
       - name: Run tests
         working-directory: core
         env:
