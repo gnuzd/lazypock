@@ -48,6 +48,12 @@ defmodule Lazypock.Schema.DDL do
           create_field_metadata!(collection.id, fields)
 
           Repo.preload(collection, :fields)
+        else
+          # Validation failures must roll back so the transaction returns
+          # {:error, reason} — otherwise the caller would receive the
+          # double-wrapped {:ok, {:error, reason}} and treat a failure as
+          # success (and broadcast a malformed message to the Registry).
+          {:error, reason} -> Repo.rollback(reason)
         end
       end)
 
@@ -185,7 +191,8 @@ defmodule Lazypock.Schema.DDL do
   def update_collection(old_name, opts \\ []) when is_binary(old_name) do
     new_name = Keyword.get(opts, :name, old_name)
     type = Keyword.get(opts, :type)
-    fields = Keyword.get(opts, :fields, [])
+    # nil when not provided — omitting :fields must NOT drop all columns
+    new_fields = Keyword.get(opts, :fields)
     new_indexes = Keyword.get(opts, :indexes)
 
     result =
@@ -194,7 +201,7 @@ defmodule Lazypock.Schema.DDL do
 
         # System collections cannot be renamed
         if collection.system and new_name != old_name do
-          {:error, "Cannot rename system collection '#{old_name}'"}
+          Repo.rollback("Cannot rename system collection '#{old_name}'")
         else
           lock_key = :erlang.phash2({:update_collection, old_name})
           Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
@@ -258,89 +265,95 @@ defmodule Lazypock.Schema.DDL do
             |> Repo.update!()
           end
 
-          existing_fields =
-            Repo.all(
-              from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
-            )
-
-          existing_names = MapSet.new(existing_fields, & &1.name)
-          incoming_names = MapSet.new(fields, & &1["name"])
-
-          # Remove deleted fields
-          for f <- existing_fields, not MapSet.member?(incoming_names, f.name) do
-            Ecto.Adapters.SQL.query!(
-              Repo,
-              "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
-              []
-            )
-
-            Repo.delete_all(
-              from(fld in Lazypock.Collections.Field,
-                where: fld.collection_id == ^collection.id and fld.name == ^f.name
+          # Sync fields ONLY when explicitly provided. Omitting :fields (e.g. a
+          # bare rename or rules-only update) must NOT silently drop every column:
+          # the controller sends the full field list on schema edits, and
+          # anything else is a partial update that should leave columns alone.
+          if not is_nil(new_fields) do
+            existing_fields =
+              Repo.all(
+                from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
               )
-            )
-          end
 
-          # Update existing fields with new options/properties
-          # Derive sort_order from array position so drag-reorder works
-          fields_with_sort =
-            fields
-            |> Enum.with_index()
-            |> Enum.map(fn {f, idx} ->
-              Map.put(f, "sort_order", idx)
-            end)
+            existing_names = MapSet.new(existing_fields, & &1.name)
+            incoming_names = MapSet.new(new_fields, & &1["name"])
 
-          for f <- fields_with_sort, MapSet.member?(existing_names, f["name"]) do
-            opts =
-              if f["type"] == "relation" do
-                normalize_relation_opts(f)
-              else
-                Map.get(f, "options", %{})
-              end
+            # Remove deleted fields
+            for f <- existing_fields, not MapSet.member?(incoming_names, f.name) do
+              Ecto.Adapters.SQL.query!(
+                Repo,
+                "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
+                []
+              )
 
-            old = Enum.find(existing_fields, &(&1.name == f["name"]))
-            new_unique = Map.get(f, "unique", false)
-            new_indexed = Map.get(f, "indexed", false)
-
-            # Sync actual DB indexes with the requested unique/indexed flags:
-            # drop the old index(es) when the flags change, then recreate.
-            if old do
-              if old.unique != new_unique or old.indexed != new_indexed do
-                drop_index_if_exists(new_name, f["name"])
-              end
-
-              if new_indexed, do: create_index(new_name, f["name"])
-              if new_unique, do: create_unique_index(new_name, f["name"])
+              Repo.delete_all(
+                from(fld in Lazypock.Collections.Field,
+                  where: fld.collection_id == ^collection.id and fld.name == ^f.name
+                )
+              )
             end
 
-            Repo.update_all(
-              from(fld in Lazypock.Collections.Field,
-                where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
-              ),
-              set: [
-                required: Map.get(f, "required", false),
-                unique: new_unique,
-                hidden: Map.get(f, "hidden", false),
-                system: Map.get(f, "system", false),
-                options: opts,
-                indexed: new_indexed,
-                sort_order: f["sort_order"]
-              ]
-            )
-          end
+            # Update existing fields with new options/properties
+            # Derive sort_order from array position so drag-reorder works
+            fields_with_sort =
+              new_fields
+              |> Enum.with_index()
+              |> Enum.map(fn {f, idx} ->
+                Map.put(f, "sort_order", idx)
+              end)
 
-          # Add new fields (also derive sort_order from position)
-          for f <- fields_with_sort, not MapSet.member?(existing_names, f["name"]) do
-            :ok = validate_field_name!(f["name"])
-            :ok = validate_field_type(f["type"])
+            for f <- fields_with_sort, MapSet.member?(existing_names, f["name"]) do
+              opts =
+                if f["type"] == "relation" do
+                  normalize_relation_opts(f)
+                else
+                  Map.get(f, "options", %{})
+                end
 
-            sql =
-              "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(f["name"])} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
+              old = Enum.find(existing_fields, &(&1.name == f["name"]))
+              new_unique = Map.get(f, "unique", false)
+              new_indexed = Map.get(f, "indexed", false)
 
-            Ecto.Adapters.SQL.query!(Repo, sql, [])
-            if f["indexed"], do: create_index(new_name, f["name"])
-            if f["unique"], do: create_unique_index(new_name, f["name"])
-            create_field_metadata_entry!(collection.id, f)
+              # Sync actual DB indexes with the requested unique/indexed flags:
+              # drop the old index(es) when the flags change, then recreate.
+              if old do
+                if old.unique != new_unique or old.indexed != new_indexed do
+                  drop_index_if_exists(new_name, f["name"])
+                end
+
+                if new_indexed, do: create_index(new_name, f["name"])
+                if new_unique, do: create_unique_index(new_name, f["name"])
+              end
+
+              Repo.update_all(
+                from(fld in Lazypock.Collections.Field,
+                  where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
+                ),
+                set: [
+                  required: Map.get(f, "required", false),
+                  unique: new_unique,
+                  hidden: Map.get(f, "hidden", false),
+                  system: Map.get(f, "system", false),
+                  options: opts,
+                  indexed: new_indexed,
+                  sort_order: f["sort_order"]
+                ]
+              )
+            end
+
+            # Add new fields (also derive sort_order from position)
+            for f <- fields_with_sort, not MapSet.member?(existing_names, f["name"]) do
+              :ok = validate_field_name!(f["name"])
+              :ok = validate_field_type(f["type"])
+
+              sql =
+                "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(f["name"])} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
+
+              Ecto.Adapters.SQL.query!(Repo, sql, [])
+              if f["indexed"], do: create_index(new_name, f["name"])
+              if f["unique"], do: create_unique_index(new_name, f["name"])
+              create_field_metadata_entry!(collection.id, f)
+            end
           end
 
           collection_refresh =

@@ -42,6 +42,36 @@ defmodule Lazypock.Schemas.FilterCompiler do
     end
   end
 
+  @doc """
+  Inlines `$1..$n` placeholders of a compiled clause with escaped SQL literals.
+
+  The compiler has no schema knowledge, so a bound parameter compared against
+  a typed column (e.g. `"id" = $1` on a `uuid` column) crashes Postgrex's
+  encoder or cannot encode `""`. Inlining lets PostgreSQL resolve the literal
+  type natively — the same semantics `Rules.Enforcer` already uses for the
+  create-rule path. Values are single-quote-escaped; rules/filters are
+  superuser-authored, and untyped literal comparisons (e.g. `"id" = ''`)
+  become SQL errors that callers treat as "no match", not crashes.
+  """
+  @spec inline_params(String.t(), [term()]) :: String.t()
+  def inline_params(sql, params) when is_binary(sql) and is_list(params) do
+    params
+    |> Enum.with_index(1)
+    |> Enum.reduce(sql, fn {val, idx}, acc ->
+      val_str =
+        cond do
+          is_nil(val) -> "null"
+          is_boolean(val) -> String.downcase(to_string(val))
+          is_binary(val) -> ~s('#{escape_quote(val)}')
+          true -> to_string(val)
+        end
+
+      String.replace(acc, "$#{idx}", val_str)
+    end)
+  end
+
+  defp escape_quote(str), do: String.replace(str, "'", "''")
+
   # ── Tokenizer ────────────────────────────────────────
 
   defp tokenize(str) do

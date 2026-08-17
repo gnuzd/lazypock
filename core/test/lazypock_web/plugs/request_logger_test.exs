@@ -120,7 +120,10 @@ defmodule LazypockWeb.Plugs.RequestLoggerTest do
 
     case Ecto.Adapters.SQL.query(Repo, "SELECT id FROM _request_logs LIMIT 1", []) do
       {:ok, %{rows: [[id]]}} ->
-        conn = build_conn() |> auth_conn() |> get("/api/logs/#{id}")
+        # Postgrex returns uuid columns as raw 16-byte binaries; cast to a
+        # readable UUID string before putting it in the URL path.
+        id_str = Ecto.UUID.cast!(id)
+        conn = build_conn() |> auth_conn() |> get("/api/logs/#{id_str}")
         resp = json_response(conn, 200)
         assert resp["body"] =~ "New title"
         assert resp["method"] == "PATCH"

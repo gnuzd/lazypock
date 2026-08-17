@@ -61,10 +61,16 @@ defmodule Lazypock.Hooks.Registry do
     collections = Keyword.get(opts, :collections)
     priority = Keyword.get(opts, :priority, 0)
 
+    # NOTE: :erlang.unique_integer([:monotonic]) is used (not [:positive])
+    # because the seq is a registration-order tiebreaker for same-priority
+    # handlers and only the :monotonic variant is guaranteed to increase
+    # across schedulers. [:positive] values interleave out of order when a
+    # process migrates between schedulers, silently breaking "runs handlers
+    # in registration order".
     updated =
       all() ++
         [
-          {event, target, collections, priority, System.unique_integer([:positive])}
+          {event, target, collections, priority, :erlang.unique_integer([:monotonic])}
         ]
 
     :persistent_term.put(@key, updated)
@@ -232,43 +238,47 @@ defmodule Lazypock.Hooks.Registry do
   @doc """
   Scans `priv/hooks/` beam files and registers any module using
   `Lazypock.Hooks.Hook` (or the legacy `Lazypock.Hooks.Lifecycle`).
-  Called at application boot.
+  Called at application boot. No-op when `LAZYPOCK_DISABLE_HOOKS` is set.
   """
   @spec discover!() :: :ok
   def discover! do
-    try do
-      beam_paths()
-      |> Enum.each(fn path ->
-        basename = Path.basename(path, ".beam")
+    if Lazypock.Hooks.User.disabled?() do
+      :ok
+    else
+      try do
+        beam_paths()
+        |> Enum.each(fn path ->
+          basename = Path.basename(path, ".beam")
 
-        mod_name =
-          basename |> String.trim_leading("Elixir.") |> String.split(".") |> Module.concat()
+          mod_name =
+            basename |> String.trim_leading("Elixir.") |> String.split(".") |> Module.concat()
 
-        case Code.ensure_loaded(mod_name) do
-          {:module, ^mod_name} ->
-            if function_exported?(mod_name, :__hook_registrations__, 0) do
-              # New-style hook module: self-registers via the __using__ macro.
-              mod_name.__hook_registrations__()
-              |> Enum.each(fn {event, target, opts} ->
-                register(event, target, opts)
-                Logger.info("Registered hook #{inspect(mod_name)} for event #{inspect(event)}")
-              end)
-            else
-              if function_exported?(mod_name, :__collection__, 0) do
-                # Legacy lifecycle module.
-                register_legacy(mod_name)
+          case Code.ensure_loaded(mod_name) do
+            {:module, ^mod_name} ->
+              if function_exported?(mod_name, :__hook_registrations__, 0) do
+                # New-style hook module: self-registers via the __using__ macro.
+                mod_name.__hook_registrations__()
+                |> Enum.each(fn {event, target, opts} ->
+                  register(event, target, opts)
+                  Logger.info("Registered hook #{inspect(mod_name)} for event #{inspect(event)}")
+                end)
+              else
+                if function_exported?(mod_name, :__collection__, 0) do
+                  # Legacy lifecycle module.
+                  register_legacy(mod_name)
+                end
               end
-            end
 
-          _ ->
-            :ok
-        end
-      end)
-    rescue
-      _ -> :ok
+            _ ->
+              :ok
+          end
+        end)
+      rescue
+        _ -> :ok
+      end
+
+      :ok
     end
-
-    :ok
   end
 
   @doc false

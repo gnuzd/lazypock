@@ -70,7 +70,18 @@ defmodule Lazypock.Rules.Enforcer do
 
           true ->
             resolved = resolve_user_tokens(rule, user)
-            FilterCompiler.compile(resolved)
+
+            case FilterCompiler.compile(resolved) do
+              {:ok, {sql, params}} ->
+                # Inline rule params: compiled rules are compared against real
+                # columns (e.g. "id" = $1 on a uuid column) and bound params
+                # crash Postgrex's encoder for uuid/empty values. Inlining lets
+                # PG resolve literal types natively.
+                {:ok, {FilterCompiler.inline_params(sql, params), []}}
+
+              {:error, _} ->
+                {:error, "Access denied by listRule"}
+            end
         end
       end
     end
@@ -209,11 +220,12 @@ defmodule Lazypock.Rules.Enforcer do
   defp eval_against_context(sql, params, nil, _collection_name) do
     # No record context — rule references only @request.auth tokens
     # The sql is something like "'' != ''" → false
-    # We can check by running a simple SELECT with no FROM
-    {:ok, %{rows: rows}} =
-      Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{sql}", params)
-
-    length(rows) > 0
+    # We can check by running a simple SELECT with no FROM.
+    # A failing query (e.g. a typo'd field name) must deny, not crash.
+    case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{sql}", params) do
+      {:ok, %{rows: rows}} -> length(rows) > 0
+      {:error, _} -> false
+    end
   end
 
   defp eval_against_context(sql, params, record, collection_name) when is_map(record) do
@@ -226,14 +238,22 @@ defmodule Lazypock.Rules.Enforcer do
       # Postgrex expects 16-byte binary for UUID columns, not string
       uuid_bin = Ecto.UUID.dump!(record_id)
 
-      {:ok, %{rows: rows}} =
-        Ecto.Adapters.SQL.query(
-          Repo,
-          "SELECT 1 FROM #{table} WHERE id = $#{length(params) + 1} AND (#{sql}) LIMIT 1",
-          params ++ [uuid_bin]
-        )
+      # Inline the rule's params: the FilterCompiler has no schema knowledge, so
+      # a bound param compared to a typed column (e.g. "id" = $1 with a user's
+      # uuid, or "" for unauthenticated) crashes Postgrex's encoder. Inlining
+      # lets PG resolve literal types natively; invalid literals ("" for uuid)
+      # become query errors → denied. This matches the create-path semantics.
+      inline_sql = FilterCompiler.inline_params(sql, params)
 
-      length(rows) > 0
+      # A failing query (undefined column, bad expression) must deny, not crash.
+      case Ecto.Adapters.SQL.query(
+             Repo,
+             "SELECT 1 FROM #{table} WHERE id = $1 AND (#{inline_sql}) LIMIT 1",
+             [uuid_bin]
+           ) do
+        {:ok, %{rows: rows}} -> length(rows) > 0
+        {:error, _} -> false
+      end
     else
       # No id yet (create action) — check what we can
       eval_without_db(sql, params, record)

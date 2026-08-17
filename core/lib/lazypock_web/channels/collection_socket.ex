@@ -27,9 +27,16 @@ defmodule LazypockWeb.CollectionSocket do
       token ->
         case Token.verify_token(token) do
           {:ok, claims} ->
-            # Superuser token
-            user = %{"id" => claims["id"], "email" => claims["email"], "role" => "superuser"}
-            {:ok, assign(socket, :current_user, user)}
+            # Superuser token — assign an actual SuperUser struct so the rule
+            # enforcer's superuser bypass (struct-based) applies to realtime
+            # subscriptions, matching PocketBase where superusers can
+            # subscribe to any collection regardless of rules.
+            superuser = %Lazypock.Auth.SuperUser{
+              id: claims["id"],
+              email: claims["email"] || ""
+            }
+
+            {:ok, assign(socket, :current_user, superuser)}
 
           {:error, _reason} ->
             # Try auth collection user token

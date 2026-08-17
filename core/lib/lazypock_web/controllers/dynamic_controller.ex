@@ -318,7 +318,13 @@ defmodule LazypockWeb.DynamicController do
 
   defp build_filter(filter_str) when is_binary(filter_str) do
     case FilterCompiler.compile(filter_str) do
-      {:ok, {sql_clause, params}} -> {sql_clause, params}
+      {:ok, {sql_clause, params}} ->
+        # Inline user filter params for the same reason as rule params: the
+        # compiler has no schema knowledge, so uuid-column comparisons (e.g.
+        # ?filter=id='abc') crash Postgrex's encoder. Inlined literals let PG
+        # resolve types natively.
+        {FilterCompiler.inline_params(sql_clause, params), []}
+
       {:error, _} -> {"", []}
     end
   end

@@ -43,6 +43,12 @@ defmodule Lazypock.Hooks.User do
     base
   end
 
+  @doc "Returns true when hook loading is disabled via `LAZYPOCK_DISABLE_HOOKS`."
+  @spec disabled?() :: boolean()
+  def disabled? do
+    System.get_env("LAZYPOCK_DISABLE_HOOKS") in ["1", "true"]
+  end
+
   @doc """
   Copies built-in hook files from the release into the user hooks dir, without
   overwriting existing files. Returns the list of files copied.
@@ -80,35 +86,45 @@ defmodule Lazypock.Hooks.User do
   """
   @spec load!() :: :ok
   def load! do
-    hooks_dir = dir()
-    sync_builtins!()
+    if disabled?() do
+      Logger.warning("LAZYPOCK_DISABLE_HOOKS is set — user hooks are NOT loaded.")
+      :ok
+    else
+      hooks_dir = dir()
+      sync_builtins!()
 
-    hooks_dir
-    |> Path.join("*.ex")
-    |> Path.wildcard()
-    |> Enum.sort()
-    |> Enum.each(fn path ->
-      case Code.compile_file(path) do
-        [{mod, _binary}] when is_atom(mod) ->
-          if function_exported?(mod, :__hook_registrations__, 0) do
-            mod.__hook_registrations__()
-            |> Enum.each(fn {event, target, opts} ->
-              Lazypock.Hooks.Registry.register(event, target, opts)
-              Logger.info("Registered user hook #{inspect(mod)} for event #{inspect(event)}")
-            end)
-          else
-            Logger.warning("User hook file did not produce a hook module: #{path}")
-          end
+      Logger.warning(
+        "Loading user hooks from #{hooks_dir} — hook code runs with full server " <>
+          "privileges (see HOOKS_SECURITY.md). Set LAZYPOCK_DISABLE_HOOKS=1 to disable."
+      )
 
-        [] ->
-          Logger.warning("User hook file compiled to no module: #{path}")
+      hooks_dir
+      |> Path.join("*.ex")
+      |> Path.wildcard()
+      |> Enum.sort()
+      |> Enum.each(fn path ->
+        case Code.compile_file(path) do
+          [{mod, _binary}] when is_atom(mod) ->
+            if function_exported?(mod, :__hook_registrations__, 0) do
+              mod.__hook_registrations__()
+              |> Enum.each(fn {event, target, opts} ->
+                Lazypock.Hooks.Registry.register(event, target, opts)
+                Logger.info("Registered user hook #{inspect(mod)} for event #{inspect(event)}")
+              end)
+            else
+              Logger.warning("User hook file did not produce a hook module: #{path}")
+            end
 
-        _other ->
-          Logger.warning("Unexpected compile result for #{path}")
-      end
-    end)
+          [] ->
+            Logger.warning("User hook file compiled to no module: #{path}")
 
-    :ok
+          _other ->
+            Logger.warning("Unexpected compile result for #{path}")
+        end
+      end)
+
+      :ok
+    end
   rescue
     e ->
       Logger.error("Failed to load user hooks: #{Exception.message(e)}")

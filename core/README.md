@@ -202,3 +202,38 @@ lazyPock/
 ├── PLAN.md                       # Full architecture plan
 └── README.md
 ```
+
+## Migrating from PocketBase
+
+Import an existing PocketBase instance (collections, records, auth users, OAuth
+links and files) into LazyPock:
+
+```bash
+# Dry run first — prints what would be imported without changing anything
+mix lazypock.import_pocketbase --pb-dir=/path/to/pb_data --dry-run
+
+# Real import (prompts for confirmation unless --yes)
+mix lazypock.import_pocketbase --pb-dir=/path/to/pb_data --yes
+
+# If your PocketBase data lives elsewhere
+mix lazypock.import_pocketbase --pb-db=/path/to/data.db --storage-dir=/path/to/storage
+```
+
+What happens:
+
+- **Collections** are recreated with their fields, rules and options
+  (PocketBase camelCase field names are normalized to `snake_case`).
+- **Records** are imported with their original `created`/`updated` timestamps.
+  PocketBase ids (15-char strings) are rewritten to deterministic UUIDv5 ids so
+  **relations stay intact** even across collections; the old-id → new-id
+  mapping is written to `pocketbase_id_map.json`.
+- **Auth collections** keep email + bcrypt password hashes (PocketBase and
+  LazyPock both use bcrypt) plus `verified`/`email_visibility`; OAuth
+  `_externalAuths` links are migrated to `_external_auths`.
+- **Files** are copied from `pb_data/storage/` into LazyPock's storage and file
+  field values are rewritten from filenames to LazyPock file ids.
+
+Requires the `sqlite3` CLI on PATH (used read-only). Re-running with `--yes`
+imports records into existing collections (useful for re-syncs); re-running a
+fresh import is idempotent thanks to `ON CONFLICT (id) DO NOTHING` and the
+deterministic ids.

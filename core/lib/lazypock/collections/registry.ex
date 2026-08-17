@@ -101,10 +101,17 @@ defmodule Lazypock.Collections.Registry do
   end
 
   @impl true
-  def handle_info({:collection_created, collection}, state) do
+  def handle_info({:collection_created, %Lazypock.Collections.Collection{} = collection}, state) do
     # Reload the specific collection with its fields preloaded
     collection = Repo.preload(collection, :fields)
     :ets.insert(@table_name, {collection.name, collection})
+    {:noreply, state}
+  end
+
+  # Defense in depth: never crash on a malformed broadcast (e.g. a buggy
+  # caller broadcasting {:error, reason} as the collection payload).
+  def handle_info({:collection_created, _malformed}, state) do
+    load_all_into_cache()
     {:noreply, state}
   end
 
@@ -122,10 +129,16 @@ defmodule Lazypock.Collections.Registry do
   end
 
   @impl true
-  def handle_info({:collection_updated, collection}, state) do
+  def handle_info({:collection_updated, %Lazypock.Collections.Collection{} = collection}, state) do
     # Reload the specific collection with its fields preloaded
     collection = Repo.preload(collection, :fields)
     :ets.insert(@table_name, {collection.name, collection})
+    {:noreply, state}
+  end
+
+  # Defense in depth: never crash on a malformed broadcast payload.
+  def handle_info({:collection_updated, _malformed}, state) do
+    load_all_into_cache()
     {:noreply, state}
   end
 

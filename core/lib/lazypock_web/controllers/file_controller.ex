@@ -17,6 +17,11 @@ defmodule LazypockWeb.FileController do
     * `mime` — only files whose mime_type starts with this prefix (e.g. `image/`)
   """
   def index(conn, params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_index(conn, params)
+  end
+
+  defp do_index(conn, params) do
     page = parse_int(params["page"], 1)
     per_page = parse_int(params["perPage"], 50)
 
@@ -65,6 +70,23 @@ defmodule LazypockWeb.FileController do
     3. Default: 10 MB
   """
   def upload(conn, %{"file" => upload}) do
+    conn = require_authenticated!(conn)
+    if conn.halted, do: conn, else: do_upload_with_size_check(conn, upload)
+  end
+
+  def upload(conn, _params) do
+    conn = require_authenticated!(conn)
+
+    if conn.halted do
+      conn
+    else
+      conn
+      |> put_status(400)
+      |> json(%{"code" => 400, "message" => "Missing required field: file", "data" => %{}})
+    end
+  end
+
+  defp do_upload_with_size_check(conn, upload) do
     max_size = resolve_max_file_size(conn.params)
     size = file_size(upload)
 
@@ -201,6 +223,11 @@ defmodule LazypockWeb.FileController do
   Delete a file.
   """
   def delete(conn, %{"id" => id}) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_delete(conn, id)
+  end
+
+  defp do_delete(conn, id) do
     case Store.delete(id) do
       :ok ->
         conn |> put_status(204) |> json(nil)
@@ -209,6 +236,46 @@ defmodule LazypockWeb.FileController do
         conn
         |> put_status(400)
         |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+    end
+  end
+
+  # Upload is allowed for ANY authenticated identity (superuser or auth-collection
+  # user) — app SDKs upload files with end-user tokens. Anonymous uploads are
+  # rejected to prevent unauthenticated disk usage. Per-record rule enforcement
+  # on uploads is an open item (the endpoint currently has no record context).
+  defp require_authenticated!(conn) do
+    case {conn.assigns[:current_superuser], conn.assigns[:current_user]} do
+      {nil, nil} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(
+          403,
+          Jason.encode!(%{
+            code: 403,
+            message: "Access denied. Authentication required.",
+            data: %{}
+          })
+        )
+        |> halt()
+
+      _ ->
+        conn
+    end
+  end
+
+  defp require_superuser!(conn) do
+    case conn.assigns[:current_superuser] do
+      nil ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(
+          403,
+          Jason.encode!(%{code: 403, message: "Access denied. Superuser required.", data: %{}})
+        )
+        |> halt()
+
+      _user ->
+        conn
     end
   end
 
