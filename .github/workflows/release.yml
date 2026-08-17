@@ -57,7 +57,9 @@ jobs:
         working-directory: studio
         run: bun install --frozen-lockfile
 
-      - name: Install ImageMagick (thumbnail/scale tests shell out to `magick`)
+      # Ubuntu LTS ships ImageMagick 6, which provides `convert`/`identify` but
+      # no `magick` binary; tests resolve `magick` or `convert` (see TestImage).
+      - name: Install ImageMagick (tests need `magick`/`convert`)
         run: |
           sudo apt-get update
           sudo apt-get install -y imagemagick

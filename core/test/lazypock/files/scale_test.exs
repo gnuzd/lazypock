@@ -3,19 +3,9 @@ defmodule Lazypock.Files.ScaleTest do
 
   alias Lazypock.Files.Store
 
-  # A 300x180 PNG (generated with ImageMagick at test setup time).
-  defp tiny_png do
-    path =
-      Path.join(
-        System.tmp_dir!(),
-        "lazypock-test-scale-#{System.unique_integer([:positive])}.png"
-      )
-
-    System.cmd("magick", ["-size", "300x180", "gradient:navy-orange", path])
-    binary = File.read!(path)
-    File.rm(path)
-    binary
-  end
+  # A 300x180 PNG (generated with ImageMagick at test setup time). Resolves
+  # `magick` or `convert` (IM7 vs IM6), see Lazypock.TestImage.
+  defp tiny_png, do: Lazypock.TestImage.tiny_png!(300, 180)
 
   describe "Store.scale/2" do
     test "scales an image on demand and returns webp" do

@@ -4,18 +4,8 @@ defmodule Lazypock.Files.StoreTest do
   alias Lazypock.Files.Store
 
   # A tiny valid PNG so thumbnail generation (ImageMagick) succeeds when present.
-  defp tiny_png do
-    path =
-      Path.join(
-        System.tmp_dir!(),
-        "lazypock-store-test-#{System.unique_integer([:positive])}.png"
-      )
-
-    System.cmd("magick", ["-size", "60x40", "gradient:navy-orange", path])
-    binary = File.read!(path)
-    File.rm(path)
-    binary
-  end
+  # Resolves `magick` or `convert` (IM7 vs IM6), see Lazypock.TestImage.
+  defp tiny_png, do: Lazypock.TestImage.tiny_png!(60, 40)
 
   defp sample_binary, do: "hello lazy pock file contents"
 

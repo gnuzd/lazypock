@@ -141,12 +141,8 @@ defmodule LazypockWeb.FileControllerTest do
 
   describe "GET /api/files/:id/thumbs/:size" do
     test "serves a generated thumbnail when present" do
-      path =
-        Path.join(System.tmp_dir!(), "lazypock-fc-thumb-#{System.unique_integer([:positive])}.png")
-
-      System.cmd("magick", ["-size", "100x80", "gradient:red-blue", path])
-      binary = File.read!(path)
-      File.rm(path)
+      # Resolves `magick` or `convert` (IM7 vs IM6), see Lazypock.TestImage.
+      binary = Lazypock.TestImage.tiny_png!(100, 80, "red-blue")
 
       {:ok, file} =
         Lazypock.Files.Store.store(binary, "img.png", thumb_sizes: ["100x100"])
