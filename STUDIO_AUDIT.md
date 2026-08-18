@@ -95,7 +95,7 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 | `/settings/files` | storage (local/S3) config | settings get/patch (s3.*) | ✅ |
 | `/settings/api-keys` | API key list/create/revoke | settings/api-keys CRUD | ✅ |
 | `/settings/backups` | backups | GET /export (manual JSON download) | 🟡 no backup/restore parity |
-| `/settings/cron` | cron jobs | none | ❌ **stub: "coming soon"** |
+| `/settings/cron` | cron job CRUD + run-now + next-run preview | crons CRUD, POST /crons/:id (run), POST /crons/validate | ✅ |
 | `/settings/export` | export collections | collections.list (client-side JSON) | ✅ |
 | `/settings/import` | import collections | collections.list, POST /import | ✅ |
 | `/settings/sql` | SQL console | POST /sql/query | ✅ |
@@ -120,7 +120,7 @@ RichEditor (TinyMCE), collectionsStore, createForm, ruleValidator.
 | G5 | **External auths viewer** — see which OAuth providers a user linked (`_external_auths`) | 🟡 dynamic collection `_external_auths` readable via API | Medium | Helps admins debug OAuth sign-in. |
 | G6 | **Superuser management** — list/create/delete superusers (core: only setup/me for a single superuser) | ❌ no core endpoints (single superuser model) | Low | Requires core work first. |
 | G7 | **Backups screen is not real** — only a manual JSON schema download; no backup list/create/download/restore | ❌ no core backup endpoints (`/export` ≠ backup) | Medium | Requires core backup/restore implementation. |
-| G8 | **Cron screen is a stub** — "coming soon" | ❌ no core cron/scheduler | Low | Requires core scheduler + persisted cron jobs. |
+| G8 | ~~Cron screen is a stub~~ — **done**: persisted `_crons` jobs, scheduler, SQL/HTTP/hook actions, timezone-aware next runs, run-now | ✅ crons CRUD + validate + run endpoints | Low | Replaced the stub with a full dashboard. |
 | G9 | **File browser / orphaned-file cleanup** — `GET /files` and `DELETE /files/:id` have no dedicated screen | ✅ core exists | Low | Records UI covers the common case. |
 | G10 | **"Send test email" button** — core endpoint exists but mail page never calls it | ✅ `POST /settings/test-email` | Low | Small, cheap win. |
 | G11 | **Admin realtime events** — `AdminChannel` has no UI consumer (e.g. settings-change toasts) | ✅ AdminChannel | Low | Nice-to-have. |
@@ -147,7 +147,6 @@ subscriptions in the record table.
 - G2 per-auth-collection Auth tab options (core option surface needs defining)
 - G6 multi-superuser management (core model is single-superuser)
 - G7 real backups (core backup/restore endpoints)
-- G8 cron (core scheduler)
 - G11 admin realtime consumption
 
 ---
@@ -174,9 +173,8 @@ Phase C — **requires core design/scope confirmation**:
    model) then build the studio Auth tab.
 8. G7: core backup/restore (zip of schema+records+files, list/download/restore
    endpoints) then a real Backups screen.
-9. G8: core scheduler + persisted cron jobs, then replace the Cron stub.
-10. G6: multi-superuser CRUD in core, then a superuser management screen.
-11. G11: consume AdminChannel events in studio (e.g. settings-change banner).
+9. G6: multi-superuser CRUD in core, then a superuser management screen.
+10. G11: consume AdminChannel events in studio (e.g. settings-change banner).
 
 **Recommended scope for a first implementation pass:** Phase A (1–3) + Phase B (4–6),
 i.e. everything achievable purely against the current core API. Phases C items
