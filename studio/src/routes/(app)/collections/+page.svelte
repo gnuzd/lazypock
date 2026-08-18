@@ -322,7 +322,7 @@
 	{#snippet headerExtra()}
 		<button
 			type="button"
-			class="btn btn-ghost btn-error btn-sm px-2"
+			class="btn btn-ghost btn-sm px-2"
 			title="Delete collection"
 			onclick={() => (deleteConfirmOpen = true)}
 		>
@@ -335,6 +335,7 @@
 				stroke-width="2"
 				stroke-linecap="round"
 				stroke-linejoin="round"
+				class="text-error"
 				><polyline points="3 6 5 6 21 6" /><path
 					d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
 				/></svg
