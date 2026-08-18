@@ -1,0 +1,43 @@
+:root:has(input.theme-controller[value="tokyo-night"]:checked),
+[data-theme="tokyo-night"] {
+  --color-base-100: oklch(21.2% 0.028 270);
+  --color-base-200: oklch(26.8% 0.032 270);
+  --color-base-300: oklch(38.2% 0.048 270);
+  --color-base-content: oklch(83.5% 0.052 270);
+
+  /* Brand Colors */
+  --color-primary: oklch(70.8% 0.138 255);
+  --color-primary-content: oklch(21.2% 0.028 270);
+
+  --color-secondary: oklch(68.2% 0.178 12);
+  --color-secondary-content: oklch(100% 0 0);
+
+  --color-accent: oklch(72.5% 0.135 295);
+  --color-accent-content: oklch(21.2% 0.028 270);
+
+  --color-neutral: oklch(18.2% 0.022 270);
+  --color-neutral-content: oklch(74.8% 0.042 270);
+
+  /* Status Colors */
+  --color-info: oklch(82.5% 0.112 220);
+  --color-info-content: oklch(21.2% 0.028 270);
+
+  --color-success: oklch(78.2% 0.132 135);
+  --color-success-content: oklch(21.2% 0.028 270);
+
+  --color-warning: oklch(76.8% 0.118 78);
+  --color-warning-content: oklch(21.2% 0.028 270);
+
+  --color-error: oklch(68.2% 0.178 12);
+  --color-error-content: oklch(100% 0 0);
+
+  /* UI & Shape Variables */
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}

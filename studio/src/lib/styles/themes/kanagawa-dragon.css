@@ -1,0 +1,43 @@
+:root:has(input.theme-controller[value='kanagawa-dragon']:checked),
+[data-theme='kanagawa-dragon'] {
+	--color-base-100: oklch(19.2% 0.014 280);
+	--color-base-200: oklch(23.5% 0.018 280);
+	--color-base-300: oklch(28.2% 0.024 280);
+	--color-base-content: oklch(80.5% 0.058 95.2);
+
+	/* Brand Colors */
+	--color-primary: oklch(58.2% 0.048 220.5);
+	--color-primary-content: oklch(100% 0 0);
+
+	--color-secondary: oklch(59.4% 0.102 24.8);
+	--color-secondary-content: oklch(100% 0 0);
+
+	--color-accent: oklch(71.5% 0.088 78.5);
+	--color-accent-content: oklch(19.2% 0.014 280);
+
+	--color-neutral: oklch(16% 0.012 280);
+	--color-neutral-content: oklch(80.5% 0.058 95.2);
+
+	/* Status Colors */
+	--color-info: oklch(68.5% 0.032 195);
+	--color-info-content: oklch(19.2% 0.014 280);
+
+	--color-success: oklch(64.8% 0.052 138);
+	--color-success-content: oklch(19.2% 0.014 280);
+
+	--color-warning: oklch(71.5% 0.088 78.5);
+	--color-warning-content: oklch(19.2% 0.014 280);
+
+	--color-error: oklch(59.4% 0.102 24.8);
+	--color-error-content: oklch(100% 0 0);
+
+	/* UI & Shape Variables */
+	--radius-selector: 0.25rem;
+	--radius-field: 0.25rem;
+	--radius-box: 0.5rem;
+	--size-selector: 0.25rem;
+	--size-field: 0.25rem;
+	--border: 1px;
+	--depth: 1;
+	--noise: 0;
+}

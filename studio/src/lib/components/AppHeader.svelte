@@ -15,7 +15,7 @@
 		{ value: 'wabisabi-light', label: 'Wabisabi Light' },
 		{ value: 'kanagawa-dragon', label: 'Kanagawa Dragon' },
 		{ value: 'kanagawa-wave', label: 'Kanagawa Wave' },
-		{ value: 'tokio-night', label: 'Tokio Night' }
+		{ value: 'tokyo-night', label: 'Tokyo Night' }
 	];
 	let currentTheme = $state('wabisabi-light');
 
@@ -67,7 +67,7 @@
 	}
 </script>
 
-<header class="flex h-11 shrink-0 items-center gap-2 bg-primary px-4 text-neutral-content">
+<header class="flex h-11 shrink-0 items-center gap-2 bg-primary px-4 text-primary-content">
 	<span class=" mr-3 border-r border-primary-content/20 pr-3 font-semibold">
 		{appName || 'Lazypock'}
 	</span>
