@@ -8,7 +8,7 @@
 		value = $bindable(),
 		placeholder = 'Select…',
 		size = 'md' as 'sm' | 'md',
-		variant = 'bordered' as 'bordered' | 'plain',
+		variant = 'bordered' as 'bordered' | 'plain' | 'ghost',
 		class: className = '',
 		triggerClass = '',
 		menuClass = '',
@@ -19,8 +19,9 @@
 		value?: unknown;
 		placeholder?: string;
 		size?: 'sm' | 'md';
-		/** 'bordered' shows a bordered trigger; 'plain' is transparent (for use inside a .field wrapper). */
-		variant?: 'bordered' | 'plain';
+		/** 'bordered' shows a bordered trigger; 'plain' is transparent (for use inside a .field wrapper);
+		 * 'ghost' is a transparent header-style trigger (inherits text color). */
+		variant?: 'bordered' | 'plain' | 'ghost';
 		class?: string;
 		triggerClass?: string;
 		menuClass?: string;
@@ -35,10 +36,12 @@
 	const triggerBase = $derived(
 		variant === 'plain'
 			? 'flex w-full cursor-pointer items-center gap-2 rounded-field px-3 text-left text-sm text-base-content disabled:opacity-50'
-			: 'flex cursor-pointer items-center gap-2 rounded-field border-2 border-base-300 bg-base-100 px-3 text-left text-base-content transition-colors hover:border-primary disabled:opacity-50 ' +
-					(size === 'sm'
-						? 'h-7 min-w-[70px] text-xs'
-						: 'h-[38px] min-w-[110px] text-sm')
+			: variant === 'ghost'
+				? 'flex h-7 cursor-pointer items-center gap-2 rounded-field px-3 text-left text-sm transition-colors hover:bg-primary-content/10 disabled:opacity-50'
+				: 'flex cursor-pointer items-center gap-2 rounded-field border-2 border-base-300 bg-base-100 px-3 text-left text-base-content transition-colors hover:border-primary disabled:opacity-50 ' +
+						(size === 'sm'
+							? 'h-7 min-w-[70px] text-xs'
+							: 'h-[38px] min-w-[110px] text-sm')
 	);
 
 	function choose(option: Option) {
