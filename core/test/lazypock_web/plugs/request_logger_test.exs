@@ -141,7 +141,7 @@ defmodule LazypockWeb.Plugs.RequestLoggerTest do
     assert log_count_where("WHERE path = '/api/health'") == 0
   end
 
-  test "stats endpoint returns a full 24-hour zero-filled series" do
+  test "stats endpoint returns a full 24-hour zero-filled multi-metric series" do
     # Insert a log row
     Ecto.Adapters.SQL.query!(
       Repo,
@@ -153,12 +153,16 @@ defmodule LazypockWeb.Plugs.RequestLoggerTest do
     assert json_response(conn, 200)
 
     body = json_response(conn, 200)
-    assert is_list(body["hourly"])
-    assert length(body["hourly"]) == 24
+    assert is_list(body["series"])
+    assert length(body["series"]) == 25
+    assert is_map(body["summary"])
 
-    # All buckets are present and ordered; every total is an integer
-    totals = Enum.map(body["hourly"], fn h -> h["total"] end)
+    # All buckets are present and ordered; every metric is an integer/float
+    totals = Enum.map(body["series"], fn h -> h["total"] end)
     assert Enum.all?(totals, &is_integer/1)
+    assert Enum.all?(body["series"], fn h ->
+             is_integer(h["errors"]) and is_number(h["avg_duration"])
+           end)
     assert length(Enum.uniq(totals)) >= 1
   end
 end

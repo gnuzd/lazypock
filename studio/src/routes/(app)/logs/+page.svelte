@@ -20,7 +20,10 @@
 	// Chart (created in onMount to avoid SSR window issues)
 	let chartCanvas: HTMLCanvasElement | undefined = $state();
 	let chartInst: ChartType | null = $state(null);
-	let chartData: { x: Date; y: number }[] = $state([]);
+	let range = $state('24h');
+	let chartSeries = $state<{ date: string; total: number; errors: number; avg_duration: number }[]>(
+		[]
+	);
 	let chartLoading = $state(false);
 	let ChartRef: typeof ChartType | null = $state(null);
 
@@ -60,15 +63,42 @@
 			data: {
 				datasets: [
 					{
-						label: 'Total requests',
+						label: 'Requests',
 						data: [],
-						borderColor: '#e34562',
-						pointBackgroundColor: '#e34562',
-						backgroundColor: 'rgb(239,69,101,0.05)',
+						borderColor: '#38bdf8',
+						pointBackgroundColor: '#38bdf8',
+						backgroundColor: 'rgba(56, 189, 248, 0.08)',
 						borderWidth: 2,
 						pointRadius: 1,
 						pointBorderWidth: 0,
-						fill: true
+						fill: true,
+						tension: 0.3,
+						yAxisID: 'y'
+					},
+					{
+						label: 'Errors',
+						data: [],
+						borderColor: '#f43f5e',
+						pointBackgroundColor: '#f43f5e',
+						backgroundColor: 'rgba(244, 63, 94, 0.06)',
+						borderWidth: 2,
+						pointRadius: 1,
+						pointBorderWidth: 0,
+						fill: false,
+						tension: 0.3,
+						yAxisID: 'y'
+					},
+					{
+						label: 'Avg duration',
+						data: [],
+						borderColor: '#f59e0b',
+						pointBackgroundColor: '#f59e0b',
+						borderWidth: 2,
+						pointRadius: 0,
+						pointBorderWidth: 0,
+						fill: false,
+						tension: 0.3,
+						yAxisID: 'y1'
 					}
 				]
 			},
@@ -83,38 +113,76 @@
 				scales: {
 					y: {
 						beginAtZero: true,
-						grid: { color: '#edf0f3' },
-						border: { color: '#e4e9ec' },
+						grid: { color: 'rgba(255,255,255,0.12)' },
+						border: { color: 'rgba(255,255,255,0.2)' },
 						ticks: {
 							precision: 0,
 							maxTicksLimit: 4,
 							autoSkip: true,
-							color: '#666f75'
+							color: 'rgba(255,255,255,0.75)'
+						}
+					},
+					y1: {
+						beginAtZero: true,
+						position: 'right',
+						grid: { drawOnChartArea: false },
+						border: { color: 'rgba(255,255,255,0.2)' },
+						ticks: {
+							maxTicksLimit: 4,
+							autoSkip: true,
+							color: 'rgba(255,255,255,0.75)'
+						},
+						title: {
+							display: true,
+							text: 'avg (ms)',
+							color: 'rgba(255,255,255,0.6)'
 						}
 					},
 					x: {
 						type: 'time',
-						min: Date.now() - 24 * 3600 * 1000,
+						min: Date.now() - (range === '7d' ? 7 : range === '30d' ? 30 : 1) * 86400000,
 						max: Date.now(),
 						time: {
-							unit: 'hour',
-							tooltipFormat: 'DD h a'
+							unit: range === '30d' ? 'day' : 'hour',
+							tooltipFormat: range === '30d' ? 'MMM d' : 'MMM d HH:mm'
 						},
 						grid: {
-							color: (c: { tick?: { major?: boolean } }) => (c.tick?.major ? '#edf0f3' : '')
+							color: (c: { tick?: { major?: boolean } }) =>
+								c.tick?.major ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'
 						},
-						border: { color: '#e4e9ec' },
+						border: { color: 'rgba(255,255,255,0.2)' },
 						ticks: {
 							maxTicksLimit: 15,
 							autoSkip: true,
 							maxRotation: 0,
 							major: { enabled: true },
-							color: (c: { tick?: { major?: boolean } }) => (c.tick?.major ? '#16161a' : '#666f75')
+							color: (c: { tick?: { major?: boolean } }) =>
+								c.tick?.major ? '#ffffff' : 'rgba(255,255,255,0.7)'
 						}
 					}
 				},
 				plugins: {
-					legend: { display: false },
+					legend: {
+						display: true,
+						position: 'top',
+						labels: {
+							color: 'rgba(255,255,255,0.9)',
+							usePointStyle: true,
+							boxWidth: 8
+						}
+					},
+					tooltip: {
+						callbacks: {
+							label: (ctx) => {
+								const v = ctx.parsed.y ?? 0;
+								if (ctx.datasetIndex === 2) {
+									const s = v < 1000 ? `${v.toFixed(0)}ms` : `${(v / 1000).toFixed(2)}s`;
+									return `Avg duration: ${s}`;
+								}
+								return `${ctx.dataset.label}: ${v}`;
+							}
+						}
+					},
 					zoom: {
 						pan: { enabled: true, mode: 'x' },
 						zoom: {
@@ -134,21 +202,27 @@
 
 		// Update chart data reactively
 		$effect(() => {
-			if (chartInst && chartData.length > 0) {
-				chartInst.data.datasets[0].data = chartData as never;
+			if (chartInst && chartSeries.length > 0) {
+				const pts = (key: 'total' | 'errors' | 'avg_duration') =>
+					chartSeries.map((s) => ({ x: new Date(s.date), y: s[key] }));
+				chartInst.data.datasets[0].data = pts('total') as never;
+				chartInst.data.datasets[1].data = pts('errors') as never;
+				chartInst.data.datasets[2].data = pts('avg_duration') as never;
 				chartInst.update('none');
 			}
 		});
 	}
 
-	async function loadChart(Chart: typeof ChartType) {
+	async function loadChart(Chart: typeof ChartType, forRange: string = range) {
 		chartLoading = true;
 		try {
-			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
-			const hourly = (res?.hourly as { date: string; total: number }[]) ?? [];
-			chartData = hourly.map((h) => ({
-				x: new Date(h.date),
-				y: h.total
+			const res = (await client.http.get(`/logs/stats?range=${forRange}`)) as Record<
+				string,
+				unknown
+			> | null;
+			chartSeries = ((res?.series as typeof chartSeries) ?? []).map((s) => ({
+				...s,
+				avg_duration: Number(s.avg_duration)
 			}));
 			initChart(Chart);
 		} catch {
@@ -156,6 +230,15 @@
 		} finally {
 			chartLoading = false;
 		}
+	}
+
+	// Rebuild the chart for a new range (axis bounds/units change with range).
+	function onRangeChange() {
+		if (chartInst) {
+			chartInst.destroy();
+			chartInst = null;
+		}
+		if (ChartRef) loadChart(ChartRef);
 	}
 
 	async function loadCollections() {
@@ -270,7 +353,20 @@
 
 <div class="flex flex-1 flex-col overflow-hidden">
 	<!-- Chart -->
-	<div class="mb-4 shrink-0 bg-primary">
+	<div class="relative mb-4 shrink-0 bg-primary text-neutral-content">
+		<div class="absolute top-2 right-3 z-10">
+			<Select
+				variant="ghost"
+				size="sm"
+				options={[
+					{ value: '24h', label: 'Last 24 hours' },
+					{ value: '7d', label: 'Last 7 days' },
+					{ value: '30d', label: 'Last 30 days' }
+				]}
+				bind:value={range}
+				onchange={onRangeChange}
+			/>
+		</div>
 		<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
 			{#if chartLoading}
 				<div class="absolute inset-0 z-50 flex items-center justify-center">
@@ -303,8 +399,8 @@
 						}}
 					/>
 				{/if}
-				<Button class="btn-ghost btn-sm" onclick={clearOldLogs}>Clean old (7d+)</Button>
-				<Button class="btn-primary btn-sm" onclick={clearLogs}>Clear all</Button>
+				<Button class="btn-ghost" onclick={clearOldLogs}>Clean old (7d+)</Button>
+				<Button class="btn-primary" onclick={clearLogs}>Clear all</Button>
 			</div>
 		</div>
 
