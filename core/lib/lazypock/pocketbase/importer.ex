@@ -234,14 +234,13 @@ defmodule Lazypock.PocketBase.Importer do
       |> Enum.reject(&is_nil/1)
 
     rules = pb_rules_to_lazypock(pb_coll)
+    indexes = pb_indexes_to_lazypock(pb_coll["indexes"])
 
-    case DDL.create_collection(name, type: type, fields: fields) do
+    case DDL.create_collection(name, type: type, fields: fields, indexes: indexes) do
       {:ok, coll} ->
-        # Apply PocketBase rules (DDL sets its own defaults)
-        {:ok, coll} =
-          coll
-          |> Lazypock.Collections.Collection.changeset(%{rules: rules})
-          |> Repo.update()
+        # Apply PocketBase rules (DDL sets its own defaults). The created
+        # collection struct already carries the imported custom indexes.
+        coll = apply_rules(coll, rules)
 
         # Auth collections: ensure LazyPock auth system columns exist
         # (verified, email_visibility) so email-verification and
@@ -262,8 +261,16 @@ defmodule Lazypock.PocketBase.Importer do
             )
 
             case Registry.get(name) do
-              {:ok, coll} -> {:ok, coll}
-              _ -> {:error, "collection not found in registry"}
+              {:ok, coll} ->
+                # Adopting an existing collection — still sync rules and custom
+                # indexes so the target ends up matching the PocketBase source.
+                apply_rules(coll, rules)
+                DDL.update_collection(name, indexes: indexes)
+                Registry.reload!()
+                {:ok, coll}
+
+              _ ->
+                {:error, "collection not found in registry"}
             end
           else
             {:error,
@@ -276,6 +283,42 @@ defmodule Lazypock.PocketBase.Importer do
       {:error, reason} ->
         {:error, inspect(reason)}
     end
+  end
+
+  # PocketBase stores custom indexes as full CREATE INDEX statements, e.g.
+  # "CREATE UNIQUE INDEX idx_x ON posts (title, created DESC)". LazyPock
+  # stores the bare column expression with an optional UNIQUE prefix and
+  # derives its own deterministic index name, so convert between the two.
+  defp pb_indexes_to_lazypock(indexes) do
+    Enum.map(indexes || [], fn sql ->
+      case Regex.run(
+             ~r/^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+\S+\s+ON\s+\S+\s*\((.*)\)\s*$/is,
+             sql
+           ) do
+        [_, columns] ->
+          unique = String.match?(sql, ~r/^\s*CREATE\s+UNIQUE\s+/i)
+          if unique, do: "UNIQUE " <> String.trim(columns), else: String.trim(columns)
+
+        _ ->
+          Logger.warning(
+            "Skipping unrecognized PocketBase index: #{inspect(sql)} (expected a CREATE INDEX statement)"
+          )
+
+          nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  # Applies PocketBase rules to a collection struct (DDL's create_collection
+  # installs its own defaults first).
+  defp apply_rules(collection, rules) do
+    {:ok, coll} =
+      collection
+      |> Lazypock.Collections.Collection.changeset(%{rules: rules})
+      |> Repo.update()
+
+    coll
   end
 
   # ── Field mapping ─────────────────────────────────────

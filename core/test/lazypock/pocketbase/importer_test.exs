@@ -4,6 +4,7 @@ defmodule Lazypock.PocketBase.ImporterTest do
   alias Lazypock.PocketBase.Importer
   alias Lazypock.Repo
   alias Lazypock.Collections.Registry
+  alias Lazypock.Schemas.GenericRecord
 
 
   @moduledoc """
@@ -44,7 +45,7 @@ defmodule Lazypock.PocketBase.ImporterTest do
          {"name":"views","type":"number","required":false,"system":false,"options":{}},
          {"name":"cover","type":"file","required":false,"system":false,"options":{"maxSelect":1,"mimeTypes":["image/png"]}},
          {"name":"author","type":"relation","required":false,"system":false,"options":{"collectionId":"coll_auth_02","maxSelect":1}}]',
-       '[]', '', NULL, NULL, NULL, NULL, NULL, '{}', '2024-01-01 00:00:00.000Z', '2024-01-01 00:00:00.000Z'),
+       '["CREATE UNIQUE INDEX idx_article_title ON pb_articles (title)"]', '', NULL, NULL, NULL, NULL, NULL, '{}', '2024-01-01 00:00:00.000Z', '2024-01-01 00:00:00.000Z'),
       ('coll_auth_02', 'pb_users', 'auth', 0,
        '[{"name":"email","type":"email","required":true,"system":true,"options":{}},
          {"name":"passwordHash","type":"password","required":true,"system":true,"options":{}},
@@ -133,6 +134,24 @@ defmodule Lazypock.PocketBase.ImporterTest do
       assert "author" in names
       cover = Enum.find(articles.fields, &(&1.name == "cover"))
       assert cover.type == "file"
+
+      # Custom indexes imported: converted from PB's CREATE INDEX SQL into
+      # LazyPock's expression format, persisted in options, and actually
+      # created in Postgres (deterministic _cx_* name).
+      assert articles.options["indexes"] == ["UNIQUE title"]
+
+      {:ok, %{rows: rows}} =
+        Ecto.Adapters.SQL.query(
+          Repo,
+          "SELECT indexname FROM pg_indexes WHERE tablename = 'pb_articles'",
+          []
+        )
+
+      pg_indexes = Enum.map(rows, &hd/1)
+      assert Enum.any?(pg_indexes, &String.starts_with?(&1, "_cx_"))
+
+      # …and the imported unique index is actually enforced
+      assert {:error, _} = GenericRecord.insert("pb_articles", %{"title" => "Hello PB"})
 
       {:ok, users} = Registry.get("pb_users")
       assert users.type == "auth"
