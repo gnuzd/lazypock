@@ -56,7 +56,14 @@
 	});
 
 	function initChart(Chart: typeof ChartType) {
-		if (!chartCanvas || chartInst) return;
+		if (!chartCanvas) return;
+		if (chartInst) {
+			chartInst.destroy();
+			chartInst = null;
+		}
+
+		const pts = (key: 'total' | 'errors' | 'avg_duration') =>
+			chartSeries.map((s) => ({ x: new Date(s.date), y: s[key] }));
 
 		chartInst = new Chart(chartCanvas, {
 			type: 'line',
@@ -64,7 +71,7 @@
 				datasets: [
 					{
 						label: 'Requests',
-						data: [],
+						data: pts('total') as never,
 						borderColor: '#38bdf8',
 						pointBackgroundColor: '#38bdf8',
 						backgroundColor: 'rgba(56, 189, 248, 0.08)',
@@ -77,7 +84,7 @@
 					},
 					{
 						label: 'Errors',
-						data: [],
+						data: pts('errors') as never,
 						borderColor: '#f43f5e',
 						pointBackgroundColor: '#f43f5e',
 						backgroundColor: 'rgba(244, 63, 94, 0.06)',
@@ -90,7 +97,7 @@
 					},
 					{
 						label: 'Avg duration',
-						data: [],
+						data: pts('avg_duration') as never,
 						borderColor: '#f59e0b',
 						pointBackgroundColor: '#f59e0b',
 						borderWidth: 2,
@@ -184,31 +191,15 @@
 						}
 					},
 					zoom: {
-						pan: { enabled: true, mode: 'x' },
+						pan: { enabled: false },
 						zoom: {
 							mode: 'x',
-							pinch: { enabled: true },
-							drag: {
-								enabled: true,
-								backgroundColor: 'rgba(255, 99, 132, 0.2)',
-								borderWidth: 0,
-								threshold: 10
-							}
+							pinch: { enabled: false },
+							wheel: { enabled: false },
+							drag: { enabled: false }
 						}
 					}
 				}
-			}
-		});
-
-		// Update chart data reactively
-		$effect(() => {
-			if (chartInst && chartSeries.length > 0) {
-				const pts = (key: 'total' | 'errors' | 'avg_duration') =>
-					chartSeries.map((s) => ({ x: new Date(s.date), y: s[key] }));
-				chartInst.data.datasets[0].data = pts('total') as never;
-				chartInst.data.datasets[1].data = pts('errors') as never;
-				chartInst.data.datasets[2].data = pts('avg_duration') as never;
-				chartInst.update('none');
 			}
 		});
 	}
@@ -234,10 +225,6 @@
 
 	// Rebuild the chart for a new range (axis bounds/units change with range).
 	function onRangeChange() {
-		if (chartInst) {
-			chartInst.destroy();
-			chartInst = null;
-		}
 		if (ChartRef) loadChart(ChartRef);
 	}
 
@@ -353,21 +340,8 @@
 
 <div class="flex flex-1 flex-col overflow-hidden">
 	<!-- Chart -->
-	<div class="relative mb-4 shrink-0 bg-primary text-neutral-content">
-		<div class="absolute top-2 right-3 z-10">
-			<Select
-				variant="ghost"
-				size="sm"
-				options={[
-					{ value: '24h', label: 'Last 24 hours' },
-					{ value: '7d', label: 'Last 7 days' },
-					{ value: '30d', label: 'Last 30 days' }
-				]}
-				bind:value={range}
-				onchange={onRangeChange}
-			/>
-		</div>
-		<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
+	<div class="mb-4 shrink-0 bg-primary text-neutral-content">
+		<div class="relative h-[180px] w-full" class:opacity-50={chartLoading}>
 			{#if chartLoading}
 				<div class="absolute inset-0 z-50 flex items-center justify-center">
 					<span class="loading loading-spinner loading-sm" />
@@ -386,6 +360,15 @@
 		<div class="mb-4 flex items-center justify-between gap-2 p-4">
 			<h1 class="text-xl font-semibold">Request Logs</h1>
 			<div class="flex items-center gap-2">
+				<Select
+					options={[
+						{ value: '24h', label: 'Last 24 hours' },
+						{ value: '7d', label: 'Last 7 days' },
+						{ value: '30d', label: 'Last 30 days' }
+					]}
+					bind:value={range}
+					onchange={onRangeChange}
+				/>
 				{#if collections.length > 0}
 					<Select
 						options={[
