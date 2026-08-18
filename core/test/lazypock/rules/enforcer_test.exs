@@ -424,5 +424,60 @@ defmodule Lazypock.Rules.EnforcerTest do
       assert :ok = Enforcer.authorize_view("token_role_test", admin, record)
       assert {:error, _} = Enforcer.authorize_view("token_role_test", user, record)
     end
+
+    test "multi-condition rule with auth tokens (regression: #38)" do
+      # https://github.com/gnuzd/lazypock/issues/38 — a rule combining an
+      # @request.auth.* comparison with another condition. After token
+      # resolution the auth comparison becomes literal-vs-literal ($1 = $2),
+      # and as the second clause it used to emit "$2 = $2" — silently allowing
+      # the wrong-role owner (and crashing the param list on other paths).
+      create_test_collection("token_multi_test", %{
+        "viewRule" => "owner_id = @request.auth.id && @request.auth.role = 'admin'"
+      })
+      record = insert_record("token_multi_test", %{title: "Owned by admin", owner_id: "user-99"})
+
+      # Owner with the right role → allowed
+      admin_owner = auth_user(%{"id" => "user-99", "role" => "admin"})
+      assert :ok = Enforcer.authorize_view("token_multi_test", admin_owner, record)
+
+      # Same owner but wrong role → must be DENIED (buggy code allowed this)
+      wrong_role = auth_user(%{"id" => "user-99", "role" => "user"})
+      assert {:error, _} = Enforcer.authorize_view("token_multi_test", wrong_role, record)
+
+      # Admin role but different owner → denied
+      other_owner = auth_user(%{"id" => "user-55", "role" => "admin"})
+      assert {:error, _} = Enforcer.authorize_view("token_multi_test", other_owner, record)
+    end
+
+    test "multi-role OR rule with auth tokens (regression: #38)" do
+      # Two literal-vs-literal clauses after token resolution. Buggy output was
+      # "$1 = $2 OR $3 = $2" — the second clause's right-hand side re-bound to
+      # the first clause's value, so a 'board' user was wrongly denied.
+      create_test_collection("token_multirole_test", %{
+        "viewRule" => "@request.auth.role = 'admin' || @request.auth.role = 'board'"
+      })
+      record = insert_record("token_multirole_test", %{title: "Role gated"})
+
+      assert :ok =
+               Enforcer.authorize_view(
+                 "token_multirole_test",
+                 auth_user(%{"role" => "admin"}),
+                 record
+               )
+
+      assert :ok =
+               Enforcer.authorize_view(
+                 "token_multirole_test",
+                 auth_user(%{"role" => "board"}),
+                 record
+               )
+
+      assert {:error, _} =
+               Enforcer.authorize_view(
+                 "token_multirole_test",
+                 auth_user(%{"role" => "user"}),
+                 record
+               )
+    end
   end
 end
