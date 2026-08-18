@@ -213,6 +213,107 @@ defmodule Lazypock.CronTest do
     end
   end
 
+  # ── HTTP action ────────────────────────────────────
+
+  describe "http action" do
+    # Tiny one-shot HTTP server: accepts a single connection, returns the
+    # canned response, closes. Runs outside the sandbox (no DB access).
+    defp start_http_server(response) do
+      {:ok, listen} =
+        :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+      {:ok, {_addr, port}} = :inet.sockname(listen)
+
+      _ =
+        Task.start(fn ->
+          case :gen_tcp.accept(listen) do
+            {:ok, socket} ->
+              {:ok, _request} = :gen_tcp.recv(socket, 0, 5_000)
+              :gen_tcp.send(socket, response)
+              :gen_tcp.close(socket)
+
+            _ ->
+              :ok
+          end
+        end)
+
+      port
+    end
+
+    test "GET succeeds and records an ok run" do
+      port = start_http_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+
+      assert {:ok, job} =
+               Cron.create(%{
+                 "name" => "webhook-ok",
+                 "expression" => "0 0 1 1 *",
+                 "action" => "http",
+                 "config" => %{"url" => "http://127.0.0.1:#{port}/hook", "method" => "GET"}
+               })
+
+      assert {:ok, updated} = Cron.run_now(job["id"])
+      assert updated["last_status"] == "ok"
+      assert updated["last_error"] == nil
+    end
+
+    test "POST with a body succeeds" do
+      port = start_http_server("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+
+      assert {:ok, job} =
+               Cron.create(%{
+                 "name" => "webhook-post",
+                 "expression" => "0 0 1 1 *",
+                 "action" => "http",
+                 "config" => %{
+                   "url" => "http://127.0.0.1:#{port}/hook",
+                   "method" => "POST",
+                   "headers" => %{"content-type" => "application/json"},
+                   "body" => "{\"hello\": \"world\"}"
+                 }
+               })
+
+      assert {:ok, updated} = Cron.run_now(job["id"])
+      assert updated["last_status"] == "ok"
+    end
+
+    test "non-2xx response records an error" do
+      port = start_http_server("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+
+      assert {:ok, job} =
+               Cron.create(%{
+                 "name" => "webhook-500",
+                 "expression" => "0 0 1 1 *",
+                 "action" => "http",
+                 "config" => %{"url" => "http://127.0.0.1:#{port}/hook"}
+               })
+
+      assert {:ok, updated} = Cron.run_now(job["id"])
+      assert updated["last_status"] == "error"
+      assert updated["last_error"] =~ "HTTP 500"
+    end
+
+    test "connection failure records an error" do
+      # Reserve a port then close it, so the connect is refused.
+      {:ok, listen} =
+        :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+      {:ok, {_addr, port}} = :inet.sockname(listen)
+      :gen_tcp.close(listen)
+
+      assert {:ok, job} =
+               Cron.create(%{
+                 "name" => "webhook-down",
+                 "expression" => "0 0 1 1 *",
+                 "action" => "http",
+                 "config" => %{"url" => "http://127.0.0.1:#{port}/hook"}
+               })
+
+      assert {:ok, updated} = Cron.run_now(job["id"])
+      assert updated["last_status"] == "error"
+      assert is_binary(updated["last_error"])
+    end
+  end
+
   # ── Run now ────────────────────────────────────────
 
   describe "run_now/1" do

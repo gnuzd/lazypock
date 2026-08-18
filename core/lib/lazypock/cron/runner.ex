@@ -108,28 +108,34 @@ defmodule Lazypock.Cron.Runner do
   defp unwrap({:error, reason}), do: {:error, inspect(reason)}
 
   defp method_atom(method) do
-    method |> String.upcase() |> String.to_existing_atom()
+    # :httpc expects lowercase atoms (:get, :post, ...) — upcasing would give
+    # :"GET", which :httpc rejects with {:error, :invalid_method}.
+    method |> String.downcase() |> String.to_existing_atom()
   rescue
     ArgumentError -> :get
   end
 
   defp build_request(_method, url, headers, body) do
+    # :httpc expects charlists for header names/values and for ContentType
+    # (binary ContentType is rejected locally with {:error, :invalid_request}).
     header_list =
-      Enum.map(headers, fn {k, v} -> {to_string(k), to_string(v)} end)
+      Enum.map(headers, fn {k, v} ->
+        {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
+      end)
 
     cond do
       is_binary(body) and body != "" ->
-        content_type = content_type(header_list)
-        {url, header_list, content_type, body}
+        content_type = content_type(headers)
+        {url, header_list, String.to_charlist(content_type), body}
 
       true ->
         {url, header_list}
     end
   end
 
-  defp content_type(header_list) do
-    Enum.find_value(header_list, "application/json", fn {k, v} ->
-      if String.downcase(k) == "content-type", do: v
+  defp content_type(headers) do
+    Enum.find_value(headers, "application/json", fn {k, v} ->
+      if String.downcase(to_string(k)) == "content-type", do: to_string(v)
     end)
   end
 end
