@@ -103,8 +103,11 @@
 	let formError = $state('');
 	let saving = $state(false);
 	let actionTab = $state('HTTP Request');
-	let previewRuns = $state<string[]>([]);
-	let previewError = $state('');
+	let preview = $state<{ runs: string[]; error: string; loading: boolean }>({
+		runs: [],
+		error: '',
+		loading: false
+	});
 
 	let form = $state({
 		name: '',
@@ -164,8 +167,7 @@
 		};
 		actionTab = 'HTTP Request';
 		formError = '';
-		previewRuns = [];
-		previewError = '';
+		preview = { runs: [], error: '', loading: false };
 		showEditor = true;
 	}
 
@@ -189,8 +191,7 @@
 		};
 		actionTab = job.action === 'http' ? 'HTTP Request' : job.action === 'sql' ? 'SQL' : 'Hook';
 		formError = '';
-		previewRuns = [];
-		previewError = '';
+		preview = { runs: [], error: '', loading: false };
 		showEditor = true;
 	}
 
@@ -198,28 +199,44 @@
 		showEditor = false;
 	}
 
-	// ── Expression preview ───────────────────────────
-	async function previewExpression() {
-		previewRuns = [];
-		previewError = '';
-		if (!form.expression.trim()) {
-			previewError = 'Expression is required';
+	// ── Expression preview (live, debounced) ─────────
+	let previewSeq = 0;
+	let previewTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function updatePreview() {
+		const expr = form.expression.trim();
+		const seq = ++previewSeq;
+		if (!expr) {
+			preview = { runs: [], error: 'Expression is required', loading: false };
 			return;
 		}
-		try {
-			const res = (await client.http.post('/crons/validate', {
-				expression: form.expression,
-				timezone: form.timezone
-			})) as { valid?: boolean; error?: string; nextRuns?: string[] } | null;
-			if (!res?.valid) {
-				previewError = res?.error ?? 'Invalid expression';
-			} else {
-				previewRuns = res.nextRuns ?? [];
+		preview = { ...preview, loading: true };
+		if (previewTimer) clearTimeout(previewTimer);
+		previewTimer = setTimeout(async () => {
+			try {
+				const res = (await client.http.post('/crons/validate', {
+					expression: expr,
+					timezone: form.timezone
+				})) as { valid?: boolean; error?: string; nextRuns?: string[] } | null;
+				if (seq !== previewSeq) return; // stale response
+				if (!res?.valid) {
+					preview = { runs: [], error: res?.error ?? 'Invalid expression', loading: false };
+				} else {
+					preview = { runs: res.nextRuns ?? [], error: '', loading: false };
+				}
+			} catch {
+				if (seq !== previewSeq) return;
+				preview = { runs: [], error: 'Could not validate expression', loading: false };
 			}
-		} catch {
-			previewError = 'Could not validate expression';
-		}
+		}, 300);
 	}
+
+	// Re-validate whenever the expression, timezone or editor visibility changes.
+	$effect(() => {
+		void form.expression;
+		void form.timezone;
+		if (showEditor) updatePreview();
+	});
 
 	// ── Save ─────────────────────────────────────────
 	function buildConfig(): Record<string, unknown> {
@@ -424,21 +441,18 @@
 	{/snippet}
 </DataTable>
 
-<Modal show={showEditor} title={editingId ? 'Edit cron job' : 'New cron job'}>
+<Modal bind:show={showEditor} title={editingId ? 'Edit cron job' : 'New cron job'}>
 	<div class="grid gap-4">
 		<Input label="Name" placeholder="e.g. nightly cleanup" bind:value={form.name} />
 
 		<div class="grid grid-cols-[1fr_220px] gap-3">
 			<div>
 				<span class="mb-1 block text-xs text-base-content/50">Cron expression</span>
-				<div class="flex items-center gap-2">
-					<input
-						class="input w-full font-mono text-xs"
-						placeholder="*/5 * * * *"
-						bind:value={form.expression}
-					/>
-					<Button class="btn-outline btn-sm" onclick={previewExpression}>Preview</Button>
-				</div>
+				<input
+					class="input w-full font-mono text-xs"
+					placeholder="*/5 * * * *"
+					bind:value={form.expression}
+				/>
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-base-content/50">Timezone</span>
@@ -446,15 +460,23 @@
 			</div>
 		</div>
 
-		{#if previewError}
-			<p class="text-xs text-error">{previewError}</p>
-		{:else if previewRuns.length}
+		{#if preview.loading}
+			<div
+				class="rounded-box border border-base-300 bg-base-200/40 p-3 text-xs text-base-content/50"
+			>
+				Checking expression…
+			</div>
+		{:else if preview.error}
+			<div class="rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
+				{preview.error}
+			</div>
+		{:else if preview.runs.length}
 			<div class="rounded-box border border-base-300 bg-base-200/40 p-3">
 				<p class="mb-1 text-xs font-medium text-base-content/60">
 					Next 5 runs (in {form.timezone}):
 				</p>
 				<ul class="space-y-0.5 font-mono text-xs">
-					{#each previewRuns as run (run)}
+					{#each preview.runs as run (run)}
 						<li>{formatDate(run)}</li>
 					{/each}
 				</ul>
@@ -492,30 +514,41 @@
 					</div>
 					<div>
 						<span class="mb-1 block text-xs text-base-content/50">Headers</span>
-						{#each form.headers as header, i (i)}
-							<div class="mb-1.5 flex items-center gap-2">
-								<input
-									class="input w-[45%] font-mono text-xs"
-									placeholder="Header"
-									bind:value={header.key}
-								/>
-								<input
-									class="input w-[45%] font-mono text-xs"
-									placeholder="Value"
-									bind:value={header.value}
-								/>
-								<button
-									class="btn-icon btn-icon-danger"
-									title="Remove header"
-									onclick={() => form.headers.splice(i, 1)}
-									disabled={form.headers.length <= 1}
-								>
-									×
-								</button>
+						<div class="overflow-hidden rounded-box border border-base-300">
+							<div
+								class="flex border-b border-base-300 bg-base-200/50 text-xs text-base-content/50"
+							>
+								<div class="w-1/2 px-3 py-1.5">Header</div>
+								<div class="w-1/2 border-l border-base-300 px-3 py-1.5">Value</div>
+								<div class="w-9 shrink-0"></div>
 							</div>
-						{/each}
+							{#each form.headers as header, i (i)}
+								<div class="flex items-center border-b border-base-300 last:border-b-0">
+									<input
+										class="w-1/2 bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
+										placeholder="X-Custom-Header"
+										bind:value={header.key}
+									/>
+									<input
+										class="w-1/2 border-l border-base-300 bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
+										placeholder="value"
+										bind:value={header.value}
+									/>
+									<div class="flex w-9 shrink-0 justify-center">
+										<button
+											class="btn-icon btn-icon-danger"
+											title="Remove header"
+											onclick={() => form.headers.splice(i, 1)}
+											disabled={form.headers.length <= 1}
+										>
+											×
+										</button>
+									</div>
+								</div>
+							{/each}
+						</div>
 						<button
-							class="cursor-pointer border-none bg-transparent text-xs text-primary hover:underline"
+							class="mt-1 cursor-pointer border-none bg-transparent text-xs text-primary hover:underline"
 							onclick={() => form.headers.push({ key: '', value: '' })}
 						>
 							+ Add header
