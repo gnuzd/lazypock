@@ -310,6 +310,48 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
   end
 
+  describe "compile/1 — multi-placeholder renumbering (regression: #38)" do
+    # https://github.com/gnuzd/lazypock/issues/38 — the Enforcer resolves
+    # @request.auth.* tokens to string literals, so any auth-token comparison
+    # becomes a literal-vs-literal clause emitting TWO placeholders ($1 op $2).
+    # When such a clause is compiled at index >= 2, all placeholders must be
+    # renumbered — previously only $1 was rewritten, corrupting the SQL.
+
+    test "literal-vs-literal as SECOND clause renumbers both placeholders" do
+      # Rule: owner_id = @request.auth.id && @request.auth.role = 'admin'
+      # resolved by the Enforcer to: owner_id = 'user-123' && 'superuser' = 'admin'
+      # Buggy output was ("owner_id" = $1 AND $2 = $2) → bind error / 500.
+      assert {:ok, {sql, params}} =
+               FilterCompiler.compile(
+                 ~s[owner_id = 'user-123' && 'superuser' = 'admin']
+               )
+
+      assert sql == ~s[("owner_id" = $1 AND $2 = $3)]
+      assert params == ["user-123", "superuser", "admin"]
+    end
+
+    test "literal-vs-literal clause at index >= 3 renumbers both placeholders" do
+      # Rule: @request.auth.role = 'admin' || @request.auth.role = 'board'
+      # Buggy output was ($1 = $2 OR $3 = $2) → $2 silently re-binds to 'admin',
+      # so a 'board' user's rule evaluated against the wrong value.
+      assert {:ok, {sql, params}} =
+               FilterCompiler.compile(
+                 ~s['superuser' = 'admin' || 'superuser' = 'board']
+               )
+
+      assert sql == ~s[($1 = $2 OR $3 = $4)]
+      assert params == ["superuser", "admin", "superuser", "board"]
+    end
+
+    test "literal-vs-literal deep inside a nested expression" do
+      assert {:ok, {sql, params}} =
+               FilterCompiler.compile(~s[a = '1' || (b = '2' && 'x' = 'y')])
+
+      assert sql == ~s[("a" = $1 OR ("b" = $2 AND $3 = $4))]
+      assert params == ["1", "2", "x", "y"]
+    end
+  end
+
   describe "apply/3 — integration with SQL queries" do
     test "empty filter leaves query unchanged" do
       {sql, params} = FilterCompiler.apply("SELECT * FROM t", "")

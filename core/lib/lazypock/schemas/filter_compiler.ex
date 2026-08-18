@@ -281,5 +281,19 @@ defmodule Lazypock.Schemas.FilterCompiler do
   end
 
   defp renumber(sql, 1), do: sql
-  defp renumber(sql, n), do: String.replace(sql, "$1", "$#{n}")
+
+  # A clause can emit MULTIPLE placeholders (e.g. literal-vs-literal
+  # comparisons emit "$1 op $2"). When compiled at index n > 1, EVERY
+  # placeholder must be shifted by (n - 1) — rewriting only $1 leaves later
+  # placeholders colliding with earlier clauses' params (silently wrong access
+  # decisions) or produces a param/placeholder count mismatch that crashes
+  # Postgres with "bind message supplies N parameters, but prepared statement
+  # requires M" (HTTP 500 on create/view/update).
+  defp renumber(sql, n) do
+    offset = n - 1
+
+    Regex.replace(~r/\$(\d+)/, sql, fn _whole, num ->
+      "$#{String.to_integer(num) + offset}"
+    end)
+  end
 end
