@@ -171,7 +171,10 @@
 		if (cur.length <= 1) {
 			update(fieldName, null);
 		} else {
-			update(fieldName, cur.filter((v) => v !== value));
+			update(
+				fieldName,
+				cur.filter((v) => v !== value)
+			);
 		}
 	}
 
@@ -547,7 +550,7 @@
 								}
 							}}
 						>
-							{#if (selectedLabels(name, targetColl).length > 0)}
+							{#if selectedLabels(name, targetColl).length > 0}
 								<div class="relation-trigger-labels">
 									{#each selectedLabels(name, targetColl) as lbl, li (lbl)}
 										<span class="relation-chip">
@@ -560,8 +563,7 @@
 													onclick={(e) => {
 														e.stopPropagation();
 														removeRelationValue(name, recordValue(name)[li]);
-													}}
-													>×</button
+													}}>×</button
 												>
 											{/if}
 										</span>
@@ -595,8 +597,12 @@
 											class:active={isMultiRel
 												? recordValue(name).includes(opt.value)
 												: data[name] === opt.value}
-											onmousedown={() => toggleRelationOption(name, opt.value, isMultiRel ? (options?.maxSelect as number) : 1)}
-											>{opt.label}</button
+											onmousedown={() =>
+												toggleRelationOption(
+													name,
+													opt.value,
+													isMultiRel ? (options?.maxSelect as number) : 1
+												)}>{opt.label}</button
 										>
 									{/each}
 									{#if filtered.length === 0}
@@ -652,6 +658,7 @@
 						type={getInputType(field)}
 						{required}
 						{disabled}
+						autocomplete="off"
 						value={(data[name] as string) ?? ''}
 						oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
 						placeholder={name}
@@ -702,6 +709,7 @@
 						<input
 							id="pw_{name}"
 							type="password"
+							autocomplete="new-password"
 							disabled={passwordSaving}
 							bind:value={newPassword}
 							placeholder="New password"
@@ -709,6 +717,7 @@
 						<input
 							id="pw_{name}_confirm"
 							type="password"
+							autocomplete="new-password"
 							disabled={passwordSaving}
 							bind:value={confirmPassword}
 							placeholder="Confirm password"
@@ -744,6 +753,7 @@
 				<input
 					id="pw_{name}"
 					type="password"
+					autocomplete="new-password"
 					disabled={disabled || passwordSaving}
 					value={(data[name] as string) ?? ''}
 					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}

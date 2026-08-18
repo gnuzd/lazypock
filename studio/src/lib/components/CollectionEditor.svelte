@@ -24,12 +24,15 @@
 	let {
 		editingCollectionId = null as string | null,
 		existingName = '',
+		showDeleteConfirm = $bindable(false),
 		onClose
 	}: {
 		/** The collection id when editing an existing collection, null when creating. */
 		editingCollectionId?: string | null;
 		/** The current name (used to detect renames). */
 		existingName?: string;
+		/** Bindable — set to true (e.g. from a pane header) to open the delete confirm. */
+		showDeleteConfirm?: boolean;
 		/**
 		 * When set (embedded in a side pane), Close button and a successful save
 		 * call this instead of navigating away. When unset (page route), the
@@ -59,7 +62,6 @@
 	let showRulesInfo = $state(false);
 	let showIndexesModal = $state(false);
 	let showCloseConfirm = $state(false);
-	let showDeleteConfirm = $state(false);
 	let deleting = $state(false);
 	const collectionTypes = [
 		{ value: 'base', label: 'Base collection' },
@@ -519,13 +521,9 @@
 
 	<!-- Footer -->
 	<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-		{#if editingCollectionId}
-			<button
-				type="button"
-				class="btn btn-ghost btn-error px-2"
-				title="Delete collection"
-				onclick={() => (showDeleteConfirm = true)}
-			>
+		<button type="button" class="btn btn-ghost" onclick={requestClose}>Close</button>
+		<div class="ml-auto flex items-center gap-2">
+			{#if error}
 				<svg
 					width="16"
 					height="16"
@@ -533,41 +531,25 @@
 					fill="none"
 					stroke="currentColor"
 					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					><polyline points="3 6 5 6 21 6" /><path
-						d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+					class="text-error"
+					><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line
+						x1="12"
+						y1="16"
+						x2="12.01"
+						y2="16"
 					/></svg
 				>
-			</button>
-		{/if}
-		<button type="button" class="btn btn-ghost mr-auto" onclick={requestClose}>Close</button>
-		{#if error}
-			<svg
-				width="16"
-				height="16"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				class="text-error"
-				><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line
-					x1="12"
-					y1="16"
-					x2="12.01"
-					y2="16"
-				/></svg
+			{/if}
+			<button
+				type="button"
+				class="btn btn-primary expanded-lg"
+				class:loading={saving}
+				disabled={!newName.trim() || saving}
+				onclick={handleSave}
 			>
-		{/if}
-		<button
-			type="button"
-			class="btn btn-primary expanded-lg"
-			class:loading={saving}
-			disabled={!newName.trim() || saving}
-			onclick={handleSave}
-		>
-			{editingCollectionId ? 'Save' : 'Create'}
-		</button>
+				{editingCollectionId ? 'Save' : 'Create'}
+			</button>
+		</div>
 	</div>
 </div>
 

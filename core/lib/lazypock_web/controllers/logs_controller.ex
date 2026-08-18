@@ -34,9 +34,9 @@ defmodule LazypockWeb.LogsController do
     if conn.halted, do: conn, else: do_collections(conn)
   end
 
-  def stats(conn, _params) do
+  def stats(conn, params) do
     conn = require_superuser!(conn)
-    if conn.halted, do: conn, else: do_stats(conn)
+    if conn.halted, do: conn, else: do_stats(conn, params)
   end
 
   def delete_logs(conn, params) do
@@ -203,7 +203,20 @@ defmodule LazypockWeb.LogsController do
     end
   end
 
-  defp do_stats(conn) do
+  # ── Stats (multi-metric time series for the chart) ──
+
+  # range → {window interval, bucket size}. Bucket sizes are fixed strings
+  # (no user input reaches the SQL), aligned on UTC boundaries via date_bin.
+  @ranges %{
+    "24h" => {"24 hours", "1 hour"},
+    "7d" => {"7 days", "6 hours"},
+    "30d" => {"30 days", "1 day"}
+  }
+
+  defp do_stats(conn, params) do
+    range = if Map.has_key?(@ranges, params["range"]), do: params["range"], else: "24h"
+    {interval, bucket} = Map.fetch!(@ranges, range)
+
     total =
       case Ecto.Adapters.SQL.query(
              Repo,
@@ -214,39 +227,44 @@ defmodule LazypockWeb.LogsController do
         _ -> 0
       end
 
-    # Hourly request volume for the last 24 hours (for chart)
-    # Always returns a full 24-bucket series (zero-filled) so the chart
-    # renders a complete 24h window even when there is little/no data.
-    hourly =
+    # Per-bucket multi-metric series over the selected window. Always returns
+    # a zero-filled series (requests / errors / avg duration per bucket) so the
+    # chart renders a complete window even with little or no data.
+    series =
       case Ecto.Adapters.SQL.query(
              Repo,
              """
-             WITH hours AS (
-               SELECT date_trunc('hour', gs) AS hour
+             WITH buckets AS (
+               SELECT date_bin(interval '#{bucket}', gs, timestamptz '2000-01-01') AS t
                FROM generate_series(
-                 date_trunc('hour', now() - interval '23 hours'),
-                 date_trunc('hour', now()),
-                 interval '1 hour'
+                 date_bin(interval '#{bucket}', now(), timestamptz '2000-01-01') - interval '#{interval}',
+                 now(),
+                 interval '#{bucket}'
                ) AS gs
              ),
-             counts AS (
-               SELECT date_trunc('hour', created_at) AS hour, COUNT(*) AS cnt
+             agg AS (
+               SELECT date_bin(interval '#{bucket}', created_at, timestamptz '2000-01-01') AS t,
+                      COUNT(*) AS total,
+                      COUNT(*) FILTER (WHERE status >= 400) AS errors,
+                      AVG(duration) AS avg_duration
                FROM _request_logs
-               WHERE created_at > now() - interval '24 hours'
-               GROUP BY hour
+               WHERE created_at > now() - interval '#{interval}'
+               GROUP BY t
              )
-             SELECT h.hour, COALESCE(c.cnt, 0) AS cnt
-             FROM hours h
-             LEFT JOIN counts c ON c.hour = h.hour
-             ORDER BY h.hour
+             SELECT b.t, COALESCE(a.total, 0), COALESCE(a.errors, 0), COALESCE(a.avg_duration, 0)
+             FROM buckets b
+             LEFT JOIN agg a ON a.t = b.t
+             ORDER BY b.t
              """,
              []
            ) do
         {:ok, result} ->
-          Enum.map(result.rows, fn [hour, count] ->
+          Enum.map(result.rows, fn [t, total, errors, avg_duration] ->
             %{
-              date: maybe_iso8601(hour),
-              total: count
+              date: maybe_iso8601(t),
+              total: total,
+              errors: errors,
+              avg_duration: coerce_avg(avg_duration)
             }
           end)
 
@@ -254,39 +272,42 @@ defmodule LazypockWeb.LogsController do
           []
       end
 
-    # Last 24h total
-    last_24h = Enum.reduce(hourly, 0, fn %{total: t}, acc -> acc + t end)
-
-    # Errors (status >= 400) in last 24h
-    errors_24h =
-      case Ecto.Adapters.SQL.query(
-             Repo,
-             "SELECT COUNT(*) FROM _request_logs WHERE created_at > now() - interval '24 hours' AND status >= 400",
-             []
-           ) do
-        {:ok, %{rows: [[count]]}} -> count
-        _ -> 0
-      end
-
-    # Avg duration in last 24h
-    avg_duration =
-      case Ecto.Adapters.SQL.query(
-             Repo,
-             "SELECT COALESCE(AVG(duration), 0) FROM _request_logs WHERE created_at > now() - interval '24 hours'",
-             []
-           ) do
-        {:ok, %{rows: [[avg]]}} -> avg
-        _ -> 0
-      end
-
     json(conn, %{
       total: total,
-      hourly: hourly,
-      last_24h: last_24h,
-      errors_24h: errors_24h,
-      avg_duration: avg_duration
+      range: range,
+      series: series,
+      summary: %{
+        requests: Enum.reduce(series, 0, fn s, acc -> acc + s.total end),
+        errors: Enum.reduce(series, 0, fn s, acc -> acc + s.errors end),
+        avg_duration:
+          coerce_avg(
+            case Ecto.Adapters.SQL.query(
+                   Repo,
+                   "SELECT COALESCE(AVG(duration), 0) FROM _request_logs WHERE created_at > now() - interval '#{interval}'",
+                   []
+                 ) do
+              {:ok, %{rows: [[avg]]}} -> avg
+              _ -> 0
+            end
+          )
+      }
     })
   end
+
+  # AVG() returns Postgres numeric (Postgrex → Decimal), which the JSON
+  # encoder stringifies. Normalize to a plain float so the API contract is
+  # a number.
+  defp coerce_avg(%Decimal{} = d), do: Decimal.to_float(d)
+  defp coerce_avg(v) when is_number(v), do: v
+
+  defp coerce_avg(v) when is_binary(v) do
+    case Float.parse(v) do
+      {f, ""} -> f
+      _ -> 0
+    end
+  end
+
+  defp coerce_avg(_), do: 0
 
   defp do_delete_logs(conn, params) do
     if params["all"] == "true" do

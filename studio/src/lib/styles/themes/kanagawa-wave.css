@@ -1,0 +1,43 @@
+:root:has(input.theme-controller[value='kanagawa-wave']:checked),
+[data-theme='kanagawa-wave'] {
+	--color-base-100: oklch(22.8% 0.015 281.8);
+	--color-base-200: oklch(26.8% 0.02 281.8);
+	--color-base-300: oklch(31.5% 0.025 281.8);
+	--color-base-content: oklch(87.3% 0.038 92.5);
+
+	/* Brand Colors */
+	--color-primary: oklch(67.5% 0.095 258.5);
+	--color-primary-content: oklch(22.8% 0.015 281.8);
+
+	--color-secondary: oklch(48.5% 0.162 25.2);
+	--color-secondary-content: oklch(100% 0 0);
+
+	--color-accent: oklch(71.2% 0.082 82.4);
+	--color-accent-content: oklch(22.8% 0.015 281.8);
+
+	--color-neutral: oklch(18.5% 0.012 281.8);
+	--color-neutral-content: oklch(87.3% 0.038 92.5);
+
+	/* Status Colors */
+	--color-info: oklch(73.5% 0.072 215.2);
+	--color-info-content: oklch(22.8% 0.015 281.8);
+
+	--color-success: oklch(62.1% 0.075 142.3);
+	--color-success-content: oklch(100% 0 0);
+
+	--color-warning: oklch(82.4% 0.095 86.1);
+	--color-warning-content: oklch(22.8% 0.015 281.8);
+
+	--color-error: oklch(56.8% 0.228 27.3);
+	--color-error-content: oklch(100% 0 0);
+
+	/* UI & Shape Variables */
+	--radius-selector: 0.25rem;
+	--radius-field: 0.25rem;
+	--radius-box: 0.5rem;
+	--size-selector: 0.25rem;
+	--size-field: 0.25rem;
+	--border: 1px;
+	--depth: 1;
+	--noise: 0;
+}

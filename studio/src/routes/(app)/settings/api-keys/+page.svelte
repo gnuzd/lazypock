@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
+	import Select from '$lib/components/Select.svelte';
 	import '../settings.css';
 
 	type ApiKey = {
@@ -139,12 +140,8 @@
 
 <div class="mb-4 flex items-end gap-3">
 	<div>
-		<label for="apikey-expiry" class="mb-1 block text-xs text-base-content/50">Expiry</label>
-		<select id="apikey-expiry" class="select select-sm select-bordered" bind:value={expires}>
-			{#each expiryOptions as opt (opt.value)}
-				<option value={opt.value}>{opt.label}</option>
-			{/each}
-		</select>
+		<span class="mb-1 block text-xs text-base-content/50">Expiry</span>
+		<Select options={expiryOptions} bind:value={expires} />
 	</div>
 	<Button class="btn-primary" loading={busy} onclick={generate}>Generate API key</Button>
 </div>

@@ -20,6 +20,7 @@
 	import { slugify } from '$lib/fieldTypes';
 	import OptionRow from './OptionRow.svelte';
 	import Button from './Button.svelte';
+	import Select from './Select.svelte';
 	import { slide } from 'svelte/transition';
 
 	const typeIcons: Record<string, typeof FileText> = {
@@ -123,11 +124,15 @@
 				{@const opts = (field.options as Record<string, unknown>) || {}}
 				{@const opt =
 					opts.onCreate && opts.onUpdate ? 'create/update' : opts.onUpdate ? 'update' : 'create'}
-				<select
-					class="select select-sm max-w-[120px] text-xs"
+				<Select
+					size="sm"
+					options={[
+						{ value: 'create', label: 'Create' },
+						{ value: 'update', label: 'Update' },
+						{ value: 'create/update', label: 'Create/Update' }
+					]}
 					value={opt}
-					onchange={(e) => {
-						const v = (e.target as HTMLSelectElement).value;
+					onchange={(v) => {
 						const o = (field.options as Record<string, unknown>) || {};
 						field.options = {
 							...o,
@@ -135,26 +140,23 @@
 							onUpdate: v === 'update' || v === 'create/update'
 						};
 					}}
-				>
-					<option value="create">Create</option>
-					<option value="update">Update</option>
-					<option value="create/update">Create/Update</option>
-				</select>
+				/>
 			{:else if field.type === 'select' || field.type === 'multi_select'}
-				<select
-					class="select select-sm max-w-[80px] text-xs"
+				<Select
+					size="sm"
+					options={[
+						{ value: 'single', label: 'Single' },
+						{ value: 'multiple', label: 'Multiple' }
+					]}
 					value={(((field.options as Record<string, unknown>)?.maxSelect as number) || 1) > 1
 						? 'multiple'
 						: 'single'}
-					onchange={(e) => {
+					onchange={(v) => {
 						const o = { ...(field.options as Record<string, unknown>) };
-						o.maxSelect = (e.target as HTMLSelectElement).value === 'multiple' ? 10 : 1;
+						o.maxSelect = v === 'multiple' ? 10 : 1;
 						field.options = o;
 					}}
-				>
-					<option value="single">Single</option>
-					<option value="multiple">Multiple</option>
-				</select>
+				/>
 			{:else if field.type === 'relation'}
 				{@const relationColls = collections.filter(
 					(c) => (c.type as string) !== 'view' && !c.system
@@ -166,50 +168,48 @@
 						? (relationColls.find((c) => c.name === relationOpts.collection)?.id as string) ||
 							''
 						: '')}
-				<select
-					class="select select-sm max-w-[150px] text-xs"
+				<Select
+					size="sm"
+					triggerClass="min-w-[150px]"
+					menuClass="min-w-[220px]"
+					placeholder="Select collection*"
+					options={relationColls.map((c) => ({ value: c.id as string, label: c.name as string }))}
 					value={currentCollId}
-					onchange={(e) => {
-						const id = (e.target as HTMLSelectElement).value;
-						field.collectionId = id;
-						const coll = relationColls.find((c) => c.id === id);
+					onchange={(id) => {
+						const collId = id as string;
+						field.collectionId = collId;
+						const coll = relationColls.find((c) => c.id === collId);
 						if (coll) setOpt('collection', coll.name as string);
 					}}
-				>
-					<option value="" disabled>Select collection*</option>
-					{#each relationColls as coll (coll.id as string)}
-						<option value={coll.id as string}>{coll.name as string}</option>
-					{/each}
-				</select>
-				<select
-					class="select select-sm max-w-[80px] text-xs"
+				/>
+				<Select
+					size="sm"
+					options={[
+						{ value: 'single', label: 'Single' },
+						{ value: 'multiple', label: 'Multiple' }
+					]}
 					value={((field.options as Record<string, unknown>)?.maxSelect as number) > 1
 						? 'multiple'
 						: 'single'}
-					onchange={(e) => {
-						setOpt('maxSelect', (e.target as HTMLSelectElement).value === 'multiple' ? 10 : 1);
+					onchange={(v) => {
+						setOpt('maxSelect', v === 'multiple' ? 10 : 1);
 					}}
-				>
-					<option value="single">Single</option>
-					<option value="multiple">Multiple</option>
-				</select>
+				/>
 			{:else if field.type === 'file'}
-				<select
-					class="select select-sm max-w-[80px] text-xs"
+				<Select
+					size="sm"
+					options={[
+						{ value: 'single', label: 'Single' },
+						{ value: 'multiple', label: 'Multiple' }
+					]}
 					value={((field.options as Record<string, unknown>)?.maxSelect as number) > 1
 						? 'multiple'
 						: 'single'}
-					onchange={(e) => {
-						const v = (field.options as Record<string, unknown>)?.maxSelect;
-						setOpt(
-							'maxSelect',
-							(e.target as HTMLSelectElement).value === 'multiple' ? (v as number) || 10 : 1
-						);
+					onchange={(v) => {
+						const prev = (field.options as Record<string, unknown>)?.maxSelect;
+						setOpt('maxSelect', v === 'multiple' ? (prev as number) || 10 : 1);
 					}}
-				>
-					<option value="single">Single</option>
-					<option value="multiple">Multiple</option>
-				</select>
+				/>
 			{/if}
 
 			<!-- Settings toggle (expand inline) -->
@@ -670,21 +670,19 @@
 						/>
 					</div>
 					<div class="rounded-field bg-base-200/40 p-1.5">
-						<label
-							class="mb-1 block text-xs font-medium text-base-content/70"
-							for="field-{fieldIndex}-cascade">Cascade delete</label
-						>
-						<select
-							class="select select-sm w-full"
-							id="field-{fieldIndex}-cascade"
+						<span class="mb-1 block text-xs font-medium text-base-content/70">Cascade delete</span>
+						<Select
+							size="sm"
+							triggerClass="w-full"
+							options={[
+								{ value: 'false', label: 'False' },
+								{ value: 'true', label: 'True' }
+							]}
 							value={opts.cascadeDelete ? 'true' : 'false'}
-							onchange={(e) => {
-								setOpt('cascadeDelete', (e.target as HTMLSelectElement).value === 'true');
+							onchange={(v) => {
+								setOpt('cascadeDelete', v === 'true');
 							}}
-						>
-							<option value="false">False</option>
-							<option value="true">True</option>
-						</select>
+						/>
 					</div>
 				{/if}
 

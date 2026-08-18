@@ -1,0 +1,44 @@
+:root,
+:root:has(input.theme-controller[value='wabisabi-light']:checked),
+[data-theme='wabisabi-light'] {
+	--color-base-100: oklch(96.8% 0.012 85);
+	--color-base-200: oklch(91.8% 0.024 85);
+	--color-base-300: oklch(83.8% 0.038 85);
+	--color-base-content: oklch(18.2% 0.012 150);
+
+	/* Brand Colors */
+	--color-primary: oklch(38.2% 0.068 152);
+	--color-primary-content: oklch(100% 0 0);
+
+	--color-secondary: oklch(42.8% 0.118 25);
+	--color-secondary-content: oklch(100% 0 0);
+
+	--color-accent: oklch(44.5% 0.042 142);
+	--color-accent-content: oklch(100% 0 0);
+
+	--color-neutral: oklch(18.2% 0.012 150);
+	--color-neutral-content: oklch(100% 0 0);
+
+	/* Status Colors */
+	--color-info: oklch(40.2% 0.072 222);
+	--color-info-content: oklch(100% 0 0);
+
+	--color-success: oklch(38.8% 0.078 148);
+	--color-success-content: oklch(100% 0 0);
+
+	--color-warning: oklch(46.2% 0.118 62);
+	--color-warning-content: oklch(100% 0 0);
+
+	--color-error: oklch(42% 0.142 25);
+	--color-error-content: oklch(100% 0 0);
+
+	/* UI & Shape Variables */
+	--radius-selector: 0.25rem;
+	--radius-field: 0.25rem;
+	--radius-box: 0.375rem;
+	--size-selector: 0.25rem;
+	--size-field: 0.25rem;
+	--border: 1px;
+	--depth: 0;
+	--noise: 0;
+}

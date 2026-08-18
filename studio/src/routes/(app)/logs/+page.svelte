@@ -4,6 +4,7 @@
 	import type { Chart as ChartType } from 'chart.js';
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
+	import Select from '$lib/components/Select.svelte';
 
 	let logs = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
@@ -13,13 +14,16 @@
 	let perPage = $state(50);
 	let collectionFilter = $state('');
 	let collections = $state<string[]>([]);
-	let detailId = $state<string | null>(null);
-	let detail = $state<Record<string, unknown> | null>(null);
+	// ── Inline row detail (accordion) ──
+	let expandedId = $state<string | null>(null);
 
 	// Chart (created in onMount to avoid SSR window issues)
 	let chartCanvas: HTMLCanvasElement | undefined = $state();
 	let chartInst: ChartType | null = $state(null);
-	let chartData: { x: Date; y: number }[] = $state([]);
+	let range = $state('24h');
+	let chartSeries = $state<{ date: string; total: number; errors: number; avg_duration: number }[]>(
+		[]
+	);
 	let chartLoading = $state(false);
 	let ChartRef: typeof ChartType | null = $state(null);
 
@@ -52,22 +56,56 @@
 	});
 
 	function initChart(Chart: typeof ChartType) {
-		if (!chartCanvas || chartInst) return;
+		if (!chartCanvas) return;
+		if (chartInst) {
+			chartInst.destroy();
+			chartInst = null;
+		}
+
+		const pts = (key: 'total' | 'errors' | 'avg_duration') =>
+			chartSeries.map((s) => ({ x: new Date(s.date), y: s[key] }));
 
 		chartInst = new Chart(chartCanvas, {
 			type: 'line',
 			data: {
 				datasets: [
 					{
-						label: 'Total requests',
-						data: [],
-						borderColor: '#e34562',
-						pointBackgroundColor: '#e34562',
-						backgroundColor: 'rgb(239,69,101,0.05)',
+						label: 'Requests',
+						data: pts('total') as never,
+						borderColor: '#38bdf8',
+						pointBackgroundColor: '#38bdf8',
+						backgroundColor: 'rgba(56, 189, 248, 0.08)',
 						borderWidth: 2,
 						pointRadius: 1,
 						pointBorderWidth: 0,
-						fill: true
+						fill: true,
+						tension: 0.3,
+						yAxisID: 'y'
+					},
+					{
+						label: 'Errors',
+						data: pts('errors') as never,
+						borderColor: '#f43f5e',
+						pointBackgroundColor: '#f43f5e',
+						backgroundColor: 'rgba(244, 63, 94, 0.06)',
+						borderWidth: 2,
+						pointRadius: 1,
+						pointBorderWidth: 0,
+						fill: false,
+						tension: 0.3,
+						yAxisID: 'y'
+					},
+					{
+						label: 'Avg duration',
+						data: pts('avg_duration') as never,
+						borderColor: '#f59e0b',
+						pointBackgroundColor: '#f59e0b',
+						borderWidth: 2,
+						pointRadius: 0,
+						pointBorderWidth: 0,
+						fill: false,
+						tension: 0.3,
+						yAxisID: 'y1'
 					}
 				]
 			},
@@ -82,72 +120,100 @@
 				scales: {
 					y: {
 						beginAtZero: true,
-						grid: { color: '#edf0f3' },
-						border: { color: '#e4e9ec' },
+						grid: { color: 'rgba(255,255,255,0.12)' },
+						border: { color: 'rgba(255,255,255,0.2)' },
 						ticks: {
 							precision: 0,
 							maxTicksLimit: 4,
 							autoSkip: true,
-							color: '#666f75'
+							color: 'rgba(255,255,255,0.75)'
+						}
+					},
+					y1: {
+						beginAtZero: true,
+						position: 'right',
+						grid: { drawOnChartArea: false },
+						border: { color: 'rgba(255,255,255,0.2)' },
+						ticks: {
+							maxTicksLimit: 4,
+							autoSkip: true,
+							color: 'rgba(255,255,255,0.75)'
+						},
+						title: {
+							display: true,
+							text: 'avg (ms)',
+							color: 'rgba(255,255,255,0.6)'
 						}
 					},
 					x: {
 						type: 'time',
-						min: Date.now() - 24 * 3600 * 1000,
+						min: Date.now() - (range === '7d' ? 7 : range === '30d' ? 30 : 1) * 86400000,
 						max: Date.now(),
 						time: {
-							unit: 'hour',
-							tooltipFormat: 'DD h a'
+							unit: range === '30d' ? 'day' : 'hour',
+							tooltipFormat: range === '30d' ? 'MMM d' : 'MMM d HH:mm'
 						},
 						grid: {
-							color: (c: { tick?: { major?: boolean } }) => (c.tick?.major ? '#edf0f3' : '')
+							color: (c: { tick?: { major?: boolean } }) =>
+								c.tick?.major ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'
 						},
-						border: { color: '#e4e9ec' },
+						border: { color: 'rgba(255,255,255,0.2)' },
 						ticks: {
 							maxTicksLimit: 15,
 							autoSkip: true,
 							maxRotation: 0,
 							major: { enabled: true },
-							color: (c: { tick?: { major?: boolean } }) => (c.tick?.major ? '#16161a' : '#666f75')
+							color: (c: { tick?: { major?: boolean } }) =>
+								c.tick?.major ? '#ffffff' : 'rgba(255,255,255,0.7)'
 						}
 					}
 				},
 				plugins: {
-					legend: { display: false },
+					legend: {
+						display: true,
+						position: 'top',
+						labels: {
+							color: 'rgba(255,255,255,0.9)',
+							usePointStyle: true,
+							boxWidth: 8
+						}
+					},
+					tooltip: {
+						callbacks: {
+							label: (ctx) => {
+								const v = ctx.parsed.y ?? 0;
+								if (ctx.datasetIndex === 2) {
+									const s = v < 1000 ? `${v.toFixed(0)}ms` : `${(v / 1000).toFixed(2)}s`;
+									return `Avg duration: ${s}`;
+								}
+								return `${ctx.dataset.label}: ${v}`;
+							}
+						}
+					},
 					zoom: {
-						pan: { enabled: true, mode: 'x' },
+						pan: { enabled: false },
 						zoom: {
 							mode: 'x',
-							pinch: { enabled: true },
-							drag: {
-								enabled: true,
-								backgroundColor: 'rgba(255, 99, 132, 0.2)',
-								borderWidth: 0,
-								threshold: 10
-							}
+							pinch: { enabled: false },
+							wheel: { enabled: false },
+							drag: { enabled: false }
 						}
 					}
 				}
 			}
 		});
-
-		// Update chart data reactively
-		$effect(() => {
-			if (chartInst && chartData.length > 0) {
-				chartInst.data.datasets[0].data = chartData as never;
-				chartInst.update('none');
-			}
-		});
 	}
 
-	async function loadChart(Chart: typeof ChartType) {
+	async function loadChart(Chart: typeof ChartType, forRange: string = range) {
 		chartLoading = true;
 		try {
-			const res = (await client.http.get('/logs/stats')) as Record<string, unknown> | null;
-			const hourly = (res?.hourly as { date: string; total: number }[]) ?? [];
-			chartData = hourly.map((h) => ({
-				x: new Date(h.date),
-				y: h.total
+			const res = (await client.http.get(`/logs/stats?range=${forRange}`)) as Record<
+				string,
+				unknown
+			> | null;
+			chartSeries = ((res?.series as typeof chartSeries) ?? []).map((s) => ({
+				...s,
+				avg_duration: Number(s.avg_duration)
 			}));
 			initChart(Chart);
 		} catch {
@@ -155,6 +221,11 @@
 		} finally {
 			chartLoading = false;
 		}
+	}
+
+	// Rebuild the chart for a new range (axis bounds/units change with range).
+	function onRangeChange() {
+		if (ChartRef) loadChart(ChartRef);
 	}
 
 	async function loadCollections() {
@@ -184,6 +255,11 @@
 
 	function goPage(p: number) {
 		page = p;
+		loadLogs();
+	}
+
+	function changePerPage() {
+		page = 1;
 		loadLogs();
 	}
 
@@ -240,17 +316,6 @@
 		return String(method ?? '').toUpperCase();
 	}
 
-	async function viewDetail(id: string) {
-		detailId = id;
-		detail = null;
-		try {
-			const res = (await client.http.get('/logs/' + id)) as Record<string, unknown> | null;
-			detail = res;
-		} catch {
-			detail = {};
-		}
-	}
-
 	async function clearLogs() {
 		if (!confirm('Delete all request logs? This cannot be undone.')) return;
 		try {
@@ -273,140 +338,157 @@
 	}
 </script>
 
-<!-- Chart -->
-<div class="mb-4 bg-primary">
-	<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
-		{#if chartLoading}
-			<div class="absolute inset-0 z-50 flex items-center justify-center">
-				<span class="loading loading-spinner loading-sm" />
-			</div>
-		{/if}
-		<canvas
-			bind:this={chartCanvas}
-			class="h-full w-full"
-			ondblclick={() => chartInst?.resetZoom()}
-		/>
-	</div>
-</div>
-
-<!-- Filters bar -->
-<div class="mb-4 flex items-center justify-between gap-2 p-4">
-	<h1 class="text-xl font-semibold">Request Logs</h1>
-	<div class="flex items-center gap-2">
-		{#if collections.length > 0}
-			<select
-				class="input input-sm"
-				bind:value={collectionFilter}
-				onchange={() => {
-					page = 1;
-					loadLogs();
-				}}
-			>
-				<option value="">All collections</option>
-				{#each collections as coll (coll)}
-					<option value={coll}>{coll}</option>
-				{/each}
-			</select>
-		{/if}
-		<Button class="btn-ghost btn-sm" onclick={clearOldLogs}>Clean old (7d+)</Button>
-		<Button class="btn-primary btn-sm" onclick={clearLogs}>Clear all</Button>
-	</div>
-</div>
-
-<!-- Detail pane -->
-{#if detailId}
-	<div class="mb-4 rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="mb-3 flex items-center justify-between">
-			<h2 class="font-semibold">Log Detail</h2>
-			<button
-				class="cursor-pointer border-none bg-transparent text-sm opacity-50 hover:opacity-100"
-				onclick={() => (detailId = null)}
-			>
-				Close
-			</button>
+<div class="flex flex-1 flex-col overflow-hidden">
+	<!-- Chart -->
+	<div class="mb-4 shrink-0 bg-primary text-neutral-content">
+		<div class="relative h-[180px] w-full" class:opacity-50={chartLoading}>
+			{#if chartLoading}
+				<div class="absolute inset-0 z-50 flex items-center justify-center">
+					<span class="loading loading-spinner loading-sm" />
+				</div>
+			{/if}
+			<canvas
+				bind:this={chartCanvas}
+				class="h-full w-full"
+				ondblclick={() => chartInst?.resetZoom()}
+			/>
 		</div>
-		{#if detail}
-			<div class="grid grid-cols-2 gap-3 text-sm">
-				<div class="text-base-content/60">Method</div>
-				<div class={methodClass(detail.method)}>{String(detail.method ?? '')}</div>
-				<div class="text-base-content/60">Path</div>
-				<div class="font-mono">{String(detail.path ?? '')}</div>
-				<div class="text-base-content/60">Status</div>
-				<div class={statusClass(detail.status)}>{String(detail.status ?? '')}</div>
-				<div class="text-base-content/60">Duration</div>
-				<div>{formatDuration(detail.duration)}</div>
-				<div class="text-base-content/60">IP</div>
-				<div class="font-mono">{String(detail.ip ?? '—')}</div>
-				<div class="text-base-content/60">User Agent</div>
-				<div class="break-all">{String(detail.user_agent ?? '—')}</div>
-				<div class="text-base-content/60">Referer</div>
-				<div class="break-all">{String(detail.referer ?? '—')}</div>
-				<div class="text-base-content/60">Collection</div>
-				<div>{String(detail.collection ?? '—')}</div>
-				{#if detail.error}
-					<div class="text-base-content/60">Error</div>
-					<div class="text-error">{String(detail.error)}</div>
+	</div>
+
+	<div class="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+		<!-- Filters bar -->
+		<div class="mb-4 flex items-center justify-between gap-2 p-4">
+			<h1 class="text-xl font-semibold">Request Logs</h1>
+			<div class="flex items-center gap-2">
+				<Select
+					options={[
+						{ value: '24h', label: 'Last 24 hours' },
+						{ value: '7d', label: 'Last 7 days' },
+						{ value: '30d', label: 'Last 30 days' }
+					]}
+					bind:value={range}
+					onchange={onRangeChange}
+				/>
+				{#if collections.length > 0}
+					<Select
+						options={[
+							{ value: '', label: 'All collections' },
+							...collections.map((c) => ({ value: c, label: c }))
+						]}
+						bind:value={collectionFilter}
+						onchange={() => {
+							page = 1;
+							loadLogs();
+						}}
+					/>
 				{/if}
-				<div class="text-base-content/60">Timestamp</div>
-				<div>{formatTS(detail.created_at)}</div>
-				{#if detail.body}
-					<div class="col-span-2 mt-2">
-						<div class="mb-1 text-base-content/60">Request Body</div>
-						<pre
-							class="max-h-64 overflow-auto rounded-lg border border-base-300 bg-base-200/50 p-3 font-mono text-xs break-all whitespace-pre-wrap">{prettyJSON(
-								detail.body
-							)}</pre>
-					</div>
-				{/if}
+				<Button class="btn-ghost" onclick={clearOldLogs}>Clean old (7d+)</Button>
+				<Button class="btn-primary" onclick={clearLogs}>Clear all</Button>
 			</div>
-		{:else}
-			<div class="text-sm opacity-50">Loading...</div>
-		{/if}
-	</div>
-{/if}
+		</div>
 
-<!-- Logs table -->
-<DataTable
-	{columns}
-	rows={logs}
-	{loading}
-	emptyLabel="No request logs yet."
-	onrowclick={(row) => viewDetail(row.id as string)}
->
-	{#snippet cell(row, col)}
-		{#if col.key === 'method'}
-			<span class={'font-mono text-xs font-semibold ' + methodClass(row.method)}
-				>{methodLabel(row.method)}</span
+		<!-- Inline row detail (accordion under the clicked row) -->
+		{#snippet rowDetail(row: Record<string, unknown>)}
+			<div class="text-sm">
+				<div class="grid grid-cols-2 gap-3">
+					<div class="text-base-content/60">Method</div>
+					<div class={methodClass(row.method)}>{String(row.method ?? '')}</div>
+					<div class="text-base-content/60">Path</div>
+					<div class="font-mono break-all">{String(row.path ?? '')}</div>
+					<div class="text-base-content/60">Status</div>
+					<div class={statusClass(row.status)}>{String(row.status ?? '')}</div>
+					<div class="text-base-content/60">Duration</div>
+					<div>{formatDuration(row.duration)}</div>
+					<div class="text-base-content/60">IP</div>
+					<div class="font-mono">{String(row.ip ?? '—')}</div>
+					<div class="text-base-content/60">User Agent</div>
+					<div class="break-all">{String(row.user_agent ?? '—')}</div>
+					<div class="text-base-content/60">Referer</div>
+					<div class="break-all">{String(row.referer ?? '—')}</div>
+					<div class="text-base-content/60">Collection</div>
+					<div>{String(row.collection ?? '—')}</div>
+					{#if row.error}
+						<div class="text-base-content/60">Error</div>
+						<div class="text-error">{String(row.error)}</div>
+					{/if}
+					<div class="text-base-content/60">Timestamp</div>
+					<div>{formatTS(row.created_at)}</div>
+					{#if row.body}
+						<div class="col-span-2 mt-2">
+							<div class="mb-1 text-base-content/60">Request Body</div>
+							<pre
+								class="max-h-64 overflow-auto rounded-lg border border-base-300 bg-base-200/50 p-3 font-mono text-xs break-all whitespace-pre-wrap">{prettyJSON(
+									row.body
+								)}</pre>
+						</div>
+					{/if}
+				</div>
+			</div>
+		{/snippet}
+
+		<!-- Logs table -->
+		<div class="min-h-0">
+			<DataTable
+				fillHeight
+				{columns}
+				rows={logs}
+				{loading}
+				emptyLabel="No request logs yet."
+				bind:expandedId
+				detail={rowDetail}
 			>
-		{:else if col.key === 'path'}
-			<span class="font-mono text-xs">{String(row.path ?? '')}</span>
-		{:else if col.key === 'status'}
-			<span class={'font-mono ' + statusClass(row.status)}>{String(row.status ?? '')}</span>
-		{:else if col.key === 'duration'}
-			<span class="text-xs text-base-content/60">{formatDuration(row.duration)}</span>
-		{:else if col.key === 'ip'}
-			<span class="font-mono text-xs">{String(row.ip ?? '—')}</span>
-		{:else if col.key === 'collection'}
-			<span class="text-xs">{String(row.collection ?? '—')}</span>
-		{:else if col.key === 'created_at'}
-			<span class="text-xs text-base-content/60">{formatTS(row.created_at)}</span>
-		{:else}
-			{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
-		{/if}
-	{/snippet}
-</DataTable>
+				{#snippet cell(row, col)}
+					{#if col.key === 'method'}
+						<span class={'font-mono text-xs font-semibold ' + methodClass(row.method)}
+							>{methodLabel(row.method)}</span
+						>
+					{:else if col.key === 'path'}
+						<span class="font-mono text-xs">{String(row.path ?? '')}</span>
+					{:else if col.key === 'status'}
+						<span class={'font-mono ' + statusClass(row.status)}>{String(row.status ?? '')}</span>
+					{:else if col.key === 'duration'}
+						<span class="text-xs text-base-content/60">{formatDuration(row.duration)}</span>
+					{:else if col.key === 'ip'}
+						<span class="font-mono text-xs">{String(row.ip ?? '—')}</span>
+					{:else if col.key === 'collection'}
+						<span class="text-xs">{String(row.collection ?? '—')}</span>
+					{:else if col.key === 'created_at'}
+						<span class="text-xs text-base-content/60">{formatTS(row.created_at)}</span>
+					{:else}
+						{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
+					{/if}
+				{/snippet}
+			</DataTable>
+		</div>
 
-<!-- Pagination -->
-{#if totalPages > 1}
-	<div class="mt-3 flex items-center justify-center gap-2">
-		<Button class="btn-ghost btn-sm" disabled={page <= 1} onclick={() => goPage(page - 1)}
-			>Previous</Button
-		>
-		<span class="text-sm text-base-content/60">
-			Page {page} of {totalPages} ({totalItems} total)
-		</span>
-		<Button class="btn-ghost btn-sm" disabled={page >= totalPages} onclick={() => goPage(page + 1)}
-			>Next</Button
-		>
+		<!-- Pagination -->
+		{#if totalPages > 1}
+			<div class="mt-3 flex items-center justify-between gap-3">
+				<div class="text-sm text-base-content/60">
+					{totalItems} log{totalItems === 1 ? '' : 's'}
+				</div>
+				<div class="flex items-center gap-2">
+					<Select
+						options={[
+							{ value: 10, label: '10 / page' },
+							{ value: 25, label: '25 / page' },
+							{ value: 50, label: '50 / page' },
+							{ value: 100, label: '100 / page' }
+						]}
+						bind:value={perPage}
+						onchange={changePerPage}
+					/>
+					<Button class="btn-ghost btn-sm" disabled={page <= 1} onclick={() => goPage(page - 1)}
+						>Previous</Button
+					>
+					<span class="text-sm text-base-content/60">Page {page} of {totalPages}</span>
+					<Button
+						class="btn-ghost btn-sm"
+						disabled={page >= totalPages}
+						onclick={() => goPage(page + 1)}>Next</Button
+					>
+				</div>
+			</div>
+		{/if}
 	</div>
-{/if}
+</div>

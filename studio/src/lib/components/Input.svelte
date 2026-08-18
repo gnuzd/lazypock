@@ -1,4 +1,6 @@
 <script lang="ts">
+	import type { HTMLInputAttributes } from 'svelte/elements';
+
 	let {
 		value = $bindable(''),
 		type = 'text',
@@ -16,6 +18,7 @@
 		oncompositionstart,
 		oncompositionend,
 		spellcheck = true,
+		autocomplete = 'off',
 		class: className = ''
 	}: {
 		value?: string;
@@ -34,6 +37,8 @@
 		oncompositionstart?: (e: CompositionEvent) => void;
 		oncompositionend?: (e: CompositionEvent) => void;
 		spellcheck?: boolean;
+		/** Disable browser autofill/autocomplete (override per-input if needed). */
+		autocomplete?: HTMLInputAttributes['autocomplete'];
 		class?: string;
 	} = $props();
 
@@ -60,14 +65,15 @@
 		{disabled}
 		{required}
 		{spellcheck}
+		{autocomplete}
 		class="field-input"
 		oninput={(e) => {
 			value = (e.target as HTMLInputElement).value;
 			oninput?.(e);
 		}}
-		onkeydown={onkeydown}
-		oncompositionstart={oncompositionstart}
-		oncompositionend={oncompositionend}
+		{onkeydown}
+		{oncompositionstart}
+		{oncompositionend}
 	/>
 	{#if help && !error}
 		<span class="field-help">{help}</span>

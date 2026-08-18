@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Button from '$lib/components/Button.svelte';
+	import Select from '$lib/components/Select.svelte';
 	import { client } from '$lib/client';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
@@ -8,7 +9,34 @@
 
 	let appName = $state('');
 
+	// ── Theme picker ──
+	// Add new themes here (plus a themes/<name>.css file) as they ship.
+	const themes = [
+		{ value: 'wabisabi-light', label: 'Wabisabi Light' },
+		{ value: 'kanagawa-dragon', label: 'Kanagawa Dragon' },
+		{ value: 'kanagawa-wave', label: 'Kanagawa Wave' },
+		{ value: 'tokyo-night', label: 'Tokyo Night' }
+	];
+	let currentTheme = $state('wabisabi-light');
+
+	function applyTheme(name: string) {
+		currentTheme = name;
+		document.documentElement.setAttribute('data-theme', name);
+		localStorage.setItem('lazypock-theme', name);
+	}
+
 	onMount(async () => {
+		// Restore the saved theme (if any) before rendering the app chrome.
+		try {
+			const saved = localStorage.getItem('lazypock-theme');
+			if (saved) {
+				currentTheme = saved;
+				document.documentElement.setAttribute('data-theme', saved);
+			}
+		} catch {
+			// ignore (storage unavailable)
+		}
+
 		try {
 			const res = (await client.http.get('/settings')) as Record<string, unknown> | null;
 			if (res?.app_name) {
@@ -50,7 +78,14 @@
 		<Button class={navClass('/logs')} onclick={() => _goto('/logs')}>Logs</Button>
 		<Button class={navClass('/settings')} onclick={() => _goto('/settings')}>Settings</Button>
 	</nav>
-	<div class="ml-auto">
+	<div class="ml-auto flex items-center gap-1">
+		<Select
+			variant="ghost"
+			size="sm"
+			options={themes}
+			bind:value={currentTheme}
+			onchange={(v) => applyTheme(String(v))}
+		/>
 		<Button class="btn-sm text-sm font-medium hover:bg-primary-content/10" onclick={logout}
 			>Logout</Button
 		>
