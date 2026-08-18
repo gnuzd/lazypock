@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
+	import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
 
 	let {
 		show = $bindable(false),
@@ -16,44 +17,59 @@
 	} = $props();
 
 	let wrapper: HTMLDivElement | undefined = $state();
+	let menu: HTMLDivElement | undefined = $state();
 
-	// Track where to place the menu. We anchor it to the VIEWPORT
-	// (position: fixed) instead of the wrapper so it can never be clipped by
-	// an overflow:hidden ancestor (e.g. the settings modals) — the classic
-	// "dropdown cut off inside a modal" bug. Width: at least as wide as the
-	// trigger, capped so long labels truncate instead of overflowing. Height:
-	// capped so long option lists scroll instead of overflowing the viewport.
-	// Height/width caps live in the initial style so they apply from the very
-	// first frame (an empty string would render the full list for one frame
-	// before the $effect computes placement).
-	let menuStyle = $state('max-width:min(90vw, 360px);max-height:min(320px, 55vh);overflow-y:auto;');
+	// Intro-transition direction (slide out of the trigger's edge). Guessed at
+	// open time — the actual placement is floating-ui's job; this only decides
+	// which way the 6px slide points, so a rare wrong guess is imperceptible.
+	let flyY = $state(-6);
+
+	function toggle() {
+		if (!show && wrapper) {
+			const wr = wrapper.getBoundingClientRect();
+			const viewH = window.innerHeight;
+			flyY = wr.bottom + 280 > viewH && wr.top >= 280 ? 6 : -6;
+		}
+		show = !show;
+	}
+
+	// Base style lives outside the positioning updates so the size caps apply
+	// from the very first frame (no full-height flash for long option lists).
+	// 'position: fixed' anchors the menu to the VIEWPORT, so an
+	// overflow:hidden ancestor (e.g. the settings modals) can never clip it.
+	const baseStyle =
+		'position:fixed;max-width:min(90vw, 360px);max-height:min(320px, 55vh);overflow-y:auto;overflow-x:hidden;';
+
+	// left/top/min-width — filled in by the floating-ui update below.
+	let posStyle = $state('');
 
 	$effect(() => {
-		if (show && wrapper) {
-			const wr = wrapper.getBoundingClientRect();
-			const viewW = window.innerWidth;
-			const viewH = window.innerHeight;
+		if (show && wrapper && menu) {
+			// Capture the narrowed references — TS loses the narrowing inside
+			// the async callbacks below.
+			const ref = wrapper;
+			const float = menu;
 
-			// Menu size caps used both for the flip logic and the CSS.
-			const menuW = Math.min(320, Math.max(Math.round(wr.width), 200));
-			const menuH = 320;
-
-			// Horizontal: prefer aligning with the requested edge, flip to the
-			// other side when that would overflow the viewport.
-			let alignLeft = align === 'left';
-			if (alignLeft && wr.right + menuW > viewW && wr.left - menuW >= 0) alignLeft = false;
-			if (!alignLeft && wr.left - menuW < 0 && wr.right + menuW <= viewW) alignLeft = true;
-
-			// Vertical: show above the trigger when there isn't enough room below.
-			const showAbove = wr.bottom + menuH > viewH && wr.top >= menuH;
-
-			const left = alignLeft ? Math.max(4, wr.left) : Math.max(4, wr.right - menuW);
-			const top = showAbove ? Math.max(4, wr.top - menuH) : Math.min(viewH - 4, wr.bottom);
-
-			menuStyle =
-				`position:fixed;left:${Math.round(left)}px;top:${Math.round(top)}px;` +
-				`min-width:${menuW}px;max-width:min(90vw, 360px);` +
-				`max-height:min(320px, 55vh);overflow-y:auto;`;
+			// autoUpdate() recomputes on scroll (any scrollable ancestor, capture
+			// phase), resize and layout changes, so the menu follows its trigger
+			// wherever it scrolls instead of staying glued to the viewport.
+			const stopAutoUpdate = autoUpdate(ref, float, () => {
+				computePosition(ref, float, {
+					strategy: 'fixed',
+					placement: align === 'right' ? 'bottom-end' : 'bottom-start',
+					// flip() decides above/below from the menu's REAL measured size
+					// (the old code guessed 320px and flipped unnecessarily);
+					// shift() keeps it inside the viewport horizontally.
+					middleware: [offset(4), flip({ padding: 8 }), shift({ padding: 8 })]
+				}).then(({ x, y }) => {
+					// The menu may have closed between the async call and now.
+					if (!show || !float.isConnected) return;
+					// At least as wide as the trigger, never narrower than 200px
+					// (icon-only triggers), capped so long labels truncate.
+					const minW = Math.min(320, Math.max(Math.round(ref.getBoundingClientRect().width), 200));
+					posStyle = `left:${Math.round(x)}px;top:${Math.round(y)}px;min-width:${minW}px;`;
+				});
+			});
 
 			function handle(e: MouseEvent) {
 				if (wrapper && !wrapper.contains(e.target as Node)) {
@@ -61,21 +77,38 @@
 				}
 			}
 			document.addEventListener('mousedown', handle);
-			return () => document.removeEventListener('mousedown', handle);
+
+			return () => {
+				stopAutoUpdate();
+				document.removeEventListener('mousedown', handle);
+			};
+		} else {
+			posStyle = '';
 		}
 	});
 </script>
 
 <div bind:this={wrapper} class="relative {className}">
-	<div onclick={() => (show = !show)} role="button" tabindex="-1">
+	<div
+		onclick={toggle}
+		onkeydown={(e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				toggle();
+			}
+		}}
+		role="button"
+		tabindex="-1"
+	>
 		{@render trigger?.()}
 	</div>
 
 	{#if show}
 		<div
+			bind:this={menu}
 			class="z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
-			style={menuStyle}
-			transition:fly={{ y: -6, duration: 120 }}
+			style={baseStyle + posStyle}
+			transition:fly={{ y: flyY, duration: 120 }}
 		>
 			{@render children?.()}
 		</div>
