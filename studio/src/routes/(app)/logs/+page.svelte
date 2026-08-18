@@ -273,140 +273,149 @@
 	}
 </script>
 
-<!-- Chart -->
-<div class="mb-4 bg-primary">
-	<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
-		{#if chartLoading}
-			<div class="absolute inset-0 z-50 flex items-center justify-center">
-				<span class="loading loading-spinner loading-sm" />
-			</div>
-		{/if}
-		<canvas
-			bind:this={chartCanvas}
-			class="h-full w-full"
-			ondblclick={() => chartInst?.resetZoom()}
-		/>
-	</div>
-</div>
-
-<!-- Filters bar -->
-<div class="mb-4 flex items-center justify-between gap-2 p-4">
-	<h1 class="text-xl font-semibold">Request Logs</h1>
-	<div class="flex items-center gap-2">
-		{#if collections.length > 0}
-			<select
-				class="input input-sm"
-				bind:value={collectionFilter}
-				onchange={() => {
-					page = 1;
-					loadLogs();
-				}}
-			>
-				<option value="">All collections</option>
-				{#each collections as coll (coll)}
-					<option value={coll}>{coll}</option>
-				{/each}
-			</select>
-		{/if}
-		<Button class="btn-ghost btn-sm" onclick={clearOldLogs}>Clean old (7d+)</Button>
-		<Button class="btn-primary btn-sm" onclick={clearLogs}>Clear all</Button>
-	</div>
-</div>
-
-<!-- Detail pane -->
-{#if detailId}
-	<div class="mb-4 rounded-box border border-base-300 bg-base-100 p-4">
-		<div class="mb-3 flex items-center justify-between">
-			<h2 class="font-semibold">Log Detail</h2>
-			<button
-				class="cursor-pointer border-none bg-transparent text-sm opacity-50 hover:opacity-100"
-				onclick={() => (detailId = null)}
-			>
-				Close
-			</button>
+<div class="flex flex-1 flex-col overflow-hidden">
+	<!-- Chart -->
+	<div class="mb-4 shrink-0 bg-primary">
+		<div class="relative h-[170px] w-full" class:opacity-50={chartLoading}>
+			{#if chartLoading}
+				<div class="absolute inset-0 z-50 flex items-center justify-center">
+					<span class="loading loading-spinner loading-sm" />
+				</div>
+			{/if}
+			<canvas
+				bind:this={chartCanvas}
+				class="h-full w-full"
+				ondblclick={() => chartInst?.resetZoom()}
+			/>
 		</div>
-		{#if detail}
-			<div class="grid grid-cols-2 gap-3 text-sm">
-				<div class="text-base-content/60">Method</div>
-				<div class={methodClass(detail.method)}>{String(detail.method ?? '')}</div>
-				<div class="text-base-content/60">Path</div>
-				<div class="font-mono">{String(detail.path ?? '')}</div>
-				<div class="text-base-content/60">Status</div>
-				<div class={statusClass(detail.status)}>{String(detail.status ?? '')}</div>
-				<div class="text-base-content/60">Duration</div>
-				<div>{formatDuration(detail.duration)}</div>
-				<div class="text-base-content/60">IP</div>
-				<div class="font-mono">{String(detail.ip ?? '—')}</div>
-				<div class="text-base-content/60">User Agent</div>
-				<div class="break-all">{String(detail.user_agent ?? '—')}</div>
-				<div class="text-base-content/60">Referer</div>
-				<div class="break-all">{String(detail.referer ?? '—')}</div>
-				<div class="text-base-content/60">Collection</div>
-				<div>{String(detail.collection ?? '—')}</div>
-				{#if detail.error}
-					<div class="text-base-content/60">Error</div>
-					<div class="text-error">{String(detail.error)}</div>
+	</div>
+
+	<div class="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+		<!-- Filters bar -->
+		<div class="mb-4 flex items-center justify-between gap-2 p-4">
+			<h1 class="text-xl font-semibold">Request Logs</h1>
+			<div class="flex items-center gap-2">
+				{#if collections.length > 0}
+					<select
+						class="input input-sm"
+						bind:value={collectionFilter}
+						onchange={() => {
+							page = 1;
+							loadLogs();
+						}}
+					>
+						<option value="">All collections</option>
+						{#each collections as coll (coll)}
+							<option value={coll}>{coll}</option>
+						{/each}
+					</select>
 				{/if}
-				<div class="text-base-content/60">Timestamp</div>
-				<div>{formatTS(detail.created_at)}</div>
-				{#if detail.body}
-					<div class="col-span-2 mt-2">
-						<div class="mb-1 text-base-content/60">Request Body</div>
-						<pre
-							class="max-h-64 overflow-auto rounded-lg border border-base-300 bg-base-200/50 p-3 font-mono text-xs break-all whitespace-pre-wrap">{prettyJSON(
-								detail.body
-							)}</pre>
+				<Button class="btn-ghost btn-sm" onclick={clearOldLogs}>Clean old (7d+)</Button>
+				<Button class="btn-primary btn-sm" onclick={clearLogs}>Clear all</Button>
+			</div>
+		</div>
+
+		<!-- Detail pane -->
+		{#if detailId}
+			<div class="mb-4 rounded-box border border-base-300 bg-base-100 p-4">
+				<div class="mb-3 flex items-center justify-between">
+					<h2 class="font-semibold">Log Detail</h2>
+					<button
+						class="cursor-pointer border-none bg-transparent text-sm opacity-50 hover:opacity-100"
+						onclick={() => (detailId = null)}
+					>
+						Close
+					</button>
+				</div>
+				{#if detail}
+					<div class="grid grid-cols-2 gap-3 text-sm">
+						<div class="text-base-content/60">Method</div>
+						<div class={methodClass(detail.method)}>{String(detail.method ?? '')}</div>
+						<div class="text-base-content/60">Path</div>
+						<div class="font-mono">{String(detail.path ?? '')}</div>
+						<div class="text-base-content/60">Status</div>
+						<div class={statusClass(detail.status)}>{String(detail.status ?? '')}</div>
+						<div class="text-base-content/60">Duration</div>
+						<div>{formatDuration(detail.duration)}</div>
+						<div class="text-base-content/60">IP</div>
+						<div class="font-mono">{String(detail.ip ?? '—')}</div>
+						<div class="text-base-content/60">User Agent</div>
+						<div class="break-all">{String(detail.user_agent ?? '—')}</div>
+						<div class="text-base-content/60">Referer</div>
+						<div class="break-all">{String(detail.referer ?? '—')}</div>
+						<div class="text-base-content/60">Collection</div>
+						<div>{String(detail.collection ?? '—')}</div>
+						{#if detail.error}
+							<div class="text-base-content/60">Error</div>
+							<div class="text-error">{String(detail.error)}</div>
+						{/if}
+						<div class="text-base-content/60">Timestamp</div>
+						<div>{formatTS(detail.created_at)}</div>
+						{#if detail.body}
+							<div class="col-span-2 mt-2">
+								<div class="mb-1 text-base-content/60">Request Body</div>
+								<pre
+									class="max-h-64 overflow-auto rounded-lg border border-base-300 bg-base-200/50 p-3 font-mono text-xs break-all whitespace-pre-wrap">{prettyJSON(
+										detail.body
+									)}</pre>
+							</div>
+						{/if}
 					</div>
+				{:else}
+					<div class="text-sm opacity-50">Loading...</div>
 				{/if}
 			</div>
-		{:else}
-			<div class="text-sm opacity-50">Loading...</div>
 		{/if}
-	</div>
-{/if}
 
-<!-- Logs table -->
-<DataTable
-	{columns}
-	rows={logs}
-	{loading}
-	emptyLabel="No request logs yet."
-	onrowclick={(row) => viewDetail(row.id as string)}
->
-	{#snippet cell(row, col)}
-		{#if col.key === 'method'}
-			<span class={'font-mono text-xs font-semibold ' + methodClass(row.method)}
-				>{methodLabel(row.method)}</span
+		<!-- Logs table -->
+		<div class="min-h-0">
+			<DataTable
+				fillHeight
+				{columns}
+				rows={logs}
+				{loading}
+				emptyLabel="No request logs yet."
+				onrowclick={(row) => viewDetail(row.id as string)}
 			>
-		{:else if col.key === 'path'}
-			<span class="font-mono text-xs">{String(row.path ?? '')}</span>
-		{:else if col.key === 'status'}
-			<span class={'font-mono ' + statusClass(row.status)}>{String(row.status ?? '')}</span>
-		{:else if col.key === 'duration'}
-			<span class="text-xs text-base-content/60">{formatDuration(row.duration)}</span>
-		{:else if col.key === 'ip'}
-			<span class="font-mono text-xs">{String(row.ip ?? '—')}</span>
-		{:else if col.key === 'collection'}
-			<span class="text-xs">{String(row.collection ?? '—')}</span>
-		{:else if col.key === 'created_at'}
-			<span class="text-xs text-base-content/60">{formatTS(row.created_at)}</span>
-		{:else}
-			{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
-		{/if}
-	{/snippet}
-</DataTable>
+				{#snippet cell(row, col)}
+					{#if col.key === 'method'}
+						<span class={'font-mono text-xs font-semibold ' + methodClass(row.method)}
+							>{methodLabel(row.method)}</span
+						>
+					{:else if col.key === 'path'}
+						<span class="font-mono text-xs">{String(row.path ?? '')}</span>
+					{:else if col.key === 'status'}
+						<span class={'font-mono ' + statusClass(row.status)}>{String(row.status ?? '')}</span>
+					{:else if col.key === 'duration'}
+						<span class="text-xs text-base-content/60">{formatDuration(row.duration)}</span>
+					{:else if col.key === 'ip'}
+						<span class="font-mono text-xs">{String(row.ip ?? '—')}</span>
+					{:else if col.key === 'collection'}
+						<span class="text-xs">{String(row.collection ?? '—')}</span>
+					{:else if col.key === 'created_at'}
+						<span class="text-xs text-base-content/60">{formatTS(row.created_at)}</span>
+					{:else}
+						{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
+					{/if}
+				{/snippet}
+			</DataTable>
+		</div>
 
-<!-- Pagination -->
-{#if totalPages > 1}
-	<div class="mt-3 flex items-center justify-center gap-2">
-		<Button class="btn-ghost btn-sm" disabled={page <= 1} onclick={() => goPage(page - 1)}
-			>Previous</Button
-		>
-		<span class="text-sm text-base-content/60">
-			Page {page} of {totalPages} ({totalItems} total)
-		</span>
-		<Button class="btn-ghost btn-sm" disabled={page >= totalPages} onclick={() => goPage(page + 1)}
-			>Next</Button
-		>
+		<!-- Pagination -->
+		{#if totalPages > 1}
+			<div class="mt-3 flex items-center justify-center gap-2">
+				<Button class="btn-ghost btn-sm" disabled={page <= 1} onclick={() => goPage(page - 1)}
+					>Previous</Button
+				>
+				<span class="text-sm text-base-content/60">
+					Page {page} of {totalPages} ({totalItems} total)
+				</span>
+				<Button
+					class="btn-ghost btn-sm"
+					disabled={page >= totalPages}
+					onclick={() => goPage(page + 1)}>Next</Button
+				>
+			</div>
+		{/if}
 	</div>
-{/if}
+</div>
