@@ -5,6 +5,7 @@
 	import { z } from 'zod';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import Select from '$lib/components/Select.svelte';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
 
@@ -164,28 +165,34 @@
 			{#if showMoreMail}
 				<div transition:slide={{ duration: 150 }}>
 					<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12">
-						<div class="lg:col-span-4">
-							<div class="field">
-								<label class="field-label" for="smtp-tls">TLS encryption</label>
-								<select id="smtp-tls" class="field-input" bind:value={mailForm.values.smtpTls}>
-									<option value={false}>Auto (StartTLS)</option>
-									<option value={true}>Always</option>
-								</select>
-							</div>
+					<div class="lg:col-span-4">
+						<div class="field">
+							<span class="field-label">TLS encryption</span>
+							<Select
+								variant="plain"
+								triggerClass="w-full py-2.5"
+								options={[
+									{ value: false, label: 'Auto (StartTLS)' },
+									{ value: true, label: 'Always' }
+								]}
+								bind:value={mailForm.values.smtpTls}
+							/>
 						</div>
-						<div class="lg:col-span-4">
-							<div class="field">
-								<label class="field-label" for="smtp-auth">AUTH method</label>
-								<select
-									id="smtp-auth"
-									class="field-input"
-									bind:value={mailForm.values.smtpAuthMethod}
-								>
-									<option value="PLAIN">PLAIN (default)</option>
-									<option value="LOGIN">LOGIN</option>
-								</select>
-							</div>
+					</div>
+					<div class="lg:col-span-4">
+						<div class="field">
+							<span class="field-label">AUTH method</span>
+							<Select
+								variant="plain"
+								triggerClass="w-full py-2.5"
+								options={[
+									{ value: 'PLAIN', label: 'PLAIN (default)' },
+									{ value: 'LOGIN', label: 'LOGIN' }
+								]}
+								bind:value={mailForm.values.smtpAuthMethod}
+							/>
 						</div>
+					</div>
 						<div class="lg:col-span-4">
 							<Input
 								label="EHLO/HELO domain"

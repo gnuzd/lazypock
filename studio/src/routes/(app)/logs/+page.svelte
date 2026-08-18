@@ -4,6 +4,7 @@
 	import type { Chart as ChartType } from 'chart.js';
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
+	import Select from '$lib/components/Select.svelte';
 
 	let logs = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
@@ -290,19 +291,17 @@
 			<h1 class="text-xl font-semibold">Request Logs</h1>
 			<div class="flex items-center gap-2">
 				{#if collections.length > 0}
-					<select
-						class="input input-sm"
+					<Select
+						options={[
+							{ value: '', label: 'All collections' },
+							...collections.map((c) => ({ value: c, label: c }))
+						]}
 						bind:value={collectionFilter}
 						onchange={() => {
 							page = 1;
 							loadLogs();
 						}}
-					>
-						<option value="">All collections</option>
-						{#each collections as coll (coll)}
-							<option value={coll}>{coll}</option>
-						{/each}
-					</select>
+					/>
 				{/if}
 				<Button class="btn-ghost btn-sm" onclick={clearOldLogs}>Clean old (7d+)</Button>
 				<Button class="btn-primary btn-sm" onclick={clearLogs}>Clear all</Button>
@@ -390,17 +389,16 @@
 					{totalItems} log{totalItems === 1 ? '' : 's'}
 				</div>
 				<div class="flex items-center gap-2">
-					<select
-						class="input input-sm"
+					<Select
+						options={[
+							{ value: 10, label: '10 / page' },
+							{ value: 25, label: '25 / page' },
+							{ value: 50, label: '50 / page' },
+							{ value: 100, label: '100 / page' }
+						]}
 						bind:value={perPage}
 						onchange={changePerPage}
-						title="Logs per page"
-					>
-						<option value={10}>10 / page</option>
-						<option value={25}>25 / page</option>
-						<option value={50}>50 / page</option>
-						<option value={100}>100 / page</option>
-					</select>
+					/>
 					<Button class="btn-ghost btn-sm" disabled={page <= 1} onclick={() => goPage(page - 1)}
 						>Previous</Button
 					>

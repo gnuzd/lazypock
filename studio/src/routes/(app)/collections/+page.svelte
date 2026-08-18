@@ -7,6 +7,7 @@
 	import { getThumbUrl } from 'lazypock';
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
+	import Select from '$lib/components/Select.svelte';
 	import RecordSidePane from '$lib/components/RecordSidePane.svelte';
 	import CollectionEditor from '$lib/components/CollectionEditor.svelte';
 	import SidePane from '$lib/components/SidePane.svelte';
@@ -264,17 +265,16 @@
 					{totalItems} record{totalItems === 1 ? '' : 's'}
 				</div>
 				<div class="flex items-center gap-2">
-					<select
-						class="input input-sm"
+					<Select
+						options={[
+							{ value: 10, label: '10 / page' },
+							{ value: 25, label: '25 / page' },
+							{ value: 50, label: '50 / page' },
+							{ value: 100, label: '100 / page' }
+						]}
 						bind:value={perPage}
 						onchange={changePerPage}
-						title="Records per page"
-					>
-						<option value={10}>10 / page</option>
-						<option value={25}>25 / page</option>
-						<option value={50}>50 / page</option>
-						<option value={100}>100 / page</option>
-					</select>
+					/>
 					<Button
 						class="btn-ghost btn-sm"
 						disabled={currentPage <= 1}
