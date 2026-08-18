@@ -111,7 +111,12 @@
 				</div>
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 					<Input label="Access Key" bind:value={storageForm.values.s3AccessKey} />
-					<Input label="Secret Key" type="password" bind:value={storageForm.values.s3SecretKey} />
+					<Input
+						label="Secret Key"
+						type="password"
+						autocomplete="new-password"
+						bind:value={storageForm.values.s3SecretKey}
+					/>
 				</div>
 				<Input
 					label="Endpoint (optional)"

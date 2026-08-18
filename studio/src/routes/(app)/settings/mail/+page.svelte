@@ -93,6 +93,7 @@
 <h2 class="mb-4 text-lg font-semibold">Mail Settings</h2>
 <form
 	class="rounded-box border border-base-300 bg-base-100 p-6"
+	autocomplete="off"
 	onsubmit={(e) => mailForm.handleSubmit(e, saveMail)}
 >
 	<div class="mb-4 text-sm text-base-content/60">
@@ -150,7 +151,12 @@
 					<Input label="Username" bind:value={mailForm.values.smtpUser} />
 				</div>
 				<div class="flex-[4]">
-					<Input label="Password" type="password" bind:value={mailForm.values.smtpPass} />
+					<Input
+						label="Password"
+						type="password"
+						autocomplete="new-password"
+						bind:value={mailForm.values.smtpPass}
+					/>
 				</div>
 			</div>
 

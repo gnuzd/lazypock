@@ -40,3 +40,13 @@ input:-webkit-autofill:focus {
 	-webkit-box-shadow: 0 0 0px 1000px transparent inset;
 	transition: background-color 5000s ease-in-out 0s;
 }
+
+/* Firefox tints autofilled fields (yellow) — neutralize it to keep the
+   themed input background. */
+input:autofill,
+input:autofill:hover,
+input:autofill:focus {
+	background-color: transparent;
+	box-shadow: 0 0 0px 1000px transparent inset;
+	transition: background-color 5000s ease-in-out 0s;
+}
