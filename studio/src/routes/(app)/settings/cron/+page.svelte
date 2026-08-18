@@ -202,15 +202,21 @@
 	// ── Expression preview (live, debounced) ─────────
 	let previewSeq = 0;
 	let previewTimer: ReturnType<typeof setTimeout> | undefined;
+	// Last non-loading result, kept in plain variables so the $effect below
+	// never reads `preview` (a read-write cycle would re-trigger it forever).
+	let lastRuns: string[] = [];
+	let lastError = '';
 
 	function updatePreview() {
 		const expr = form.expression.trim();
 		const seq = ++previewSeq;
 		if (!expr) {
-			preview = { runs: [], error: 'Expression is required', loading: false };
+			lastRuns = [];
+			lastError = 'Expression is required';
+			preview = { runs: [], error: lastError, loading: false };
 			return;
 		}
-		preview = { ...preview, loading: true };
+		preview = { runs: lastRuns, error: lastError, loading: true };
 		if (previewTimer) clearTimeout(previewTimer);
 		previewTimer = setTimeout(async () => {
 			try {
@@ -220,13 +226,18 @@
 				})) as { valid?: boolean; error?: string; nextRuns?: string[] } | null;
 				if (seq !== previewSeq) return; // stale response
 				if (!res?.valid) {
-					preview = { runs: [], error: res?.error ?? 'Invalid expression', loading: false };
+					lastRuns = [];
+					lastError = res?.error ?? 'Invalid expression';
 				} else {
-					preview = { runs: res.nextRuns ?? [], error: '', loading: false };
+					lastRuns = res.nextRuns ?? [];
+					lastError = '';
 				}
+				preview = { runs: lastRuns, error: lastError, loading: false };
 			} catch {
 				if (seq !== previewSeq) return;
-				preview = { runs: [], error: 'Could not validate expression', loading: false };
+				lastRuns = [];
+				lastError = 'Could not validate expression';
+				preview = { runs: [], error: lastError, loading: false };
 			}
 		}, 300);
 	}
