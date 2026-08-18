@@ -15,6 +15,11 @@
 	let collection = $state<Record<string, unknown> | null>(null);
 	let rows = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
+	// ── Pagination state ──
+	let currentPage = $state(1);
+	let perPage = $state(50);
+	let totalItems = $state(0);
+	let totalPages = $state(1);
 	// ── Collection edit pane state ──
 	let showCollectionPane = $state(false);
 	let collectionEditName = $state('');
@@ -69,15 +74,18 @@
 		return cols;
 	});
 
-	async function loadCollection(name: string) {
+	async function loadCollection(name: string, targetPage: number = currentPage) {
 		loading = true;
 		try {
 			const [coll, recs] = await Promise.all([
 				client.collections.getOne(name),
-				client.collection(name).getList(1, 50)
+				client.collection(name).getList(targetPage, perPage)
 			]);
 			collection = coll;
 			rows = (recs?.items as Record<string, unknown>[]) || [];
+			totalItems = recs?.totalItems ?? 0;
+			totalPages = Math.max(1, recs?.totalPages ?? 1);
+			currentPage = Math.min(targetPage, totalPages);
 		} catch (e) {
 			console.error('load collection:', e);
 		} finally {
@@ -105,6 +113,7 @@
 		// Only reload + resubscribe when the collection actually changed
 		if (name === lastHandledName) return;
 		lastHandledName = name;
+		currentPage = 1;
 
 		loadCollection(name);
 
@@ -146,7 +155,17 @@
 	}
 
 	function reload() {
-		if ($activeName) loadCollection($activeName);
+		if ($activeName) loadCollection($activeName, currentPage);
+	}
+
+	// ── Pagination ──
+	function goPage(target: number) {
+		if (target < 1 || target > totalPages || target === currentPage || !$activeName) return;
+		loadCollection($activeName, target);
+	}
+
+	function changePerPage() {
+		if ($activeName) loadCollection($activeName, 1);
 	}
 
 	function editCollection() {
@@ -200,39 +219,79 @@
 		<p class="text-sm">Loading...</p>
 	</div>
 {:else if collection}
-	<div class="mb-3 flex items-center justify-between pb-3">
-		<nav class="flex items-center gap-2">
-			<span class="text-base-content/50">Collections</span>
-			<span class="text-xs opacity-30">/</span>
-			<span class="font-medium">{(collection.name as string) ?? '...'}</span>
-			<button
-				type="button"
-				class="ml-2 cursor-pointer rounded border-none bg-transparent p-0.5 text-base-content opacity-40 transition-opacity hover:opacity-100"
-				onclick={editCollection}
-				title="Edit collection"
+	<div class="flex h-full flex-col">
+		<div class="mb-3 flex items-center justify-between pb-3">
+			<nav class="flex items-center gap-2">
+				<span class="text-base-content/50">Collections</span>
+				<span class="text-xs opacity-30">/</span>
+				<span class="font-medium">{(collection.name as string) ?? '...'}</span>
+				<button
+					type="button"
+					class="ml-2 cursor-pointer rounded border-none bg-transparent p-0.5 text-base-content opacity-40 transition-opacity hover:opacity-100"
+					onclick={editCollection}
+					title="Edit collection"
+				>
+					<Settings class="h-4 w-4" />
+				</button>
+			</nav>
+			<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+		</div>
+
+		<div class="min-h-0 flex-1">
+			<DataTable
+				{columns}
+				{rows}
+				fillHeight
+				selectable
+				bind:selectedIds
+				emptyLabel="No records yet. Create your first record to get started."
+				emptyActionLabel="+ New Record"
+				onemptyaction={newRecord}
+				onrowclick={(row) => editRecord(row)}
 			>
-				<Settings class="h-4 w-4" />
-			</button>
-		</nav>
-		<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+				{#snippet selectionActions()}
+					<Button class="btn-ghost btn-sm" onclick={downloadSelected}>Download JSON</Button>
+					<Button class="btn-error btn-sm" loading={deletingSelected} onclick={deleteSelected}>
+						Delete
+					</Button>
+				{/snippet}
+			</DataTable>
+		</div>
+
+		{#if totalItems > 0}
+			<div class="mt-3 flex items-center justify-between gap-3">
+				<div class="text-sm text-base-content/60">
+					{totalItems} record{totalItems === 1 ? '' : 's'}
+				</div>
+				<div class="flex items-center gap-2">
+					<select
+						class="input input-sm"
+						bind:value={perPage}
+						onchange={changePerPage}
+						title="Records per page"
+					>
+						<option value={10}>10 / page</option>
+						<option value={25}>25 / page</option>
+						<option value={50}>50 / page</option>
+						<option value={100}>100 / page</option>
+					</select>
+					<Button
+						class="btn-ghost btn-sm"
+						disabled={currentPage <= 1}
+						onclick={() => goPage(currentPage - 1)}>Previous</Button
+					>
+					<span class="text-sm text-base-content/60">
+						Page {currentPage} of {totalPages}
+					</span>
+					<Button
+						class="btn-ghost btn-sm"
+						disabled={currentPage >= totalPages}
+						onclick={() => goPage(currentPage + 1)}>Next</Button
+					>
+				</div>
+			</div>
+		{/if}
 	</div>
-	<DataTable
-		{columns}
-		{rows}
-		selectable
-		bind:selectedIds
-		emptyLabel="No records yet. Create your first record to get started."
-		emptyActionLabel="+ New Record"
-		onemptyaction={newRecord}
-		onrowclick={(row) => editRecord(row)}
-	>
-		{#snippet selectionActions()}
-			<Button class="btn-ghost btn-sm" onclick={downloadSelected}>Download JSON</Button>
-			<Button class="btn-error btn-sm" loading={deletingSelected} onclick={deleteSelected}>
-				Delete
-			</Button>
-		{/snippet}
-	</DataTable>
 {:else}
 	<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>
 {/if}
@@ -268,19 +327,3 @@
 		}}
 	/>
 </SidePane>
-
-<style>
-	.file-thumbs {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-	}
-
-	.file-thumb {
-		width: 32px;
-		height: 32px;
-		object-fit: cover;
-		border-radius: 6px;
-		background: var(--color-base-200, #f0f0f0);
-	}
-</style>
