@@ -108,6 +108,10 @@ npm run dev         # Starts Vite dev server on http://localhost:5173
 ```
 
 > The SvelteKit dev server proxies `/api` requests to the Phoenix backend (port 4000). The Studio is served at `http://localhost:5173/_/`.
+>
+> For production, the SPA is built into `core/priv/static/studio/` (gitignored —
+> generated, not committed). Run `mix assets.build` (or `mix assets.deploy`)
+> in `core/` to produce it; the release workflow does this automatically.
 
 #### 3. TypeScript SDK
 
