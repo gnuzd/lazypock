@@ -258,7 +258,7 @@
 			</DataTable>
 		</div>
 
-		{#if totalItems > 0}
+		{#if totalPages > 1}
 			<div class="mt-3 flex items-center justify-between gap-3">
 				<div class="text-sm text-base-content/60">
 					{totalItems} record{totalItems === 1 ? '' : 's'}
