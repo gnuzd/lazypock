@@ -187,6 +187,11 @@
 		loadLogs();
 	}
 
+	function changePerPage() {
+		page = 1;
+		loadLogs();
+	}
+
 	function statusClass(status: unknown): string {
 		const s = Number(status);
 		if (s >= 200 && s < 300) return 'text-success';
@@ -380,18 +385,32 @@
 
 		<!-- Pagination -->
 		{#if totalPages > 1}
-			<div class="mt-3 flex items-center justify-center gap-2">
-				<Button class="btn-ghost btn-sm" disabled={page <= 1} onclick={() => goPage(page - 1)}
-					>Previous</Button
-				>
-				<span class="text-sm text-base-content/60">
-					Page {page} of {totalPages} ({totalItems} total)
-				</span>
-				<Button
-					class="btn-ghost btn-sm"
-					disabled={page >= totalPages}
-					onclick={() => goPage(page + 1)}>Next</Button
-				>
+			<div class="mt-3 flex items-center justify-between gap-3">
+				<div class="text-sm text-base-content/60">
+					{totalItems} log{totalItems === 1 ? '' : 's'}
+				</div>
+				<div class="flex items-center gap-2">
+					<select
+						class="input input-sm"
+						bind:value={perPage}
+						onchange={changePerPage}
+						title="Logs per page"
+					>
+						<option value={10}>10 / page</option>
+						<option value={25}>25 / page</option>
+						<option value={50}>50 / page</option>
+						<option value={100}>100 / page</option>
+					</select>
+					<Button class="btn-ghost btn-sm" disabled={page <= 1} onclick={() => goPage(page - 1)}
+						>Previous</Button
+					>
+					<span class="text-sm text-base-content/60">Page {page} of {totalPages}</span>
+					<Button
+						class="btn-ghost btn-sm"
+						disabled={page >= totalPages}
+						onclick={() => goPage(page + 1)}>Next</Button
+					>
+				</div>
 			</div>
 		{/if}
 	</div>
