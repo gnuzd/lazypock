@@ -23,7 +23,10 @@
 	// "dropdown cut off inside a modal" bug. Width: at least as wide as the
 	// trigger, capped so long labels truncate instead of overflowing. Height:
 	// capped so long option lists scroll instead of overflowing the viewport.
-	let menuStyle = $state('');
+	// Height/width caps live in the initial style so they apply from the very
+	// first frame (an empty string would render the full list for one frame
+	// before the $effect computes placement).
+	let menuStyle = $state('max-width:min(90vw, 360px);max-height:min(320px, 55vh);overflow-y:auto;');
 
 	$effect(() => {
 		if (show && wrapper) {

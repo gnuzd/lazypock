@@ -30,6 +30,20 @@
 	} = $props();
 
 	let open = $state(false);
+	// Filter text for long option lists (menu shows an input when there are
+	// 10+ options); cleared whenever the menu closes.
+	let filter = $state('');
+
+	const visibleOptions = $derived(
+		filter
+			? options.filter((o) => String(o.label).toLowerCase().includes(filter.toLowerCase()))
+			: options
+	);
+
+	// Reset the filter when the menu closes (also on selection).
+	$effect(() => {
+		if (!open) filter = '';
+	});
 
 	const selected = $derived(options.find((o) => o.value === value));
 
@@ -80,15 +94,25 @@
 		</button>
 	{/snippet}
 
+	{#if options.length >= 10}
+		<div class="border-b border-base-300 p-1.5">
+			<input
+				type="text"
+				class="w-full rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs transition-colors outline-none focus:border-primary"
+				placeholder="Filter…"
+				bind:value={filter}
+			/>
+		</div>
+	{/if}
 	<div class="min-w-[160px] py-1 {menuClass}">
-		{#each options as option (option.value)}
+		{#each visibleOptions as option (option.value)}
 			<button
 				type="button"
 				class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200"
 				class:font-medium={option.value === value}
 				onclick={() => choose(option)}
 			>
-				<span class="flex-1 truncate">{option.label}</span>
+				<span class="min-w-0 flex-1 truncate">{option.label}</span>
 				{#if option.value === value}
 					<svg
 						width="14"
@@ -102,5 +126,8 @@
 				{/if}
 			</button>
 		{/each}
+		{#if visibleOptions.length === 0}
+			<div class="px-3 py-2 text-xs text-base-content/40">No matching options</div>
+		{/if}
 	</div>
 </Dropdown>
