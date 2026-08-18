@@ -8,16 +8,13 @@ defmodule LazypockWeb.DynamicView do
   alias Lazypock.Schemas.FieldNames
   alias Lazypock.Schemas.GenericRecord
 
-  # Keys always kept when projecting fields (PocketBase parity):
-  # id, collection metadata, and timestamps renamed to created/updated.
-  @system_keys ~w(id collectionId collectionName created updated)
-
   @doc """
   Formats a list of records from a collection into PocketBase-compatible items,
   adding collection metadata to each record.
 
   When `fields` (comma-separated) is given, each item is projected to only the
-  requested fields plus system keys.
+  requested fields (strict projection — system keys like `id`/`created` are
+  only returned when explicitly requested, matching PocketBase).
   """
   @spec format_items([map()], String.t(), String.t() | nil) :: [map()]
   def format_items(records, collection_name, fields \\ nil) do
@@ -55,11 +52,14 @@ defmodule LazypockWeb.DynamicView do
   end
 
   @doc """
-  Projects an API-style item map to only the requested comma-separated `fields`
-  plus system keys (`id`, `collectionId`, `collectionName`, `created`, `updated`).
+  Projects an API-style item map to only the requested comma-separated `fields`.
 
   - `nil` or `"*"` → returns the item unchanged (all fields).
-  - Any other string → keeps only requested + system keys.
+  - Any other string → keeps ONLY the requested fields (strict projection,
+    matching PocketBase). `id`, `created`, `updated`, `collectionId` and
+    `collectionName` are NOT implicitly included — list them explicitly if
+    needed (e.g. `?fields=id,title`).
+  - Unknown field names are silently ignored.
   - Should be applied AFTER `strip_password_fields/2` so password fields are
     already removed and can never leak through projection.
   """
@@ -74,12 +74,7 @@ defmodule LazypockWeb.DynamicView do
       |> Enum.map(&String.trim/1)
       |> MapSet.new()
 
-    Map.take(
-      item,
-      Enum.filter(Map.keys(item), fn key ->
-        key in @system_keys or MapSet.member?(requested, key)
-      end)
-    )
+    Map.take(item, MapSet.to_list(requested))
   end
 
   @doc """

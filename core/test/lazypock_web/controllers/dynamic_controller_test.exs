@@ -121,22 +121,27 @@ defmodule LazypockWeb.DynamicControllerTest do
 
       assert length(body["items"]) == 1
       item = hd(body["items"])
-      # requested + system keys only (`created`/`updated` are system keys, kept
-      # per PocketBase parity); `active` must be absent
-      assert Map.keys(item) |> Enum.sort() ==
-               [
-                 "collectionId",
-                 "collectionName",
-                 "count",
-                 "created",
-                 "id",
-                 "title",
-                 "updated"
-               ]
+      # strict projection — only the requested fields are returned (PocketBase
+      # parity); `active` and system keys (`id`, `created`, ...) must be absent
+      assert Map.keys(item) |> Enum.sort() == ["count", "title"]
 
       assert item["title"] == "proj"
       assert item["count"] == 7
       refute Map.has_key?(item, "active")
+      refute Map.has_key?(item, "id")
+      refute Map.has_key?(item, "created")
+    end
+
+    test "projects fields including system keys when explicitly requested" do
+      insert_test_item(%{"title" => "proj-id"})
+
+      conn = get(build_conn(), list_path(), %{fields: "id,title"})
+      body = json_response(conn, 200)
+      item = hd(body["items"])
+
+      assert Map.keys(item) |> Enum.sort() == ["id", "title"]
+      assert item["title"] == "proj-id"
+      assert is_binary(item["id"])
     end
 
     test "list without fields returns full records (regression guard)" do
@@ -202,12 +207,12 @@ defmodule LazypockWeb.DynamicControllerTest do
       conn = get(build_conn(), item_path(record["id"]), %{fields: "title"})
       body = json_response(conn, 200)
 
-      assert Map.keys(body) |> Enum.sort() ==
-               ["collectionId", "collectionName", "created", "id", "title", "updated"]
-
+      # strict projection — only the requested field is returned
+      assert Map.keys(body) == ["title"]
       assert body["title"] == "show-proj"
       refute Map.has_key?(body, "count")
       refute Map.has_key?(body, "active")
+      refute Map.has_key?(body, "id")
     end
 
     test "returns 404 for unknown id" do
