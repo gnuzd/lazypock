@@ -13,8 +13,9 @@
 	let perPage = $state(50);
 	let collectionFilter = $state('');
 	let collections = $state<string[]>([]);
-	let detailId = $state<string | null>(null);
-	let detail = $state<Record<string, unknown> | null>(null);
+	// ── Inline row detail (accordion) ──
+	let expandedId = $state<string | null>(null);
+	let detailCache = $state<Record<string, Record<string, unknown> | null>>({});
 
 	// Chart (created in onMount to avoid SSR window issues)
 	let chartCanvas: HTMLCanvasElement | undefined = $state();
@@ -240,16 +241,20 @@
 		return String(method ?? '').toUpperCase();
 	}
 
-	async function viewDetail(id: string) {
-		detailId = id;
-		detail = null;
-		try {
-			const res = (await client.http.get('/logs/' + id)) as Record<string, unknown> | null;
-			detail = res;
-		} catch {
-			detail = {};
-		}
-	}
+	// Fetch the full detail for the expanded row (lazily, cached per id).
+	$effect(() => {
+		const id = expandedId;
+		if (!id || detailCache[id] !== undefined) return;
+		detailCache[id] = null; // in-flight marker
+		client.http
+			.get('/logs/' + id)
+			.then((res) => {
+				detailCache[id] = (res as Record<string, unknown> | null) ?? {};
+			})
+			.catch(() => {
+				detailCache[id] = {};
+			});
+	});
 
 	async function clearLogs() {
 		if (!confirm('Delete all request logs? This cannot be undone.')) return;
@@ -315,57 +320,50 @@
 			</div>
 		</div>
 
-		<!-- Detail pane -->
-		{#if detailId}
-			<div class="mb-4 rounded-box border border-base-300 bg-base-100 p-4">
-				<div class="mb-3 flex items-center justify-between">
-					<h2 class="font-semibold">Log Detail</h2>
-					<button
-						class="cursor-pointer border-none bg-transparent text-sm opacity-50 hover:opacity-100"
-						onclick={() => (detailId = null)}
-					>
-						Close
-					</button>
-				</div>
-				{#if detail}
-					<div class="grid grid-cols-2 gap-3 text-sm">
+		<!-- Inline row detail (accordion under the clicked row) -->
+		{#snippet rowDetail(row: Record<string, unknown>)}
+			{@const id = row.id as string}
+			{@const d = detailCache[id]}
+			<div class="text-sm">
+				{#if d === undefined || d === null}
+					<div class="py-2 opacity-50">Loading detail...</div>
+				{:else}
+					<div class="grid grid-cols-2 gap-3">
 						<div class="text-base-content/60">Method</div>
-						<div class={methodClass(detail.method)}>{String(detail.method ?? '')}</div>
+						<div class={methodClass(d.method)}>{String(d.method ?? '')}</div>
 						<div class="text-base-content/60">Path</div>
-						<div class="font-mono">{String(detail.path ?? '')}</div>
+						<div class="font-mono break-all">{String(d.path ?? '')}</div>
 						<div class="text-base-content/60">Status</div>
-						<div class={statusClass(detail.status)}>{String(detail.status ?? '')}</div>
+						<div class={statusClass(d.status)}>{String(d.status ?? '')}</div>
 						<div class="text-base-content/60">Duration</div>
-						<div>{formatDuration(detail.duration)}</div>
+						<div>{formatDuration(d.duration)}</div>
 						<div class="text-base-content/60">IP</div>
-						<div class="font-mono">{String(detail.ip ?? '—')}</div>
+						<div class="font-mono">{String(d.ip ?? '—')}</div>
 						<div class="text-base-content/60">User Agent</div>
-						<div class="break-all">{String(detail.user_agent ?? '—')}</div>
+						<div class="break-all">{String(d.user_agent ?? '—')}</div>
 						<div class="text-base-content/60">Referer</div>
-						<div class="break-all">{String(detail.referer ?? '—')}</div>
+						<div class="break-all">{String(d.referer ?? '—')}</div>
 						<div class="text-base-content/60">Collection</div>
-						<div>{String(detail.collection ?? '—')}</div>
-						{#if detail.error}
+						<div>{String(d.collection ?? '—')}</div>
+						{#if d.error}
 							<div class="text-base-content/60">Error</div>
-							<div class="text-error">{String(detail.error)}</div>
+							<div class="text-error">{String(d.error)}</div>
 						{/if}
 						<div class="text-base-content/60">Timestamp</div>
-						<div>{formatTS(detail.created_at)}</div>
-						{#if detail.body}
+						<div>{formatTS(d.created_at)}</div>
+						{#if d.body}
 							<div class="col-span-2 mt-2">
 								<div class="mb-1 text-base-content/60">Request Body</div>
 								<pre
 									class="max-h-64 overflow-auto rounded-lg border border-base-300 bg-base-200/50 p-3 font-mono text-xs break-all whitespace-pre-wrap">{prettyJSON(
-										detail.body
+										d.body
 									)}</pre>
 							</div>
 						{/if}
 					</div>
-				{:else}
-					<div class="text-sm opacity-50">Loading...</div>
 				{/if}
 			</div>
-		{/if}
+		{/snippet}
 
 		<!-- Logs table -->
 		<div class="min-h-0">
@@ -375,7 +373,8 @@
 				rows={logs}
 				{loading}
 				emptyLabel="No request logs yet."
-				onrowclick={(row) => viewDetail(row.id as string)}
+				bind:expandedId
+				detail={rowDetail}
 			>
 				{#snippet cell(row, col)}
 					{#if col.key === 'method'}

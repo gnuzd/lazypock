@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { fly } from 'svelte/transition';
+	import { fly, slide } from 'svelte/transition';
 	import Button from '$lib/components/Button.svelte';
 
 	type Column = {
@@ -24,7 +24,9 @@
 		selectable = false,
 		fillHeight = false,
 		selectedIds = $bindable([] as string[]),
+		expandedId = $bindable(null as string | null),
 		cell,
+		detail,
 		selectionActions
 	}: {
 		columns: Column[];
@@ -39,7 +41,11 @@
 		/** Fill the parent's height (flex-1 container) with an internal scroll area. */
 		fillHeight?: boolean;
 		selectedIds?: string[];
+		/** Row id currently expanded (accordion) when `detail` is provided. */
+		expandedId?: string | null;
 		cell?: Snippet<[row: Record<string, unknown>, col: Column]>;
+		/** When set, clicking a row expands this snippet inline under the row. */
+		detail?: Snippet<[row: Record<string, unknown>]>;
 		/** Extra action buttons rendered inside the floating selection bar. */
 		selectionActions?: Snippet;
 	} = $props();
@@ -62,21 +68,29 @@
 	function toggleAll(checked: boolean) {
 		selectedIds = checked ? rows.map((r) => r.id as string) : [];
 	}
+
+	function handleRowClick(row: Record<string, unknown>) {
+		if (detail) {
+			// Accordion: clicking the same row collapses, another row switches.
+			const id = row.id as string;
+			expandedId = expandedId === id ? null : id;
+		} else {
+			onrowclick?.(row);
+		}
+	}
 </script>
 
 <div
 	class={fillHeight
 		? 'flex h-full flex-col overflow-hidden rounded-box border border-base-300 bg-base-100'
-		: 'overflow-auto rounded-box border border-base-300 bg-base-100'}
+		: 'no-scrollbar overflow-auto rounded-box border border-base-300 bg-base-100'}
 >
-	<div class={fillHeight ? 'min-h-0 flex-1 overflow-auto' : ''}>
+	<div class={fillHeight ? 'no-scrollbar min-h-0 flex-1 overflow-auto' : ''}>
 		<table class="w-full border-collapse text-sm">
 			<thead>
 				<tr class="bg-base-200 text-xs font-semibold tracking-wider text-base-content/60 uppercase">
 					{#if selectable}
-						<th
-							class="sticky top-0 z-10 w-10 border-b border-base-300 bg-base-200 px-3.5 py-2.5"
-						>
+						<th class="sticky top-0 z-10 w-10 border-b border-base-300 bg-base-200 px-3.5 py-2.5">
 							<input
 								type="checkbox"
 								class="checkbox checkbox-sm"
@@ -133,8 +147,8 @@
 							{#each columns as col (col.key)}
 								<td
 									class="max-w-60 truncate border-b border-base-200 px-3.5 py-2 {col.class ?? ''}"
-									role={onrowclick ? 'button' : undefined}
-									onclick={onrowclick ? () => onrowclick(row) : undefined}
+									role={onrowclick || detail ? 'button' : undefined}
+									onclick={onrowclick || detail ? () => handleRowClick(row) : undefined}
 								>
 									{#if col.thumbs}
 										{@const thumbUrls = col.thumbs(row)}
@@ -155,6 +169,15 @@
 								</td>
 							{/each}
 						</tr>
+						{#if detail && expandedId === (row.id as string)}
+							<tr class="border-b border-base-200 bg-base-200/40">
+								<td {colspan} class="px-3.5 py-3">
+									<div transition:slide={{ duration: 150 }}>
+										{@render detail(row)}
+									</div>
+								</td>
+							</tr>
+						{/if}
 					{/each}
 				{/if}
 			</tbody>
@@ -179,6 +202,16 @@
 {/if}
 
 <style>
+	/* Hide scrollbars but keep scrolling (applied to the table's scroll area). */
+	.no-scrollbar {
+		scrollbar-width: none; /* Firefox */
+		-ms-overflow-style: none; /* legacy Edge/IE */
+	}
+
+	.no-scrollbar::-webkit-scrollbar {
+		display: none; /* Chrome/Safari/Edge */
+	}
+
 	.file-thumbs {
 		display: flex;
 		align-items: center;
