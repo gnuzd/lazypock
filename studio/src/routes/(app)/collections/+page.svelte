@@ -237,7 +237,7 @@
 			<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
 		</div>
 
-		<div class="min-h-0 flex-1">
+		<div class="min-h-0">
 			<DataTable
 				{columns}
 				{rows}
