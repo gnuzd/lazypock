@@ -15,7 +15,7 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 ### 1.1 Public (no auth)
 
 | Route | Controller action | Studio counterpart |
-|---|---|---|
+| --- | --- | --- |
 | `GET /api/health` | HealthController.index | none (not needed) |
 | `GET /api/oauth2-redirect` | AuthController.oauth2_redirect | none (browser redirect target) |
 | `GET /api/superusers/check` | SuperUserController.check | ✅ login page (checkSuperuser) |
@@ -34,7 +34,7 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 ### 1.2 Authenticated (token verified, enforcer decides)
 
 | Route | Controller action | Studio counterpart |
-|---|---|---|
+| --- | --- | --- |
 | `GET /api/superusers/me` | SuperUserController.me | ✅ login page / AppHeader session |
 | `GET /api/me` | SuperUserController.me | ✅ same |
 | `GET /api/collections` | CollectionController.list | ✅ collectionsStore |
@@ -69,14 +69,14 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 ### 1.3 Dynamic record routes
 
 | Route | Controller | Studio counterpart |
-|---|---|---|
+| --- | --- | --- |
 | `GET/POST /api/:collection` | DynamicController list/create | ✅ collections page (DataTable) |
 | `GET/PATCH/PUT/DELETE /api/:collection/:id` | DynamicController | ✅ RecordSidePane |
 
 ### 1.4 Realtime
 
 | Channel / topic | Purpose | Studio counterpart |
-|---|---|---|
+| --- | --- | --- |
 | `CollectionSocket` + `CollectionChannel` (`collection:topic`) | record create/update/delete events, authorization via view/list rules | ✅ collections page (subscribe) |
 | `AdminChannel` | admin events | ❌ no UI consumption |
 
@@ -85,7 +85,7 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 ## 2. Studio screens inventory
 
 | Route | Screen | API calls | Status |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `/login` | superuser check/setup/login | check, setup, login, me, collections.list | ✅ |
 | `/collections` (+ `?collection=`) | collection sidebar + record table + record CRUD | collections.list/getOne/create/update/delete/subscribe; collection(name) getList/create/update/delete/subscribe; file thumbs | ✅ |
 | `/collections/new` | new-collection page | (redirects to side pane) | ✅ (thin) |
@@ -112,7 +112,7 @@ RichEditor (TinyMCE), collectionsStore, createForm, ruleValidator.
 ## 3. Gap matrix — missing / incomplete screens
 
 | # | Gap | Core API available? | Severity | Notes |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | G1 | **OAuth provider configuration UI** — no screen to configure Google/GitHub/etc. (`oauth2.providers` runtime settings key exists, read by `Lazypock.Auth.OAuth2.providers/0`) | ✅ `PATCH /settings` accepts `oauth2` key | High | Admins must hand-edit settings via SQL/API today. Provider secrets also live here. |
 | G2 | **Auth collection "Auth" tab** — per-auth-collection options (password auth toggle, OAuth providers enabled for the collection, token duration, email template overrides) | 🟡 partial (collection options object) | High | PocketBase's collection editor has this tab; LazyPock's CollectionEditor has Fields/Rules only. |
 | G3 | **`auth-methods` viewer + per-collection login UI** — no UI to inspect or exercise a collection's auth methods (password/oauth providers) | ✅ `GET /:collection/auth-methods` | Medium | Useful for admins verifying auth config. |
@@ -136,6 +136,7 @@ API keys, import/export, SQL console, superuser login/setup, realtime record
 subscriptions in the record table.
 
 **Missing / incomplete (actionable without core changes):**
+
 - G1 OAuth provider config screen (High)
 - G3 auth-methods viewer (Medium)
 - G4 email actions on auth records (Medium)
@@ -144,6 +145,7 @@ subscriptions in the record table.
 - G12 field-type parity in the editor (Medium)
 
 **Missing (blocked on core work first):**
+
 - G2 per-auth-collection Auth tab options (core option surface needs defining)
 - G6 multi-superuser management (core model is single-superuser)
 - G7 real backups (core backup/restore endpoints)
@@ -154,6 +156,7 @@ subscriptions in the record table.
 ## 5. Proposed completion plan (priority order)
 
 Phase A — **quick wins, no core changes** (days):
+
 1. G10: add "Send test email" to `/settings/mail` (uses existing endpoint).
 2. G12: align `fieldTypes.ts` with `TypeMapper.valid_types/0` (add multi_file,
    multi_select, datetime; fix geo name); add option editors where missing.
