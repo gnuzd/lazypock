@@ -16,3 +16,5 @@ example
 lazypock-ts/
 
 .repowise
+/.claude
+/.vscode
