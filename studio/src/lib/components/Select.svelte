@@ -38,10 +38,8 @@
 			? 'flex w-full cursor-pointer items-center gap-2 rounded-field px-3 text-left text-sm text-base-content disabled:opacity-50'
 			: variant === 'ghost'
 				? 'flex h-7 cursor-pointer items-center gap-2 rounded-field px-3 text-left text-sm transition-colors hover:bg-primary-content/10 disabled:opacity-50'
-				: 'flex cursor-pointer items-center gap-2 rounded-field border-2 border-base-300 bg-base-100 px-3 text-left text-base-content transition-colors hover:border-primary disabled:opacity-50 ' +
-						(size === 'sm'
-							? 'h-7 min-w-[70px] text-xs'
-							: 'h-[38px] min-w-[110px] text-sm')
+				: 'flex w-full cursor-pointer items-center gap-2 rounded-field border-2 border-base-300 bg-base-100 px-3 text-left text-base-content transition-colors hover:border-primary disabled:opacity-50 ' +
+					(size === 'sm' ? 'h-7 min-w-[70px] text-xs' : 'h-[38px] min-w-[110px] text-sm')
 	);
 
 	function choose(option: Option) {
@@ -60,7 +58,7 @@
 		<button
 			type="button"
 			class={triggerBase + ' ' + triggerClass}
-			disabled={disabled}
+			{disabled}
 			aria-haspopup="listbox"
 		>
 			<span class="min-w-0 flex-1 truncate">

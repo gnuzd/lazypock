@@ -17,7 +17,12 @@
 
 	let wrapper: HTMLDivElement | undefined = $state();
 
-	// Track which side to attach the menu for viewport-aware placement
+	// Track where to place the menu. We anchor it to the VIEWPORT
+	// (position: fixed) instead of the wrapper so it can never be clipped by
+	// an overflow:hidden ancestor (e.g. the settings modals) — the classic
+	// "dropdown cut off inside a modal" bug. Width: at least as wide as the
+	// trigger, capped so long labels truncate instead of overflowing. Height:
+	// capped so long option lists scroll instead of overflowing the viewport.
 	let menuStyle = $state('');
 
 	$effect(() => {
@@ -26,30 +31,26 @@
 			const viewW = window.innerWidth;
 			const viewH = window.innerHeight;
 
-			// Reserve ~200px for menu width estimate
-			const menuW = 200;
-			const menuH = 120;
+			// Menu size caps used both for the flip logic and the CSS.
+			const menuW = Math.min(320, Math.max(Math.round(wr.width), 200));
+			const menuH = 320;
 
-			// Horizontal: flip if overflow
-			let left = align === 'left';
-			if (align === 'left' && wr.right + menuW > viewW) left = false;
-			if (align === 'right' && wr.left - menuW < 0) left = true;
+			// Horizontal: prefer aligning with the requested edge, flip to the
+			// other side when that would overflow the viewport.
+			let alignLeft = align === 'left';
+			if (alignLeft && wr.right + menuW > viewW && wr.left - menuW >= 0) alignLeft = false;
+			if (!alignLeft && wr.left - menuW < 0 && wr.right + menuW <= viewW) alignLeft = true;
 
-			// Vertical: show above if not enough space below
-			const showAbove = wr.bottom + menuH > viewH && wr.top > viewH - wr.bottom;
+			// Vertical: show above the trigger when there isn't enough room below.
+			const showAbove = wr.bottom + menuH > viewH && wr.top >= menuH;
 
-			let style = '';
-			if (showAbove) {
-				style += 'bottom:100%;margin-bottom:4px;';
-			} else {
-				style += 'top:100%;margin-top:4px;';
-			}
-			if (left) {
-				style += 'left:0;right:auto;';
-			} else {
-				style += 'right:0;left:auto;';
-			}
-			menuStyle = style;
+			const left = alignLeft ? Math.max(4, wr.left) : Math.max(4, wr.right - menuW);
+			const top = showAbove ? Math.max(4, wr.top - menuH) : Math.min(viewH - 4, wr.bottom);
+
+			menuStyle =
+				`position:fixed;left:${Math.round(left)}px;top:${Math.round(top)}px;` +
+				`min-width:${menuW}px;max-width:min(90vw, 360px);` +
+				`max-height:min(320px, 55vh);overflow-y:auto;`;
 
 			function handle(e: MouseEvent) {
 				if (wrapper && !wrapper.contains(e.target as Node)) {
@@ -69,7 +70,7 @@
 
 	{#if show}
 		<div
-			class="absolute z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
+			class="z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
 			style={menuStyle}
 			transition:fly={{ y: -6, duration: 120 }}
 		>
