@@ -70,15 +70,13 @@
 		: 'overflow-auto rounded-box border border-base-300 bg-base-100'}
 >
 	<div class={fillHeight ? 'min-h-0 flex-1 overflow-auto' : ''}>
-		<table
-			class={fillHeight
-				? 'h-full w-full border-collapse text-sm'
-				: 'w-full border-collapse text-sm'}
-		>
-			<thead class="sticky">
+		<table class="w-full border-collapse text-sm">
+			<thead>
 				<tr class="bg-base-200 text-xs font-semibold tracking-wider text-base-content/60 uppercase">
 					{#if selectable}
-						<th class="w-10 border-b border-base-300 px-3.5 py-2.5">
+						<th
+							class="sticky top-0 z-10 w-10 border-b border-base-300 bg-base-200 px-3.5 py-2.5"
+						>
 							<input
 								type="checkbox"
 								class="checkbox checkbox-sm"
@@ -90,7 +88,7 @@
 					{/if}
 					{#each columns as col (col.key)}
 						<th
-							class="border-b border-base-300 px-3.5 py-2.5 text-left whitespace-nowrap {col.class ??
+							class="sticky top-0 z-10 border-b border-base-300 bg-base-200 px-3.5 py-2.5 text-left whitespace-nowrap {col.class ??
 								''}">{col.label}</th
 						>
 					{/each}
