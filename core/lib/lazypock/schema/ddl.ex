@@ -29,6 +29,9 @@ defmodule Lazypock.Schema.DDL do
     type = Keyword.get(opts, :type, "base")
     fields = Keyword.get(opts, :fields, [])
     indexes = Keyword.get(opts, :indexes, [])
+    rules = Keyword.get(opts, :rules)
+    options = Keyword.get(opts, :options)
+    hooks = Keyword.get(opts, :hooks)
 
     result =
       Repo.transaction(fn ->
@@ -38,7 +41,7 @@ defmodule Lazypock.Schema.DDL do
           lock_key = :erlang.phash2({:create_collection, name})
           Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
-          collection = create_collection_metadata!(name, type, fields, indexes)
+          collection = create_collection_metadata!(name, type, fields, indexes, rules, options, hooks)
 
           sql = build_create_table_sql(name, fields)
           Ecto.Adapters.SQL.query!(Repo, sql, [])
@@ -252,7 +255,15 @@ defmodule Lazypock.Schema.DDL do
 
           # Sync custom indexes (options["indexes"]) with actual DB indexes.
           if not is_nil(new_indexes) do
-            old_options = collection.options || %{}
+            # Base the merge on the incoming :options when provided (e.g. an
+            # export→import round-trip) so other option keys from the payload
+            # aren't clobbered by the stale pre-update collection struct.
+            old_options =
+              case Keyword.fetch(opts, :options) do
+                {:ok, value} when is_map(value) -> value
+                _ -> collection.options || %{}
+              end
+
             old_indexes = Map.get(old_options, "indexes", []) || []
 
             sync_custom_indexes!(new_name, old_indexes, new_indexes)
@@ -623,7 +634,7 @@ defmodule Lazypock.Schema.DDL do
     apply_custom_indexes!(table, new_indexes)
   end
 
-  defp create_collection_metadata!(name, type, fields, indexes) do
+  defp create_collection_metadata!(name, type, fields, indexes, rules, options, hooks) do
     initial_schema =
       Enum.map(fields, fn f ->
         %{
@@ -659,13 +670,18 @@ defmodule Lazypock.Schema.DDL do
         }
       end
 
+    # Explicitly-applied indexes always win; other option keys (if any) come
+    # from the payload so an export→import round-trip preserves them.
+    options = Map.merge(options || %{}, %{"indexes" => indexes || []})
+
     %Lazypock.Collections.Collection{}
     |> Lazypock.Collections.Collection.changeset(%{
       name: name,
       type: type,
       schema: initial_schema,
-      rules: default_rules,
-      options: %{"indexes" => indexes || []},
+      rules: rules || default_rules,
+      options: options,
+      hooks: hooks || %{},
       managed: true
     })
     |> Repo.insert!()

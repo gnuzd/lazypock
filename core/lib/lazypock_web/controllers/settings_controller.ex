@@ -248,6 +248,12 @@ defmodule LazypockWeb.SettingsController do
     end)
   end
 
+  # Adds `{key, value}` to a keyword list only when value is not nil.
+  # Used by import to avoid overwriting existing collection metadata
+  # (rules/options/hooks/indexes) when the payload omits them.
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
   # ── Export all collections ──
 
   def export_all(conn, _params) do
@@ -267,6 +273,7 @@ defmodule LazypockWeb.SettingsController do
           schema: coll.schema,
           rules: coll.rules,
           options: coll.options,
+          hooks: coll.hooks,
           records: records
         }
       end)
@@ -298,16 +305,44 @@ defmodule LazypockWeb.SettingsController do
         type = coll_data["type"] || "base"
         schema = coll_data["schema"] || []
         records = coll_data["records"] || []
+        rules = coll_data["rules"]
+        options = coll_data["options"]
+        hooks = coll_data["hooks"]
+
+        # Custom indexes live inside options["indexes"] — extract so the DDL
+        # engine can (re)create the actual Postgres indexes, not just the
+        # metadata. Omitted when the payload doesn't carry options so existing
+        # target indexes are left untouched.
+        indexes =
+          case options do
+            %{"indexes" => idx} when is_list(idx) -> idx
+            _ -> nil
+          end
 
         result =
           if name in existing_names do
-            # Update existing collection — apply new schema fields
-            case Lazypock.Schema.DDL.update_collection(name, fields: schema) do
+            # Update existing collection — apply new schema fields plus any
+            # rules/options/hooks carried in the payload.
+            case Lazypock.Schema.DDL.update_collection(
+                   name,
+                   [fields: schema]
+                   |> maybe_put(:rules, rules)
+                   |> maybe_put(:options, options)
+                   |> maybe_put(:hooks, hooks)
+                   |> maybe_put(:indexes, indexes)
+                 ) do
               {:ok, _} -> {:ok, :updated}
               other -> other
             end
           else
-            Lazypock.Schema.DDL.create_collection(name, type: type, fields: schema)
+            Lazypock.Schema.DDL.create_collection(
+              name,
+              [type: type, fields: schema]
+              |> maybe_put(:rules, rules)
+              |> maybe_put(:options, options)
+              |> maybe_put(:hooks, hooks)
+              |> maybe_put(:indexes, indexes)
+            )
           end
 
         case result do
