@@ -24,6 +24,7 @@
 	// ── Collection edit pane state ──
 	let showCollectionPane = $state(false);
 	let collectionEditName = $state('');
+	let deleteConfirmOpen = $state(false);
 	// ── Record CRUD state ──
 	let showRecordPane = $state(false);
 	let recordData = $state<Record<string, unknown>>({});
@@ -318,9 +319,32 @@
 		return false;
 	}}
 >
+	{#snippet headerExtra()}
+		<button
+			type="button"
+			class="btn btn-ghost btn-error btn-sm px-2"
+			title="Delete collection"
+			onclick={() => (deleteConfirmOpen = true)}
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				><polyline points="3 6 5 6 21 6" /><path
+					d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+				/></svg
+			>
+		</button>
+	{/snippet}
 	<CollectionEditor
 		editingCollectionId={collectionEditName || null}
 		existingName={collectionEditName}
+		bind:showDeleteConfirm={deleteConfirmOpen}
 		onClose={() => {
 			showCollectionPane = false;
 			reload();
