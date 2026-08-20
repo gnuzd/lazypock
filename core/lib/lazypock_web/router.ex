@@ -105,6 +105,16 @@ defmodule LazypockWeb.Router do
 
     # Send test email (superuser)
     post("/settings/test-email", SettingsController, :send_test_email)
+
+    # Cron jobs (superuser) — POST /api/crons/:id triggers a job (PocketBase parity)
+    get("/crons", CronController, :index)
+    post("/crons", CronController, :create)
+    post("/crons/validate", CronController, :validate)
+    get("/crons/:id", CronController, :show)
+    patch("/crons/:id", CronController, :update)
+    put("/crons/:id", CronController, :update)
+    delete("/crons/:id", CronController, :delete)
+    post("/crons/:id", CronController, :run)
   end
 
   # Auth collection routes — must be BEFORE dynamic :collection routes

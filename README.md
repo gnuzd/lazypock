@@ -65,6 +65,7 @@ LazyPock/
 | ⚡ **Realtime** | Phoenix Channels. Broadcaster wired into DynamicController. Rule-enforced join (anonymous allowed on public/rule-based collections). ✅ | Real-time record updates via `client.realtime.subscribe()`. ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`; auto-connects without a token for anon/rule-based access ✅ |
 | 📁 **File Storage** | Upload, serve, delete. Local + S3 adapters. ✅ | Upload in record form, image library picker, thumbnails in list/form. ✅ | `files.upload/list/delete`, `getThumbUrl`, `getScaleUrl` ✅ |
 | 🪝 **Hooks** | PocketBase-compatible event hooks: `use Lazypock.Hooks.Hook` modules in `priv/hooks/`, `function(e)` + `e.next()` chain, ~70 hooks (App/Record/Collection/BaseModel/Request/Mailer/Realtime), custom API routes via `on_before_serve` + `Router.add`. Legacy Lifecycle/Dispatcher still work (deprecated). ✅ | — | — |
+| ⏰ **Cron Jobs** | Persisted `_crons` scheduler: 5/6-field expressions, per-job IANA timezone, SQL / HTTP-webhook / Elixir-hook actions, run-now, pg advisory-lock guarded execution. ✅ | Settings → Cron dashboard: CRUD, enable/disable, run-now, next-run preview, last-run status. ✅ | — |
 | 🎨 **Admin Dashboard** | Serves Svelte SPA at `/_/*`. Proxy support in dev. ✅ | Collections sidebar. Record CRUD. Field editor. Rules. Indexes. API key management (Settings → API Keys). ✅ | — |
 
 ---

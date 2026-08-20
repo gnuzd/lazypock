@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
+	import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
 
 	let {
 		show = $bindable(false),
@@ -16,40 +17,58 @@
 	} = $props();
 
 	let wrapper: HTMLDivElement | undefined = $state();
+	let menu: HTMLDivElement | undefined = $state();
 
-	// Track which side to attach the menu for viewport-aware placement
-	let menuStyle = $state('');
+	// Intro-transition direction (slide out of the trigger's edge). Guessed at
+	// open time — the actual placement is floating-ui's job; this only decides
+	// which way the 6px slide points, so a rare wrong guess is imperceptible.
+	let flyY = $state(-6);
+
+	function toggle() {
+		if (!show && wrapper) {
+			const wr = wrapper.getBoundingClientRect();
+			const viewH = window.innerHeight;
+			flyY = wr.bottom + 280 > viewH && wr.top >= 280 ? 6 : -6;
+		}
+		show = !show;
+	}
+
+	// Base style lives outside the positioning updates so the size caps apply
+	// from the very first frame (no full-height flash for long option lists).
+	// 'position: fixed' anchors the menu to the VIEWPORT, so an
+	// overflow:hidden ancestor (e.g. the settings modals) can never clip it.
+	const baseStyle = 'max-height:min(320px, 55vh);overflow-y:auto;overflow-x:hidden;';
+
+	// left/top/min-width — filled in by the floating-ui update below.
+	let posStyle = $state('');
 
 	$effect(() => {
-		if (show && wrapper) {
-			const wr = wrapper.getBoundingClientRect();
-			const viewW = window.innerWidth;
-			const viewH = window.innerHeight;
+		if (show && wrapper && menu) {
+			// Capture the narrowed references — TS loses the narrowing inside
+			// the async callbacks below.
+			const ref = wrapper;
+			const float = menu;
 
-			// Reserve ~200px for menu width estimate
-			const menuW = 200;
-			const menuH = 120;
-
-			// Horizontal: flip if overflow
-			let left = align === 'left';
-			if (align === 'left' && wr.right + menuW > viewW) left = false;
-			if (align === 'right' && wr.left - menuW < 0) left = true;
-
-			// Vertical: show above if not enough space below
-			const showAbove = wr.bottom + menuH > viewH && wr.top > viewH - wr.bottom;
-
-			let style = '';
-			if (showAbove) {
-				style += 'bottom:100%;margin-bottom:4px;';
-			} else {
-				style += 'top:100%;margin-top:4px;';
-			}
-			if (left) {
-				style += 'left:0;right:auto;';
-			} else {
-				style += 'right:0;left:auto;';
-			}
-			menuStyle = style;
+			// autoUpdate() recomputes on scroll (any scrollable ancestor, capture
+			// phase), resize and layout changes, so the menu follows its trigger
+			// wherever it scrolls instead of staying glued to the viewport.
+			const stopAutoUpdate = autoUpdate(ref, float, () => {
+				computePosition(ref, float, {
+					strategy: 'fixed',
+					placement: align === 'right' ? 'bottom-end' : 'bottom-start',
+					// flip() decides above/below from the menu's REAL measured size
+					// (the old code guessed 320px and flipped unnecessarily);
+					// shift() keeps it inside the viewport horizontally.
+					middleware: [offset(4), flip({ padding: 8 }), shift({ padding: 8 })]
+				}).then(({ x, y }) => {
+					// The menu may have closed between the async call and now.
+					if (!show || !float.isConnected) return;
+					// At least as wide as the trigger, never narrower than 200px
+					// (icon-only triggers), capped so long labels truncate.
+					const minW = Math.min(320, Math.max(Math.round(ref.getBoundingClientRect().width), 200));
+					posStyle = `left:${Math.round(x)}px;top:${Math.round(y)}px;min-width:${minW}px;`;
+				});
+			});
 
 			function handle(e: MouseEvent) {
 				if (wrapper && !wrapper.contains(e.target as Node)) {
@@ -57,21 +76,38 @@
 				}
 			}
 			document.addEventListener('mousedown', handle);
-			return () => document.removeEventListener('mousedown', handle);
+
+			return () => {
+				stopAutoUpdate();
+				document.removeEventListener('mousedown', handle);
+			};
+		} else {
+			posStyle = '';
 		}
 	});
 </script>
 
 <div bind:this={wrapper} class="relative {className}">
-	<div onclick={() => (show = !show)} role="button" tabindex="-1">
+	<div
+		onclick={toggle}
+		onkeydown={(e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				toggle();
+			}
+		}}
+		role="button"
+		tabindex="-1"
+	>
 		{@render trigger?.()}
 	</div>
 
 	{#if show}
 		<div
-			class="absolute z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
-			style={menuStyle}
-			transition:fly={{ y: -6, duration: 120 }}
+			bind:this={menu}
+			class="no-scrollbar absolute z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
+			style={baseStyle + posStyle}
+			transition:fly={{ y: flyY, duration: 120 }}
 		>
 			{@render children?.()}
 		</div>

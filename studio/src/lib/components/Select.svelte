@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Dropdown from '$lib/components/Dropdown.svelte';
+	import Input from './Input.svelte';
 
 	type Option = { value: unknown; label: string };
 
@@ -30,6 +31,20 @@
 	} = $props();
 
 	let open = $state(false);
+	// Filter text for long option lists (menu shows an input when there are
+	// 10+ options); cleared whenever the menu closes.
+	let filter = $state('');
+
+	const visibleOptions = $derived(
+		filter
+			? options.filter((o) => String(o.label).toLowerCase().includes(filter.toLowerCase()))
+			: options
+	);
+
+	// Reset the filter when the menu closes (also on selection).
+	$effect(() => {
+		if (!open) filter = '';
+	});
 
 	const selected = $derived(options.find((o) => o.value === value));
 
@@ -38,10 +53,8 @@
 			? 'flex w-full cursor-pointer items-center gap-2 rounded-field px-3 text-left text-sm text-base-content disabled:opacity-50'
 			: variant === 'ghost'
 				? 'flex h-7 cursor-pointer items-center gap-2 rounded-field px-3 text-left text-sm transition-colors hover:bg-primary-content/10 disabled:opacity-50'
-				: 'flex cursor-pointer items-center gap-2 rounded-field border-2 border-base-300 bg-base-100 px-3 text-left text-base-content transition-colors hover:border-primary disabled:opacity-50 ' +
-						(size === 'sm'
-							? 'h-7 min-w-[70px] text-xs'
-							: 'h-[38px] min-w-[110px] text-sm')
+				: 'flex w-full cursor-pointer items-center gap-2 rounded-field border-2 border-base-300 bg-base-100 px-3 text-left text-base-content transition-colors hover:border-primary disabled:opacity-50 ' +
+					(size === 'sm' ? 'h-7 min-w-[70px] text-xs' : 'h-[38px] min-w-[110px] text-sm')
 	);
 
 	function choose(option: Option) {
@@ -60,7 +73,7 @@
 		<button
 			type="button"
 			class={triggerBase + ' ' + triggerClass}
-			disabled={disabled}
+			{disabled}
 			aria-haspopup="listbox"
 		>
 			<span class="min-w-0 flex-1 truncate">
@@ -82,15 +95,25 @@
 		</button>
 	{/snippet}
 
-	<div class="min-w-[160px] py-1 {menuClass}">
-		{#each options as option (option.value)}
+	{#if options.length >= 10}
+		<div class="sticky top-0 border-b bg-base-100 p-1.5">
+			<input
+				type="text"
+				class="w-full rounded-field border bg-base-100 px-2.5 py-2 text-xs transition-colors outline-none focus:border-primary"
+				placeholder="Filter…"
+				bind:value={filter}
+			/>
+		</div>
+	{/if}
+	<div class="min-w-[160px] p-1 {menuClass}">
+		{#each visibleOptions as option (option.value)}
 			<button
 				type="button"
 				class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200"
 				class:font-medium={option.value === value}
 				onclick={() => choose(option)}
 			>
-				<span class="flex-1 truncate">{option.label}</span>
+				<span class="min-w-0 flex-1 truncate">{option.label}</span>
 				{#if option.value === value}
 					<svg
 						width="14"
@@ -104,5 +127,8 @@
 				{/if}
 			</button>
 		{/each}
+		{#if visibleOptions.length === 0}
+			<div class="px-3 py-2 text-xs text-base-content/40">No matching options</div>
+		{/if}
 	</div>
 </Dropdown>

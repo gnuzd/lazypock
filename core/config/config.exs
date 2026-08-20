@@ -11,6 +11,15 @@ config :lazypock,
   ecto_repos: [Lazypock.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# Time zone database used for localized cron scheduling (IANA zones per job).
+# `tz` embeds the tzdata database at compile time — no runtime fetches.
+config :elixir, :time_zone_database, Tz.TimeZoneDatabase
+
+# Start the cron scheduler in the supervision tree (disabled under test —
+# the sandbox DB pool blocks non-owner processes, which would crash-loop it;
+# tests exercise cron through the synchronous run_now path instead).
+config :lazypock, start_cron_scheduler: true
+
 # Configure the endpoint
 config :lazypock, LazypockWeb.Endpoint,
   url: [host: "localhost"],

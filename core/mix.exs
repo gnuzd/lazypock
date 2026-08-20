@@ -23,7 +23,7 @@ defmodule Lazypock.MixProject do
   def application do
     [
       mod: {Lazypock.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger, :runtime_tools, :inets, :ssl]
     ]
   end
 
@@ -76,7 +76,9 @@ defmodule Lazypock.MixProject do
       {:swoosh, "~> 1.17"},
       {:gen_smtp, "~> 1.2"},
       {:cors_plug, "~> 3.0"},
-      {:assent, "~> 0.3.1"}
+      {:assent, "~> 0.3.1"},
+      {:crontab, "~> 1.2"},
+      {:tz, "~> 0.28"}
     ]
   end
 

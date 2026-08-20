@@ -202,16 +202,6 @@
 {/if}
 
 <style>
-	/* Hide scrollbars but keep scrolling (applied to the table's scroll area). */
-	.no-scrollbar {
-		scrollbar-width: none; /* Firefox */
-		-ms-overflow-style: none; /* legacy Edge/IE */
-	}
-
-	.no-scrollbar::-webkit-scrollbar {
-		display: none; /* Chrome/Safari/Edge */
-	}
-
 	.file-thumbs {
 		display: flex;
 		align-items: center;

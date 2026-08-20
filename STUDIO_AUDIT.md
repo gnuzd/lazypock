@@ -15,7 +15,7 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 ### 1.1 Public (no auth)
 
 | Route | Controller action | Studio counterpart |
-|---|---|---|
+| --- | --- | --- |
 | `GET /api/health` | HealthController.index | none (not needed) |
 | `GET /api/oauth2-redirect` | AuthController.oauth2_redirect | none (browser redirect target) |
 | `GET /api/superusers/check` | SuperUserController.check | ✅ login page (checkSuperuser) |
@@ -34,7 +34,7 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 ### 1.2 Authenticated (token verified, enforcer decides)
 
 | Route | Controller action | Studio counterpart |
-|---|---|---|
+| --- | --- | --- |
 | `GET /api/superusers/me` | SuperUserController.me | ✅ login page / AppHeader session |
 | `GET /api/me` | SuperUserController.me | ✅ same |
 | `GET /api/collections` | CollectionController.list | ✅ collectionsStore |
@@ -69,14 +69,14 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 ### 1.3 Dynamic record routes
 
 | Route | Controller | Studio counterpart |
-|---|---|---|
+| --- | --- | --- |
 | `GET/POST /api/:collection` | DynamicController list/create | ✅ collections page (DataTable) |
 | `GET/PATCH/PUT/DELETE /api/:collection/:id` | DynamicController | ✅ RecordSidePane |
 
 ### 1.4 Realtime
 
 | Channel / topic | Purpose | Studio counterpart |
-|---|---|---|
+| --- | --- | --- |
 | `CollectionSocket` + `CollectionChannel` (`collection:topic`) | record create/update/delete events, authorization via view/list rules | ✅ collections page (subscribe) |
 | `AdminChannel` | admin events | ❌ no UI consumption |
 
@@ -85,7 +85,7 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 ## 2. Studio screens inventory
 
 | Route | Screen | API calls | Status |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `/login` | superuser check/setup/login | check, setup, login, me, collections.list | ✅ |
 | `/collections` (+ `?collection=`) | collection sidebar + record table + record CRUD | collections.list/getOne/create/update/delete/subscribe; collection(name) getList/create/update/delete/subscribe; file thumbs | ✅ |
 | `/collections/new` | new-collection page | (redirects to side pane) | ✅ (thin) |
@@ -95,7 +95,7 @@ Status legend: ✅ complete · 🟡 partial · ❌ missing/stub · ➖ not appli
 | `/settings/files` | storage (local/S3) config | settings get/patch (s3.*) | ✅ |
 | `/settings/api-keys` | API key list/create/revoke | settings/api-keys CRUD | ✅ |
 | `/settings/backups` | backups | GET /export (manual JSON download) | 🟡 no backup/restore parity |
-| `/settings/cron` | cron jobs | none | ❌ **stub: "coming soon"** |
+| `/settings/cron` | cron job CRUD + run-now + next-run preview | crons CRUD, POST /crons/:id (run), POST /crons/validate | ✅ |
 | `/settings/export` | export collections | collections.list (client-side JSON) | ✅ |
 | `/settings/import` | import collections | collections.list, POST /import | ✅ |
 | `/settings/sql` | SQL console | POST /sql/query | ✅ |
@@ -112,7 +112,7 @@ RichEditor (TinyMCE), collectionsStore, createForm, ruleValidator.
 ## 3. Gap matrix — missing / incomplete screens
 
 | # | Gap | Core API available? | Severity | Notes |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | G1 | **OAuth provider configuration UI** — no screen to configure Google/GitHub/etc. (`oauth2.providers` runtime settings key exists, read by `Lazypock.Auth.OAuth2.providers/0`) | ✅ `PATCH /settings` accepts `oauth2` key | High | Admins must hand-edit settings via SQL/API today. Provider secrets also live here. |
 | G2 | **Auth collection "Auth" tab** — per-auth-collection options (password auth toggle, OAuth providers enabled for the collection, token duration, email template overrides) | 🟡 partial (collection options object) | High | PocketBase's collection editor has this tab; LazyPock's CollectionEditor has Fields/Rules only. |
 | G3 | **`auth-methods` viewer + per-collection login UI** — no UI to inspect or exercise a collection's auth methods (password/oauth providers) | ✅ `GET /:collection/auth-methods` | Medium | Useful for admins verifying auth config. |
@@ -120,7 +120,7 @@ RichEditor (TinyMCE), collectionsStore, createForm, ruleValidator.
 | G5 | **External auths viewer** — see which OAuth providers a user linked (`_external_auths`) | 🟡 dynamic collection `_external_auths` readable via API | Medium | Helps admins debug OAuth sign-in. |
 | G6 | **Superuser management** — list/create/delete superusers (core: only setup/me for a single superuser) | ❌ no core endpoints (single superuser model) | Low | Requires core work first. |
 | G7 | **Backups screen is not real** — only a manual JSON schema download; no backup list/create/download/restore | ❌ no core backup endpoints (`/export` ≠ backup) | Medium | Requires core backup/restore implementation. |
-| G8 | **Cron screen is a stub** — "coming soon" | ❌ no core cron/scheduler | Low | Requires core scheduler + persisted cron jobs. |
+| G8 | ~~Cron screen is a stub~~ — **done**: persisted `_crons` jobs, scheduler, SQL/HTTP/hook actions, timezone-aware next runs, run-now | ✅ crons CRUD + validate + run endpoints | Low | Replaced the stub with a full dashboard. |
 | G9 | **File browser / orphaned-file cleanup** — `GET /files` and `DELETE /files/:id` have no dedicated screen | ✅ core exists | Low | Records UI covers the common case. |
 | G10 | **"Send test email" button** — core endpoint exists but mail page never calls it | ✅ `POST /settings/test-email` | Low | Small, cheap win. |
 | G11 | **Admin realtime events** — `AdminChannel` has no UI consumer (e.g. settings-change toasts) | ✅ AdminChannel | Low | Nice-to-have. |
@@ -136,6 +136,7 @@ API keys, import/export, SQL console, superuser login/setup, realtime record
 subscriptions in the record table.
 
 **Missing / incomplete (actionable without core changes):**
+
 - G1 OAuth provider config screen (High)
 - G3 auth-methods viewer (Medium)
 - G4 email actions on auth records (Medium)
@@ -144,10 +145,10 @@ subscriptions in the record table.
 - G12 field-type parity in the editor (Medium)
 
 **Missing (blocked on core work first):**
+
 - G2 per-auth-collection Auth tab options (core option surface needs defining)
 - G6 multi-superuser management (core model is single-superuser)
 - G7 real backups (core backup/restore endpoints)
-- G8 cron (core scheduler)
 - G11 admin realtime consumption
 
 ---
@@ -155,6 +156,7 @@ subscriptions in the record table.
 ## 5. Proposed completion plan (priority order)
 
 Phase A — **quick wins, no core changes** (days):
+
 1. G10: add "Send test email" to `/settings/mail` (uses existing endpoint).
 2. G12: align `fieldTypes.ts` with `TypeMapper.valid_types/0` (add multi_file,
    multi_select, datetime; fix geo name); add option editors where missing.
@@ -174,9 +176,8 @@ Phase C — **requires core design/scope confirmation**:
    model) then build the studio Auth tab.
 8. G7: core backup/restore (zip of schema+records+files, list/download/restore
    endpoints) then a real Backups screen.
-9. G8: core scheduler + persisted cron jobs, then replace the Cron stub.
-10. G6: multi-superuser CRUD in core, then a superuser management screen.
-11. G11: consume AdminChannel events in studio (e.g. settings-change banner).
+9. G6: multi-superuser CRUD in core, then a superuser management screen.
+10. G11: consume AdminChannel events in studio (e.g. settings-change banner).
 
 **Recommended scope for a first implementation pass:** Phase A (1–3) + Phase B (4–6),
 i.e. everything achievable purely against the current core API. Phases C items

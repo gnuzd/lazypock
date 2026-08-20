@@ -45,14 +45,16 @@ defmodule Lazypock.Application do
       Lazypock.Migrations.seed()
     end
 
-    children = [
-      LazypockWeb.Telemetry,
-      Lazypock.Repo,
-      {DNSCluster, query: Application.get_env(:lazypock, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: Lazypock.PubSub},
-      Lazypock.Collections.Registry,
-      LazypockWeb.Endpoint
-    ]
+    children =
+      [
+        LazypockWeb.Telemetry,
+        Lazypock.Repo,
+        {DNSCluster, query: Application.get_env(:lazypock, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: Lazypock.PubSub},
+        Lazypock.Collections.Registry
+      ] ++
+        cron_scheduler_children() ++
+        [LazypockWeb.Endpoint]
 
     opts = [strategy: :one_for_one, name: Lazypock.Supervisor]
 
@@ -93,6 +95,17 @@ defmodule Lazypock.Application do
 
       error ->
         error
+    end
+  end
+
+  # The cron scheduler is skipped under test: its DB access from a non-owner
+  # process blocks on sandboxed connections and crash-loops the supervisor.
+  # Returns a (possibly empty) child list — supervisors flatten nested lists.
+  defp cron_scheduler_children do
+    if Application.get_env(:lazypock, :start_cron_scheduler, true) do
+      [Lazypock.Cron.Scheduler]
+    else
+      []
     end
   end
 

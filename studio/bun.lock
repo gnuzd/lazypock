@@ -5,6 +5,7 @@
     "": {
       "name": "studio",
       "dependencies": {
+        "@floating-ui/dom": "^1.8.0",
         "@sveltejs/adapter-static": "^3.0.10",
         "@tiptap/core": "^3.28.0",
         "@tiptap/extension-link": "^3.28.0",

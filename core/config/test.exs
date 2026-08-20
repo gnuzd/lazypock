@@ -1,5 +1,10 @@
 import Config
 
+# The cron scheduler must not run under test: its DB access from a
+# non-owner process blocks on sandboxed connections and crash-loops the
+# supervisor (cascading into "repo not started" failures).
+config :lazypock, start_cron_scheduler: false
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
