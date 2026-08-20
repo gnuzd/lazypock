@@ -14,8 +14,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 FROM alpine:3.20
 
-# Fail fast on any pipe failure (curl | jq below) — alpine ships /bin/sh as busybox
-SHELL ["/bin/ash", "-eo", "pipefail"]
+# Fail fast on errors in RUN commands (busybox ash ignores pipefail silently,
+# but `-e` + `-c` are required for RUN scripts to execute correctly)
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
 # ImageMagick (thumbnails + scaling), ca-certificates (HTTPS: OAuth, webhooks,
 # Studio), curl + jq (to resolve the latest release — removed after download).
