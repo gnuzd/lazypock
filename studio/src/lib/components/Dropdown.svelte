@@ -37,8 +37,7 @@
 	// from the very first frame (no full-height flash for long option lists).
 	// 'position: fixed' anchors the menu to the VIEWPORT, so an
 	// overflow:hidden ancestor (e.g. the settings modals) can never clip it.
-	const baseStyle =
-		'position:fixed;max-width:min(90vw, 360px);max-height:min(320px, 55vh);overflow-y:auto;overflow-x:hidden;';
+	const baseStyle = 'max-height:min(320px, 55vh);overflow-y:auto;overflow-x:hidden;';
 
 	// left/top/min-width — filled in by the floating-ui update below.
 	let posStyle = $state('');
@@ -106,7 +105,7 @@
 	{#if show}
 		<div
 			bind:this={menu}
-			class="z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
+			class="no-scrollbar absolute z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
 			style={baseStyle + posStyle}
 			transition:fly={{ y: flyY, duration: 120 }}
 		>

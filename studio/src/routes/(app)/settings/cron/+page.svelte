@@ -123,6 +123,10 @@
 		hookEvent: ''
 	});
 
+	// ── Confirm modal state ───────────────────────────
+	let showDeleteConfirm = $state(false);
+	let selectedCron = $state<CronJob | null>(null);
+
 	onMount(refresh);
 
 	async function refresh() {
@@ -340,15 +344,21 @@
 	}
 
 	async function remove(job: CronJob) {
-		if (!confirm(`Delete cron job "${job.name}"?`)) return;
+		selectedCron = job;
+		showDeleteConfirm = true;
+	}
+
+	async function deleteCron() {
+		if (!selectedCron) return;
 		busy = true;
 		try {
-			await client.http.delete(`/crons/${job.id}`);
+			await client.http.delete(`/crons/${selectedCron.id}`);
 			await refresh();
 		} catch {
 			// ignore
 		} finally {
 			busy = false;
+			showDeleteConfirm = false;
 		}
 	}
 
@@ -423,22 +433,32 @@
 				<span class="badge badge-ghost badge-sm">never</span>
 			{/if}
 		{:else if col.key === 'actions'}
-			<div class="flex items-center justify-end gap-1.5">
+			<div class="flex items-center justify-end gap-2">
 				<input
 					type="checkbox"
-					class="toggle"
+					class="toggle cursor-pointer"
 					checked={job.enabled}
 					onchange={() => toggleEnabled(job)}
 					title={job.enabled ? 'Disable' : 'Enable'}
 				/>
-				<button class="btn-icon" title="Run now" disabled={busy} onclick={() => runNow(job)}>
+				<button
+					class="btn-icon cursor-pointer active:scale-90"
+					title="Run now"
+					disabled={busy}
+					onclick={() => runNow(job)}
+				>
 					<Play size={14} />
 				</button>
-				<button class="btn-icon" title="Edit" disabled={busy} onclick={() => openEdit(job)}>
+				<button
+					class="btn-icon cursor-pointer active:scale-90"
+					title="Edit"
+					disabled={busy}
+					onclick={() => openEdit(job)}
+				>
 					<Pencil size={14} />
 				</button>
 				<button
-					class="btn-icon btn-icon-danger"
+					class="btn-icon btn-icon-danger cursor-pointer active:scale-90"
 					title="Delete"
 					disabled={busy}
 					onclick={() => remove(job)}
@@ -456,43 +476,38 @@
 	<div class="grid gap-4">
 		<Input label="Name" placeholder="e.g. nightly cleanup" bind:value={form.name} />
 
-		<div class="grid grid-cols-[1fr_220px] gap-3">
-			<div>
-				<span class="mb-1 block text-xs text-base-content/50">Cron expression</span>
-				<input
-					class="input w-full font-mono text-xs"
-					placeholder="*/5 * * * *"
-					bind:value={form.expression}
-				/>
-			</div>
-			<div>
+		<div class="flex gap-3">
+			<Input
+				label="Cron expression"
+				placeholder="*/5 * * * *"
+				bind:value={form.expression}
+				class="bg-transparent!"
+			/>
+			<div class="flex-1">
 				<span class="mb-1 block text-xs text-base-content/50">Timezone</span>
 				<Select options={timezoneOptions} bind:value={form.timezone} />
 			</div>
 		</div>
 
-		{#if preview.loading}
-			<div
-				class="rounded-box border border-base-300 bg-base-200/40 p-3 text-xs text-base-content/50"
-			>
-				Checking expression…
-			</div>
-		{:else if preview.error}
-			<div class="rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
+		<div
+			class="h-33.5 rounded-box border bg-base-200/40 p-3 text-xs text-base-content/50"
+			class:box-error={preview.error}
+		>
+			{#if preview.loading}
+				<div class="flex h-full items-center justify-center">Checking expression…</div>
+			{:else if preview.error}
 				{preview.error}
-			</div>
-		{:else if preview.runs.length}
-			<div class="rounded-box border border-base-300 bg-base-200/40 p-3">
-				<p class="mb-1 text-xs font-medium text-base-content/60">
+			{:else if preview.runs.length}
+				<p class="mb-1 font-medium text-base-content/60">
 					Next 5 runs (in {form.timezone}):
 				</p>
-				<ul class="space-y-0.5 font-mono text-xs">
+				<ul class="space-y-0.5 font-mono">
 					{#each preview.runs as run (run)}
 						<li>{formatDate(run)}</li>
 					{/each}
 				</ul>
-			</div>
-		{/if}
+			{/if}
+		</div>
 
 		<div class="switch-field">
 			<label class="switch-label" for="cron-enabled">
@@ -526,22 +541,20 @@
 					<div>
 						<span class="mb-1 block text-xs text-base-content/50">Headers</span>
 						<div class="overflow-hidden rounded-box border border-base-300">
-							<div
-								class="flex border-b border-base-300 bg-base-200/50 text-xs text-base-content/50"
-							>
+							<div class="flex border-b bg-base-200/50 text-xs text-base-content/50">
 								<div class="w-1/2 px-3 py-1.5">Header</div>
-								<div class="w-1/2 border-l border-base-300 px-3 py-1.5">Value</div>
+								<div class="w-1/2 border-l px-3 py-1.5">Value</div>
 								<div class="w-9 shrink-0"></div>
 							</div>
 							{#each form.headers as header, i (i)}
-								<div class="flex items-center border-b border-base-300 last:border-b-0">
+								<div class="flex items-center border-b last:border-b-0">
 									<input
 										class="w-1/2 bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
 										placeholder="X-Custom-Header"
 										bind:value={header.key}
 									/>
 									<input
-										class="w-1/2 border-l border-base-300 bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
+										class="w-1/2 border-l bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
 										placeholder="value"
 										bind:value={header.value}
 									/>
@@ -617,3 +630,26 @@
 		</div>
 	</div>
 </Modal>
+
+<!-- Delete collection confirm -->
+<Modal bind:show={showDeleteConfirm} title="Delete collection?">
+	<p class="text-sm">
+		Delete <strong>{selectedCron?.name}</strong>? The table and all its records will be permanently
+		removed. This cannot be undone.
+	</p>
+	<div class="mt-4 flex justify-end gap-2">
+		<Button type="button" class="btn-ghost btn-sm" onclick={() => (showDeleteConfirm = false)}
+			>Cancel</Button
+		>
+		<Button type="button" class="btn-error btn-sm" loading={busy} onclick={deleteCron}
+			>Delete</Button
+		>
+	</div>
+</Modal>
+
+<style>
+	@reference '$lib/styles/app.css';
+	.box-error {
+		@apply border-error/30 bg-error/10 text-xs text-error;
+	}
+</style>

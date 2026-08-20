@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { quintInOut } from 'svelte/easing';
+	import { fade } from 'svelte/transition';
+
 	let {
 		show = $bindable(false),
 		title = '',
@@ -22,7 +25,12 @@
 
 {#if show}
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
-	<div class="modal-overlay" onclick={close} role="dialog">
+	<div
+		class="modal-overlay"
+		transition:fade={{ duration: 200, easing: quintInOut }}
+		onclick={close}
+		role="dialog"
+	>
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div class="modal" onclick={(e) => e.stopPropagation()}>
 			{#if title}

@@ -16,6 +16,7 @@
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { collections, loadCollections } from '$lib/collectionsStore';
+	import { Check } from '@lucide/svelte';
 
 	/**
 	 * New/Edit collection editor. Shared by /collections/[name] (edit) and
@@ -333,30 +334,24 @@
 <div class="flex h-full min-h-0 flex-col">
 	<!-- Header: Name + Type row -->
 	<div class="shrink-0 p-4 pb-3">
-		<div class="flex gap-0">
-			<div class="field min-w-0 flex-1">
-				<Input
-					id="coll-name"
-					label="Name"
-					class="bg-transparent!"
-					placeholder="e.g. posts"
-					name="name"
-					required
-					spellcheck={false}
-					bind:value={newName}
-					oninput={handleNameInput}
-					oncompositionend={handleNameCompositionEnd}
-					onkeydown={handleKeydown}
-					autofocus
-				/>
-			</div>
+		<div class="flex items-end gap-0">
+			<Input
+				id="coll-name"
+				label="Name"
+				class="bg-transparent!"
+				placeholder="e.g. posts"
+				name="name"
+				required
+				spellcheck={false}
+				bind:value={newName}
+				oninput={handleNameInput}
+				oncompositionend={handleNameCompositionEnd}
+				onkeydown={handleKeydown}
+				autofocus
+			/>
 			<Dropdown bind:show={typeOpen} class="shrink-0">
 				{#snippet trigger()}
-					<label class="mb-1 block text-xs font-medium text-base-content/70">&nbsp;</label>
-					<button
-						type="button"
-						class="btn btn-sm flex h-[34px] items-center gap-2 rounded-field border-2 border-current bg-transparent px-3 whitespace-nowrap text-base-content"
-					>
+					<Button class="btn-outline">
 						<span>Type: {getTypeLabel(newType)}</span>
 						<svg
 							width="16"
@@ -367,21 +362,23 @@
 							stroke-width="2"
 							class="ml-auto"><polyline points="6 9 12 15 18 9" /></svg
 						>
-					</button>
+					</Button>
 				{/snippet}
-				<div class="min-w-[200px] py-1">
+
+				<div class="flex flex-col py-1">
 					{#each collectionTypes as ct (ct.value)}
-						<button
-							type="button"
-							class="flex w-full cursor-pointer items-center gap-2 rounded-field border-none bg-transparent px-3 py-2 text-left text-sm text-base-content hover:bg-base-200"
-							class:font-medium={ct.value === newType}
-							onmousedown={() => {
+						<Button
+							class="justify-between font-normal hover:bg-base-200"
+							onclick={() => {
 								newType = ct.value;
 								typeOpen = false;
 							}}
 						>
 							<span>{ct.label}</span>
-						</button>
+							{#if ct.value === newType}
+								<Check size={16} />
+							{/if}
+						</Button>
 					{/each}
 				</div>
 			</Dropdown>

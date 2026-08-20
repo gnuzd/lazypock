@@ -50,3 +50,13 @@ input:autofill:focus {
 	box-shadow: 0 0 0px 1000px transparent inset;
 	transition: background-color 5000s ease-in-out 0s;
 }
+
+/* Hide scrollbars but keep scrolling (applied to the table's scroll area). */
+.no-scrollbar {
+	scrollbar-width: none; /* Firefox */
+	-ms-overflow-style: none; /* legacy Edge/IE */
+}
+
+.no-scrollbar::-webkit-scrollbar {
+	display: none; /* Chrome/Safari/Edge */
+}

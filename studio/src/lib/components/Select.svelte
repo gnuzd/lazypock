@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Dropdown from '$lib/components/Dropdown.svelte';
+	import Input from './Input.svelte';
 
 	type Option = { value: unknown; label: string };
 
@@ -95,16 +96,16 @@
 	{/snippet}
 
 	{#if options.length >= 10}
-		<div class="border-b border-base-300 p-1.5">
+		<div class="sticky top-0 border-b bg-base-100 p-1.5">
 			<input
 				type="text"
-				class="w-full rounded-field border border-base-300 bg-base-100 px-2 py-1 text-xs transition-colors outline-none focus:border-primary"
+				class="w-full rounded-field border bg-base-100 px-2.5 py-2 text-xs transition-colors outline-none focus:border-primary"
 				placeholder="Filter…"
 				bind:value={filter}
 			/>
 		</div>
 	{/if}
-	<div class="min-w-[160px] py-1 {menuClass}">
+	<div class="min-w-[160px] p-1 {menuClass}">
 		{#each visibleOptions as option (option.value)}
 			<button
 				type="button"
