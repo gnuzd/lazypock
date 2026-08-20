@@ -66,7 +66,7 @@ LazyPock/
 | 📁 **File Storage** | Upload, serve, delete. Local + S3 adapters. ✅ | Upload in record form, image library picker, thumbnails in list/form. ✅ | `files.upload/list/delete`, `getThumbUrl`, `getScaleUrl` ✅ |
 | 🪝 **Hooks** | PocketBase-compatible event hooks: `use Lazypock.Hooks.Hook` modules in `priv/hooks/`, `function(e)` + `e.next()` chain, ~70 hooks (App/Record/Collection/BaseModel/Request/Mailer/Realtime), custom API routes via `on_before_serve` + `Router.add`. Legacy Lifecycle/Dispatcher still work (deprecated). ✅ | — | — |
 | ⏰ **Cron Jobs** | Persisted `_crons` scheduler: 5/6-field expressions, per-job IANA timezone, SQL / HTTP-webhook / Elixir-hook actions, run-now, pg advisory-lock guarded execution. ✅ | Settings → Cron dashboard: CRUD, enable/disable, run-now, next-run preview, last-run status. ✅ | — |
-| 🎨 **Admin Dashboard** | Serves Svelte SPA at `/_/*`. Proxy support in dev. ✅ | Collections sidebar. Record CRUD. Field editor. Rules. Indexes. API key management (Settings → API Keys). ✅ | — |
+| 🎨 **Admin Dashboard** | Serves Svelte SPA at `/_/*`. Proxy support in dev. ✅ | Collections sidebar. Record CRUD. Field editor. Rules. Indexes. API key management (Settings → API Keys). Import/Export (Settings → Export/Import Collections). ✅ | — |
 
 ---
 
@@ -246,6 +246,63 @@ lazypock seed --force    # explicit re-run (same behavior)
 
 > Boot-time seeding (on first boot) is idempotent — tracked in `_seeds_run` —
 > while the standalone `lazypock seed` command always re-runs the file.
+
+---
+
+## Migrating from PocketBase
+
+Two paths, depending on what you're moving:
+
+### 1. Studio Import/Export (collection-set sync, JSON)
+
+The Studio admin UI can **export** and **re-import** a JSON manifest of your
+collections (id/name/type) — the quick way to replicate a collection set
+across LazyPock environments or keep it in git:
+
+- **Export** — Settings → **Export Collections**: select collections and download
+  `lazypock-schema-<date>.json` (or copy the JSON to clipboard).
+- **Import** — Settings → **Import Collections**: paste the JSON or upload the
+  file; the page diffs it against your current set (added/removed/changed) and
+  can **Delete missing collections** so the target matches the source exactly.
+
+For the full detail — fields, rules, options, hooks, **and records** — use the
+backend endpoints directly (superuser): `GET /api/export` downloads everything,
+`POST /api/import` restores it.
+
+### 2. Full PocketBase instance import (data + files, CLI)
+
+Coming from a **running PocketBase app**? LazyPock ships a one-shot importer that
+reads a PocketBase `pb_data` directory (SQLite `data.db` + `storage/`) and
+recreates everything in Postgres:
+
+```bash
+cd core
+mix lazypock.import_pocketbase --pb-dir=/path/to/pb_data
+# or point directly at the database and storage dirs:
+mix lazypock.import_pocketbase --pb-db=/path/to/pb_data/data.db \
+  --storage-dir=/path/to/pb_data/storage
+```
+
+What gets migrated:
+
+| What | Details |
+| --- | --- |
+| **Collections** | schema, rules (list/view/create/update/delete/manage), options, custom indexes |
+| **Records** | values + original `created`/`updated` timestamps |
+| **Relations** | PocketBase record ids are rewritten to **deterministic UUIDv5 ids** so cross-collection references stay intact; `--id-map-file` writes the old→new mapping |
+| **Auth collections** | email, bcrypt password hash, `verified`, `emailVisibility` — users log in with their existing passwords |
+| **OAuth links** | `_externalAuths` → `_external_auths` (Google/GitHub/generic) |
+| **Files** | copied from `pb_data/storage/` into LazyPock's storage |
+
+Requires the `sqlite3` CLI on PATH (used read-only). Dry-run first to preview:
+
+```bash
+mix lazypock.import_pocketbase --pb-dir=/path/to/pb_data --dry-run
+```
+
+Options: `--pb-dir` (default `pb_data`), `--pb-db`, `--storage-dir`,
+`--dry-run`, `--yes` (skip the prompt; also imports records into existing
+collections), `--id-map-file` (default `pocketbase_id_map.json`).
 
 ---
 
