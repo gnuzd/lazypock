@@ -9,14 +9,11 @@ import Config
 
 # ## Using releases
 #
-# If you use `mix release`, you need to explicitly enable the server
-# by passing the PHX_SERVER=true when you start it:
-#
-#     PHX_SERVER=true bin/lazypock start
-#
-# Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
-# script that automatically sets the env var above.
-if System.get_env("PHX_SERVER") do
+# The HTTP server is always started in dev, prod, and releases — no PHX_SERVER
+# env var check needed, `bin/lazypock start` serves HTTP out of the box.
+# Only the test env keeps `server: false` (set in config/test.exs) so the
+# sandbox DB pool isn't hit by a real HTTP listener.
+if config_env() != :test do
   config :lazypock, LazypockWeb.Endpoint, server: true
 end
 

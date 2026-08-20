@@ -6,7 +6,7 @@
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**. Define collections in the Studio admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
 
-**Status:** Beta — Core backend features working. Auth collections (user JWT, login/refresh, rule integration) ✅. Studio SvelteKit admin UI in development. TypeScript SDK ([lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) published.
+**Status:** Beta — Core backend features working. Auth collections (user JWT, login/refresh, rule integration) ✅. Studio SvelteKit admin UI **ready for beta test**. TypeScript SDK ([lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) **ready for beta test**.
 
 ---
 
@@ -149,7 +149,6 @@ MIX_ENV=prod mix release
 | Variable | Description | Example |
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string | `ecto://postgres:postgres@localhost:5432/lazypock_dev` |
-| `PHX_SERVER` | Enable the HTTP server (set to `true`) | `true` |
 | `SECRET_KEY_BASE` | Secret for signing cookies | (generate with `mix phx.gen.secret`) |
 | `PHX_HOST` | Public hostname (optional, defaults to `example.com`) | `localhost` |
 | `PORT` | HTTP port (optional, defaults to `4000`) | `4000` |
@@ -166,12 +165,14 @@ MIX_ENV=prod mix release
 
 ```bash
 export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
-export PHX_SERVER=true
 export SECRET_KEY_BASE="$(mix phx.gen.secret)"
 export PHX_HOST="localhost"
 LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \
   ./core/burrito_out/lazypock_macos_silicon
 ```
+
+The HTTP server is **always started** — no `PHX_SERVER` needed; just run the
+binary (or `bin/lazypock start`).
 
 Note: The release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
 
@@ -429,7 +430,7 @@ Schema  Hooks  Rules  ← Dynamic engine layer
 
 See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 
-**Current Status:** BE core (Phases 1–7) done. Auth collections (Phase 3 — user JWT, login/refresh, rule integration) ✅. Studio SPA (Phase 8) active. TypeScript SDK (Phase 9 — [lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) shipping.
+**Current Status:** BE core (Phases 1–7) done. Auth collections (Phase 3 — user JWT, login/refresh, rule integration) ✅. Studio SPA (Phase 8) **ready for beta test**. TypeScript SDK (Phase 9 — [lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) **ready for beta test**. Release setup (Phase 10 — Burrito single binary + GitHub Actions release workflow) done.
 
 | Phase | What | Status |
 | --- | --- | --- |
@@ -440,9 +441,9 @@ See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 | 5 | Realtime (Phoenix Channels, Broadcaster) | ✅ Complete |
 | 6 | File Storage (upload, serve, local + S3) | ✅ Complete |
 | 7 | Hook System (PocketBase-parity event hooks: Event + `e.next()` chain, Router for custom API routes) | ✅ Complete |
-| 8 | Studio Admin SPA (SvelteKit) | 🚧 In Progress — collections, records, rules, logs, settings shipped |
-| 9 | TypeScript SDK ([lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) | 🚧 Shipping — published on npm, codegen CLI included |
-| 10 | Polish & Release | ⏳ Planned |
+| 8 | Studio Admin SPA (SvelteKit) | ✅ **Ready for beta test** — collections, records, rules, logs, settings shipped |
+| 9 | TypeScript SDK ([lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) | ✅ **Ready for beta test** — published on npm, codegen CLI included |
+| 10 | Polish & Release | 🔧 **Release setup done** — Burrito single binary + GitHub Actions release workflow; polish items pending |
 
 ---
 
