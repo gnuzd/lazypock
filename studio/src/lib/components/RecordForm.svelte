@@ -584,6 +584,8 @@
 									class="relation-search"
 									placeholder="Type to filter..."
 									value={relationSearch[name] ?? ''}
+									// Keep clicks inside the dropdown from bubbling to the trigger's toggle
+									onclick={(e) => e.stopPropagation()}
 									oninput={(e: Event) => {
 										relationSearch[name] = (e.target as HTMLInputElement).value;
 										relationSearch = { ...relationSearch };
@@ -597,12 +599,14 @@
 											class:active={isMultiRel
 												? recordValue(name).includes(opt.value)
 												: data[name] === opt.value}
-											onmousedown={() =>
+											onclick={(e) => {
+												e.stopPropagation();
 												toggleRelationOption(
 													name,
 													opt.value,
 													isMultiRel ? (options?.maxSelect as number) : 1
-												)}>{opt.label}</button
+												);
+											}}>{opt.label}</button
 										>
 									{/each}
 									{#if filtered.length === 0}
@@ -958,7 +962,7 @@
 	.field-help {
 		display: block;
 		width: 100%;
-		margin: 3px 0 0;
+		margin: 10px 0 2px;
 		font-size: 0.875rem;
 		line-height: 1.4;
 		color: var(--color-base-content);
@@ -1161,7 +1165,7 @@
 		align-items: center;
 		gap: 6px;
 		min-height: 38px;
-		padding: 4px 10px;
+		padding: 8px 12px;
 		border: 1px solid var(--color-base-300);
 		border-radius: var(--radius-field);
 		background: var(--color-base-100);
