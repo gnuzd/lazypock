@@ -37,6 +37,13 @@
 	let unsubRecordEvents: (() => void) | null = null;
 	/** Last collection name the effect processed (avoids duplicate loads/subscribes). */
 	let lastHandledName = $state('');
+	/**
+	 * Collection name with a load currently in-flight. After a create/update/
+	 * delete BOTH the realtime subscription and onSaved/onDeleted fire a reload
+	 * for the same collection back-to-back; coalescing them avoids firing an
+	 * identical duplicate GET that the SDK would auto-cancel mid-flight.
+	 */
+	let loadInFlight = $state('');
 
 	function formatValue(field: Record<string, unknown>, value: unknown): string {
 		if (value == null) return '—';
@@ -77,6 +84,11 @@
 	});
 
 	async function loadCollection(name: string, targetPage: number = currentPage) {
+		// A reload for this collection is already running (realtime event + save
+		// callback fire together) — the pending request started after the record
+		// change and will include it, so skip the redundant duplicate.
+		if (loadInFlight === name) return;
+		loadInFlight = name;
 		loading = true;
 		try {
 			const [coll, recs] = await Promise.all([
@@ -89,9 +101,14 @@
 			totalPages = Math.max(1, recs?.totalPages ?? 1);
 			currentPage = Math.min(targetPage, totalPages);
 		} catch (e) {
+			// An auto-cancelled duplicate (another identical request started) is
+			// not a failure — the newer request owns the result. Never treat it
+			// as an error, and importantly never let it clear `rows`.
+			if ((e as { isAbort?: boolean })?.isAbort) return;
 			console.error('load collection:', e);
 		} finally {
 			loading = false;
+			loadInFlight = '';
 		}
 	}
 
