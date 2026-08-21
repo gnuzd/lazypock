@@ -35,6 +35,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # workflow_dispatch pins github.sha to main at trigger time, and other
+      # pushes can land on main while the ~6 min build runs. Re-sync so we
+      # build (and later tag) the true tip of main, not a stale snapshot.
+      - name: Sync to latest main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+
       - name: Setup Elixir & Erlang
         uses: erlef/setup-beam@v1.18.2
         with:
@@ -131,6 +139,19 @@ jobs:
             "41898282+github-actions[bot]@users.noreply.github.com"
           git add core/mix.exs core/priv/static
           git commit -m "chore: release v${VERSION}" --allow-empty
+          # If main moved while we were building, rebase the bump commit onto
+          # the latest main so the push is a fast-forward. (A rejected push
+          # here previously killed a release: "! [rejected] main -> main
+          # (fetch first)".) If main also touched the version line the rebase
+          # conflicts — abort loudly rather than force-pushing.
+          git fetch origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            git rebase origin/main || {
+              git rebase --abort
+              echo "::error::main moved during the build and conflicts with the version bump (core/mix.exs). Rebase manually or re-run once main settles." >&2
+              exit 1
+            }
+          fi
           git tag "v${VERSION}"
           git push origin main
           git push origin "v${VERSION}"
