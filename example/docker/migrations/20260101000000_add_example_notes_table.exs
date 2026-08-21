@@ -1,4 +1,7 @@
 defmodule Lazypock.Repo.Migrations.AddExampleNotesTable do
+  # NOTE: runtime-loaded user migration (LAZYPOCK_MIGRATIONS_DIR) — the server
+  # applies this via Ecto.Migrator at boot; editor LSPs outside the mix project
+  # can't resolve Ecto modules.
   @moduledoc """
   Example user migration.
 

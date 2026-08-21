@@ -1,4 +1,7 @@
 defmodule CustomApiHooks do
+  # NOTE: runtime-compiled user hook (LAZYPOCK_HOOKS_DIR) — the server compiles
+  # this at boot; editor LSPs outside the mix project can't resolve Lazypock.*
+  # modules, which is expected (see HOOKS_SECURITY.md).
   @moduledoc """
   Example custom API routes — the PocketBase `routerAdd()` equivalent.
 
