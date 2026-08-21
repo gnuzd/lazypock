@@ -40,11 +40,6 @@ defmodule Lazypock.Application do
       Lazypock.Migrations.run()
     end
 
-    # Run seeds once (idempotent, after migrations).
-    if System.get_env("LAZYPOCK_AUTOSEED") != "0" do
-      Lazypock.Migrations.seed()
-    end
-
     children =
       [
         LazypockWeb.Telemetry,
@@ -60,6 +55,16 @@ defmodule Lazypock.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
+        # Run seeds once (idempotent, tracked in `_seeds_run`) AFTER the
+        # supervision tree is up: the bundled seed creates the example "posts"
+        # collection via DDL.create_collection, whose post-commit broadcast to
+        # Lazypock.PubSub would crash ("unknown registry") if PubSub had not
+        # started yet — and the Registry subscribes to schema broadcasts, so it
+        # picks up the seeded collection automatically.
+        if System.get_env("LAZYPOCK_AUTOSEED") != "0" do
+          Lazypock.Migrations.seed()
+        end
+
         # Boot-time setup: create _superusers table + auto-create from env
         Lazypock.Auth.Setup.ensure_superusers_table!()
         Lazypock.Auth.Setup.create_from_env!()
