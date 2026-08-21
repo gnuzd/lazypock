@@ -105,7 +105,7 @@
 	{#if show}
 		<div
 			bind:this={menu}
-			class="no-scrollbar absolute z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
+			class="no-scrollbar fixed z-50 rounded-field border-2 border-primary bg-base-100 shadow-lg"
 			style={baseStyle + posStyle}
 			transition:fly={{ y: flyY, duration: 120 }}
 		>
