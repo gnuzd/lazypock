@@ -9,16 +9,21 @@
 alias Lazypock.Repo
 
 # ── Example: create a sample "posts" collection if it doesn't exist ──────────
+# Use DDL.create_collection (NOT a raw Repo.insert!) so the collection gets a
+# real Postgres table + field metadata and `managed: true` — otherwise it
+# cannot be deleted and record queries fail with "relation posts does not exist".
 if Repo.get_by(Lazypock.Collections.Collection, name: "posts") == nil do
-  Repo.insert!(%Lazypock.Collections.Collection{
-    name: "posts",
-    type: "base",
-    schema: [],
-    rules: %{},
-    options: %{},
-    hooks: %{},
-    managed: false
-  })
+  {:ok, _collection} =
+    Lazypock.Schema.DDL.create_collection("posts",
+      type: "base",
+      fields: [
+        %{"name" => "title", "type" => "text", "required" => true},
+        # The bundled post_hooks.ex example auto-generates a slug on create
+        %{"name" => "slug", "type" => "text"},
+        %{"name" => "body", "type" => "editor"},
+        %{"name" => "published", "type" => "bool", "default" => false}
+      ]
+    )
 
   IO.puts("Seeded collection: posts")
 else

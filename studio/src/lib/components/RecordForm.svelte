@@ -359,7 +359,7 @@
 </script>
 
 <div class="record-form">
-	{#each fields.filter((f) => f.type !== 'autodate' && f.name !== 'id' && f.type !== 'password') as field (field.name as string)}
+	{#each fields.filter((f) => f.type !== 'autodate' && f.name !== 'id') as field (field.name as string)}
 		{@const options = (field.options ?? {}) as Record<string, unknown>}
 		{@const type = field.type as string}
 		{@const name = field.name as string}
@@ -584,6 +584,8 @@
 									class="relation-search"
 									placeholder="Type to filter..."
 									value={relationSearch[name] ?? ''}
+									// Keep clicks inside the dropdown from bubbling to the trigger's toggle
+									onclick={(e) => e.stopPropagation()}
 									oninput={(e: Event) => {
 										relationSearch[name] = (e.target as HTMLInputElement).value;
 										relationSearch = { ...relationSearch };
@@ -597,12 +599,14 @@
 											class:active={isMultiRel
 												? recordValue(name).includes(opt.value)
 												: data[name] === opt.value}
-											onmousedown={() =>
+											onclick={(e) => {
+												e.stopPropagation();
 												toggleRelationOption(
 													name,
 													opt.value,
 													isMultiRel ? (options?.maxSelect as number) : 1
-												)}>{opt.label}</button
+												);
+											}}>{opt.label}</button
 										>
 									{/each}
 									{#if filtered.length === 0}
@@ -636,6 +640,96 @@
 				{/if}
 			</div>
 
+			<!-- ═══ PASSWORD (inline at its sort position — create: set, edit: change) ═══ -->
+		{:else if type === 'password'}
+			<div class="field" class:required>
+				<label for="pw_{name}">Password</label>
+				{#if editing}
+					{#if !editPwOpen}
+						<button
+							type="button"
+							class="btn btn-ghost w-full text-left font-normal"
+							style="padding: 10px 12px; font-size: 0.9375rem"
+							onclick={() => (editPwOpen = true)}
+						>
+							<svg
+								width="16"
+								height="16"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class="mr-2 inline"
+								><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path
+									d="M7 11V7a5 5 0 0 1 10 0v4"
+								/></svg
+							>
+							Change password
+						</button>
+					{:else}
+						<div transition:slide>
+							<input
+								id="pw_{name}"
+								type="password"
+								autocomplete="new-password"
+								disabled={passwordSaving}
+								bind:value={newPassword}
+								placeholder="New password"
+							/>
+							<input
+								id="pw_{name}_confirm"
+								type="password"
+								autocomplete="new-password"
+								disabled={passwordSaving}
+								bind:value={confirmPassword}
+								placeholder="Confirm password"
+							/>
+							<div class="flex items-center gap-2 px-0 pt-1 pb-1">
+								<button
+									type="button"
+									class="btn btn-ghost btn-sm"
+									onclick={() => {
+										editPwOpen = false;
+										newPassword = '';
+										confirmPassword = '';
+									}}
+									disabled={passwordSaving}
+								>
+									Cancel
+								</button>
+								<button
+									type="button"
+									class="btn btn-primary btn-sm"
+									onclick={() => onPasswordSave?.(newPassword)}
+									disabled={passwordSaving ||
+										!newPassword ||
+										!confirmPassword ||
+										newPassword !== confirmPassword}
+								>
+									{passwordSaving ? 'Saving...' : 'Save Password'}
+								</button>
+							</div>
+						</div>
+					{/if}
+				{:else}
+					<input
+						id="pw_{name}"
+						type="password"
+						autocomplete="new-password"
+						disabled={disabled || passwordSaving}
+						value={(data[name] as string) ?? ''}
+						oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
+						placeholder="Password"
+					/>
+				{/if}
+				{#if passwordError}
+					<span class="field-error">{passwordError}</span>
+				{:else if editing && editPwOpen && confirmPassword && newPassword !== confirmPassword}
+					<span class="field-error">Passwords do not match</span>
+				{/if}
+			</div>
 			<!-- ═══ TEXT / NUMBER / EMAIL / URL ═══ -->
 		{:else if isTextInput(field)}
 			{@const isMulti = type === 'text' && !!field.multiline}
@@ -672,101 +766,6 @@
 				{/if}
 			</div>
 		{/if}
-	{/each}
-
-	<!-- ═══ PASSWORD SECTION (separate from main fields) ═══ -->
-	{#each fields.filter((f) => f.type === 'password') as field (field.name as string)}
-		{@const name = field.name as string}
-		<div class="field">
-			<label for="pw_{name}">Password</label>
-
-			{#if editing}
-				{#if !editPwOpen}
-					<button
-						type="button"
-						class="btn btn-ghost w-full text-left font-normal"
-						style="padding: 10px 12px; font-size: 0.9375rem"
-						onclick={() => (editPwOpen = true)}
-					>
-						<svg
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							class="mr-2 inline"
-							><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path
-								d="M7 11V7a5 5 0 0 1 10 0v4"
-							/></svg
-						>
-						Change password
-					</button>
-				{:else}
-					<div transition:slide>
-						<input
-							id="pw_{name}"
-							type="password"
-							autocomplete="new-password"
-							disabled={passwordSaving}
-							bind:value={newPassword}
-							placeholder="New password"
-						/>
-						<input
-							id="pw_{name}_confirm"
-							type="password"
-							autocomplete="new-password"
-							disabled={passwordSaving}
-							bind:value={confirmPassword}
-							placeholder="Confirm password"
-						/>
-						<div class="flex items-center gap-2 px-0 pt-1 pb-1">
-							<button
-								type="button"
-								class="btn btn-ghost btn-sm"
-								onclick={() => {
-									editPwOpen = false;
-									newPassword = '';
-									confirmPassword = '';
-								}}
-								disabled={passwordSaving}
-							>
-								Cancel
-							</button>
-							<button
-								type="button"
-								class="btn btn-primary btn-sm"
-								onclick={() => onPasswordSave?.(newPassword)}
-								disabled={passwordSaving ||
-									!newPassword ||
-									!confirmPassword ||
-									newPassword !== confirmPassword}
-							>
-								{passwordSaving ? 'Saving...' : 'Save Password'}
-							</button>
-						</div>
-					</div>
-				{/if}
-			{:else}
-				<input
-					id="pw_{name}"
-					type="password"
-					autocomplete="new-password"
-					disabled={disabled || passwordSaving}
-					value={(data[name] as string) ?? ''}
-					oninput={(e: Event) => update(name, (e.target as HTMLInputElement).value)}
-					placeholder="Password"
-				/>
-			{/if}
-
-			{#if passwordError}
-				<span class="field-error">{passwordError}</span>
-			{:else if editing && editPwOpen && confirmPassword && newPassword !== confirmPassword}
-				<span class="field-error">Passwords do not match</span>
-			{/if}
-		</div>
 	{/each}
 </div>
 
@@ -958,7 +957,7 @@
 	.field-help {
 		display: block;
 		width: 100%;
-		margin: 3px 0 0;
+		margin: 10px 0 2px;
 		font-size: 0.875rem;
 		line-height: 1.4;
 		color: var(--color-base-content);
@@ -1156,12 +1155,18 @@
 		position: relative;
 	}
 
+	/* Lift the open relation field above the following fields so the dropdown
+	   is never painted behind the next field's container. */
+	.relation-wrap:has(.relation-dropdown) {
+		z-index: 20;
+	}
+
 	.relation-trigger {
 		display: flex;
 		align-items: center;
 		gap: 6px;
 		min-height: 38px;
-		padding: 4px 10px;
+		padding: 8px 12px;
 		border: 1px solid var(--color-base-300);
 		border-radius: var(--radius-field);
 		background: var(--color-base-100);
@@ -1236,7 +1241,7 @@
 		top: 100%;
 		left: 0;
 		right: 0;
-		z-index: 50;
+		z-index: 100;
 		background: var(--color-base-100);
 		border: 1px solid var(--color-base-300);
 		border-radius: var(--radius-field);

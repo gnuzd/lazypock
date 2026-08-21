@@ -1,0 +1,6 @@
+{
+  "ignore": [
+    "example/docker/hooks/**",
+    "example/docker/migrations/**"
+  ]
+}

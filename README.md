@@ -77,6 +77,23 @@ LazyPock/
 
 ## How to Run
 
+### Docker (easiest — no toolchain needed)
+
+The fastest way to try LazyPock: `docker compose up` starts Postgres + LazyPock
+(the **latest release**, built with ImageMagick included) plus example hooks
+and a starter migration.
+
+```bash
+git clone git@github.com:gnuzd/lazypock.git
+cd lazypock/example/docker
+docker compose up --build
+```
+
+- Server + Studio admin UI: <http://localhost:4000> (`/_/`)
+- Superuser (auto-created on first boot): `admin@lazypock.app` / `admin123`
+
+See [example/](example/) for details (example hooks, migrations, and frontend apps).
+
 ### Prerequisites
 
 - **Elixir 1.17+** + **Erlang/OTP 26+**
