@@ -24,7 +24,7 @@ RUN apk add --no-cache imagemagick ca-certificates curl jq
 
 # Resolve + download the latest (or pinned) Linux x86_64 release binary.
 # GitHub uploads assets as `lazypock-<version>-linux-x86_64`.
-ARG LAZYPOCK_VERSION=latest
+ARG LAZYPOCK_VERSION=0.2.6
 RUN set -eux; \
     if [ "$LAZYPOCK_VERSION" = "latest" ]; then \
       ASSET_URL="$(curl -fsSL https://api.github.com/repos/gnuzd/lazypock/releases/latest \

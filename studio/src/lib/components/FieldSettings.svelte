@@ -65,8 +65,10 @@
 </script>
 
 {#if !field['@toDelete']}
+	<!-- NOTE: no overflow-hidden here — it would clip the Select dropdowns
+	     (absolute menus) that open below the collapsed one-line row. -->
 	<div
-		class="overflow-hidden rounded-field border border-base-300 bg-base-100"
+		class="rounded-field border border-base-300 bg-base-100"
 		role="region"
 		tabindex="-1"
 	>

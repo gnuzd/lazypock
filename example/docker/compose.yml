@@ -21,7 +21,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - example_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d lazypock"]
       interval: 5s
@@ -48,12 +48,12 @@ services:
     volumes:
       - ./hooks:/hooks
       - ./migrations:/migrations
-      - lazypock_data:/data/lazypock
+      - example_lazypock_data:/data/lazypock
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  postgres_data:
-  lazypock_data:
+  example_postgres_data:
+  example_lazypock_data:

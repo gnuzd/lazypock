@@ -37,13 +37,13 @@
 		onDeleted?: () => void;
 	} = $props();
 
-let recordSaving = $state(false);
-let recordError = $state('');
-let recordFieldErrors = $state<Record<string, string>>({});
-let showDiscardConfirm = $state(false);
-// ── Password change state (edit mode only) ──
-let passwordSaving = $state(false);
-let passwordError = $state('');
+	let recordSaving = $state(false);
+	let recordError = $state('');
+	let recordFieldErrors = $state<Record<string, string>>({});
+	let showDiscardConfirm = $state(false);
+	// ── Password change state (edit mode only) ──
+	let passwordSaving = $state(false);
+	let passwordError = $state('');
 
 	// Dynamic record schema from collection fields
 	let recordSchema = $state<z.ZodObject<Record<string, z.ZodTypeAny>> | null>(null);
@@ -130,6 +130,12 @@ let passwordError = $state('');
 		return true;
 	}
 
+	function closePane() {
+		// Dirty → requestClose() already opened the discard confirm; block the close.
+		if (requestClose() === false) return;
+		show = false;
+	}
+
 	function confirmDiscard() {
 		showDiscardConfirm = false;
 		show = false;
@@ -186,7 +192,12 @@ let passwordError = $state('');
 		{#if editingRecordId}
 			<Dropdown>
 				{#snippet trigger()}
-					<button type="button" class="btn btn-ghost btn-sm px-2">
+					<button
+						type="button"
+						class="btn btn-ghost btn-sm px-2"
+						aria-label="Record actions"
+						title="Record actions"
+					>
 						<svg
 							width="16"
 							height="16"
@@ -254,7 +265,7 @@ let passwordError = $state('');
 		{/if}
 
 		<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-			<Button class="btn-ghost mr-auto" onclick={requestClose}>Close</Button>
+			<Button class="btn-ghost mr-auto" onclick={closePane}>Close</Button>
 			<Button
 				class="btn-primary"
 				loading={recordSaving}
@@ -273,7 +284,9 @@ let passwordError = $state('');
 		You have unsaved changes to this record. They will be lost if you close without saving.
 	</p>
 	<div class="mt-4 flex justify-end gap-2">
-		<Button type="button" class="btn-ghost btn-sm" onclick={() => (showDiscardConfirm = false)}>Keep editing</Button>
+		<Button type="button" class="btn-ghost btn-sm" onclick={() => (showDiscardConfirm = false)}
+			>Keep editing</Button
+		>
 		<Button type="button" class="btn-error btn-sm" onclick={confirmDiscard}>Discard</Button>
 	</div>
 </Modal>

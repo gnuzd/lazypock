@@ -35,8 +35,12 @@
 
 	// Base style lives outside the positioning updates so the size caps apply
 	// from the very first frame (no full-height flash for long option lists).
-	// 'position: fixed' anchors the menu to the VIEWPORT, so an
-	// overflow:hidden ancestor (e.g. the settings modals) can never clip it.
+	// 'position: absolute' anchors the menu to the trigger's wrapper — the
+	// nearest positioned ancestor — so ancestor transforms (e.g. the side
+	// panes' fly transition, which Svelte leaves as translateX(0) via
+	// WAAPI fill:forwards) never hijack its containing block. Keep any
+	// clipping container (field rows, modals) free of overflow:hidden, since
+	// absolute descendants ARE clipped by it.
 	const baseStyle = 'max-height:min(320px, 55vh);overflow-y:auto;overflow-x:hidden;';
 
 	// left/top/min-width — filled in by the floating-ui update below.
@@ -54,7 +58,7 @@
 			// wherever it scrolls instead of staying glued to the viewport.
 			const stopAutoUpdate = autoUpdate(ref, float, () => {
 				computePosition(ref, float, {
-					strategy: 'fixed',
+					strategy: 'absolute',
 					placement: align === 'right' ? 'bottom-end' : 'bottom-start',
 					// flip() decides above/below from the menu's REAL measured size
 					// (the old code guessed 320px and flipped unnecessarily);

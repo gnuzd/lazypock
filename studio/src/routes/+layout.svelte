@@ -12,6 +12,9 @@
 	let initialized = $state(false);
 	onMount(async () => {
 		try {
+			const theme = localStorage.getItem('lazypock-theme');
+			if (theme) document.documentElement.setAttribute('data-theme', theme);
+
 			await client.authStore.init();
 
 			if (!browser) return;
