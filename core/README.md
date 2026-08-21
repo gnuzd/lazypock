@@ -237,3 +237,27 @@ Requires the `sqlite3` CLI on PATH (used read-only). Re-running with `--yes`
 imports records into existing collections (useful for re-syncs); re-running a
 fresh import is idempotent thanks to `ON CONFLICT (id) DO NOTHING` and the
 deterministic ids.
+
+## Releasing (automatic)
+
+Releases are fully automatic via [release-please](https://github.com/googleapis/release-please):
+
+1. Push a change to `main` that touches `core/` with a conventional commit
+   message (`fix(...)`, `feat(...)`, `chore(...)`). Release Please opens a
+   **release PR** — `chore(main): release core-vX.Y.Z` — with the
+   `core/mix.exs` version bump and generated `core/CHANGELOG.md`.
+2. **Merge the release PR** (review it first — it's the human gate). That
+   merge creates the `vX.Y.Z` GitHub Release + tag, then the same workflow
+   run runs the test suite, builds the Burrito binaries (`darwin-arm64` +
+   `linux-x86_64`), and attaches them (with checksums) to the release.
+
+There is no manual `workflow_dispatch` step.
+
+### Version selection
+
+- `fix(...)` commits → patch (`0.3.0` → `0.3.1`)
+- `feat(...)` commits → minor (`0.3.0` → `0.4.0`)
+- a `BREAKING CHANGE:` footer in any commit body → major (`0.3.0` → `1.0.0`)
+
+Only commits that touch `core/` participate — Studio and example-app changes
+do not bump the server version.

@@ -1,19 +1,55 @@
 name: Release
 
+# Automatic release pipeline (replaces the old manual workflow_dispatch).
+#
+# Flow:
+#   1. Every push to `main` that touches `core/` runs release-please. If the
+#      commits since the last release include `fix:` / `feat:` / BREAKING
+#      CHANGE (conventional commits), it opens (or updates) a release PR —
+#      "chore(main): release core-vX.Y.Z" — with the `core/mix.exs` version
+#      bump + `core/CHANGELOG.md`.
+#   2. Merging that release PR pushes the bump to `main`, release-please
+#      creates the GitHub Release + `vX.Y.Z` tag, and the build job in this
+#      same run runs the test suite, builds the Burrito binaries (macOS +
+#      Linux), and attaches them to the release.
+#
+# Commit messages on `main` should follow conventional commits
+# (e.g. `fix(core): ...`, `feat(core): ...`, `chore: ...`) so the next
+# version is chosen correctly. `BREAKING CHANGE:` in the body bumps major.
+
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Semver version to release (e.g. 0.3.0)"
-        required: true
-        type: string
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  release:
-    name: Build & Release
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs['core--release_created'] }}
+      upload_url: ${{ steps.release.outputs['core--upload_url'] }}
+      tag_name: ${{ steps.release.outputs['core--tag_name'] }}
+    steps:
+      - name: Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release-type: elixir
+          package-name: lazypock
+          path: core
+
+  # ── Only runs when release-please just created a release (release PR
+  #    merged): checkout the released code, test it, build the Burrito
+  #    binaries, and attach them to the release. ──
+  build:
+    name: Test, build & attach binaries
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -79,37 +115,6 @@ jobs:
           # (hooks RegistryTest :should_not_run race)
           mix test --max-cases 8 || mix test --max-cases 8
 
-      - name: Resolve version
-        id: version
-        run: |
-          VERSION="$VERSION_INPUT"
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Invalid version: $VERSION (expected semver like 0.3.0)" >&2
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-        env:
-          VERSION_INPUT: ${{ github.event.inputs.version }}
-
-      - name: Bump version in mix.exs
-        working-directory: core
-        run: |
-          python3 - <<'PY'
-          import re, os
-          V = os.environ["VERSION"]
-          src = open("mix.exs").read()
-          src = re.sub(
-            r'version: "[0-9]+\.[0-9]+\.[0-9]+"',
-            f'version: "{V}"',
-            src,
-            count=1,
-          )
-          open("mix.exs", "w").write(src)
-          PY
-          grep -n "version:" mix.exs | head -1
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-
       - name: Deploy assets (studio build + phx.digest)
         working-directory: core
         run: mix assets.deploy
@@ -122,23 +127,11 @@ jobs:
           mix release --overwrite
           ls -la burrito_out/
 
-      - name: Commit version bump and tag
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
-          git add core/mix.exs core/priv/static
-          git commit -m "chore: release v${VERSION}" --allow-empty
-          git tag "v${VERSION}"
-          git push origin main
-          git push origin "v${VERSION}"
-
       - name: Prepare release assets
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: |
+          VERSION="${TAG_NAME#v}"
           mkdir -p dist
           cp core/burrito_out/lazypock_macos_silicon \
             "dist/lazypock-${VERSION}-darwin-arm64"
@@ -147,43 +140,10 @@ jobs:
           chmod +x dist/*
           cd dist && sha256sum * > checksums-sha256.txt
 
-      - name: Generate changelog
-        id: changelog
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: releases } = await github.rest.repos.listReleases({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 1,
-            });
-            const last = releases[0]?.tag_name;
-            const { data: commits } = await github.rest.repos.listCommits({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 50,
-            });
-            let cutoff = null;
-            if (last) {
-              const found = commits.find(
-                (c) => c.commit.message.includes(last)
-              );
-              if (found) cutoff = found.sha;
-            }
-            const items = [];
-            for (const c of commits) {
-              if (cutoff && c.sha === cutoff) break;
-              const msg = c.commit.message.split("\n")[0];
-              items.push(`- ${msg} (${c.sha.slice(0, 7)})`);
-            }
-            core.setOutput("body", items.join("\n"));
-
-      - name: Create GitHub Release
+      - name: Attach assets to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: lazypock v${{ steps.version.outputs.version }}
-          body: ${{ steps.changelog.outputs.body }}
+          upload_url: ${{ needs.release-please.outputs.upload_url }}
           files: |
             dist/lazypock-*
             dist/checksums-sha256.txt
