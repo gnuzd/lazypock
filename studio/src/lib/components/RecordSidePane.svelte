@@ -54,7 +54,9 @@ let passwordError = $state('');
 			return;
 		}
 		const schemaFields = (collection.fields as Record<string, unknown>[]) ?? [];
-		recordSchema = buildRecordSchema(schemaFields).schema;
+		// Create mode enforces required password fields; edit mode treats an
+		// empty password as "keep existing".
+		recordSchema = buildRecordSchema(schemaFields, { isCreate: !editingRecordId }).schema;
 	});
 
 	async function saveRecord() {

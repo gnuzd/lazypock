@@ -63,10 +63,14 @@ const NON_TEXT_TYPES = new Set(['number', 'bool', 'date', 'datetime']);
  * Returns `{ schema, fieldsMap }` where `schema` validates the whole form object
  * and `fieldsMap` maps field names to their type for display purposes.
  */
-export function buildRecordSchema(fields: Record<string, unknown>[]) {
+export function buildRecordSchema(
+	fields: Record<string, unknown>[],
+	opts?: { isCreate?: boolean }
+) {
 	const shape: Record<string, z.ZodTypeAny> = {};
 
 	const fieldsMap: Record<string, string> = {};
+	const isCreate = opts?.isCreate ?? true;
 
 	// Skip auto-managed fields — set by backend automatically
 	for (const f of fields) {
@@ -162,9 +166,14 @@ export function buildRecordSchema(fields: Record<string, unknown>[]) {
 			default:
 				// text, editor, password, file
 				if (type === 'password') {
-					// Password is always optional in form (empty = keep existing on update)
-					// Backend auto-hashes and enforces on create
-					shape[name] = z.string().nullable().optional();
+					// Create: a required password must be set. Edit: empty = keep existing.
+					if (isCreate && required) {
+						shape[name] = z
+							.string()
+							.min(8, 'Password must be at least 8 characters');
+					} else {
+						shape[name] = z.string().nullable().optional();
+					}
 				} else if (required) {
 					shape[name] = z.string().min(1, 'Required');
 				} else {
