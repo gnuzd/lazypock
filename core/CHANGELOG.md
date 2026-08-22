@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/gnuzd/lazypock/compare/v0.3.3...v0.4.0) (2026-08-22)
+
+
+### Features
+
+* **migrations:** run bundled system migrations from inside the binary ([7cbfcca](https://github.com/gnuzd/lazypock/commit/7cbfcca46ecaaeae91190e335d3128058099748d))
+* **migrations:** run bundled system migrations from inside the binary ([fcb4e5e](https://github.com/gnuzd/lazypock/commit/fcb4e5ecc4e92a2211a5e869035fdb08272ec137))
+
 ## [0.3.3](https://github.com/gnuzd/lazypock/compare/v0.3.2...v0.3.3) (2026-08-22)
 
 
