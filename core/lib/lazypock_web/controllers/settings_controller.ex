@@ -289,8 +289,8 @@ defmodule LazypockWeb.SettingsController do
   end
 
   defp do_import(conn, params) do
-    collections = params["collections"] || []
     delete_missing = params["deleteMissing"] == true
+    collections = (params["collections"] || []) |> normalize_import_payload()
 
     existing_names =
       Lazypock.Collections.Registry.list()
@@ -330,6 +330,7 @@ defmodule LazypockWeb.SettingsController do
                    |> maybe_put(:options, options)
                    |> maybe_put(:hooks, hooks)
                    |> maybe_put(:indexes, indexes)
+                   |> Keyword.put(:delete_missing_fields, delete_missing)
                  ) do
               {:ok, _} -> {:ok, :updated}
               other -> other
@@ -371,11 +372,12 @@ defmodule LazypockWeb.SettingsController do
         end
       end)
 
-    # Delete missing collections if requested
+    # Delete missing collections if requested (system collections are
+    # protected inside drop_collection).
     if delete_missing do
       for name <- MapSet.difference(existing_names, incoming_names) do
         case Lazypock.Schema.DDL.drop_collection(name) do
-          {:ok, _} -> :ok
+          :ok -> :ok
           {:error, _} -> :ok
         end
       end
@@ -385,6 +387,127 @@ defmodule LazypockWeb.SettingsController do
       imported: Enum.reverse(imported_list),
       errors: Enum.reverse(errors_list)
     })
+  end
+
+  # ── PocketBase-format payload normalization ──
+
+  # PocketBase exports use camelCase field names, PB collection ids in relation
+  # options, and PB-style record keys. Normalize all three to LazyPock's
+  # conventions (snake_case field names, relations resolved to collection
+  # names) before the DDL layer sees them, so a PocketBase export imports
+  # cleanly.
+  defp normalize_import_payload(collections) do
+    id_to_name = Map.new(collections, fn c -> {c["id"], c["name"]} end)
+
+    Enum.map(collections, fn c ->
+      {fields, name_map} = normalize_fields(c["name"], c["schema"] || [], id_to_name)
+
+      c
+      |> Map.put("schema", fields)
+      |> Map.put("records", rekey_records(c["records"] || [], name_map))
+    end)
+  end
+
+  # Returns {normalized_fields, %{pb_field_name => lazy_field_name}}.
+  defp normalize_fields(collection_name, fields, id_to_name) do
+    existing_names = existing_field_names(collection_name)
+
+    {fields, name_map} =
+      Enum.reduce(fields, {[], %{}}, fn f, {acc, name_map} ->
+        pb_name = f["name"]
+
+        lazy_name =
+          if MapSet.member?(existing_names, pb_name) do
+            # Keep the original spelling when the target collection already has
+            # a field with that exact name (e.g. the system users collection
+            # uses camelCase `emailVisibility`).
+            pb_name
+          else
+            normalize_field_name(pb_name)
+          end
+
+        normalized =
+          f
+          |> Map.put("name", lazy_name)
+          |> resolve_relation(id_to_name)
+
+        {[normalized | acc], Map.put(name_map, pb_name, lazy_name)}
+      end)
+
+    {Enum.reverse(fields), name_map}
+  end
+
+  defp existing_field_names(collection_name) do
+    case Lazypock.Collections.Registry.get(collection_name) do
+      {:ok, coll} -> MapSet.new(coll.fields, & &1.name)
+      _ -> MapSet.new()
+    end
+  end
+
+  # PocketBase allows camelCase field names; LazyPock DDL requires lowercase
+  # snake_case columns (mirrors Lazypock.PocketBase.Importer).
+  defp normalize_field_name(name) when is_binary(name) do
+    name
+    |> Macro.underscore()
+    |> String.replace(~r/[^a-z0-9_]/, "_")
+    |> String.trim("_")
+  end
+
+  defp normalize_field_name(nil), do: nil
+
+  # PocketBase's users auth collection ids (older `_pb_users_auth_` and the
+  # bare `pb_users_auth`) map to LazyPock's built-in `users` collection.
+  @pocketbase_users_ids ["_pb_users_auth_", "pb_users_auth"]
+
+  # Relations in PocketBase exports reference the target by PB collection id
+  # (e.g. "kanban_columns_col", or PocketBase's users auth id). Resolve to the
+  # LazyPock collection NAME and store it in options["collection"].
+  defp resolve_relation(field, id_to_name) do
+    if field["type"] == "relation" do
+      opts = Map.get(field, "options", %{})
+      raw_id = opts["collectionId"] || field["collectionId"]
+
+      resolved =
+        cond do
+          is_binary(raw_id) and raw_id != "" and Map.has_key?(id_to_name, raw_id) ->
+            id_to_name[raw_id]
+
+          is_binary(raw_id) and raw_id in @pocketbase_users_ids ->
+            pocketbase_users_name()
+
+          true ->
+            nil
+        end
+
+      if resolved do
+        Map.put(field, "options", Map.put(opts, "collection", resolved))
+      else
+        field
+      end
+    else
+      field
+    end
+  end
+
+  defp pocketbase_users_name do
+    case Lazypock.Collections.Registry.get("users") do
+      {:ok, _} -> "users"
+      _ -> nil
+    end
+  end
+
+  # PB record keys are the PB field names (camelCase) — re-key to the
+  # normalized LazyPock field names so inserts hit the right columns. PB-only
+  # timestamp keys are dropped (LazyPock sets its own created_at/updated_at).
+  defp rekey_records(records, name_map) do
+    Enum.map(records, fn record ->
+      record
+      |> Map.drop(["created", "updated"])
+      |> Map.new(fn {k, v} ->
+        key = to_string(k)
+        {Map.get(name_map, key, key), v}
+      end)
+    end)
   end
 
   # ── Send test email ──

@@ -197,6 +197,11 @@ defmodule Lazypock.Schema.DDL do
     # nil when not provided — omitting :fields must NOT drop all columns
     new_fields = Keyword.get(opts, :fields)
     new_indexes = Keyword.get(opts, :indexes)
+    # When false (e.g. import with "delete missing" disabled), fields absent
+    # from the payload are left untouched. Defaults to true so the collection
+    # editor (which always sends the full field list) keeps its delete-on-remove
+    # behavior. System fields are NEVER dropped, regardless of this flag.
+    delete_missing_fields = Keyword.get(opts, :delete_missing_fields, true)
 
     result =
       Repo.transaction(fn ->
@@ -289,8 +294,13 @@ defmodule Lazypock.Schema.DDL do
             existing_names = MapSet.new(existing_fields, & &1.name)
             incoming_names = MapSet.new(new_fields, & &1["name"])
 
-            # Remove deleted fields
-            for f <- existing_fields, not MapSet.member?(incoming_names, f.name) do
+            # Remove deleted fields (only when deletion is requested; system
+            # fields are never removed — e.g. verified/email_visibility on the
+            # auth users collection).
+            for f <- existing_fields,
+                not MapSet.member?(incoming_names, f.name),
+                delete_missing_fields,
+                not f.system do
               Ecto.Adapters.SQL.query!(
                 Repo,
                 "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
@@ -405,7 +415,10 @@ defmodule Lazypock.Schema.DDL do
     result =
       Repo.transaction(fn ->
         cond do
-          collection.system ->
+          # Protect by the DB flag AND the canonical system-name set (the users
+          # collection was historically created with system=false in the DB).
+          collection.system or
+              Lazypock.Collections.Collection.system?(collection.name) ->
             {:error, "Cannot delete system collection '#{collection.name}'"}
 
           collection.managed ->
@@ -722,13 +735,20 @@ defmodule Lazypock.Schema.DDL do
     if is_binary(opts["collection"]) and opts["collection"] != "" do
       opts
     else
-      # Try to resolve collectionId (UUID from SPA) to a collection name
+      # Try to resolve collectionId (UUID from SPA, or collection name) to a
+      # collection name. The id column is :binary_id, so only query by id when
+      # the value is actually a UUID — a PocketBase collection id (e.g.
+      # "kanban_columns_col") or a bare name would otherwise crash the query.
       raw_id = field_def["collectionId"] || opts["collectionId"]
 
       if is_binary(raw_id) and raw_id != "" do
         collection =
-          Lazypock.Repo.get_by(Lazypock.Collections.Collection, id: raw_id) ||
+          if match?({:ok, _}, Ecto.UUID.cast(raw_id)) do
+            Lazypock.Repo.get_by(Lazypock.Collections.Collection, id: raw_id) ||
+              Lazypock.Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
+          else
             Lazypock.Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
+          end
 
         if collection do
           Map.put(opts, "collection", collection.name)
