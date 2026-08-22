@@ -2,6 +2,7 @@
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
 	import { z } from 'zod';
+	import { toast } from 'svelte-sonner';
 	import Button from '$lib/components/Button.svelte';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
@@ -127,14 +128,15 @@
 				collections: data,
 				deleteMissing: importForm.values.deleteMissing
 			})) as { imported?: unknown[]; errors?: unknown[] } | null;
-			if (res?.errors && (res.errors as unknown[]).length > 0) {
-				importResult = `Imported ${(res.imported as unknown[]).length} collections with ${(res.errors as unknown[]).length} errors.`;
+			const importedCount = (res?.imported as unknown[])?.length ?? 0;
+			const errorCount = (res?.errors as unknown[])?.length ?? 0;
+			if (errorCount > 0) {
+				toast.error(`Imported ${importedCount} collections with ${errorCount} errors`);
 			} else {
-				const count = (res?.imported as unknown[])?.length ?? 0;
-				importResult = `Successfully imported ${count} collections.`;
+				toast.success(`Successfully imported ${importedCount} collections`);
 			}
 		} catch (e) {
-			importResult = `Import failed: ${(e as Error).message}`;
+			toast.error(`Import failed: ${(e as Error).message}`);
 		} finally {
 			importing = false;
 		}
@@ -262,9 +264,5 @@
 				Import
 			</Button>
 		</div>
-
-		{#if importResult && !importResult.startsWith('Invalid')}
-			<p class="mt-3 text-xs text-base-content/60">{importResult}</p>
-		{/if}
 	</div>
 {/if}
