@@ -365,6 +365,24 @@ defmodule LazypockWeb.DynamicController do
   # and bcrypt-hash password fields automatically.
   # Empty password values are dropped entirely (keep existing on update).
   defp sanitize_attrs(attrs, collection) do
+    # `password` is the canonical write-only API key for an auth collection's
+    # password field (PocketBase parity — the SDK sends { email, password })
+    # even though the backing field/column may be named `password_hash`.
+    # Map it onto the actual password column; the standard hashing below then
+    # applies. An empty value is dropped entirely (keep existing on update).
+    attrs =
+      case password_column(collection) do
+        nil ->
+          attrs
+
+        column ->
+          case Map.pop(attrs, "password") do
+            {nil, rest} -> rest
+            {"", rest} -> rest
+            {value, rest} -> Map.put(rest, column, value)
+          end
+      end
+
     # Map API (camelCase) keys to actual DB column names first.
     # e.g. emailVisibility (metadata) → emailvisibility (Postgres column).
     attrs = Lazypock.Schemas.FieldNames.attrs_to_columns(attrs, collection)
@@ -402,5 +420,14 @@ defmodule LazypockWeb.DynamicController do
           Map.put(acc, key, value)
       end
     end)
+  end
+
+  # DB column for the collection's (first) password field, if any.
+  # `nil` when the collection has no password field.
+  defp password_column(collection) do
+    case Enum.find(collection.fields || [], &(&1.type == "password")) do
+      nil -> nil
+      field -> String.downcase(field.name)
+    end
   end
 end

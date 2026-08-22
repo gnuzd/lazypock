@@ -18,7 +18,7 @@ defmodule Lazypock.Repo.Migrations.RecreateUsersCollection do
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
+      password_hash TEXT,
       avatar TEXT,
       name TEXT,
       verified BOOLEAN NOT NULL DEFAULT false,
@@ -40,8 +40,11 @@ defmodule Lazypock.Repo.Migrations.RecreateUsersCollection do
     users_fields = [
       %{name: "email", type: "email", required: true, system: true, sort: 0,
         options: "{}"},
-      %{name: "password_hash", type: "password", required: true, system: true, sort: 1,
-        options: "{}"},
+      # Write-only: hidden (never returned/shown) and not required (accounts
+      # may exist without a password) — matching PocketBase. The API key for
+      # it is `password` (aliased to this column by DynamicController).
+      %{name: "password_hash", type: "password", required: false, system: true, sort: 1,
+        hidden: true, options: "{}"},
       %{name: "created_at", type: "autodate", required: true, system: true, sort: 2,
         options: ~s({"onCreate": true})},
       %{name: "updated_at", type: "autodate", required: true, system: true, sort: 3,
@@ -60,9 +63,11 @@ defmodule Lazypock.Repo.Migrations.RecreateUsersCollection do
     ]
 
     for f <- users_fields do
+      hidden = Map.get(f, :hidden, false)
+
       execute """
-      INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
-      SELECT c.id, '#{f.name}', '#{f.type}', #{f.required}, #{f.system}, #{f.sort}, '#{f.options}'::jsonb, now(), now()
+      INSERT INTO _fields (collection_id, name, type, required, hidden, system, sort_order, options, created_at, updated_at)
+      SELECT c.id, '#{f.name}', '#{f.type}', #{f.required}, #{hidden}, #{f.system}, #{f.sort}, '#{f.options}'::jsonb, now(), now()
       FROM _collections c WHERE c.name = 'users'
       AND NOT EXISTS (SELECT 1 FROM _fields f2 WHERE f2.collection_id = c.id AND f2.name = '#{f.name}')
       """

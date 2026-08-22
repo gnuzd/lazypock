@@ -433,7 +433,55 @@ curl -X POST http://localhost:4000/api/posts \
   -d '{"title": "Hello World", "body": "My first post"}'
 ```
 
-### TypeScript SDK (npm: `lazypock`)
+### Auth collections & creating users
+
+Collections come in two types: **base** (plain records) and **auth** (accounts
+with an email + write-only password). The built-in **`users`** collection is an
+auth collection — like PocketBase, it's a normal (non-system) collection you
+can rename, edit, or even delete.
+
+The password field is **write-only**:
+
+- **Hidden** — never returned in API responses, never shown in the Studio,
+  excluded from the SDK's default field projection (`hidden: true`).
+- **Optional** — accounts may exist without a password (OAuth-only users,
+  invite flows), so the DB column is nullable (`required: false`).
+- **Hashed** — the server bcrypt-hashes it before storing it.
+
+Create a user exactly like any other record, using `password` as the field
+name (PocketBase convention):
+
+```bash
+# POST /api/users — public by default (createRule = "")
+curl -X POST http://localhost:4000/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"email": "ada@example.com", "password": "correct-horse-battery"}'
+
+# → 201 {"id": "...", "email": "ada@example.com", "collectionName": "users", ...}
+#   (no password / password_hash key in the response — ever)
+
+# Password is optional:
+curl -X POST http://localhost:4000/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"email": "ghost@example.com"}'
+```
+
+Login (PocketBase-compatible endpoints):
+
+```bash
+# POST /api/users/auth-with-password → { token, record }
+curl -X POST http://localhost:4000/api/users/auth-with-password \
+  -H "Content-Type: application/json" \
+  -d '{"identity": "ada@example.com", "password": "correct-horse-battery"}'
+
+# POST /api/users/auth-refresh → fresh token (Bearer header)
+# GET  /api/users/auth-methods  → available auth methods
+```
+
+The `password` key is aliased to the actual backing column (`password_hash`)
+on write — sending either name works, so the TypeScript SDK below and any
+PocketBase SDK behave identically.
+
 
 ```ts
 import { LazypockClient } from "lazypock";
@@ -446,6 +494,17 @@ const newPost = await client.collection("posts").create({
   title: "Hello World",
   body: "My first post",
 });
+
+// Auth collections — create a user (password optional + write-only)
+const user = await client.collection("users").create({
+  email: "ada@example.com",
+  password: "correct-horse-battery",
+});
+const session = await client.authWithPassword(
+  "users",
+  "ada@example.com",
+  "correct-horse-battery"
+);
 
 // Realtime — callback-first, PocketBase-style
 client.collection("posts").subscribe((e) => {

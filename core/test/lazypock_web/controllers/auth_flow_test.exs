@@ -134,6 +134,109 @@ defmodule LazypockWeb.AuthFlowTest do
     end
   end
 
+  describe "user registration via REST API (POST /api/users)" do
+
+    test "creates a user with `password` (PocketBase-style) and hashes it" do
+      conn =
+        post(build_conn(), "/api/users", %{
+          "data" => %{"email" => "reg@test.com", "password" => "secret123"}
+        })
+
+      body = json_response(conn, 201)
+      assert body["email"] == "reg@test.com"
+      assert body["collectionName"] == "users"
+      # Password must never leak in responses
+      refute Map.has_key?(body, "password")
+      refute Map.has_key?(body, "password_hash")
+
+      # The stored value is a bcrypt hash, not the plaintext
+      {:ok, coll} = Registry.get("users")
+      password_field =
+        Enum.find(coll.fields, &(&1.type == "password"))
+
+      [user] = GenericRecord.all_where("users", "email = $1", ["reg@test.com"])
+      stored = user[password_field.name]
+      assert is_binary(stored)
+      refute stored == "secret123"
+      assert Bcrypt.verify_pass("secret123", stored)
+    end
+
+
+    test "legacy password_hash key still works (backward compat)" do
+      conn =
+        post(build_conn(), "/api/users", %{
+          "data" => %{"email" => "legacy@test.com", "password_hash" => "hunter22"}
+        })
+
+      assert json_response(conn, 201)["email"] == "legacy@test.com"
+
+      conn =
+        post(build_conn(), "/api/users/auth-with-password", %{
+          "identity" => "legacy@test.com",
+          "password" => "hunter22"
+        })
+
+      assert json_response(conn, 200)["token"] != nil
+    end
+
+
+    test "created user can log in via auth-with-password" do
+      post(build_conn(), "/api/users", %{
+        "data" => %{"email" => "reg2@test.com", "password" => "secret123"}
+      })
+
+      conn =
+        post(build_conn(), "/api/users/auth-with-password", %{
+          "identity" => "reg2@test.com",
+          "password" => "secret123"
+        })
+
+      body = json_response(conn, 200)
+      assert body["token"] != nil
+      assert body["record"]["email"] == "reg2@test.com"
+      refute Map.has_key?(body["record"], "password_hash")
+    end
+
+
+    test "password is NOT required — user can be created without one" do
+      conn =
+        post(build_conn(), "/api/users", %{
+          "data" => %{"email" => "reg3@test.com"}
+        })
+
+      body = json_response(conn, 201)
+      assert body["email"] == "reg3@test.com"
+      refute Map.has_key?(body, "password_hash")
+
+      # Record exists with a nil password hash
+      {:ok, coll} = Registry.get("users")
+      password_field =
+        Enum.find(coll.fields, &(&1.type == "password"))
+
+      [user] = GenericRecord.all_where("users", "email = $1", ["reg3@test.com"])
+      assert is_nil(user[password_field.name])
+
+      # And can't log in with a password
+      conn =
+        post(build_conn(), "/api/users/auth-with-password", %{
+          "identity" => "reg3@test.com",
+          "password" => "anything"
+        })
+
+      assert json_response(conn, 401)
+    end
+
+
+    test "users collection schema marks the password field hidden + non-required" do
+      {:ok, coll} = Registry.get("users")
+      password_field =
+        Enum.find(coll.fields, &(&1.type == "password"))
+
+      assert password_field.hidden == true
+      assert password_field.required == false
+    end
+  end
+
   describe "POST /api/:collection/auth-refresh" do
     setup do
       name = cname("auth_refresh")
