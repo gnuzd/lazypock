@@ -143,7 +143,8 @@ jobs:
       - name: Attach assets to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.release-please.outputs.upload_url }}
+          # v2 resolves the release by tag (upload_url was a v1-only input)
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: |
             dist/lazypock-*
             dist/checksums-sha256.txt
