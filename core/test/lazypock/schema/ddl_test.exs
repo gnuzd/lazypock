@@ -31,6 +31,7 @@ defmodule Lazypock.Schema.DDLTest do
   describe "create_collection/2" do
     test "creates a base collection with table + metadata" do
       name = cname("base")
+
       {:ok, coll} =
         DDL.create_collection(name,
           type: "base",
@@ -113,7 +114,8 @@ defmodule Lazypock.Schema.DDLTest do
       name = cname("badfield")
 
       assert {:error, msg} =
-               DDL.create_collection(name, type: "base",
+               DDL.create_collection(name,
+                 type: "base",
                  fields: [%{"name" => "Bad Name", "type" => "text"}]
                )
 
@@ -124,7 +126,8 @@ defmodule Lazypock.Schema.DDLTest do
       name = cname("mixedcase")
 
       assert {:ok, coll} =
-               DDL.create_collection(name, type: "base",
+               DDL.create_collection(name,
+                 type: "base",
                  fields: [
                    %{"name" => "tagColor", "type" => "text", "required" => false},
                    %{"name" => "displayName", "type" => "text", "required" => false}
@@ -162,7 +165,10 @@ defmodule Lazypock.Schema.DDLTest do
       name = cname("badtype")
 
       assert {:error, msg} =
-               DDL.create_collection(name, type: "base", fields: [%{"name" => "x", "type" => "nope"}])
+               DDL.create_collection(name,
+                 type: "base",
+                 fields: [%{"name" => "x", "type" => "nope"}]
+               )
 
       assert msg =~ "Invalid field type"
     end
@@ -186,7 +192,10 @@ defmodule Lazypock.Schema.DDLTest do
 
     test "json field creates jsonb column" do
       name = cname("jsonb")
-      {:ok, _} = DDL.create_collection(name, type: "base", fields: [%{"name" => "meta", "type" => "json"}])
+
+      {:ok, _} =
+        DDL.create_collection(name, type: "base", fields: [%{"name" => "meta", "type" => "json"}])
+
       cols = table_columns(name) |> Enum.map(fn [c, t, _n, _d] -> {c, t} end)
       assert {"meta", "jsonb"} in cols
     end
@@ -280,6 +289,7 @@ defmodule Lazypock.Schema.DDLTest do
   describe "drop_field/3" do
     test "removes column and metadata" do
       name = cname("dropf")
+
       {:ok, _} =
         DDL.create_collection(name,
           type: "base",
@@ -302,7 +312,9 @@ defmodule Lazypock.Schema.DDLTest do
     test "renames the table and metadata" do
       old = cname("ren_old")
       new = cname("ren_new")
-      {:ok, _} = DDL.create_collection(old, type: "base", fields: [%{"name" => "title", "type" => "text"}])
+
+      {:ok, _} =
+        DDL.create_collection(old, type: "base", fields: [%{"name" => "title", "type" => "text"}])
 
       {:ok, coll} = DDL.update_collection(old, name: new)
       assert coll.name == new
@@ -378,8 +390,14 @@ defmodule Lazypock.Schema.DDLTest do
         )
 
       coll = Repo.get_by(Lazypock.Collections.Collection, name: name)
+
       fields =
-        Repo.all(from(f in Lazypock.Collections.Field, where: f.collection_id == ^coll.id, order_by: f.sort_order))
+        Repo.all(
+          from(f in Lazypock.Collections.Field,
+            where: f.collection_id == ^coll.id,
+            order_by: f.sort_order
+          )
+        )
 
       assert Enum.map(fields, & &1.name) == ["b", "a"]
     end

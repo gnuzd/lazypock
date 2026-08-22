@@ -385,6 +385,7 @@ defmodule LazypockWeb.SettingsExportImportTest do
 
       Registry.reload!()
       {:ok, cards} = Registry.get("cards")
+
       assert Enum.map(cards.fields, & &1.name) |> Enum.sort() ==
                ["assignee", "column", "description", "order", "tag", "tagColor", "title"]
     end

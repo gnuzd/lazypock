@@ -83,6 +83,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "simple parenthesized expression" do
       assert {:ok, {sql, params}} =
                FilterCompiler.compile(~s[(a = '1')])
+
       assert sql =~ ~s["a" = $1]
       assert params == ["1"]
     end
@@ -90,6 +91,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "parens override precedence: a && (b || c)" do
       assert {:ok, {sql, _params}} =
                FilterCompiler.compile(~s[a = '1' && (b = '2' || c = '3')])
+
       assert sql =~ ~r/AND\s*\(/
       assert sql =~ ~r/OR/
     end
@@ -97,12 +99,14 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "nested parens: (a || b) && c" do
       assert {:ok, {sql, _params}} =
                FilterCompiler.compile(~s[(a = '1' || b = '2') && c = '3'])
+
       assert sql =~ ~r/\(.*OR.*\)\s*AND/
     end
 
     test "three-level nesting" do
       assert {:ok, {sql, _params}} =
                FilterCompiler.compile(~s[(a = '1' && (b = '2' || c = '3'))])
+
       assert sql =~ ~r/AND/
       assert sql =~ ~r/OR/
     end
@@ -255,6 +259,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "three params in complex expression" do
       {:ok, {sql, params}} =
         FilterCompiler.compile(~s[a = 'x' || (b = 'y' && c = 'z')])
+
       assert sql =~ "$1"
       assert sql =~ "$2"
       assert sql =~ "$3"
@@ -264,6 +269,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "params preserve order of appearance" do
       {:ok, {_sql, params}} =
         FilterCompiler.compile(~s[a = 'first' && b = 'second'])
+
       assert params == ["first", "second"]
     end
 
@@ -329,9 +335,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
       # resolved by the Enforcer to: owner_id = 'user-123' && 'superuser' = 'admin'
       # Buggy output was ("owner_id" = $1 AND $2 = $2) → bind error / 500.
       assert {:ok, {sql, params}} =
-               FilterCompiler.compile(
-                 ~s[owner_id = 'user-123' && 'superuser' = 'admin']
-               )
+               FilterCompiler.compile(~s[owner_id = 'user-123' && 'superuser' = 'admin'])
 
       assert sql == ~s[("owner_id" = $1 AND $2 = $3)]
       assert params == ["user-123", "superuser", "admin"]
@@ -342,9 +346,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
       # Buggy output was ($1 = $2 OR $3 = $2) → $2 silently re-binds to 'admin',
       # so a 'board' user's rule evaluated against the wrong value.
       assert {:ok, {sql, params}} =
-               FilterCompiler.compile(
-                 ~s['superuser' = 'admin' || 'superuser' = 'board']
-               )
+               FilterCompiler.compile(~s['superuser' = 'admin' || 'superuser' = 'board'])
 
       assert sql == ~s[($1 = $2 OR $3 = $4)]
       assert params == ["superuser", "admin", "superuser", "board"]
@@ -375,6 +377,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "filter with AND" do
       {sql, _params} =
         FilterCompiler.apply("SELECT * FROM t", ~s[a = '1' && b = '2'])
+
       assert sql =~ "WHERE"
       assert sql =~ "AND"
     end
@@ -382,6 +385,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "apply with base params preserves them" do
       {_sql, params} =
         FilterCompiler.apply("SELECT * FROM t WHERE id = $1", ~s[x = 'y'], ["existing"])
+
       assert params == ["existing", "y"]
     end
 
@@ -410,6 +414,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
       # passing to FilterCompiler, so the compiler sees: owner_id = 'user-123'
       assert {:ok, {sql, params}} =
                FilterCompiler.compile(~s[owner_id = 'user-123'])
+
       assert sql =~ ~s["owner_id" = $1]
       assert params == ["user-123"]
     end
@@ -417,6 +422,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "OR of two field comparisons with different field names" do
       assert {:ok, {sql, params}} =
                FilterCompiler.compile(~s[status = 'published' || status = 'draft'])
+
       assert params == ["published", "draft"]
       assert sql =~ "OR"
     end
@@ -424,15 +430,15 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "AND of three conditions" do
       assert {:ok, {sql, params}} =
                FilterCompiler.compile(~s[a = '1' && b = '2' && c = '3'])
+
       assert params == ["1", "2", "3"]
       assert sql =~ "AND"
     end
 
     test "mixed comparison types in complex expression" do
       assert {:ok, {sql, params}} =
-               FilterCompiler.compile(
-                 ~s[age > 18 && status = 'active' || role ~ 'admin']
-               )
+               FilterCompiler.compile(~s[age > 18 && status = 'active' || role ~ 'admin'])
+
       assert params == [18, "active", "%admin%"]
       assert sql =~ ">"
       assert sql =~ "ILIKE"
@@ -442,6 +448,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "NOT with parenthesized expression" do
       assert {:ok, {sql, _params}} =
                FilterCompiler.compile(~s[!(status = 'draft' && owner_id = '1')])
+
       assert sql =~ "NOT"
       assert sql =~ "AND"
     end
