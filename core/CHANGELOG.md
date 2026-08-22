@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/gnuzd/lazypock/compare/v0.3.1...v0.3.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **core:** reference app-context module in moduledoc ([5925059](https://github.com/gnuzd/lazypock/commit/5925059da15b531294d978ea6cfe1477ad9d9e87))
+* **core:** reference app-context module in moduledoc ([725fcb1](https://github.com/gnuzd/lazypock/commit/725fcb13ddfb3c6e52c2df0367277daebf75df4e))
+
 ## [0.3.1](https://github.com/gnuzd/lazypock/compare/v0.3.0...v0.3.1) (2026-08-22)
 
 
