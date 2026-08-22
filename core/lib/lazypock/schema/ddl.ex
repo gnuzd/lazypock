@@ -416,10 +416,10 @@ defmodule Lazypock.Schema.DDL do
     result =
       Repo.transaction(fn ->
         cond do
-          # Protect by the DB flag AND the canonical system-name set (the users
-          # collection was historically created with system=false in the DB).
-          collection.system or
-              Lazypock.Collections.Collection.system?(collection.name) ->
+          # Protect by the DB flag only. The built-in users collection is a
+          # normal auth collection (matching PocketBase) and is deliberately
+          # not protected — like in PocketBase, it can be renamed/deleted.
+          collection.system ->
             {:error, "Cannot delete system collection '#{collection.name}'"}
 
           collection.managed ->

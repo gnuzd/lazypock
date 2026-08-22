@@ -8,6 +8,10 @@ defmodule Lazypock.Repo.Migrations.RecreateUsersCollection do
   idempotently (table, `_collections` row, `_fields` metadata) so existing
   deployments self-heal on upgrade. Mirrors the definitions from
   `setup_system_collections_proper` + `add_auth_collection_fields`.
+
+  `users` is a **normal** (non-system) auth collection, matching PocketBase,
+  so it is registered with `system = false` — only the internal `_` tables
+  are system collections.
   """
   def up do
     execute """
@@ -27,7 +31,7 @@ defmodule Lazypock.Repo.Migrations.RecreateUsersCollection do
 
     execute """
     INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
-    SELECT 'users', 'auth', true, true, '[]',
+    SELECT 'users', 'auth', false, true, '[]',
       '{"listRule": "", "viewRule": "", "createRule": "", "updateRule": "id = @request.auth.id", "deleteRule": "id = @request.auth.id"}'::jsonb,
       '{}', '{}', now(), now()
     WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = 'users')

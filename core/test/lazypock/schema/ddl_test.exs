@@ -416,6 +416,20 @@ defmodule Lazypock.Schema.DDLTest do
       assert msg =~ "Cannot delete system collection"
     end
 
+    test "users is a normal auth collection (PocketBase parity)" do
+      users = Repo.get_by(Lazypock.Collections.Collection, name: "users")
+      assert users.type == "auth"
+      refute users.system
+      refute Lazypock.Collections.Collection.system?("users")
+      assert users.managed
+
+      # drop_collection/1 protects collections flagged `system` in the DB only,
+      # so users passes every guard and is dropped like any normal collection
+      # (matching PocketBase). It is not executed here on purpose: the shared
+      # registry cache would stay stale for the rest of the suite (the sandbox
+      # rollback restores the DB row but not the ETS cache).
+    end
+
     test "unknown collection returns error" do
       assert {:error, :not_found} = DDL.drop_collection("does_not_exist_xyz")
     end

@@ -27,11 +27,20 @@ defmodule Lazypock.Collections.Collection do
   @doc "_auth_origins collection (base): auth origin fingerprints"
   def system_auth_origins, do: "_auth_origins"
 
-  @doc "users collection (auth): default user accounts"
+  @doc """
+  users collection (auth): the default user accounts collection.
+
+  Like PocketBase, `users` is a **normal** (non-system) auth collection:
+  it is registered with `system = false` in `_collections` and is managed
+  like any other collection. Only the internal `_` tables are system.
+  """
   def system_users, do: "users"
 
   @doc """
   Returns all known system collection names.
+
+  Note: the built-in `users` collection is intentionally NOT included —
+  it is a regular auth collection (PocketBase parity), not a system one.
   """
   def system_names,
     do: [
@@ -39,8 +48,7 @@ defmodule Lazypock.Collections.Collection do
       system_external_auths(),
       system_mfas(),
       system_otps(),
-      system_auth_origins(),
-      system_users()
+      system_auth_origins()
     ]
 
   @doc """
