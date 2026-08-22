@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/gnuzd/lazypock/compare/v0.3.2...v0.3.3) (2026-08-22)
+
+
+### Bug Fixes
+
+* **studio:** document /api proxy in shared client ([755dfea](https://github.com/gnuzd/lazypock/commit/755dfea79cd4e56d1b25b6fe47fef15589ee33b2))
+
 ## [0.3.2](https://github.com/gnuzd/lazypock/compare/v0.3.1...v0.3.2) (2026-08-22)
 
 
