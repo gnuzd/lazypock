@@ -392,15 +392,19 @@ defmodule LazypockWeb.SettingsController do
   # ── PocketBase-format payload normalization ──
 
   # PocketBase exports use camelCase field names, PB collection ids in relation
-  # options, and PB-style record keys. Normalize all three to LazyPock's
-  # conventions (snake_case field names, relations resolved to collection
-  # names) before the DDL layer sees them, so a PocketBase export imports
-  # cleanly.
+  # PocketBase exports reference relation targets by PB collection id.
+  # Field names are kept VERBATIM (no snake_case/camelCase conversion) —
+  # whatever the payload says (tagColor or tag_color) becomes the field name
+  # and the API/codegen name; the DB column is derived (lowercased) by the
+  # DDL/FieldNames layers. The only exception: an incoming name that matches
+  # an EXISTING column by its snake_case form (e.g. system users'
+  # `passwordHash` ↔ LazyPock's `password_hash`) is aliased to that column so
+  # no duplicate is created.
   defp normalize_import_payload(collections) do
     id_to_name = Map.new(collections, fn c -> {c["id"], c["name"]} end)
 
     Enum.map(collections, fn c ->
-      {fields, name_map} = normalize_fields(c["name"], c["schema"] || [], id_to_name)
+      {fields, name_map} = reconcile_field_names(c["name"], c["schema"] || [], id_to_name)
 
       c
       |> Map.put("schema", fields)
@@ -408,30 +412,23 @@ defmodule LazypockWeb.SettingsController do
     end)
   end
 
-  # Returns {normalized_fields, %{pb_field_name => lazy_field_name}}.
-  defp normalize_fields(collection_name, fields, id_to_name) do
+  # Returns {fields, %{payload_name => field_name}}. New fields keep their
+  # payload name verbatim; existing fields are matched by exact name first,
+  # then by snake_case-normalized name (passwordHash → password_hash).
+  defp reconcile_field_names(collection_name, fields, id_to_name) do
     existing_names = existing_field_names(collection_name)
 
     {fields, name_map} =
       Enum.reduce(fields, {[], %{}}, fn f, {acc, name_map} ->
-        pb_name = f["name"]
-
-        lazy_name =
-          if MapSet.member?(existing_names, pb_name) do
-            # Keep the original spelling when the target collection already has
-            # a field with that exact name (e.g. the system users collection
-            # uses camelCase `emailVisibility`).
-            pb_name
-          else
-            normalize_field_name(pb_name)
-          end
+        payload_name = f["name"]
+        lazy_name = match_existing_name(payload_name, existing_names)
 
         normalized =
           f
           |> Map.put("name", lazy_name)
           |> resolve_relation(id_to_name)
 
-        {[normalized | acc], Map.put(name_map, pb_name, lazy_name)}
+        {[normalized | acc], Map.put(name_map, payload_name, lazy_name)}
       end)
 
     {Enum.reverse(fields), name_map}
@@ -444,16 +441,32 @@ defmodule LazypockWeb.SettingsController do
     end
   end
 
-  # PocketBase allows camelCase field names; LazyPock DDL requires lowercase
-  # snake_case columns (mirrors Lazypock.PocketBase.Importer).
+  # Exact match wins; else an existing field whose snake_case form equals the
+  # payload's (PB camelCase ↔ LZ snake_case system columns); else verbatim.
+  defp match_existing_name(payload_name, existing_names) when is_binary(payload_name) do
+    cond do
+      MapSet.member?(existing_names, payload_name) ->
+        payload_name
+
+      true ->
+        normalized = normalize_field_name(payload_name)
+
+        Enum.find(existing_names, fn n ->
+          is_binary(n) and normalize_field_name(n) == normalized
+        end) || payload_name
+    end
+  end
+
+  defp match_existing_name(nil, _existing_names), do: nil
+
+  # Normalize a name to its snake_case form for MATCHING ONLY (never to rename
+  # fields — those stay verbatim).
   defp normalize_field_name(name) when is_binary(name) do
     name
     |> Macro.underscore()
     |> String.replace(~r/[^a-z0-9_]/, "_")
     |> String.trim("_")
   end
-
-  defp normalize_field_name(nil), do: nil
 
   # PocketBase's users auth collection ids (older `_pb_users_auth_` and the
   # bare `pb_users_auth`) map to LazyPock's built-in `users` collection.

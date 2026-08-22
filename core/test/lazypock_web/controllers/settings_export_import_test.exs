@@ -178,10 +178,20 @@ defmodule LazypockWeb.SettingsExportImportTest do
             type: "base",
             system: false,
             schema: [
-              %{id: "col_title_field", name: "title", type: "text", required: true,
-                options: %{"min" => 1, "max" => 100}},
-              %{id: "col_order_field", name: "order", type: "number", required: true,
-                options: %{"min" => 0, "max" => 1000}}
+              %{
+                id: "col_title_field",
+                name: "title",
+                type: "text",
+                required: true,
+                options: %{"min" => 1, "max" => 100}
+              },
+              %{
+                id: "col_order_field",
+                name: "order",
+                type: "number",
+                required: true,
+                options: %{"min" => 0, "max" => 1000}
+              }
             ],
             indexes: [],
             listRule: "@request.auth.id != ''",
@@ -196,15 +206,37 @@ defmodule LazypockWeb.SettingsExportImportTest do
             type: "base",
             system: false,
             schema: [
-              %{id: "card_title_field", name: "title", type: "text", required: true,
-                options: %{"min" => 1, "max" => 255}},
-              %{id: "card_tagcolor_field", name: "tagColor", type: "select",
-                options: %{"maxSelect" => 1, "values" => ["primary", "accent", "success"]}},
-              %{id: "card_column_rel", name: "column", type: "relation", required: true,
-                options: %{"collectionId" => "kanban_columns_col", "cascadeDelete" => true,
-                  "maxSelect" => 1, "displayFields" => ["title"]}},
-              %{id: "card_assignee_rel", name: "assignee", type: "relation",
-                options: %{"collectionId" => "pb_users_auth", "maxSelect" => 1}}
+              %{
+                id: "card_title_field",
+                name: "title",
+                type: "text",
+                required: true,
+                options: %{"min" => 1, "max" => 255}
+              },
+              %{
+                id: "card_tagcolor_field",
+                name: "tagColor",
+                type: "select",
+                options: %{"maxSelect" => 1, "values" => ["primary", "accent", "success"]}
+              },
+              %{
+                id: "card_column_rel",
+                name: "column",
+                type: "relation",
+                required: true,
+                options: %{
+                  "collectionId" => "kanban_columns_col",
+                  "cascadeDelete" => true,
+                  "maxSelect" => 1,
+                  "displayFields" => ["title"]
+                }
+              },
+              %{
+                id: "card_assignee_rel",
+                name: "assignee",
+                type: "relation",
+                options: %{"collectionId" => "pb_users_auth", "maxSelect" => 1}
+              }
             ],
             indexes: [],
             listRule: "@request.auth.id != ''",
@@ -223,10 +255,10 @@ defmodule LazypockWeb.SettingsExportImportTest do
 
       Registry.reload!()
 
-      # camelCase field normalized to snake_case
+      # camelCase field name is kept VERBATIM (no snake_case conversion)
       {:ok, cards} = Registry.get("cards")
-      assert Enum.any?(cards.fields, &(&1.name == "tag_color"))
-      refute Enum.any?(cards.fields, &(&1.name == "tagColor"))
+      assert Enum.any?(cards.fields, &(&1.name == "tagColor"))
+      refute Enum.any?(cards.fields, &(&1.name == "tag_color"))
 
       # relations resolved from PB collection ids to LazyPock collection names
       column = Enum.find(cards.fields, &(&1.name == "column"))
@@ -242,7 +274,8 @@ defmodule LazypockWeb.SettingsExportImportTest do
       name = random_name("imp_keep_")
 
       {:ok, _} =
-        DDL.create_collection(name, type: "base",
+        DDL.create_collection(name,
+          type: "base",
           fields: [title_field(), %{"name" => "extra", "type" => "text", "required" => false}]
         )
 
@@ -267,7 +300,8 @@ defmodule LazypockWeb.SettingsExportImportTest do
       name = random_name("imp_drop_")
 
       {:ok, _} =
-        DDL.create_collection(name, type: "base",
+        DDL.create_collection(name,
+          type: "base",
           fields: [title_field(), %{"name" => "extra", "type" => "text", "required" => false}]
         )
 
@@ -324,8 +358,9 @@ defmodule LazypockWeb.SettingsExportImportTest do
       Registry.reload!()
 
       {:ok, cards} = Registry.get("cards")
+
       assert Enum.map(cards.fields, & &1.name) |> Enum.sort() ==
-               ["assignee", "column", "description", "order", "tag", "tag_color", "title"]
+               ["assignee", "column", "description", "order", "tag", "tagColor", "title"]
 
       column = Enum.find(cards.fields, &(&1.name == "column"))
       assert column.options["collection"] == "columns"
@@ -351,7 +386,7 @@ defmodule LazypockWeb.SettingsExportImportTest do
       Registry.reload!()
       {:ok, cards} = Registry.get("cards")
       assert Enum.map(cards.fields, & &1.name) |> Enum.sort() ==
-               ["assignee", "column", "description", "order", "tag", "tag_color", "title"]
+               ["assignee", "column", "description", "order", "tag", "tagColor", "title"]
     end
   end
 end
