@@ -1,7 +1,8 @@
 defmodule Lazypock do
   @moduledoc """
   Lazypock keeps the contexts that define your domain
-  and business logic.
+  and business logic. See `Lazypock.App` for the application
+  context module.
   """
 
   @doc """
