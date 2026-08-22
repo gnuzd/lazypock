@@ -17,7 +17,7 @@
         "chart.js": "^4.5.1",
         "chartjs-adapter-luxon": "^1.3.1",
         "chartjs-plugin-zoom": "^2.2.0",
-        "lazypock": "^0.8.0",
+        "lazypock": "^0.8.3",
         "luxon": "^3.7.2",
         "svelte-sonner": "^1.1.1",
         "svelte-tiptap": "^3.0.1",
@@ -387,7 +387,7 @@
 
     "known-css-properties": ["known-css-properties@0.37.0", "", {}, "sha512-JCDrsP4Z1Sb9JwG0aJ8Eo2r7k4Ou5MwmThS/6lcIe1ICyb7UBJKGRIUUdqc2ASdE/42lgz6zFUnzAIhtXnBVrQ=="],
 
-    "lazypock": ["lazypock@0.8.0", "", { "bin": { "lazypock": "dist/cli.js", "lazypock-gen": "dist/cli.js" } }, "sha512-/n7ryPrkMd0OsIPp4dMlOijxmZ5r9pGSEuGXLSje7fz3sdXYjbrLcdhslX9f8omzWG+5IieWSkL0Cie1YqCtlQ=="],
+    "lazypock": ["lazypock@0.8.3", "", { "bin": { "lazypock": "dist/cli.js", "lazypock-gen": "dist/cli.js" } }, "sha512-dYvEQuA4Tunus6shKZhSU4ImahsLCIFomLZ/6PAGCMX+cBSglZ3hOeXVh2Y8uGv0q1M1NCorRTM8oKihxC4EFA=="],
 
     "levn": ["levn@0.4.1", "", { "dependencies": { "prelude-ls": "^1.2.1", "type-check": "~0.4.0" } }, "sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ=="],
 
