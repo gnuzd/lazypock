@@ -248,6 +248,10 @@ defmodule LazypockWeb.SettingsExportImportTest do
         ]
       }
 
+      # The relation resolver reads the registry cache, which other tests in
+      # this file mutate (deleteMissing sweeps drop users). Reload so the DB
+      # is the source of truth before importing.
+      Registry.reload!()
       conn = json_post(auth_conn(build_conn()), "/api/import", payload)
       body = json_response(conn, 200)
       assert body["errors"] == []
@@ -326,9 +330,35 @@ defmodule LazypockWeb.SettingsExportImportTest do
       {:ok, _} = DDL.create_collection(name, type: "base", fields: [title_field()])
       Registry.reload!()
 
+      # users is a normal auth collection (PocketBase parity) — include it in
+      # the incoming payload like a real export would, so the sweep preserves
+      # it the same way it would preserve any user collection (it is NOT
+      # special-cased by name anymore).
+      {:ok, users} = Registry.get("users")
+      refute users.system
+
+      users_payload = %{
+        "name" => "users",
+        "type" => "auth",
+        "schema" =>
+          Enum.map(users.fields, fn f ->
+            %{
+              "name" => f.name,
+              "type" => f.type,
+              "required" => f.required,
+              "unique" => f.unique,
+              "system" => f.system,
+              "hidden" => f.hidden,
+              "indexed" => f.indexed,
+              "options" => f.options || %{}
+            }
+          end),
+        "records" => []
+      }
+
       conn =
         json_post(auth_conn(build_conn()), "/api/import", %{
-          collections: [],
+          collections: [users_payload],
           deleteMissing: true
         })
 
@@ -337,13 +367,24 @@ defmodule LazypockWeb.SettingsExportImportTest do
 
       Registry.reload!()
       assert Registry.get(name) == {:error, :not_found}
+
+      # users survived because it was part of the incoming payload — a normal
+      # collection like any other.
       assert {:ok, users} = Registry.get("users")
-      assert users.system
+      refute users.system
+
+      # Real system collections are still protected from the sweep.
+      assert {:ok, superusers} = Registry.get("_superusers")
+      assert superusers.system
     end
 
     test "imports the exact PocketBase kanban export fixture with deleteMissing=false" do
       path = Path.expand("../../fixtures/pocketbase_kanban_import.json", __DIR__)
       collections = Jason.decode!(File.read!(path))
+
+      # Reload first — the relation resolver reads the registry cache, which
+      # deleteMissing sweeps in earlier tests may have dropped users from.
+      Registry.reload!()
 
       conn =
         json_post(auth_conn(build_conn()), "/api/import", %{

@@ -9,7 +9,9 @@
 alias Lazypock.Repo
 
 # No bundled sample collections by default — the server ships with only the
-# system collections (_superusers, users, ...). Add your own seeds below, e.g.:
+# system collections (_superusers, _mfas, _otps, ...) plus the built-in users
+# auth collection (a normal, non-system collection, like PocketBase). Add your
+# own seeds below, e.g.:
 #
 #   if Repo.get_by(Lazypock.Collections.Collection, name: "posts") == nil do
 #     {:ok, _collection} =
