@@ -325,7 +325,8 @@ defmodule LazypockWeb.DynamicController do
         # resolve types natively.
         {FilterCompiler.inline_params(sql_clause, params), []}
 
-      {:error, _} -> {"", []}
+      {:error, _} ->
+        {"", []}
     end
   end
 

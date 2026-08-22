@@ -482,7 +482,6 @@ The `password` key is aliased to the actual backing column (`password_hash`)
 on write — sending either name works, so the TypeScript SDK below and any
 PocketBase SDK behave identically.
 
-
 ```ts
 import { LazypockClient } from "lazypock";
 

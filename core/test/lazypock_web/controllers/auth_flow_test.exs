@@ -29,10 +29,16 @@ defmodule LazypockWeb.AuthFlowTest do
 
   defp create_user(collection, email, password, extra \\ %{}) do
     {:ok, user} =
-      GenericRecord.insert(collection, Map.merge(%{
-        "email" => email,
-        "password_hash" => Bcrypt.hash_pwd_salt(password)
-      }, extra))
+      GenericRecord.insert(
+        collection,
+        Map.merge(
+          %{
+            "email" => email,
+            "password_hash" => Bcrypt.hash_pwd_salt(password)
+          },
+          extra
+        )
+      )
 
     user
   end
@@ -135,7 +141,6 @@ defmodule LazypockWeb.AuthFlowTest do
   end
 
   describe "user registration via REST API (POST /api/users)" do
-
     test "creates a user with `password` (PocketBase-style) and hashes it" do
       conn =
         post(build_conn(), "/api/users", %{
@@ -151,6 +156,7 @@ defmodule LazypockWeb.AuthFlowTest do
 
       # The stored value is a bcrypt hash, not the plaintext
       {:ok, coll} = Registry.get("users")
+
       password_field =
         Enum.find(coll.fields, &(&1.type == "password"))
 
@@ -160,7 +166,6 @@ defmodule LazypockWeb.AuthFlowTest do
       refute stored == "secret123"
       assert Bcrypt.verify_pass("secret123", stored)
     end
-
 
     test "legacy password_hash key still works (backward compat)" do
       conn =
@@ -179,7 +184,6 @@ defmodule LazypockWeb.AuthFlowTest do
       assert json_response(conn, 200)["token"] != nil
     end
 
-
     test "created user can log in via auth-with-password" do
       post(build_conn(), "/api/users", %{
         "data" => %{"email" => "reg2@test.com", "password" => "secret123"}
@@ -197,7 +201,6 @@ defmodule LazypockWeb.AuthFlowTest do
       refute Map.has_key?(body["record"], "password_hash")
     end
 
-
     test "password is NOT required — user can be created without one" do
       conn =
         post(build_conn(), "/api/users", %{
@@ -210,6 +213,7 @@ defmodule LazypockWeb.AuthFlowTest do
 
       # Record exists with a nil password hash
       {:ok, coll} = Registry.get("users")
+
       password_field =
         Enum.find(coll.fields, &(&1.type == "password"))
 
@@ -226,9 +230,9 @@ defmodule LazypockWeb.AuthFlowTest do
       assert json_response(conn, 401)
     end
 
-
     test "users collection schema marks the password field hidden + non-required" do
       {:ok, coll} = Registry.get("users")
+
       password_field =
         Enum.find(coll.fields, &(&1.type == "password"))
 
