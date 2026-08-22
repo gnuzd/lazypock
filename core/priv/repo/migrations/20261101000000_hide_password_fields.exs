@@ -24,6 +24,11 @@ defmodule Lazypock.Repo.Migrations.HidePasswordFields do
     # created without a password. Column = lowercased field name; collection
     # names are validated `^[a-z][a-z0-9_]*$`, and %I quoting keeps the
     # dynamic ALTER safe.
+    #
+    # Skip collections whose backing table does not exist yet: system tables
+    # like `_superusers` are created at app boot (Auth.Setup), not by a
+    # migration, so `mix ecto.migrate` on a fresh DB must not assume they
+    # exist (to_regclass is NULL for missing tables).
     execute """
     DO $$
     DECLARE
@@ -34,6 +39,7 @@ defmodule Lazypock.Repo.Migrations.HidePasswordFields do
         FROM _fields f
         JOIN _collections c ON c.id = f.collection_id
         WHERE f.type = 'password'
+          AND to_regclass(format('%I', c.name)) IS NOT NULL
       LOOP
         EXECUTE format('ALTER TABLE %I ALTER COLUMN %I DROP NOT NULL',
           r.table_name, lower(r.field_name));
@@ -58,6 +64,7 @@ defmodule Lazypock.Repo.Migrations.HidePasswordFields do
         FROM _fields f
         JOIN _collections c ON c.id = f.collection_id
         WHERE f.type = 'password'
+          AND to_regclass(format('%I', c.name)) IS NOT NULL
       LOOP
         EXECUTE format('ALTER TABLE %I ALTER COLUMN %I SET NOT NULL',
           r.table_name, lower(r.field_name));
