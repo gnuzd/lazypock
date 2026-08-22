@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/gnuzd/lazypock/compare/v0.4.0...v0.4.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **migrations:** only treat numeric-prefixed files as migration versions ([83bff32](https://github.com/gnuzd/lazypock/commit/83bff3267c90c2abe175db1359162e5293caf181))
+* **migrations:** only treat numeric-prefixed files as migration versions ([1ee7beb](https://github.com/gnuzd/lazypock/commit/1ee7beb0ed7dcae221b0ceda627dc528c4cc20c8))
+
 ## [0.4.0](https://github.com/gnuzd/lazypock/compare/v0.3.3...v0.4.0) (2026-08-22)
 
 
