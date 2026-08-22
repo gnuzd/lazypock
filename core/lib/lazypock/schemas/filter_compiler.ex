@@ -244,17 +244,17 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   # Field ILIKE 'pattern'
   defp emit_simple({"~", {:field, f}, {:literal, val}}) do
-    {~s["#{f}" ILIKE $1], ["%" <> val <> "%"]}
+    {~s["#{column_name(f)}" ILIKE $1], ["%" <> val <> "%"]}
   end
 
   # Field NOT ILIKE 'pattern'
   defp emit_simple({"!~", {:field, f}, {:literal, val}}) do
-    {~s["#{f}" NOT ILIKE $1], ["%" <> val <> "%"]}
+    {~s["#{column_name(f)}" NOT ILIKE $1], ["%" <> val <> "%"]}
   end
 
   # Field OP Literal
   defp emit_simple({op, {:field, f}, {:literal, val}}) when op in ~w(= != > >= < <=) do
-    {~s["#{f}" #{op} $1], [val]}
+    {~s["#{column_name(f)}" #{op} $1], [val]}
   end
 
   # Literal OP Literal — e.g. '' != '' (from @request.auth.id != '' when unauthenticated)
@@ -264,7 +264,7 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   # Standalone field
   defp emit_simple({:field, name}) do
-    {~s["#{name}"], []}
+    {~s["#{column_name(name)}"], []}
   end
 
   # Standalone literal (fallback — unlikely)
@@ -296,4 +296,10 @@ defmodule Lazypock.Schemas.FilterCompiler do
       "$#{String.to_integer(num) + offset}"
     end)
   end
+
+  # Field identifiers in filters/rules reference the metadata name (which may
+  # be mixed case, e.g. `tagColor`); DB columns are their lowercase form
+  # (e.g. `tagcolor`), so emit the column name.
+  defp column_name(name) when is_binary(name), do: String.downcase(name)
+  defp column_name(name), do: name
 end

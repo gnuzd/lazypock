@@ -113,9 +113,49 @@ defmodule Lazypock.Schema.DDLTest do
       name = cname("badfield")
 
       assert {:error, msg} =
-               DDL.create_collection(name, type: "base", fields: [%{"name" => "Bad Name", "type" => "text"}])
+               DDL.create_collection(name, type: "base",
+                 fields: [%{"name" => "Bad Name", "type" => "text"}]
+               )
 
       assert msg =~ "Field names must start with a letter"
+    end
+
+    test "allows mixed-case field names — column is lowercased, name kept verbatim" do
+      name = cname("mixedcase")
+
+      assert {:ok, coll} =
+               DDL.create_collection(name, type: "base",
+                 fields: [
+                   %{"name" => "tagColor", "type" => "text", "required" => false},
+                   %{"name" => "displayName", "type" => "text", "required" => false}
+                 ]
+               )
+
+      # Metadata name is verbatim (camelCase)
+      assert Enum.map(coll.fields, & &1.name) |> Enum.sort() == ["displayName", "tagColor"]
+
+      # DB columns are the lowercase forms
+      cols =
+        Repo.query!(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+          [name]
+        )
+        |> Map.get(:rows)
+        |> List.flatten()
+
+      assert "tagcolor" in cols
+      assert "displayname" in cols
+      refute "tagColor" in cols
+
+      # FieldNames bridges: insert via lowercase column, read back via metadata name
+      assert {:ok, _} = Lazypock.Schemas.GenericRecord.insert(name, %{"tagcolor" => "red"})
+
+      {:ok, coll} = Lazypock.Collections.Registry.get(name)
+
+      assert [%{"tagColor" => "red"}] =
+               name
+               |> Lazypock.Schemas.GenericRecord.all()
+               |> Enum.map(&Lazypock.Schemas.FieldNames.row_to_api(&1, coll))
     end
 
     test "rejects invalid field types" do

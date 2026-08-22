@@ -289,8 +289,8 @@ defmodule LazypockWeb.SettingsController do
   end
 
   defp do_import(conn, params) do
-    collections = params["collections"] || []
     delete_missing = params["deleteMissing"] == true
+    collections = (params["collections"] || []) |> normalize_import_payload()
 
     existing_names =
       Lazypock.Collections.Registry.list()
@@ -330,6 +330,7 @@ defmodule LazypockWeb.SettingsController do
                    |> maybe_put(:options, options)
                    |> maybe_put(:hooks, hooks)
                    |> maybe_put(:indexes, indexes)
+                   |> Keyword.put(:delete_missing_fields, delete_missing)
                  ) do
               {:ok, _} -> {:ok, :updated}
               other -> other
@@ -371,11 +372,12 @@ defmodule LazypockWeb.SettingsController do
         end
       end)
 
-    # Delete missing collections if requested
+    # Delete missing collections if requested (system collections are
+    # protected inside drop_collection).
     if delete_missing do
       for name <- MapSet.difference(existing_names, incoming_names) do
         case Lazypock.Schema.DDL.drop_collection(name) do
-          {:ok, _} -> :ok
+          :ok -> :ok
           {:error, _} -> :ok
         end
       end
@@ -385,6 +387,140 @@ defmodule LazypockWeb.SettingsController do
       imported: Enum.reverse(imported_list),
       errors: Enum.reverse(errors_list)
     })
+  end
+
+  # ── PocketBase-format payload normalization ──
+
+  # PocketBase exports use camelCase field names, PB collection ids in relation
+  # PocketBase exports reference relation targets by PB collection id.
+  # Field names are kept VERBATIM (no snake_case/camelCase conversion) —
+  # whatever the payload says (tagColor or tag_color) becomes the field name
+  # and the API/codegen name; the DB column is derived (lowercased) by the
+  # DDL/FieldNames layers. The only exception: an incoming name that matches
+  # an EXISTING column by its snake_case form (e.g. system users'
+  # `passwordHash` ↔ LazyPock's `password_hash`) is aliased to that column so
+  # no duplicate is created.
+  defp normalize_import_payload(collections) do
+    id_to_name = Map.new(collections, fn c -> {c["id"], c["name"]} end)
+
+    Enum.map(collections, fn c ->
+      {fields, name_map} = reconcile_field_names(c["name"], c["schema"] || [], id_to_name)
+
+      c
+      |> Map.put("schema", fields)
+      |> Map.put("records", rekey_records(c["records"] || [], name_map))
+    end)
+  end
+
+  # Returns {fields, %{payload_name => field_name}}. New fields keep their
+  # payload name verbatim; existing fields are matched by exact name first,
+  # then by snake_case-normalized name (passwordHash → password_hash).
+  defp reconcile_field_names(collection_name, fields, id_to_name) do
+    existing_names = existing_field_names(collection_name)
+
+    {fields, name_map} =
+      Enum.reduce(fields, {[], %{}}, fn f, {acc, name_map} ->
+        payload_name = f["name"]
+        lazy_name = match_existing_name(payload_name, existing_names)
+
+        normalized =
+          f
+          |> Map.put("name", lazy_name)
+          |> resolve_relation(id_to_name)
+
+        {[normalized | acc], Map.put(name_map, payload_name, lazy_name)}
+      end)
+
+    {Enum.reverse(fields), name_map}
+  end
+
+  defp existing_field_names(collection_name) do
+    case Lazypock.Collections.Registry.get(collection_name) do
+      {:ok, coll} -> MapSet.new(coll.fields, & &1.name)
+      _ -> MapSet.new()
+    end
+  end
+
+  # Exact match wins; else an existing field whose snake_case form equals the
+  # payload's (PB camelCase ↔ LZ snake_case system columns); else verbatim.
+  defp match_existing_name(payload_name, existing_names) when is_binary(payload_name) do
+    cond do
+      MapSet.member?(existing_names, payload_name) ->
+        payload_name
+
+      true ->
+        normalized = normalize_field_name(payload_name)
+
+        Enum.find(existing_names, fn n ->
+          is_binary(n) and normalize_field_name(n) == normalized
+        end) || payload_name
+    end
+  end
+
+  defp match_existing_name(nil, _existing_names), do: nil
+
+  # Normalize a name to its snake_case form for MATCHING ONLY (never to rename
+  # fields — those stay verbatim).
+  defp normalize_field_name(name) when is_binary(name) do
+    name
+    |> Macro.underscore()
+    |> String.replace(~r/[^a-z0-9_]/, "_")
+    |> String.trim("_")
+  end
+
+  # PocketBase's users auth collection ids (older `_pb_users_auth_` and the
+  # bare `pb_users_auth`) map to LazyPock's built-in `users` collection.
+  @pocketbase_users_ids ["_pb_users_auth_", "pb_users_auth"]
+
+  # Relations in PocketBase exports reference the target by PB collection id
+  # (e.g. "kanban_columns_col", or PocketBase's users auth id). Resolve to the
+  # LazyPock collection NAME and store it in options["collection"].
+  defp resolve_relation(field, id_to_name) do
+    if field["type"] == "relation" do
+      opts = Map.get(field, "options", %{})
+      raw_id = opts["collectionId"] || field["collectionId"]
+
+      resolved =
+        cond do
+          is_binary(raw_id) and raw_id != "" and Map.has_key?(id_to_name, raw_id) ->
+            id_to_name[raw_id]
+
+          is_binary(raw_id) and raw_id in @pocketbase_users_ids ->
+            pocketbase_users_name()
+
+          true ->
+            nil
+        end
+
+      if resolved do
+        Map.put(field, "options", Map.put(opts, "collection", resolved))
+      else
+        field
+      end
+    else
+      field
+    end
+  end
+
+  defp pocketbase_users_name do
+    case Lazypock.Collections.Registry.get("users") do
+      {:ok, _} -> "users"
+      _ -> nil
+    end
+  end
+
+  # PB record keys are the PB field names (camelCase) — re-key to the
+  # normalized LazyPock field names so inserts hit the right columns. PB-only
+  # timestamp keys are dropped (LazyPock sets its own created_at/updated_at).
+  defp rekey_records(records, name_map) do
+    Enum.map(records, fn record ->
+      record
+      |> Map.drop(["created", "updated"])
+      |> Map.new(fn {k, v} ->
+        key = to_string(k)
+        {Map.get(name_map, key, key), v}
+      end)
+    end)
   end
 
   # ── Send test email ──

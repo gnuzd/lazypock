@@ -66,9 +66,9 @@ defmodule Lazypock.Collections.Field do
     |> validate_inclusion(:type, @valid_types,
       message: "must be one of: #{Enum.join(@valid_types, ", ")}"
     )
-    |> validate_format(:name, ~r/^[a-z][a-z0-9_]*$/,
+    |> validate_format(:name, ~r/^[A-Za-z][A-Za-z0-9_]*$/,
       message:
-        "must start with a letter and contain only lowercase letters, numbers, and underscores"
+        "must start with a letter and contain only letters, numbers, and underscores"
     )
     |> unique_constraint(:name, name: :fields_collection_id_name_index)
     |> foreign_key_constraint(:collection_id)

@@ -41,7 +41,8 @@ defmodule Lazypock.Schema.DDL do
           lock_key = :erlang.phash2({:create_collection, name})
           Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
-          collection = create_collection_metadata!(name, type, fields, indexes, rules, options, hooks)
+          collection =
+            create_collection_metadata!(name, type, fields, indexes, rules, options, hooks)
 
           sql = build_create_table_sql(name, fields)
           Ecto.Adapters.SQL.query!(Repo, sql, [])
@@ -88,7 +89,7 @@ defmodule Lazypock.Schema.DDL do
 
           sql = """
           ALTER TABLE #{TypeMapper.quote_ident(collection_name)}
-          ADD COLUMN #{TypeMapper.quote_ident(field_def["name"])}
+          ADD COLUMN #{TypeMapper.quote_ident(column_name(field_def["name"]))}
           #{TypeMapper.to_pg_with_opts(field_def["type"], field_def["options"] || %{})}
           #{if field_def["required"], do: " NOT NULL", else: ""}
           #{TypeMapper.default_sql(field_def)}
@@ -197,6 +198,11 @@ defmodule Lazypock.Schema.DDL do
     # nil when not provided — omitting :fields must NOT drop all columns
     new_fields = Keyword.get(opts, :fields)
     new_indexes = Keyword.get(opts, :indexes)
+    # When false (e.g. import with "delete missing" disabled), fields absent
+    # from the payload are left untouched. Defaults to true so the collection
+    # editor (which always sends the full field list) keeps its delete-on-remove
+    # behavior. System fields are NEVER dropped, regardless of this flag.
+    delete_missing_fields = Keyword.get(opts, :delete_missing_fields, true)
 
     result =
       Repo.transaction(fn ->
@@ -289,8 +295,13 @@ defmodule Lazypock.Schema.DDL do
             existing_names = MapSet.new(existing_fields, & &1.name)
             incoming_names = MapSet.new(new_fields, & &1["name"])
 
-            # Remove deleted fields
-            for f <- existing_fields, not MapSet.member?(incoming_names, f.name) do
+            # Remove deleted fields (only when deletion is requested; system
+            # fields are never removed — e.g. verified/email_visibility on the
+            # auth users collection).
+            for f <- existing_fields,
+                not MapSet.member?(incoming_names, f.name),
+                delete_missing_fields,
+                not f.system do
               Ecto.Adapters.SQL.query!(
                 Repo,
                 "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
@@ -358,7 +369,7 @@ defmodule Lazypock.Schema.DDL do
               :ok = validate_field_type(f["type"])
 
               sql =
-                "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(f["name"])} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
+                "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(column_name(f["name"]))} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
 
               Ecto.Adapters.SQL.query!(Repo, sql, [])
               if f["indexed"], do: create_index(new_name, f["name"])
@@ -405,7 +416,10 @@ defmodule Lazypock.Schema.DDL do
     result =
       Repo.transaction(fn ->
         cond do
-          collection.system ->
+          # Protect by the DB flag AND the canonical system-name set (the users
+          # collection was historically created with system=false in the DB).
+          collection.system or
+              Lazypock.Collections.Collection.system?(collection.name) ->
             {:error, "Cannot delete system collection '#{collection.name}'"}
 
           collection.managed ->
@@ -466,9 +480,9 @@ defmodule Lazypock.Schema.DDL do
     names = Enum.map(fields, & &1["name"])
 
     cond do
-      Enum.any?(names, &(not (&1 =~ ~r/^[a-z][a-z0-9_]*$/))) ->
+      Enum.any?(names, &(not (&1 =~ ~r/^[A-Za-z][A-Za-z0-9_]*$/))) ->
         {:error,
-         "Field names must start with a letter and contain only lowercase letters, numbers, and underscores"}
+         "Field names must start with a letter and contain only letters, numbers, and underscores"}
 
       length(Enum.uniq(names)) != length(names) ->
         {:error, "Duplicate field names are not allowed"}
@@ -482,13 +496,23 @@ defmodule Lazypock.Schema.DDL do
   end
 
   defp validate_field_name!(field_name) do
-    if field_name =~ ~r/^[a-z][a-z0-9_]*$/ do
+    # Mixed case is allowed (e.g. `tagColor`) — the name is kept verbatim as
+    # the metadata/API name; the DB column is derived (lowercased) and bridged
+    # by Lazypock.Schemas.FieldNames on reads/writes.
+    if field_name =~ ~r/^[A-Za-z][A-Za-z0-9_]*$/ do
       :ok
     else
       {:error,
-       "Field name must start with a letter and contain only lowercase letters, numbers, and underscores"}
+       "Field name must start with a letter and contain only letters, numbers, and underscores"}
     end
   end
+
+  # DB column for a field name: the field name is kept verbatim as the
+  # metadata/API name (e.g. `tagColor`); the Postgres column is its lowercase
+  # form (e.g. `tagcolor`), matching how the system migrations create columns
+  # and what Lazypock.Schemas.FieldNames bridges on reads/writes.
+  defp column_name(name) when is_binary(name), do: String.downcase(name)
+  defp column_name(name), do: name
 
   defp validate_field_type(type) do
     if TypeMapper.valid_type?(type), do: :ok, else: {:error, "Invalid field type: #{type}"}
@@ -516,7 +540,7 @@ defmodule Lazypock.Schema.DDL do
   end
 
   defp column_def(field) do
-    col = TypeMapper.quote_ident(field["name"])
+    col = TypeMapper.quote_ident(column_name(field["name"]))
     pg_type = TypeMapper.to_pg_with_opts(field["type"], field["options"] || %{})
     not_null = if field["required"], do: " NOT NULL", else: ""
     default = TypeMapper.default_sql(field)
@@ -531,6 +555,7 @@ defmodule Lazypock.Schema.DDL do
   end
 
   defp create_index(table, column) do
+    column = column_name(column)
     index_name = "#{table}_#{column}_idx"
 
     Ecto.Adapters.SQL.query!(
@@ -541,6 +566,7 @@ defmodule Lazypock.Schema.DDL do
   end
 
   defp create_unique_index(table, column) do
+    column = column_name(column)
     index_name = "#{table}_#{column}_unq"
 
     Ecto.Adapters.SQL.query!(
@@ -722,13 +748,20 @@ defmodule Lazypock.Schema.DDL do
     if is_binary(opts["collection"]) and opts["collection"] != "" do
       opts
     else
-      # Try to resolve collectionId (UUID from SPA) to a collection name
+      # Try to resolve collectionId (UUID from SPA, or collection name) to a
+      # collection name. The id column is :binary_id, so only query by id when
+      # the value is actually a UUID — a PocketBase collection id (e.g.
+      # "kanban_columns_col") or a bare name would otherwise crash the query.
       raw_id = field_def["collectionId"] || opts["collectionId"]
 
       if is_binary(raw_id) and raw_id != "" do
         collection =
-          Lazypock.Repo.get_by(Lazypock.Collections.Collection, id: raw_id) ||
+          if match?({:ok, _}, Ecto.UUID.cast(raw_id)) do
+            Lazypock.Repo.get_by(Lazypock.Collections.Collection, id: raw_id) ||
+              Lazypock.Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
+          else
             Lazypock.Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
+          end
 
         if collection do
           Map.put(opts, "collection", collection.name)

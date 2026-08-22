@@ -1,0 +1,148 @@
+[
+{
+"id": "kanban_columns_col",
+"name": "columns",
+"type": "base",
+"system": false,
+"schema": [
+{
+"id": "col_title_field",
+"name": "title",
+"type": "text",
+"required": true,
+"presentable": true,
+"unique": false,
+"options": {
+"min": 1,
+"max": 100,
+"pattern": ""
+}
+},
+{
+"id": "col_order_field",
+"name": "order",
+"type": "number",
+"required": true,
+"presentable": false,
+"unique": false,
+"options": {
+"min": 0,
+"max": 1000
+}
+}
+],
+"indexes": [],
+"listRule": "@request.auth.id != ''",
+"viewRule": "@request.auth.id != ''",
+"createRule": "@request.auth.id != ''",
+"updateRule": "@request.auth.id != ''",
+"deleteRule": "@request.auth.id != ''"
+},
+{
+"id": "kanban_cards_col",
+"name": "cards",
+"type": "base",
+"system": false,
+"schema": [
+{
+"id": "card_title_field",
+"name": "title",
+"type": "text",
+"required": true,
+"presentable": true,
+"unique": false,
+"options": {
+"min": 1,
+"max": 255,
+"pattern": ""
+}
+},
+{
+"id": "card_desc_field",
+"name": "description",
+"type": "text",
+"required": false,
+"presentable": false,
+"unique": false,
+"options": {
+"min": null,
+"max": 2000,
+"pattern": ""
+}
+},
+{
+"id": "card_tag_field",
+"name": "tag",
+"type": "text",
+"required": false,
+"presentable": false,
+"unique": false,
+"options": {
+"min": null,
+"max": 50,
+"pattern": ""
+}
+},
+{
+"id": "card_tagcolor_field",
+"name": "tagColor",
+"type": "select",
+"required": false,
+"presentable": false,
+"unique": false,
+"options": {
+"maxSelect": 1,
+"values": ["primary", "accent", "success", "warning", "info"]
+}
+},
+{
+"id": "card_column_rel",
+"name": "column",
+"type": "relation",
+"required": true,
+"presentable": false,
+"unique": false,
+"options": {
+"collectionId": "kanban_columns_col",
+"cascadeDelete": true,
+"minSelect": null,
+"maxSelect": 1,
+"displayFields": ["title"]
+}
+},
+{
+"id": "card_assignee_rel",
+"name": "assignee",
+"type": "relation",
+"required": false,
+"presentable": false,
+"unique": false,
+"options": {
+"collectionId": "pb_users_auth",
+"cascadeDelete": false,
+"minSelect": null,
+"maxSelect": 1,
+"displayFields": ["name"]
+}
+},
+{
+"id": "card_order_field",
+"name": "order",
+"type": "number",
+"required": false,
+"presentable": false,
+"unique": false,
+"options": {
+"min": 0,
+"max": 100000
+}
+}
+],
+"indexes": [],
+"listRule": "@request.auth.id != ''",
+"viewRule": "@request.auth.id != ''",
+"createRule": "@request.auth.id != ''",
+"updateRule": "@request.auth.id != ''",
+"deleteRule": "@request.auth.id != ''"
+}
+]
