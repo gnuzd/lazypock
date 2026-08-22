@@ -2,22 +2,27 @@ defmodule Lazypock.Migrations do
   @moduledoc """
   PocketBase-style migrations for the Lazypock binary.
 
-  Migrations live in a **user-writable directory on disk** (`~/.lazypock/migrations/`
-  by default, override with `LAZYPOCK_MIGRATIONS_DIR`), NOT inside the binary.
+  Two independent migration sources, both tracked in `schema_migrations`:
 
-  On boot:
+  1. **System migrations** — the schema for LazyPock's own internal tables
+     (`_collections`, `_fields`, `_request_logs`, ...). They ship **inside**
+     the release (`priv/repo/migrations/`) and are applied directly from
+     there on boot. They are never written to a user-visible directory.
 
-  1. `sync_builtins!/0` copies the migrations bundled in the release
-     (`priv/repo/migrations/*.exs`) into that directory **only if the file
-     doesn't already exist** (never overwrites user files or a previous
-     version of a migration with the same name).
-  2. `run/0` applies all pending migrations from that directory via
-     `Ecto.Migrator.run/4` (idempotent — uses `schema_migrations`).
+  2. **User migrations** — live in a user-writable directory on disk
+     (`~/.lazypock/migrations/` by default, override with
+     `LAZYPOCK_MIGRATIONS_DIR`). Drop new `NNNN..._name.exs` files there and
+     either restart (auto-migrate runs them) or run `lazypock migrate`.
 
-  Users can drop additional `NNNN..._name.exs` files into the migrations
-  directory and either restart (auto-migrate runs them) or run
-  `lazypock migrate` manually. Set `LAZYPOCK_AUTOMIGRATE=0` to disable
-  auto-migrate on boot (then use `lazypock migrate`).
+  System migrations always run before user migrations, so user code can rely
+  on the system tables existing. Both runs are idempotent
+  (`schema_migrations`). Set `LAZYPOCK_AUTOMIGRATE=0` to disable auto-migrate
+  on boot (then use `lazypock migrate`).
+
+  If a user migration file shares its version with a bundled system
+  migration, it is ignored (the version is already applied from the system
+  dir) and a warning is logged. This usually happens with stale copies of
+  system migrations copied by older releases — those files are safe to delete.
 
   ## Seeds
 
@@ -46,76 +51,42 @@ defmodule Lazypock.Migrations do
     base
   end
 
-  @doc """
-  Copies built-in migration files from the release into the user migrations
-  dir, without overwriting existing files. Returns the list of files copied.
-  """
-  @spec sync_builtins!() :: [String.t()]
-  def sync_builtins! do
-    src = Application.app_dir(:lazypock, @builtin_migrations)
-    dest = dir()
-
-    if File.dir?(src) do
-      src
-      |> File.ls!()
-      |> Enum.filter(&String.ends_with?(&1, ".exs"))
-      |> Enum.sort()
-      |> Enum.flat_map(fn name ->
-        target = Path.join(dest, name)
-
-        if File.exists?(target) do
-          []
-        else
-          File.cp!(Path.join(src, name), target)
-          [target]
-        end
-      end)
-    else
-      []
-    end
+  @doc "Returns the bundled system migrations directory inside the release."
+  @spec system_dir() :: String.t()
+  def system_dir do
+    Application.app_dir(:lazypock, @builtin_migrations)
   end
 
   @doc """
-  Runs all pending migrations from the user migrations dir (idempotent).
+  Runs all pending migrations — system (bundled) first, then user —
+  idempotently.
 
   Returns `:ok` or `{:error, reason}` — never raises.
   """
   @spec run() :: :ok | {:error, term()}
   def run do
-    migrations_dir = dir()
-    sync_builtins!()
+    warn_on_stale_system_copies!()
 
-    if Code.ensure_loaded?(Ecto.Migrator) and File.dir?(migrations_dir) do
-      case Ecto.Migrator.with_repo(Repo, fn repo ->
-             Ecto.Migrator.run(repo, migrations_dir, :up, all: true)
-           end) do
-        {:ok, _, _} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.error("Auto-migration failed: #{inspect(reason)}")
-          {:error, reason}
-      end
-    else
+    with :ok <- migrate_dir(system_dir(), "system"),
+         :ok <- migrate_dir(dir(), "user") do
       :ok
     end
   end
 
-  @doc "Prints migration status (applied/pending) for the user migrations dir."
+  @doc "Prints migration status (applied/pending) for system and user dirs."
   @spec status() :: :ok
   def status do
-    migrations_dir = dir()
-    sync_builtins!()
+    warn_on_stale_system_copies!()
 
-    if Code.ensure_loaded?(Ecto.Migrator) and File.dir?(migrations_dir) do
-      Ecto.Migrator.with_repo(Repo, fn repo ->
-        repo
-        |> Ecto.Migrator.migrations(migrations_dir)
-        |> Enum.each(fn {state, version, name} ->
-          IO.puts("#{state |> to_string() |> String.pad_trailing(7)} #{version} #{name}")
-        end)
-      end)
-    end
+    system_versions = migration_versions(system_dir())
+    user_versions = migration_versions(dir())
+
+    IO.puts("System migrations (bundled in release):")
+    print_status(system_dir(), MapSet.difference(user_versions, system_versions))
+
+    IO.puts("")
+    IO.puts("User migrations (#{dir()}):")
+    print_status(dir(), system_versions)
 
     :ok
   end
@@ -213,5 +184,90 @@ defmodule Lazypock.Migrations do
 
   defp user_base do
     System.get_env("LAZYPOCK_DATA_DIR") || Path.join(System.user_home!(), ".lazypock")
+  end
+
+  # ── Internals ──────────────────────────────────────────────────────────────
+
+  # Applies all pending migrations from a single directory (idempotent).
+  defp migrate_dir(migration_dir, label) do
+    if Code.ensure_loaded?(Ecto.Migrator) and File.dir?(migration_dir) do
+      case Ecto.Migrator.with_repo(Repo, fn repo ->
+             Ecto.Migrator.run(repo, migration_dir, :up, all: true)
+           end) do
+        {:ok, _, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error("#{label} migration failed: #{inspect(reason)}")
+          {:error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  # Prints applied/pending for one dir, hiding versions that belong to the
+  # other source (they'd otherwise show up as "FILE NOT FOUND").
+  defp print_status(migration_dir, excluded_versions) do
+    if Code.ensure_loaded?(Ecto.Migrator) and File.dir?(migration_dir) do
+      Ecto.Migrator.with_repo(Repo, fn repo ->
+        repo
+        |> Ecto.Migrator.migrations(migration_dir)
+        |> Enum.reject(fn {_state, version, _name} ->
+          MapSet.member?(excluded_versions, Integer.to_string(version))
+        end)
+        |> Enum.each(fn {state, version, name} ->
+          IO.puts("  #{state |> to_string() |> String.pad_trailing(7)} #{version} #{name}")
+        end)
+      end)
+    else
+      IO.puts("  (no migrations)")
+    end
+  end
+
+  # Detect user-dir files whose version collides with a bundled system
+  # migration (typically stale copies from the old copy-to-user-dir behavior)
+  # and warn that they are ignored / safe to delete.
+  defp warn_on_stale_system_copies! do
+    system_versions = migration_versions(system_dir())
+    user_dir = dir()
+
+    case File.ls(user_dir) do
+      {:ok, files} ->
+        stale =
+          files
+          |> Enum.filter(&String.ends_with?(&1, ".exs"))
+          |> Enum.filter(fn name -> MapSet.member?(system_versions, migration_version(name)) end)
+
+        if stale != [] do
+          Logger.warning(
+            "User migration file(s) share a version with bundled system migrations " <>
+              "and are ignored: #{Enum.join(stale, ", ")}. " <>
+              "These are usually copies of the old sync behavior — safe to delete."
+          )
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp migration_versions(migration_dir) do
+    case File.ls(migration_dir) do
+      {:ok, files} ->
+        files
+        |> Enum.filter(&String.ends_with?(&1, ".exs"))
+        |> Enum.map(&migration_version/1)
+        |> MapSet.new()
+
+      _ ->
+        MapSet.new()
+    end
+  end
+
+  # Ecto migration version = the numeric prefix before the first `_`
+  # (e.g. "20250101000000_create_system_tables.exs" → "20250101000000").
+  defp migration_version(filename) do
+    filename |> String.split("_") |> hd()
   end
 end
