@@ -1,6 +1,8 @@
 defmodule LazypockWeb.SettingsController do
   use LazypockWeb, :controller
 
+  require Logger
+
   alias Lazypock.Repo
 
   defp require_superuser!(conn) do
@@ -495,6 +497,14 @@ defmodule LazypockWeb.SettingsController do
       if resolved do
         Map.put(field, "options", Map.put(opts, "collection", resolved))
       else
+        if is_binary(raw_id) and raw_id in @pocketbase_users_ids do
+          Logger.warning(
+            "Relation field '#{field["name"]}' references PocketBase's users auth " <>
+              "collection (#{raw_id}), but no 'users' collection exists on this instance " <>
+              "— the relation was left unresolved."
+          )
+        end
+
         field
       end
     else
