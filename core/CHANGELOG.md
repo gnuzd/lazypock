@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.5](https://github.com/gnuzd/lazypock/compare/v0.4.4...v0.4.5) (2026-08-22)
+
+
+### Bug Fixes
+
+* **core:** guard hide-password migration against missing boot-time tables ([e8ce84d](https://github.com/gnuzd/lazypock/commit/e8ce84dbbf45ea9087e21646d726825cbb8ead12))
+* **core:** guard hide-password migration against missing boot-time tables ([39206cc](https://github.com/gnuzd/lazypock/commit/39206cc344a9248ff2f6f29a34219e3528b432eb))
+
 ## [0.4.4](https://github.com/gnuzd/lazypock/compare/v0.4.3...v0.4.4) (2026-08-22)
 
 
