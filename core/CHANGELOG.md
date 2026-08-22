@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.4](https://github.com/gnuzd/lazypock/compare/v0.4.3...v0.4.4) (2026-08-22)
+
+
+### Bug Fixes
+
+* **collections:** users is a normal auth collection, not system ([094866c](https://github.com/gnuzd/lazypock/commit/094866cc0235b41a10634e4c0b18800d696667f8))
+* **collections:** users is a normal auth collection, not system ([fca447f](https://github.com/gnuzd/lazypock/commit/fca447fddb46dc391646665b970ba70e9ac08db2))
+* **users:** accept `password` alias, hide password fields ([5eb30f6](https://github.com/gnuzd/lazypock/commit/5eb30f681b44579518784e162e26ca62d5f7a3c2))
+* **users:** accept password alias, hide password fields ([2392c11](https://github.com/gnuzd/lazypock/commit/2392c1127943f5f4aa6961b066cae0f39df6306d))
+
 ## [0.4.3](https://github.com/gnuzd/lazypock/compare/v0.4.2...v0.4.3) (2026-08-22)
 
 
