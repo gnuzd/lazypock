@@ -195,13 +195,19 @@ Note: The release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all conf
 
 ### Migrations (PocketBase-style)
 
-Migrations live in a **user-writable directory on disk** — `~/.lazypock/migrations/`
-by default (override with `LAZYPOCK_MIGRATIONS_DIR`). They do NOT live inside
-the binary.
+Two independent migration sources, both tracked in `schema_migrations`:
 
-- **On first boot**, the bundled migrations (from `priv/repo/migrations/`) are
-  copied into that directory (only if they don't already exist — user files are
-  never overwritten), then applied automatically.
+- **System migrations** (LazyPock's own tables — `_collections`, `_fields`, …)
+  ship **inside** the binary (`priv/repo/migrations/`) and are applied
+  directly from there on boot. They are never written to a user-visible
+  directory.
+- **User migrations** live in a **user-writable directory on disk** —
+  `~/.lazypock/migrations/` by default (override with
+  `LAZYPOCK_MIGRATIONS_DIR`). Only *your* migrations belong there.
+
+System migrations always run before user migrations. Both are applied
+automatically on boot (idempotent) and are listed by `lazypock migrations`.
+
 - **To add a migration after a release** (no rebuild needed):
 
   ```bash
