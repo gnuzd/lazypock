@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.3](https://github.com/gnuzd/lazypock/compare/v0.4.2...v0.4.3) (2026-08-22)
+
+
+### Bug Fixes
+
+* **import:** toast results, drop posts seed, self-heal missing users collection ([fc10943](https://github.com/gnuzd/lazypock/commit/fc109431b72aeb7f4176866296075264ad1ba995))
+* **import:** toast results, drop posts seed, self-heal missing users collection ([d805cb7](https://github.com/gnuzd/lazypock/commit/d805cb7b71b9dbebe92d62fea5ee4cd06c727307))
+
 ## [0.4.2](https://github.com/gnuzd/lazypock/compare/v0.4.1...v0.4.2) (2026-08-22)
 
 
