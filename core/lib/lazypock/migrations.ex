@@ -258,6 +258,7 @@ defmodule Lazypock.Migrations do
         files
         |> Enum.filter(&String.ends_with?(&1, ".exs"))
         |> Enum.map(&migration_version/1)
+        |> Enum.reject(&is_nil/1)
         |> MapSet.new()
 
       _ ->
@@ -267,7 +268,11 @@ defmodule Lazypock.Migrations do
 
   # Ecto migration version = the numeric prefix before the first `_`
   # (e.g. "20250101000000_create_system_tables.exs" → "20250101000000").
+  # Non-migration files (e.g. ".formatter.exs") return nil.
   defp migration_version(filename) do
-    filename |> String.split("_") |> hd()
+    case Regex.run(~r/^(\d+)_/, filename) do
+      [_, digits] -> digits
+      _ -> nil
+    end
   end
 end
