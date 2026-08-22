@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "elixir",
+      "include-component-in-tag": false,
+      "changelog-path": "core/CHANGELOG.md",
+      "extra-files": [
+        { "type": "generic", "path": "core/mix.exs" }
+      ],
+      "exclude-paths": ["example"]
+    }
+  }
+}
