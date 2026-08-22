@@ -3,19 +3,22 @@ name: Release
 # Automatic release pipeline (replaces the old manual workflow_dispatch).
 #
 # Flow:
-#   1. Every push to `main` that touches `core/` runs release-please. If the
-#      commits since the last release include `fix:` / `feat:` / BREAKING
-#      CHANGE (conventional commits), it opens (or updates) a release PR —
-#      "chore(main): release core-vX.Y.Z" — with the `core/mix.exs` version
-#      bump + `core/CHANGELOG.md`.
+#   1. Every push to `main` runs release-please against the repo ROOT (the
+#      release component is the whole repository — the `core` Elixir app plus
+#      the `studio` SPA that gets bundled into the core binary; see
+#      release-please-config.json). If the commits since the last release
+#      include `fix:` / `feat:` / BREAKING CHANGE (conventional commits), it
+#      opens (or updates) a release PR — "chore(main): release vX.Y.Z" — with
+#      the `core/mix.exs` version bump + `core/CHANGELOG.md`.
 #   2. Merging that release PR pushes the bump to `main`, release-please
 #      creates the GitHub Release + `vX.Y.Z` tag, and the build job in this
 #      same run runs the test suite, builds the Burrito binaries (macOS +
 #      Linux), and attaches them to the release.
 #
 # Commit messages on `main` should follow conventional commits
-# (e.g. `fix(core): ...`, `feat(core): ...`, `chore: ...`) so the next
-# version is chosen correctly. `BREAKING CHANGE:` in the body bumps major.
+# (e.g. `fix(core): ...`, `fix(studio): ...`, `feat(studio): ...`, `chore: ...`)
+# so the next version is chosen correctly. `BREAKING CHANGE:` in the body
+# bumps major. Changes under `example/` are excluded from versioning.
 
 on:
   push:
@@ -30,18 +33,18 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs['core--release_created'] }}
-      upload_url: ${{ steps.release.outputs['core--upload_url'] }}
-      tag_name: ${{ steps.release.outputs['core--tag_name'] }}
+      # Root-package manifest releases emit unprefixed outputs (no `core--`).
+      release_created: ${{ steps.release.outputs.release_created }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: Release Please
         id: release
         uses: googleapis/release-please-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          release-type: elixir
-          package-name: lazypock
-          path: core
+          config-file: release-please-config.json
+          manifest-file: release-please-manifest.json
 
   # ── Only runs when release-please just created a release (release PR
   #    merged): checkout the released code, test it, build the Burrito
