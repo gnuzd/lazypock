@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2](https://github.com/gnuzd/lazypock/compare/v0.4.1...v0.4.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **import:** keep field names verbatim — no snake/camel conversion ([d195ed5](https://github.com/gnuzd/lazypock/commit/d195ed5dbc455c1f17adf6b6eb10c3eff7073fc5))
+* **import:** make PocketBase JSON exports import cleanly + honor deleteMissing for fields ([b0b5429](https://github.com/gnuzd/lazypock/commit/b0b5429d9b4aa3cec63aab1ed908f1927cdda104))
+* **import:** PocketBase JSON exports import cleanly + deleteMissing honors fields ([6830c4b](https://github.com/gnuzd/lazypock/commit/6830c4ba243007ec57312c82836f77d036b80450))
+
 ## [0.4.1](https://github.com/gnuzd/lazypock/compare/v0.4.0...v0.4.1) (2026-08-22)
 
 
