@@ -162,7 +162,7 @@ defmodule LazypockWeb.CollectionSocketTest do
       {:ok, socket} = connect(LazypockWeb.CollectionSocket, %{})
       {:ok, _reply, joined} = subscribe_and_join(socket, "collection:#{name}", %{})
       ref = push(joined, "ping", %{})
-      assert_reply ref, :ok, %{ping: "pong"}
+      assert_reply(ref, :ok, %{ping: "pong"})
     end
   end
 
@@ -207,10 +207,10 @@ defmodule LazypockWeb.CollectionSocketTest do
         "from_connection" => "conn-1"
       })
 
-      assert_push "record_change", %{
+      assert_push("record_change", %{
         "action" => "update",
         "record" => %{"id" => "rec-1", "title" => "hello"}
-      }
+      })
 
       refute_receive %Phoenix.Socket.Message{
         event: "record_change",
@@ -230,7 +230,7 @@ defmodule LazypockWeb.CollectionSocketTest do
         "record" => %{"id" => "rec-9"}
       })
 
-      assert_push "record_change", %{"action" => "delete", "record" => %{"id" => "rec-9"}}
+      assert_push("record_change", %{"action" => "delete", "record" => %{"id" => "rec-9"}})
     end
 
     test "clients without a connection id still receive tagged broadcasts (backwards compatible)" do
@@ -246,7 +246,7 @@ defmodule LazypockWeb.CollectionSocketTest do
         "from_connection" => "other-client"
       })
 
-      assert_push "record_change", %{"action" => "create", "record" => %{"id" => "rec-3"}}
+      assert_push("record_change", %{"action" => "create", "record" => %{"id" => "rec-3"}})
     end
   end
 
@@ -257,7 +257,7 @@ defmodule LazypockWeb.CollectionSocketTest do
       assert joined.assigns[:topic] == "chat:room1"
 
       LazypockWeb.Endpoint.broadcast!("chat:room1", "new_message", %{"text" => "hi"})
-      assert_push "new_message", %{"text" => "hi"}
+      assert_push("new_message", %{"text" => "hi"})
     end
 
     test "authenticated clients can join custom topics too" do
