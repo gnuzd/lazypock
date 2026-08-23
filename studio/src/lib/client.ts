@@ -39,4 +39,6 @@ function createConnectionId(): string {
 // Advertise the connection id on the realtime socket so the server can
 // match socket ↔ HTTP requests from the same tab. The SDK appends
 // ?token=... itself on (re)connect.
-client.realtime.setUrl(wsUrlFromBaseUrl('/api') + '?connectionId=' + encodeURIComponent(connectionId));
+client.realtime.setUrl(
+	wsUrlFromBaseUrl('/api') + '?connectionId=' + encodeURIComponent(connectionId)
+);
