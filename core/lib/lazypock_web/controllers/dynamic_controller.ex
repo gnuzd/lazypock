@@ -167,7 +167,7 @@ defmodule LazypockWeb.DynamicController do
               })
 
               Hooks.dispatch_after_create(record, context)
-              Broadcaster.broadcast_create(name, record)
+              Broadcaster.broadcast_create(name, record, conn.assigns[:connection_id])
 
               conn
               |> put_status(201)
@@ -228,7 +228,7 @@ defmodule LazypockWeb.DynamicController do
             })
 
             Hooks.dispatch_after_update(updated_record, context)
-            Broadcaster.broadcast_update(name, updated_record)
+            Broadcaster.broadcast_update(name, updated_record, conn.assigns[:connection_id])
             conn |> json(DynamicView.format_item(updated_record, name))
           else
             Hooks.dispatch_after_update_error(attrs, :update_failed, context)
@@ -277,7 +277,7 @@ defmodule LazypockWeb.DynamicController do
           case GenericRecord.delete(name, id) do
             :ok ->
               Store.delete_by_record(name, id)
-              Broadcaster.broadcast_delete(name, id)
+              Broadcaster.broadcast_delete(name, id, conn.assigns[:connection_id])
               Hooks.dispatch_after_delete(record, context)
               conn |> put_status(204) |> json(nil)
 

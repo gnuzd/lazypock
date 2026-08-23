@@ -9,6 +9,10 @@ defmodule LazypockWeb.CollectionChannel do
 
   use Phoenix.Channel
 
+  # Intercept server broadcasts so handle_out can filter the originating
+  # connection (record_change is broadcast by Lazypock.Realtime.Broadcaster).
+  intercept(["record_change"])
+
   @impl true
   def join("collection:" <> topic, payload, socket) do
     # topic can be: "posts", "posts:abc123", "posts:*"
@@ -47,6 +51,33 @@ defmodule LazypockWeb.CollectionChannel do
   @impl true
   def handle_in("ping", _payload, socket) do
     {:reply, {:ok, %{ping: "pong"}}, socket}
+  end
+
+  @doc """
+  Intercepts server broadcasts before they reach the client.
+
+  When a broadcast is tagged with `from_connection` (the connection id of
+  the socket/HTTP request that performed the CRUD), the event is dropped
+  for the originating connection and delivered to every other subscriber
+  (including the same user's other tabs/devices). Clients without a
+  connection id never match, so behavior is unchanged for third-party
+  clients that don't send one. The internal `from_connection` field is
+  stripped from what reaches clients.
+  """
+  @impl true
+  def handle_out("record_change", %{"from_connection" => from} = payload, socket)
+      when is_binary(from) do
+    if from == socket.assigns[:connection_id] do
+      {:noreply, socket}
+    else
+      push(socket, "record_change", Map.delete(payload, "from_connection"))
+      {:noreply, socket}
+    end
+  end
+
+  def handle_out("record_change", payload, socket) do
+    push(socket, "record_change", payload)
+    {:noreply, socket}
   end
 
   defp parse_topic(topic) do
