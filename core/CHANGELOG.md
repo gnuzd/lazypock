@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/gnuzd/lazypock/compare/v0.4.5...v0.5.0) (2026-08-23)
+
+
+### Features
+
+* **realtime:** exclude origin connection, custom channels, admin channel fix ([a6bf6e4](https://github.com/gnuzd/lazypock/commit/a6bf6e41149372d0d55534a30af2978a5801f5e8))
+* **realtime:** exclude origin connection, custom channels, admin channel fix ([68b0f30](https://github.com/gnuzd/lazypock/commit/68b0f30a6b5f9d8bc070614437caa075317985be))
+
 ## [0.4.5](https://github.com/gnuzd/lazypock/compare/v0.4.4...v0.4.5) (2026-08-22)
 
 
