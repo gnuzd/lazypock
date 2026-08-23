@@ -4,7 +4,7 @@ defmodule Lazypock.MixProject do
   def project do
     [
       app: :lazypock,
-      version: "0.4.5", # x-release-please-version
+      version: "0.5.0", # x-release-please-version
       license: "MIT",
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
