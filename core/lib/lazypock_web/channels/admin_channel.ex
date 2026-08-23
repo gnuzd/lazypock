@@ -10,8 +10,13 @@ defmodule LazypockWeb.AdminChannel do
 
   @impl true
   def join("collections", _payload, socket) do
-    # Require authenticated superuser
+    # Require authenticated superuser. The socket assigns a SuperUser struct
+    # (which has no `role` field), so match the struct directly as well as
+    # the map form for robustness.
     case socket.assigns[:current_user] do
+      %Lazypock.Auth.SuperUser{} ->
+        {:ok, socket}
+
       %{"role" => "superuser"} ->
         {:ok, socket}
 

@@ -12,6 +12,8 @@ defmodule LazypockWeb.Router do
   pipeline :api do
     plug(:accepts, ["json"])
     plug(LazypockWeb.Plugs.RequestLogger)
+    # Client connection id (for realtime origin-exclusion)
+    plug(LazypockWeb.Plugs.ConnectionId)
     # Custom API routes registered via on_before_serve hooks (PocketBase routerAdd)
     plug(LazypockWeb.Plugs.CustomRoutes)
   end
@@ -20,6 +22,8 @@ defmodule LazypockWeb.Router do
     plug(:accepts, ["json"])
     plug(LazypockWeb.Plugs.RequestLogger)
     plug(Lazypock.Auth.Plug)
+    # Client connection id (for realtime origin-exclusion)
+    plug(LazypockWeb.Plugs.ConnectionId)
     # Custom API routes registered via on_before_serve hooks (PocketBase routerAdd)
     plug(LazypockWeb.Plugs.CustomRoutes)
   end

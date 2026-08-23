@@ -369,4 +369,37 @@ defmodule LazypockWeb.DynamicControllerTest do
       assert response(conn, 404)
     end
   end
+
+  describe "realtime broadcasts carry the requesting connection id" do
+    test "create tags the broadcast with X-Connection-Id" do
+      Phoenix.PubSub.subscribe(Lazypock.PubSub, "collection:#{@collection}")
+
+      conn =
+        build_conn()
+        |> auth_conn()
+        |> put_req_header("x-connection-id", "conn-1")
+        |> post(list_path(), %{"title" => "hello"})
+
+      assert json_response(conn, 201)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "record_change",
+        payload: %{:action => "create", "from_connection" => "conn-1"}
+      }
+    end
+
+    test "create without a connection header broadcasts without from_connection" do
+      Phoenix.PubSub.subscribe(Lazypock.PubSub, "collection:#{@collection}")
+
+      conn =
+        build_conn()
+        |> auth_conn()
+        |> post(list_path(), %{"title" => "no cid"})
+
+      assert json_response(conn, 201)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "record_change", payload: payload}
+      refute Map.has_key?(payload, "from_connection")
+    end
+  end
 end
