@@ -164,9 +164,103 @@ defmodule LazypockWeb.SettingsExportImportTest do
       assert coll.rules == coll_payload["rules"]
       assert coll.options == coll_payload["options"]
       assert coll.hooks == coll_payload["hooks"]
-      # import re-inserts payload records (no dedupe): 1 original + 1 re-imported
-      assert length(GenericRecord.all(name)) == 2
-      assert [%{"title" => "roundtrip"} | _] = GenericRecord.all(name)
+      # Records are upserted by id: re-importing the same export updates the
+      # existing row instead of duplicating it.
+      assert length(GenericRecord.all(name)) == 1
+      assert [%{"title" => "roundtrip"}] = GenericRecord.all(name)
+    end
+
+    test "import restores record ids, timestamps and relations (upsert by id)" do
+      parent = random_name("imp_rel_parent_")
+      child = random_name("imp_rel_child_")
+
+      {:ok, _} =
+        DDL.create_collection(parent,
+          type: "base",
+          fields: [%{"name" => "name", "type" => "text", "required" => true}]
+        )
+
+      {:ok, _} =
+        DDL.create_collection(child,
+          type: "base",
+          fields: [
+            %{"name" => "name", "type" => "text", "required" => true},
+            %{
+              "name" => "parent",
+              "type" => "relation",
+              "options" => %{"collection" => parent, "maxSelect" => 1}
+            }
+          ]
+        )
+
+      {:ok, parent_rec} = GenericRecord.insert(parent, %{"name" => "Alpha"})
+
+      {:ok, child_rec} =
+        GenericRecord.insert(child, %{"name" => "Alice", "parent" => parent_rec["id"]})
+
+      Registry.reload!()
+
+      export_body =
+        build_conn()
+        |> auth_conn()
+        |> get("/api/export")
+        |> json_response(200)
+
+      payload = %{
+        collections: Enum.filter(export_body["collections"], &(&1["name"] in [parent, child]))
+      }
+
+      # Wipe the collections, then restore from the export envelope.
+      assert :ok = DDL.drop_collection(child)
+      assert :ok = DDL.drop_collection(parent)
+      Registry.reload!()
+
+      conn = json_post(auth_conn(build_conn()), "/api/import", payload)
+      body = json_response(conn, 200)
+      assert body["errors"] == []
+      assert Enum.map(body["imported"], & &1["name"]) |> Enum.sort() == [child, parent]
+
+      Registry.reload!()
+      [restored_parent] = GenericRecord.all(parent)
+      [restored_child] = GenericRecord.all(child)
+
+      # ids and timestamps survive, so the relation is intact
+      assert restored_parent["id"] == parent_rec["id"]
+      assert restored_child["id"] == child_rec["id"]
+      assert restored_child["parent"] == restored_parent["id"]
+      assert restored_parent["created_at"] == parent_rec["created_at"]
+
+      # re-restoring the same backup is idempotent (no duplicates)
+      conn = json_post(auth_conn(build_conn()), "/api/import", payload)
+      assert json_response(conn, 200)["errors"] == []
+      Registry.reload!()
+      assert length(GenericRecord.all(parent)) == 1
+      assert length(GenericRecord.all(child)) == 1
+    end
+
+    test "import accepts the backup envelope ({collections: [...]}) and record ids are kept" do
+      name = random_name("imp_env_")
+      record_id = Ecto.UUID.generate()
+
+      payload = %{
+        "collections" => [
+          %{
+            "name" => name,
+            "type" => "base",
+            "schema" => [title_field()],
+            "records" => [%{"id" => record_id, "title" => "envelope"}]
+          }
+        ]
+      }
+
+      conn = json_post(auth_conn(build_conn()), "/api/import", payload)
+      body = json_response(conn, 200)
+      assert body["errors"] == []
+
+      Registry.reload!()
+      [record] = GenericRecord.all(name)
+      assert record["id"] == record_id
+      assert record["title"] == "envelope"
     end
 
     test "imports a PocketBase-style export (camelCase fields, PB collection ids)" do

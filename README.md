@@ -208,19 +208,26 @@ Two independent migration sources, both tracked in `schema_migrations`:
 System migrations always run before user migrations. Both are applied
 automatically on boot (idempotent) and are listed by `lazypock migrations`.
 
-- **To add a migration after a release** (no rebuild needed):
+- **To add a collection after a release** (no rebuild needed), drop a
+  migration into the migrations dir that uses the collection helpers —
+  these register the collection + fields metadata, so it shows up in the
+  Studio and is served by the dynamic `/api/:collection` routes:
 
   ```bash
   # 1. Drop a new migration file into the migrations dir
-  cat > ~/.lazypock/migrations/20260915000000_add_custom_table.exs << 'EOF'
-  defmodule Lazypock.Repo.Migrations.AddCustomTable do
+  cat > ~/.lazypock/migrations/20260915000000_add_posts.exs << 'EOF'
+  defmodule Lazypock.Repo.Migrations.AddPosts do
     use Ecto.Migration
     def up do
-      create table(:custom_things) do
-        add :name, :text
-      end
+      Lazypock.Migrations.create_collection("posts",
+        type: "base",
+        fields: [
+          %{"name" => "title", "type" => "text", "required" => true},
+          %{"name" => "published", "type" => "bool", "options" => %{"defaultValue" => false}}
+        ]
+      )
     end
-    def down, do: drop table(:custom_things)
+    def down, do: Lazypock.Migrations.drop_collection("posts")
   end
   EOF
 
@@ -228,6 +235,15 @@ automatically on boot (idempotent) and are listed by `lazypock migrations`.
   lazypock migrate          # apply pending migrations, then exit
   # or restart the server — auto-migrate runs on boot
   ```
+
+  Other helpers: `Lazypock.Migrations.update_collection/2`,
+  `Lazypock.Migrations.add_field/2`, `Lazypock.Migrations.drop_field/2`.
+
+  > **Raw `create table` migrations still work** for plain SQL tables, but
+  > such tables are **not** LazyPock collections — they won't appear in the
+  > Studio or the collections API (LazyPock logs a warning listing any
+  > unregistered public tables after every migrate). Use the helpers above to
+  > create collections.
 
 - **Check status**: `lazypock migrations`
 - **Disable auto-migrate on boot**: `LAZYPOCK_AUTOMIGRATE=0 lazypock`
@@ -288,9 +304,19 @@ across LazyPock environments or keep it in git:
   file; the page diffs it against your current set (added/removed/changed) and
   can **Delete missing collections** so the target matches the source exactly.
 
-For the full detail — fields, rules, options, hooks, **and records** — use the
-backend endpoints directly (superuser): `GET /api/export` downloads everything,
-`POST /api/import` restores it.
+For the full detail — fields, rules, options, hooks, **and records** — use
+**Backups**: Settings → **Backups** downloads a full JSON backup
+(`GET /api/export`) and restores it from the same page (`POST /api/import`).
+Records are restored **upserted by id**, so relations stay intact and
+re-restoring the same file never duplicates data.
+
+Both flows are also available from the CLI (run with the release binary):
+
+```bash
+lazypock backup                     # write lazypock-backup-<date>.json
+lazypock backup /path/to/backup.json
+lazypock restore /path/to/backup.json   # restore schema + data
+```
 
 ### 2. Full PocketBase instance import (data + files, CLI)
 
@@ -517,6 +543,9 @@ client.collection("posts").subscribe((e) => {
 lazypock migrate        # apply pending migrations, then exit
 lazypock migrations     # show applied/pending migration status
 lazypock seed           # run the seed file
+lazypock backup         # write a full JSON backup (schema + data) to lazypock-backup-<date>.json
+lazypock backup FILE    # ... or to a specific path
+lazypock restore FILE   # restore schema + data from a backup JSON (upsert by id)
 ```
 
 > **Planned** (not available yet): sandboxed runtime hook evaluation and the

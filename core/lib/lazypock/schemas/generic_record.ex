@@ -200,6 +200,96 @@ defmodule Lazypock.Schemas.GenericRecord do
     end
   end
 
+  @doc """
+  Restores a record from a backup, preserving its identity.
+
+  Unlike `insert/2`, this keeps the payload's `id` (when it is a valid
+  UUID), `created_at` and `updated_at` — so relations between records stay
+  intact across a backup restore. It is an **upsert**: a record with the
+  same `id` already present is updated in place, making re-restores
+  idempotent (no duplicate rows).
+
+  When the payload has no `id` (or an id that isn't a valid UUID, e.g. a
+  PocketBase-style id), a fresh UUID is generated — matching `insert/2`.
+  Timestamps missing from the payload default to now.
+
+  Returns `{:ok, record_map}` or `{:error, error_message}`.
+  """
+  @spec restore(String.t(), map()) :: {:ok, map()} | {:error, String.t()}
+  def restore(collection_name, record) when is_binary(collection_name) and is_map(record) do
+    now = DateTime.utc_now()
+
+    data =
+      record
+      |> Enum.map(fn {k, v} -> {to_string(k), v} end)
+      |> Map.new()
+      |> coerce_values_for_db()
+      |> restore_ensure_id(now)
+      |> restore_ensure_timestamps(now)
+
+    # `id` needs Postgrex's 16-byte binary encoding for the UUID column.
+    id_bin = maybe_uuid_to_bin(Map.fetch!(data, "id"))
+
+    # Build columns + values from ONE pass so their order always aligns.
+    entries = Enum.reject(data, fn {k, _} -> k == "id" end)
+    columns = Enum.map(entries, &elem(&1, 0))
+    values = Enum.map(entries, &elem(&1, 1))
+    quoted = Enum.map(columns, &TypeMapper.quote_ident/1)
+
+    set_clauses =
+      quoted
+      |> Enum.with_index(2)
+      |> Enum.map(fn {col, idx} -> "#{col} = $#{idx}" end)
+      |> Enum.join(", ")
+
+    placeholders =
+      quoted
+      |> Enum.with_index(2)
+      |> Enum.map(fn {_col, idx} -> "$#{idx}" end)
+      |> Enum.join(", ")
+
+    sql = """
+    INSERT INTO #{TypeMapper.quote_ident(collection_name)} ("id", #{Enum.join(quoted, ", ")})
+    VALUES ($1, #{placeholders})
+    ON CONFLICT (id) DO UPDATE SET
+      #{set_clauses}
+    RETURNING *
+    """
+
+    case Ecto.Adapters.SQL.query(Repo, sql, [id_bin | values]) do
+      {:ok, %{rows: [row], columns: cols}} ->
+        {:ok, row_to_map(cols, row)}
+
+      {:error, err} ->
+        {:error, Exception.message(err)}
+    end
+  end
+
+  # ── Restore helpers ────────────────────────────────
+
+  defp restore_ensure_id(data, _now) do
+    # Missing id → generate one (matches insert/2 auto-gen). Invalid UUID
+    # (e.g. PocketBase-style id) → same, let the DB generate it.
+    data = Map.put_new(data, "id", Ecto.UUID.generate())
+
+    case Map.get(data, "id") do
+      id when is_binary(id) ->
+        case Ecto.UUID.cast(id) do
+          {:ok, _} -> data
+          :error -> Map.put(data, "id", Ecto.UUID.generate())
+        end
+
+      _ ->
+        Map.put_new(data, "id", Ecto.UUID.generate())
+    end
+  end
+
+  defp restore_ensure_timestamps(data, now) do
+    data
+    |> Map.put_new("created_at", now)
+    |> Map.put_new("updated_at", now)
+  end
+
   # ── Private ──
 
   # ── Private ──

@@ -30,6 +30,37 @@ defmodule Lazypock.Migrations do
   `LAZYPOCK_SEEDS_FILE`). On first boot the bundled `priv/repo/seeds.exs` is
   copied there; after that it's never overwritten. Seeds run once after
   migrations (tracked in `_seeds_run`), or manually via `lazypock seed`.
+
+  ## Creating collections from migrations
+
+  A raw `create table(:posts)` migration creates a bare Postgres table that
+  is **not** a LazyPock collection — it won't show up in the Studio or be
+  served through the dynamic `/api/:collection` routes. To create a real
+  collection from a migration, use the helpers below (they delegate to the
+  DDL engine and register the collection + fields metadata):
+
+      defmodule Lazypock.Repo.Migrations.AddPosts do
+        use Ecto.Migration
+
+        def up do
+          Lazypock.Migrations.create_collection("posts",
+            type: "base",
+            fields: [
+              %{"name" => "title", "type" => "text", "required" => true},
+              %{"name" => "published", "type" => "bool", "options" => %{"defaultValue" => false}}
+            ]
+          )
+        end
+
+        def down do
+          Lazypock.Migrations.drop_collection("posts")
+        end
+      end
+
+  After every run, any public tables that exist but are **not** registered as
+  collections are reported as a warning (raw `create table` migrations, or
+  tables you manage yourself) — they stay untouched, they just aren't
+  served through the collections API/Studio.
   """
 
   require Logger
@@ -69,6 +100,7 @@ defmodule Lazypock.Migrations do
 
     with :ok <- migrate_dir(system_dir(), "system"),
          :ok <- migrate_dir(dir(), "user") do
+      warn_on_unregistered_tables!()
       :ok
     end
   end
@@ -138,6 +170,77 @@ defmodule Lazypock.Migrations do
 
       dest
     end
+  end
+
+  # ── Collection helpers (callable from user migrations / seeds) ──
+  #
+  # These delegate to the DDL engine so a migration can create a REAL
+  # collection (table + `_collections` + `_fields` metadata) that shows up
+  # in the Studio and is served by the dynamic collection API.
+  #
+  # Broadcasts are no-ops while PubSub isn't running (CLI migrate / boot),
+  # so calling these from a migration is safe — the registry reconciles
+  # from the DB at startup.
+
+  @doc """
+  Creates a collection (table + metadata) from a migration or seed.
+
+  Same contract as `Lazypock.Schema.DDL.create_collection/2` — returns
+  `{:ok, collection}` or `{:error, reason}`. Fails if the collection
+  already exists.
+
+  ## Options
+
+    * `:type` — `"base"` (default) or `"auth"`
+    * `:fields` — list of field definition maps
+    * `:rules` / `:options` / `:hooks` / `:indexes` — optional metadata
+  """
+  @spec create_collection(String.t(), keyword()) ::
+          {:ok, Lazypock.Collections.Collection.t()} | {:error, term()}
+  def create_collection(name, opts \\ []) when is_binary(name) do
+    Lazypock.Schema.DDL.create_collection(name, opts)
+  end
+
+  @doc """
+  Updates a collection (rename, add/remove fields, rules, options, hooks).
+
+  Same contract as `Lazypock.Schema.DDL.update_collection/2`. Omitting
+  `:fields` leaves columns untouched.
+  """
+  @spec update_collection(String.t(), keyword()) ::
+          {:ok, Lazypock.Collections.Collection.t()} | {:error, term()}
+  def update_collection(name, opts \\ []) when is_binary(name) do
+    Lazypock.Schema.DDL.update_collection(name, opts)
+  end
+
+  @doc """
+  Adds a single field (column + metadata) to a collection.
+
+  Same contract as `Lazypock.Schema.DDL.add_field/2`.
+  """
+  @spec add_field(String.t(), map()) :: :ok | {:error, term()}
+  def add_field(collection_name, field_def) when is_binary(collection_name) do
+    Lazypock.Schema.DDL.add_field(collection_name, field_def)
+  end
+
+  @doc """
+  Removes a single field (column + metadata) from a collection.
+
+  Same contract as `Lazypock.Schema.DDL.drop_field/2`.
+  """
+  @spec drop_field(String.t(), String.t()) :: :ok | {:error, term()}
+  def drop_field(collection_name, field_name)
+      when is_binary(collection_name) and is_binary(field_name) do
+    Lazypock.Schema.DDL.drop_field(collection_name, field_name)
+  end
+
+  @doc """
+  Drops a managed collection (table + metadata). System collections are
+  protected. Same contract as `Lazypock.Schema.DDL.drop_collection/1`.
+  """
+  @spec drop_collection(String.t()) :: :ok | {:error, term()}
+  def drop_collection(name) when is_binary(name) do
+    Lazypock.Schema.DDL.drop_collection(name)
   end
 
   defp seed_already_run? do
@@ -264,6 +367,66 @@ defmodule Lazypock.Migrations do
       _ ->
         MapSet.new()
     end
+  end
+
+  # Public tables that exist but are NOT registered in `_collections` — the
+  # classic "my migration created the table but the Studio shows nothing"
+  # confusion. Raw `create table` migrations do exactly this. We never touch
+  # those tables (the user may manage them with raw SQL), we only surface
+  # them so the missing registration isn't a silent surprise. Internal tables
+  # (`_...`, `schema_migrations`) are expected and skipped.
+  defp warn_on_unregistered_tables! do
+    # The repo is stopped once each migrate_dir/with_repo returns, so wrap
+    # our own read in a fresh with_repo (best-effort, never raises).
+    try do
+      Ecto.Migrator.with_repo(Repo, fn _repo -> do_warn_on_unregistered_tables() end)
+    rescue
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  defp do_warn_on_unregistered_tables do
+    registered =
+      case Repo.query("SELECT name FROM _collections", []) do
+        {:ok, %{rows: rows}} -> rows |> List.flatten() |> MapSet.new()
+        _ -> MapSet.new()
+      end
+
+    case Repo.query(
+           "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
+           []
+         ) do
+      {:ok, %{rows: rows}} ->
+        tables =
+          rows
+          |> List.flatten()
+          # Internal `_`-prefixed tables + schema_migrations are expected
+          # to exist without a `_collections` row — skip them.
+          |> Enum.reject(&(String.starts_with?(&1, "_") or &1 == "schema_migrations"))
+
+        unregistered =
+          tables
+          |> Enum.reject(&MapSet.member?(registered, &1))
+          |> Enum.sort()
+
+        if unregistered != [] do
+          Logger.warning(
+            "Tables exist but are not registered as collections " <>
+              "(they won't appear in the Studio / collections API): " <>
+              Enum.join(unregistered, ", ") <>
+              ". To serve them, create a collection instead of a raw table " <>
+              "(see Lazypock.Migrations.create_collection/2), or import a backup " <>
+              "that registers them."
+          )
+        end
+
+      _ ->
+        :ok
+    end
+
+    :ok
   end
 
   # Ecto migration version = the numeric prefix before the first `_`

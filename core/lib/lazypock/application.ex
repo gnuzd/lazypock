@@ -26,9 +26,66 @@ defmodule Lazypock.Application do
         Lazypock.Migrations.seed(force: true)
         System.halt(0)
 
+      ["backup"] ->
+        backup(default_backup_path())
+        System.halt(0)
+
+      ["backup", path] ->
+        backup(path)
+        System.halt(0)
+
+      ["restore", path] ->
+        restore(path)
+        System.halt(0)
+
       _ ->
         start_app()
     end
+  end
+
+  defp backup(path) do
+    Ecto.Migrator.with_repo(Lazypock.Repo, fn _repo ->
+      payload = Lazypock.Backup.export()
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, Jason.encode!(payload, pretty: true))
+      IO.puts("Backup written to #{path}")
+    end)
+  end
+
+  defp restore(path) do
+    if not File.exists?(path) do
+      IO.puts("Backup file not found: #{path}")
+      System.halt(1)
+    end
+
+    payload =
+      case File.read(path) do
+        {:ok, contents} ->
+          Jason.decode!(contents)
+
+        {:error, reason} ->
+          IO.puts("Failed to read #{path}: #{inspect(reason)}")
+          System.halt(1)
+      end
+
+    Ecto.Migrator.with_repo(Lazypock.Repo, fn _repo ->
+      result = Lazypock.Backup.restore(payload, true)
+
+      Enum.each(result.imported, fn %{name: name, records_imported: count} ->
+        IO.puts("  ✓ #{name} (#{count} records)")
+      end)
+
+      Enum.each(result.errors, fn %{name: name, error: error} ->
+        IO.puts("  ✗ #{name}: #{inspect(error)}")
+      end)
+
+      IO.puts("Restored #{length(result.imported)} collections, #{length(result.errors)} errors")
+    end)
+  end
+
+  defp default_backup_path do
+    date = DateTime.utc_now() |> Calendar.strftime("%Y-%m-%d")
+    "lazypock-backup-#{date}.json"
   end
 
   defp start_app do
