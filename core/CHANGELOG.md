@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/gnuzd/lazypock/compare/v0.5.0...v0.5.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* register collections from user migrations + add backup restore ([fdeae88](https://github.com/gnuzd/lazypock/commit/fdeae88de10e416731d7b141ee7efd924bd9fea1))
+
 ## [0.5.0](https://github.com/gnuzd/lazypock/compare/v0.4.5...v0.5.0) (2026-08-23)
 
 
