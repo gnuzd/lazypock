@@ -58,15 +58,21 @@
 		importResult = null;
 		try {
 			const data = JSON.parse(importForm.values.schemas);
-			if (!Array.isArray(data)) {
-				importResult = 'Invalid format. Expected an array of collections.';
+			// Accept both a bare array of collections and the backup envelope
+			// ({ "collections": [...] }) produced by Settings → Backups.
+			const collections = Array.isArray(data) ? data : data?.collections;
+			if (!Array.isArray(collections)) {
+				importResult =
+					'Invalid format. Expected an array of collections or { "collections": [...] }.';
 				return;
 			}
-			// Deduplicate by id
+			// Deduplicate by id, falling back to name (backups from older
+			// versions don't carry a per-collection id).
 			const seenIds: Record<string, true> = {};
-			for (const c of data) {
-				if (c.id && c.name && !seenIds[c.id]) {
-					seenIds[c.id] = true;
+			for (const c of collections) {
+				const key = c.id || c.name;
+				if (key && c.name && !seenIds[key]) {
+					seenIds[key] = true;
 					parsedCollections.push({ id: c.id, name: c.name, type: c.type || 'base' });
 				}
 			}
@@ -86,17 +92,17 @@
 		!!importForm.values.schemas && parsedCollections.length > 0 && !importResult
 	);
 
-	// Detect changes
+	// Detect changes — keyed by id when present, else by name.
 	let importChanges = $derived.by(() => {
 		if (!isValidImport) return { added: [], removed: [], changed: [] };
 		const added: string[] = [];
 		const removed: string[] = [];
 		const changed: string[] = [];
 		const oldMap = new Map(oldCollections.map((c) => [c.id, c]));
-		const newIds = new Set(parsedCollections.map((c) => c.id));
+		const newKeys = new Set(parsedCollections.map((c) => c.id || c.name));
 
 		for (const c of oldCollections) {
-			if (!newIds.has(c.id)) {
+			if (!newKeys.has(c.id)) {
 				if (importForm.values.deleteMissing) removed.push(c.name);
 			}
 		}
@@ -124,8 +130,9 @@
 		importResult = null;
 		try {
 			const data = JSON.parse(importForm.values.schemas);
+			const collections = Array.isArray(data) ? data : data?.collections;
 			const res = (await client.http.post('/import', {
-				collections: data,
+				collections,
 				deleteMissing: importForm.values.deleteMissing
 			})) as { imported?: unknown[]; errors?: unknown[] } | null;
 			const importedCount = (res?.imported as unknown[])?.length ?? 0;
@@ -218,7 +225,7 @@
 			<div class="mb-4 space-y-1">
 				{#each importChanges.removed as name (name)}
 					<label class="flex items-center gap-2 rounded-field bg-error/20 px-3 py-1.5 text-sm">
-						<span class="text-white rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold"
+						<span class="rounded bg-error px-1.5 py-0.5 text-[10px] font-semibold text-white"
 							>Deleted</span
 						>
 						<span>{name}</span>
@@ -226,7 +233,7 @@
 				{/each}
 				{#each importChanges.changed as name (name)}
 					<label class="flex items-center gap-2 rounded-field bg-warning/20 px-3 py-1.5 text-sm">
-						<span class="text-white rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold"
+						<span class="rounded bg-warning px-1.5 py-0.5 text-[10px] font-semibold text-white"
 							>Changed</span
 						>
 						<span>{name}</span>
@@ -234,7 +241,7 @@
 				{/each}
 				{#each importChanges.added as name (name)}
 					<label class="flex items-center gap-2 rounded-field bg-success/20 px-3 py-1.5 text-sm">
-						<span class="text-white rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold"
+						<span class="rounded bg-success px-1.5 py-0.5 text-[10px] font-semibold text-white"
 							>Added</span
 						>
 						<span>{name}</span>

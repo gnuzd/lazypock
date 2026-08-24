@@ -6,11 +6,26 @@ defmodule Lazypock.Schema.DDL do
   the entire transaction (including DDL) rolls back automatically.
   PubSub broadcasts happen AFTER the commit so the Registry
   (which connects via a different DB connection) sees committed data.
+
+  Broadcasts are safe when `Lazypock.PubSub` isn't running (e.g. the
+  `lazypock migrate` CLI or a boot-time user migration) — they become a
+  no-op and the registry simply picks the change up from the DB on boot.
   """
 
   alias Lazypock.Repo
   alias Lazypock.Schema.TypeMapper
   import Ecto.Query
+
+  # Broadcast a schema event to the in-process Registry, unless PubSub isn't
+  # started yet (CLI migrate / boot-time migrations). The Registry reloads
+  # from the DB on startup, so a skipped broadcast is always reconciled.
+  defp safe_broadcast(topic, message) do
+    if Process.whereis(Lazypock.PubSub) do
+      Phoenix.PubSub.broadcast(Lazypock.PubSub, topic, message)
+    end
+
+    :ok
+  end
 
   # ── Create collection ──────────────────────────────
 
@@ -63,7 +78,7 @@ defmodule Lazypock.Schema.DDL do
 
     case result do
       {:ok, collection} ->
-        Phoenix.PubSub.broadcast(Lazypock.PubSub, "schema", {:collection_created, collection})
+        safe_broadcast("schema", {:collection_created, collection})
         {:ok, collection}
 
       {:error, reason} ->
@@ -114,11 +129,7 @@ defmodule Lazypock.Schema.DDL do
 
     case result do
       {:ok, :ok} ->
-        Phoenix.PubSub.broadcast(
-          Lazypock.PubSub,
-          "schema",
-          {:field_added, collection_name, field_def}
-        )
+        safe_broadcast("schema", {:field_added, collection_name, field_def})
 
         :ok
 
@@ -164,11 +175,7 @@ defmodule Lazypock.Schema.DDL do
 
     case result do
       {:ok, :ok} ->
-        Phoenix.PubSub.broadcast(
-          Lazypock.PubSub,
-          "schema",
-          {:field_removed, collection_name, field_name}
-        )
+        safe_broadcast("schema", {:field_removed, collection_name, field_name})
 
         :ok
 
@@ -388,7 +395,7 @@ defmodule Lazypock.Schema.DDL do
 
     case result do
       {:ok, collection} ->
-        Phoenix.PubSub.broadcast(Lazypock.PubSub, "schema", {:collection_updated, collection})
+        safe_broadcast("schema", {:collection_updated, collection})
         {:ok, collection}
 
       {:error, reason} ->
@@ -439,11 +446,7 @@ defmodule Lazypock.Schema.DDL do
 
     case result do
       {:ok, :ok} ->
-        Phoenix.PubSub.broadcast(
-          Lazypock.PubSub,
-          "schema",
-          {:collection_deleted, collection.name}
-        )
+        safe_broadcast("schema", {:collection_deleted, collection.name})
 
         :ok
 
