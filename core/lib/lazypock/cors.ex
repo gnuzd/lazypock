@@ -70,9 +70,25 @@ defmodule Lazypock.CORS do
       |> List.first()
 
     if conn.method == "OPTIONS" and requested_method != nil do
+      # Echo the browser's requested headers back (standard CORS practice)
+      # instead of a hardcoded list, so custom headers like `X-Connection-Id`
+      # (realtime origin-exclusion) are always allowed without maintaining
+      # the list by hand.
+      requested_headers =
+        conn
+        |> Conn.get_req_header("access-control-request-headers")
+        |> List.first()
+        |> case do
+          nil -> "Content-Type, Authorization"
+          value -> value
+        end
+
       conn
-      |> Conn.put_resp_header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-      |> Conn.put_resp_header("access-control-allow-headers", "Content-Type, Authorization")
+      |> Conn.put_resp_header(
+        "access-control-allow-methods",
+        "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+      )
+      |> Conn.put_resp_header("access-control-allow-headers", requested_headers)
       |> Conn.put_resp_header("access-control-max-age", "86400")
       |> Conn.send_resp(204, "")
       |> Conn.halt()
@@ -165,8 +181,6 @@ defmodule Lazypock.CORS do
   end
 
   defp normalize_origin(_), do: nil
-
-
 
   defp ensure_cache! do
     case :ets.whereis(:lazypock_cors_cache) do
