@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/gnuzd/lazypock/compare/v0.6.0...v0.6.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **cors:** echo requested headers in preflight so X-Connection-Id is allowed ([4bbe37f](https://github.com/gnuzd/lazypock/commit/4bbe37fa5b83ec44751983cca0ac89680db1e179))
+
 ## [0.6.0](https://github.com/gnuzd/lazypock/compare/v0.5.1...v0.6.0) (2026-08-25)
 
 
