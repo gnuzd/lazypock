@@ -33,39 +33,54 @@ defmodule Lazypock.Migrations do
 
   ## Creating collections from migrations
 
-  A raw `create table(:posts)` migration creates a bare Postgres table that
-  is **not** a LazyPock collection — it won't show up in the Studio or be
-  served through the dynamic `/api/:collection` routes. To create a real
-  collection from a migration, use the helpers below (they delegate to the
-  DDL engine and register the collection + fields metadata):
+  Two ways to create a collection from a migration:
 
-      defmodule Lazypock.Repo.Migrations.AddPosts do
-        use Ecto.Migration
+  1. **Explicit** — use the helpers below (they delegate to the DDL engine
+     and register the collection + fields metadata). This is the recommended
+     path when you want full control (rules, indexes, auth type, ...):
 
-        def up do
-          Lazypock.Migrations.create_collection("posts",
-            type: "base",
-            fields: [
-              %{"name" => "title", "type" => "text", "required" => true},
-              %{"name" => "published", "type" => "bool", "options" => %{"defaultValue" => false}}
-            ]
-          )
-        end
+         defmodule Lazypock.Repo.Migrations.AddPosts do
+           use Ecto.Migration
 
-        def down do
-          Lazypock.Migrations.drop_collection("posts")
-        end
-      end
+           def up do
+             Lazypock.Migrations.create_collection("posts",
+               type: "base",
+               fields: [
+                 %{"name" => "title", "type" => "text", "required" => true},
+                 %{"name" => "published", "type" => "bool", "options" => %{"defaultValue" => false}}
+               ]
+             )
+           end
 
-  After every run, any public tables that exist but are **not** registered as
-  collections are reported as a warning (raw `create table` migrations, or
-  tables you manage yourself) — they stay untouched, they just aren't
-  served through the collections API/Studio.
+           def down do
+             Lazypock.Migrations.drop_collection("posts")
+           end
+         end
+
+  2. **Automatic** — a raw `create table(:posts)` migration "just works".
+     After every migration run, any public table that exists but is **not**
+     registered in `_collections` is registered as a `base` collection with
+     its columns inferred from the Postgres schema (so it shows up in the
+     Studio and is served through `/api/:collection`). Tables that use
+     Ecto's `timestamps()` get their `inserted_at` renamed to LazyPock's
+     `created_at` convention, and a missing `updated_at` is added, so
+     create/update/delete work out of the box.
+
+     Internal `_`-prefixed tables and `schema_migrations` are never
+     touched. Tables created at runtime by the app (request logs, settings,
+     files, ...) are internal tables and are skipped the same way.
+
+  Note: registration happens after migrations complete. When migrations run
+  at boot (the default), the collections registry starts afterwards and
+  picks everything up. When you run `lazypock migrate` against an **already
+  running** server, the new collections are written to the DB but the
+  running server's registry only refreshes on restart.
   """
 
   require Logger
 
   alias Lazypock.Repo
+  alias Lazypock.Schema.TypeMapper
 
   @builtin_migrations "priv/repo/migrations"
   @builtin_seeds "priv/repo/seeds.exs"
@@ -100,7 +115,7 @@ defmodule Lazypock.Migrations do
 
     with :ok <- migrate_dir(system_dir(), "system"),
          :ok <- migrate_dir(dir(), "user") do
-      warn_on_unregistered_tables!()
+      register_unregistered_tables!()
       :ok
     end
   end
@@ -371,15 +386,18 @@ defmodule Lazypock.Migrations do
 
   # Public tables that exist but are NOT registered in `_collections` — the
   # classic "my migration created the table but the Studio shows nothing"
-  # confusion. Raw `create table` migrations do exactly this. We never touch
-  # those tables (the user may manage them with raw SQL), we only surface
-  # them so the missing registration isn't a silent surprise. Internal tables
-  # (`_...`, `schema_migrations`) are expected and skipped.
-  defp warn_on_unregistered_tables! do
+  # confusion. Raw `create table` migrations do exactly this. Instead of
+  # leaving those tables invisible (and only warning), we register them as
+  # base collections so they show up in the Studio and are served through the
+  # dynamic `/api/:collection` routes.
+  #
+  # Internal tables (`_...`, `schema_migrations`) are expected to exist
+  # without a `_collections` row and are always skipped.
+  defp register_unregistered_tables! do
     # The repo is stopped once each migrate_dir/with_repo returns, so wrap
     # our own read in a fresh with_repo (best-effort, never raises).
     try do
-      Ecto.Migrator.with_repo(Repo, fn _repo -> do_warn_on_unregistered_tables() end)
+      Ecto.Migrator.with_repo(Repo, fn _repo -> register_unregistered_tables() end)
     rescue
       _ -> :ok
     end
@@ -387,7 +405,17 @@ defmodule Lazypock.Migrations do
     :ok
   end
 
-  defp do_warn_on_unregistered_tables do
+  @doc """
+  Registers any public table that exists but is not yet in `_collections` as
+  a base collection (columns inferred from the Postgres schema).
+
+  Runs against the currently-started repo (no restart, safe to call from a
+  running server / tests). Returns `:ok`; per-table failures are logged as
+  warnings, never raised. Internal `_`-prefixed tables and
+  `schema_migrations` are skipped.
+  """
+  @spec register_unregistered_tables() :: :ok
+  def register_unregistered_tables do
     registered =
       case Repo.query("SELECT name FROM _collections", []) do
         {:ok, %{rows: rows}} -> rows |> List.flatten() |> MapSet.new()
@@ -406,27 +434,183 @@ defmodule Lazypock.Migrations do
           # to exist without a `_collections` row — skip them.
           |> Enum.reject(&(String.starts_with?(&1, "_") or &1 == "schema_migrations"))
 
-        unregistered =
-          tables
-          |> Enum.reject(&MapSet.member?(registered, &1))
-          |> Enum.sort()
-
-        if unregistered != [] do
-          Logger.warning(
-            "Tables exist but are not registered as collections " <>
-              "(they won't appear in the Studio / collections API): " <>
-              Enum.join(unregistered, ", ") <>
-              ". To serve them, create a collection instead of a raw table " <>
-              "(see Lazypock.Migrations.create_collection/2), or import a backup " <>
-              "that registers them."
-          )
-        end
+        tables
+        |> Enum.reject(&MapSet.member?(registered, &1))
+        |> Enum.sort()
+        |> Enum.each(&register_table!(&1))
 
       _ ->
         :ok
     end
 
     :ok
+  end
+
+  # Registers one existing physical table as a base collection (metadata
+  # only — the table itself is never recreated). Reconciles the LazyPock
+  # shape first so raw Ecto `timestamps()` tables (inserted_at/updated_at)
+  # become fully usable: `inserted_at` → `created_at`, missing `updated_at`
+  # added. Best-effort: failures are logged, never raised.
+  defp register_table!(table_name) do
+    Repo.transaction(fn ->
+      reconcile_timestamps!(table_name)
+      columns = fetch_columns!(table_name)
+      fields = infer_fields(columns)
+
+      collection =
+        %Lazypock.Collections.Collection{}
+        |> Lazypock.Collections.Collection.changeset(%{
+          name: table_name,
+          type: "base",
+          schema: Enum.map(fields, &schema_entry/1),
+          rules: default_base_rules(),
+          options: %{"indexes" => []},
+          hooks: %{},
+          managed: true
+        })
+        |> Repo.insert!()
+
+      fields
+      |> Enum.with_index(1)
+      |> Enum.each(fn {field, order} ->
+        %Lazypock.Collections.Field{}
+        |> Lazypock.Collections.Field.changeset(%{
+          collection_id: collection.id,
+          name: field["name"],
+          type: field["type"],
+          required: field["required"],
+          unique: field["unique"],
+          default_value: field["default"],
+          options: field["options"],
+          indexed: field["indexed"],
+          sort_order: order
+        })
+        |> Repo.insert!()
+      end)
+
+      Logger.info(
+        "Registered existing table as collection: #{table_name} " <>
+          "(#{length(fields)} fields, type: base)"
+      )
+
+      :ok
+    end)
+  rescue
+    e ->
+      Logger.warning(
+        "Failed to register table #{table_name} as a collection: #{Exception.message(e)}"
+      )
+  end
+
+  # Ecto `timestamps()` creates `inserted_at`/`updated_at`; LazyPock uses
+  # `created_at`/`updated_at`. Rename so inserts/updates work unchanged.
+  # Adding missing `updated_at` keeps updates working on half-shaped tables.
+  defp reconcile_timestamps!(table_name) do
+    columns = fetch_columns!(table_name)
+    names = MapSet.new(columns, & &1["column_name"])
+
+    if "inserted_at" in names and "created_at" not in names do
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "ALTER TABLE #{TypeMapper.quote_ident(table_name)} RENAME COLUMN inserted_at TO created_at",
+        []
+      )
+    end
+
+    if "updated_at" not in names do
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "ALTER TABLE #{TypeMapper.quote_ident(table_name)} " <>
+          "ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+        []
+      )
+    end
+  end
+
+  defp fetch_columns!(table_name) do
+    {:ok, %{rows: rows, columns: cols}} =
+      Repo.query(
+        """
+        SELECT column_name, data_type, udt_name, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = $1
+        ORDER BY ordinal_position
+        """,
+        [table_name]
+      )
+
+    rows
+    |> Enum.map(fn row ->
+      cols |> Enum.zip(row) |> Map.new()
+    end)
+  end
+
+  # Skips the implicit LazyPock columns (id/created_at/updated_at) and maps
+  # Postgres column types to LazyPock field types. Best-effort: anything
+  # unrecognized becomes "text" so the collection is still usable.
+  defp infer_fields(columns) do
+    implicit = MapSet.new(["id", "created_at", "updated_at"])
+
+    columns
+    |> Enum.reject(&MapSet.member?(implicit, &1["column_name"]))
+    |> Enum.map(fn col ->
+      %{
+        "name" => col["column_name"],
+        "type" => infer_field_type(col),
+        "required" => col["is_nullable"] == "NO" and is_nil(col["column_default"]),
+        "unique" => false,
+        "options" => %{},
+        "indexed" => false,
+        "default" => nil
+      }
+    end)
+  end
+
+  defp infer_field_type(col) do
+    case {col["data_type"], col["udt_name"]} do
+      {"boolean", _} -> "bool"
+      {"smallint", _} -> "number"
+      {"integer", _} -> "number"
+      {"bigint", _} -> "number"
+      {"numeric", _} -> "number"
+      {"real", _} -> "number"
+      {"double precision", _} -> "number"
+      {"money", _} -> "number"
+      {"date", _} -> "date"
+      {"timestamp without time zone", _} -> "datetime"
+      {"timestamp with time zone", _} -> "datetime"
+      {"json", _} -> "json"
+      {"jsonb", _} -> "json"
+      {"ARRAY", "_text"} -> "multi_select"
+      {"ARRAY", _} -> "json"
+      # text, varchar, char, citext, uuid, enum, bytea, inet, ...
+      {_, _} -> "text"
+    end
+  end
+
+  # The `schema` array stored on `_collections` (mirrors DDL's shape).
+  defp schema_entry(field) do
+    %{
+      "name" => field["name"],
+      "type" => field["type"],
+      "required" => field["required"],
+      "unique" => field["unique"],
+      "default" => field["default"],
+      "options" => field["options"],
+      "indexed" => field["indexed"]
+    }
+  end
+
+  # Same default rules as DDL.create_collection/2 for base collections.
+  defp default_base_rules do
+    %{
+      "listRule" => "",
+      "viewRule" => "",
+      "createRule" => "@request.auth.id != ''",
+      "updateRule" => "",
+      "deleteRule" => "",
+      "manageRule" => nil
+    }
   end
 
   # Ecto migration version = the numeric prefix before the first `_`

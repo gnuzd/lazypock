@@ -384,12 +384,23 @@ defmodule Lazypock.Schemas.GenericRecord do
 
   # Convert a UUID string to Postgrex-compatible binary for UUID columns
   # Convert a UUID string to Postgrex-compatible binary for UUID columns
+  # UUID columns get Postgrex's 16-byte binary encoding; integer ids
+  # (bigint/serial tables from raw `create table` migrations) are passed as
+  # integers so Postgrex encodes them against the numeric column instead of
+  # raising ("expected an integer, got \"1\""); anything else passes through.
   defp maybe_uuid_to_bin(id) when is_binary(id) do
     case Ecto.UUID.dump(id) do
       {:ok, bin} -> bin
-      :error -> id
+      :error -> maybe_integer_id(id)
     end
   end
 
   defp maybe_uuid_to_bin(id), do: id
+
+  defp maybe_integer_id(id) do
+    case Integer.parse(id) do
+      {int, ""} -> int
+      _ -> id
+    end
+  end
 end
