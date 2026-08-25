@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/gnuzd/lazypock/compare/v0.5.1...v0.6.0) (2026-08-25)
+
+
+### Features
+
+* **migrations:** auto-register raw tables as collections + realtime id support ([63defa8](https://github.com/gnuzd/lazypock/commit/63defa80a64b8a31a2b934d9d9d29ee511e29f0f))
+
+
+### Bug Fixes
+
+* **migrations:** auto-register raw tables as collections; realtime origin-exclusion for SDK clients ([d80d134](https://github.com/gnuzd/lazypock/commit/d80d1340df9a46930362f7fe21992c3dbbb6d542))
+
 ## [0.5.1](https://github.com/gnuzd/lazypock/compare/v0.5.0...v0.5.1) (2026-08-24)
 
 
