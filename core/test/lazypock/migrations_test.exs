@@ -87,4 +87,142 @@ defmodule Lazypock.MigrationsTest do
       assert Registry.get(name) == {:error, :not_found}
     end
   end
+
+  describe "raw create-table migrations are auto-registered" do
+    test "an existing public table becomes a collection visible to the registry" do
+      name = "mig_raw_#{:erlang.unique_integer([:positive])}"
+
+      # Simulate a raw `create table` migration (no _collections/_fields rows).
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        CREATE TABLE #{name} (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          title TEXT NOT NULL,
+          published BOOLEAN NOT NULL DEFAULT false,
+          views BIGINT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+        []
+      )
+
+      on_exit(fn -> Ecto.Adapters.SQL.query!(Repo, "DROP TABLE IF EXISTS #{name}", []) end)
+
+      assert :ok = Migrations.register_unregistered_tables()
+      Registry.reload!()
+
+      assert {:ok, coll} = Registry.get(name)
+      assert coll.type == "base"
+
+      names = Enum.map(coll.fields, & &1.name) |> Enum.sort()
+      assert names == ["published", "title", "views"]
+
+      types = Map.new(coll.fields, &{&1.name, &1.type})
+      assert types["title"] == "text"
+      assert types["published"] == "bool"
+      assert types["views"] == "number"
+      assert Enum.find(coll.fields, &(&1.name == "title")).required
+      refute Enum.find(coll.fields, &(&1.name == "published")).required
+    end
+
+    test "registering is idempotent" do
+      name = "mig_raw2_#{:erlang.unique_integer([:positive])}"
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        CREATE TABLE #{name} (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          title TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+        []
+      )
+
+      on_exit(fn -> Ecto.Adapters.SQL.query!(Repo, "DROP TABLE IF EXISTS #{name}", []) end)
+
+      assert :ok = Migrations.register_unregistered_tables()
+      assert :ok = Migrations.register_unregistered_tables()
+
+      count =
+        Repo.query!("SELECT count(*) FROM _collections WHERE name = $1", [name]).rows
+        |> List.flatten()
+        |> hd()
+
+      assert count == 1
+    end
+
+    test "Ecto timestamps() shape is reconciled (inserted_at -> created_at, updated_at added)" do
+      name = "mig_ecto_#{:erlang.unique_integer([:positive])}"
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        CREATE TABLE #{name} (
+          id BIGSERIAL PRIMARY KEY,
+          title TEXT NOT NULL,
+          inserted_at timestamp NOT NULL,
+          updated_at timestamp NOT NULL
+        )
+        """,
+        []
+      )
+
+      on_exit(fn -> Ecto.Adapters.SQL.query!(Repo, "DROP TABLE IF EXISTS #{name}", []) end)
+
+      assert :ok = Migrations.register_unregistered_tables()
+      Registry.reload!()
+      assert {:ok, _} = Registry.get(name)
+
+      # inserted_at was renamed to created_at; updated_at already existed
+      {:ok, %{rows: rows}} =
+        Repo.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = $1 ORDER BY ordinal_position",
+          [name]
+        )
+
+      columns = List.flatten(rows)
+      assert "created_at" in columns
+      refute "inserted_at" in columns
+      assert "updated_at" in columns
+
+      # And CRUD works end-to-end on the registered raw table
+      assert {:ok, rec} = Lazypock.Schemas.GenericRecord.insert(name, %{"title" => "hello"})
+      assert rec["title"] == "hello"
+
+      assert %{"title" => "updated"} =
+               Lazypock.Schemas.GenericRecord.update(
+                 name,
+                 rec["id"],
+                 %{"title" => "updated"}
+               )
+
+      assert :ok = Lazypock.Schemas.GenericRecord.delete(name, rec["id"])
+    end
+
+    test "internal _ tables and schema_migrations are never registered" do
+      name = "_mig_internal_#{:erlang.unique_integer([:positive])}"
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "CREATE TABLE #{name} (id UUID PRIMARY KEY DEFAULT gen_random_uuid())",
+        []
+      )
+
+      on_exit(fn -> Ecto.Adapters.SQL.query!(Repo, "DROP TABLE IF EXISTS #{name}", []) end)
+
+      assert :ok = Migrations.register_unregistered_tables()
+
+      count =
+        Repo.query!("SELECT count(*) FROM _collections WHERE name = $1", [name]).rows
+        |> List.flatten()
+        |> hd()
+
+      assert count == 0
+    end
+  end
 end

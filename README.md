@@ -239,11 +239,14 @@ automatically on boot (idempotent) and are listed by `lazypock migrations`.
   Other helpers: `Lazypock.Migrations.update_collection/2`,
   `Lazypock.Migrations.add_field/2`, `Lazypock.Migrations.drop_field/2`.
 
-  > **Raw `create table` migrations still work** for plain SQL tables, but
-  > such tables are **not** LazyPock collections — they won't appear in the
-  > Studio or the collections API (LazyPock logs a warning listing any
-  > unregistered public tables after every migrate). Use the helpers above to
-  > create collections.
+  > **Raw `create table` migrations also work** — after every migrate run,
+  > any public table that isn't registered in `_collections` is automatically
+  > registered as a `base` collection (columns inferred from the Postgres
+  > schema), so it shows up in the Studio and is served through
+  > `/api/:collection`. Ecto `timestamps()` tables get their `inserted_at`
+  > renamed to `created_at` and a missing `updated_at` added, so CRUD works
+  > out of the box. Internal `_`-prefixed tables are never touched. Use the
+  > helpers above when you want explicit control (rules, indexes, auth type).
 
 - **Check status**: `lazypock migrations`
 - **Disable auto-migrate on boot**: `LAZYPOCK_AUTOMIGRATE=0 lazypock`
