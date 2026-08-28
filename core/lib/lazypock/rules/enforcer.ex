@@ -17,8 +17,10 @@ defmodule Lazypock.Rules.Enforcer do
                     access via `@request.auth.*` tokens.      |
 
   * **`@request.auth.*` tokens** — `@request.auth.id`, `@request.auth.email`,
-    `@request.auth.role` are replaced with the authenticated user's values.
-    For unauthenticated requests they become empty strings `''`.
+    `@request.auth.role` are resolved to bound SQL parameters (`$N`) with
+    explicit Postgres casts derived from each column's type via
+    `Lazypock.Schema.TypeMapper`. For unauthenticated requests they become
+    empty-string parameters.
 
   * **Superuser bypass** — Authenticated superusers always bypass all
     rules entirely (matches PocketBase superadmin behavior).
@@ -69,15 +71,12 @@ defmodule Lazypock.Rules.Enforcer do
             {:ok, {"", []}}
 
           true ->
-            resolved = resolve_user_tokens(rule, user)
-
-            case FilterCompiler.compile(resolved) do
+            case compile_rule(rule, user, collection_name) do
               {:ok, {sql, params}} ->
-                # Inline rule params: compiled rules are compared against real
-                # columns (e.g. "id" = $1 on a uuid column) and bound params
-                # crash Postgrex's encoder for uuid/empty values. Inlining lets
-                # PG resolve literal types natively.
-                {:ok, {FilterCompiler.inline_params(sql, params), []}}
+                # Rule values are bound as parameters with explicit casts
+                # (e.g. "id" = $1::UUID) so Postgrex can encode them against
+                # typed columns; the caller merges these into the list query.
+                {:ok, {sql, params}}
 
               {:error, _} ->
                 {:error, "Access denied by listRule"}
@@ -182,9 +181,7 @@ defmodule Lazypock.Rules.Enforcer do
   end
 
   defp passes_rule?(rule, user, context, collection_name) do
-    resolved = resolve_user_tokens(rule, user)
-
-    case FilterCompiler.compile(resolved) do
+    case compile_rule(rule, user, collection_name) do
       {:ok, {sql, params}} ->
         if sql == "" do
           true
@@ -197,30 +194,75 @@ defmodule Lazypock.Rules.Enforcer do
     end
   end
 
+  # Resolves @request.auth.* tokens, compiles the rule with schema-aware casts
+  # and returns the bound SQL clause + params.
+  defp compile_rule(rule, user, collection_name) do
+    {resolved, token_values} = resolve_user_tokens(rule, user)
+    FilterCompiler.compile(resolved, token_values, field_types(collection_name))
+  end
+
+  # Column name (lowercase, matching FilterCompiler's emitted identifiers) →
+  # PostgreSQL type, so the compiler can emit explicit casts like `$1::UUID`.
+  defp field_types(collection_name) do
+    {:ok, collection} = Registry.get(collection_name)
+
+    types =
+      Map.new(collection.fields, fn field ->
+        {String.downcase(field.name), TypeMapper.column_pg_type(field)}
+      end)
+
+    # Every collection has a system `id UUID` column (DDL) that is not part of
+    # the user-defined fields.
+    Map.put(types, "id", TypeMapper.id_column_type())
+  end
+
+  # @request.auth.* tokens become `$N` placeholders whose values are bound as
+  # parameters (in `token_values`, indexed 1..4). The returned pair feeds
+  # FilterCompiler.compile/3.
   defp resolve_user_tokens(rule, nil) do
-    rule
-    |> String.replace(~r/@request\.auth\.id/, "''")
-    |> String.replace(~r/@request\.auth\.email/, "''")
-    |> String.replace(~r/@request\.auth\.role/, "''")
-    |> String.replace(~r/@request\.auth\.\w+/, "''")
+    values = [nil, nil, nil, nil]
+
+    {sql, values} = apply_token(rule, ~r/@request\.auth\.id/, "", 1, values)
+    {sql, values} = apply_token(sql, ~r/@request\.auth\.email/, "", 2, values)
+    {sql, values} = apply_token(sql, ~r/@request\.auth\.role/, "", 3, values)
+    {sql, values} = apply_token(sql, ~r/@request\.auth\.\w+/, "", 4, values)
+
+    {sql, values}
   end
 
   defp resolve_user_tokens(rule, user) do
-    uid = escape_quote(to_string(Map.get(user, "id") || Map.get(user, :id) || ""))
-    email = escape_quote(to_string(Map.get(user, "email") || Map.get(user, :email) || ""))
-    role = escape_quote(to_string(Map.get(user, "role") || Map.get(user, :role) || "user"))
+    id = to_string(Map.get(user, "id") || Map.get(user, :id) || "")
+    email = to_string(Map.get(user, "email") || Map.get(user, :email) || "")
+    role = to_string(Map.get(user, "role") || Map.get(user, :role) || "user")
 
-    rule
-    |> String.replace(~r/@request\.auth\.id/, "'#{uid}'")
-    |> String.replace(~r/@request\.auth\.email/, "'#{email}'")
-    |> String.replace(~r/@request\.auth\.role/, "'#{role}'")
-    |> String.replace(~r/@request\.auth\.\w+/, "''")
+    values = [nil, nil, nil, nil]
+
+    {sql, values} = apply_token(rule, ~r/@request\.auth\.id/, id, 1, values)
+    {sql, values} = apply_token(sql, ~r/@request\.auth\.email/, email, 2, values)
+    {sql, values} = apply_token(sql, ~r/@request\.auth\.role/, role, 3, values)
+    {sql, values} = apply_token(sql, ~r/@request\.auth\.\w+/, "", 4, values)
+
+    {sql, values}
+  end
+
+  # Replaces one token kind with a `$N` placeholder (bound param).
+  #
+  # A value containing a single quote keeps the escape_quote'd-literal
+  # fallback: parameterizing the escaped form would change matching semantics
+  # against SQL-escaped rule literals (e.g. `'o''brien@x.com'`), and the raw
+  # value must never reach SQL. The escaped literal is the last-resort
+  # defense-in-depth path — every other value is bound.
+  defp apply_token(sql, regex, value, idx, values) do
+    if String.contains?(value, "'") do
+      {String.replace(sql, regex, ~s('#{escape_quote(value)}')), values}
+    else
+      {String.replace(sql, regex, "$#{idx}"), List.replace_at(values, idx - 1, value)}
+    end
   end
 
   defp eval_against_context(sql, params, nil, _collection_name) do
-    # No record context — rule references only @request.auth tokens
-    # The sql is something like "'' != ''" → false
-    # We can check by running a simple SELECT with no FROM.
+    # No record context — rule references only @request.auth tokens.
+    # The sql is something like "$1 != $2" → false for empty values.
     # A failing query (e.g. a typo'd field name) must deny, not crash.
     case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{sql}", params) do
       {:ok, %{rows: rows}} -> length(rows) > 0
@@ -238,18 +280,17 @@ defmodule Lazypock.Rules.Enforcer do
       # Postgrex expects 16-byte binary for UUID columns, not string
       uuid_bin = Ecto.UUID.dump!(record_id)
 
-      # Inline the rule's params: the FilterCompiler has no schema knowledge, so
-      # a bound param compared to a typed column (e.g. "id" = $1 with a user's
-      # uuid, or "" for unauthenticated) crashes Postgrex's encoder. Inlining
-      # lets PG resolve literal types natively; invalid literals ("" for uuid)
-      # become query errors → denied. This matches the create-path semantics.
-      inline_sql = FilterCompiler.inline_params(sql, params)
+      # The record id is bound as $1 with an explicit cast pulled from
+      # TypeMapper (every collection's id column is uuid). Rule params are
+      # already cast/coerced by FilterCompiler, so the rule's placeholders are
+      # shifted up by one to make room for $1.
+      rule_sql = FilterCompiler.shift_placeholders(sql, 1)
 
       # A failing query (undefined column, bad expression) must deny, not crash.
       case Ecto.Adapters.SQL.query(
              Repo,
-             "SELECT 1 FROM #{table} WHERE id = $1 AND (#{inline_sql}) LIMIT 1",
-             [uuid_bin]
+             "SELECT 1 FROM #{table} WHERE id = $1::#{TypeMapper.id_column_type()} AND (#{rule_sql}) LIMIT 1",
+             [uuid_bin | params]
            ) do
         {:ok, %{rows: rows}} -> length(rows) > 0
         {:error, _} -> false
@@ -279,19 +320,13 @@ defmodule Lazypock.Rules.Enforcer do
         end)
 
       # Resolve remaining $1, $2 etc. parameter placeholders with actual values
+      # (params may already be coerced to their column representation, e.g. a
+      # 16-byte uuid binary or a Decimal)
       resolved =
         params
         |> Enum.with_index(1)
         |> Enum.reduce(resolved, fn {val, idx}, acc ->
-          val_str =
-            cond do
-              is_nil(val) -> "null"
-              is_boolean(val) -> String.downcase(to_string(val))
-              is_binary(val) -> ~s('#{escape_quote(val)}')
-              true -> to_string(val)
-            end
-
-          String.replace(acc, "$#{idx}", val_str)
+          String.replace(acc, "$#{idx}", inline_sql_value(val))
         end)
 
       # Now run SELECT 1 WHERE with fully resolved values
@@ -307,6 +342,25 @@ defmodule Lazypock.Rules.Enforcer do
       end
     end
   end
+
+  # Formats a value as a SQL literal for eval_without_db's inline evaluation,
+  # handling values already coerced by TypeMapper (uuid binaries, Decimals,
+  # DateTimes).
+  defp inline_sql_value(nil), do: "null"
+
+  defp inline_sql_value(val) when is_boolean(val), do: String.downcase(to_string(val))
+
+  defp inline_sql_value(val) when is_binary(val) and byte_size(val) == 16 do
+    case Ecto.UUID.load(val) do
+      {:ok, uuid} -> ~s('#{uuid}')
+      _ -> "null"
+    end
+  end
+
+  defp inline_sql_value(val) when is_binary(val), do: ~s('#{escape_quote(val)}')
+  defp inline_sql_value(%Decimal{} = val), do: to_string(val)
+  defp inline_sql_value(%DateTime{} = val), do: ~s('#{DateTime.to_iso8601(val)}')
+  defp inline_sql_value(val), do: to_string(val)
 
   defp escape_quote(str), do: String.replace(str, "'", "''")
 end
