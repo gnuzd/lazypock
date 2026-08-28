@@ -1,18 +1,87 @@
 # 🦥 LazyPock
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Elixir](https://img.shields.io/badge/Elixir-1.17%2B-4B275F?logo=elixir)](https://elixir-lang.org)
+[![Phoenix](https://img.shields.io/badge/Phoenix-1.7%2B-FD4F00)](https://www.phoenixframework.org)
 
 > **Your whole backend. In one lazy pocket.**
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**. Define collections in the Studio admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
 
-**Status:** Beta — Core backend features working. Auth collections (user JWT, login/refresh, rule integration) ✅. Studio SvelteKit admin UI **ready for beta test**. TypeScript SDK ([lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) **ready for beta test**.
+**Status:** Beta. The backend (schema engine, REST API, rules, realtime, file storage, hooks, cron, auth incl. OAuth2), the Studio admin UI, and the TypeScript SDK are all complete and usable end-to-end. See [What Works Now](#what-works-now) for the full breakdown.
+
+---
+
+## Try it in 60 seconds
+
+No Elixir, Erlang, or source checkout needed — just Docker (for Postgres) and a prebuilt binary.
+
+```bash
+# 1. Start Postgres (the repo's docker-compose.yml runs Postgres 16:
+#    postgres/postgres@localhost:5432, database lazypock_dev)
+docker compose up -d
+
+# 2. Grab the prebuilt binary for your platform from Releases:
+#    https://github.com/gnuzd/lazypock/releases
+#    (macOS arm64 + Linux x86_64; checksums included)
+
+# 3. Run it — the superuser is auto-created on first boot
+DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev" \
+SECRET_KEY_BASE="$(openssl rand -base64 48)" \
+LAZYPOCK_SUPERUSER_EMAIL=admin@lazypock.app \
+LAZYPOCK_SUPERUSER_PASSWORD=admin123 \
+  ./lazypock
+```
+
+- Server + Studio admin UI: **<http://localhost:4000>** (login at `/_/` with the superuser above)
+- REST API: `http://localhost:4000/api/...`
+
+Reset everything (including the database):
+
+```bash
+docker compose down -v
+```
+
+Prefer no Docker at all? Any PostgreSQL 15+ works — just point `DATABASE_URL` at it. Or run from source: see [Development](#development).
+
+### Talk to it from TypeScript
+
+```ts
+import { LazypockClient } from 'lazypock';
+
+const client = new LazypockClient({ baseUrl: 'http://localhost:4000/api' });
+await client.login('admin@lazypock.app', 'admin123');
+
+// after creating a `posts` collection in the Studio
+const posts = await client.collection('posts').getList(1, 30);
+client.collection('posts').subscribe((e) => console.log(e.action, e.record));
+```
+
+Full SDK docs (type-safe codegen, filters, realtime, file uploads): **[gnuzd/lazypock-ts](https://github.com/gnuzd/lazypock-ts)**.
+
+---
+
+## What Works Now
+
+| Feature | Backend (core) | Studio (admin UI) | SDK (lazypock-ts) |
+| --- | --- | --- | --- |
+| 🗄️ **Dynamic Collections** | DDL create/drop/add field — real Postgres tables, real columns ✅ | Collection CRUD in side pane, field editor (add/remove/reorder) ✅ | — |
+| 🌐 **REST API** | `GET/POST/PATCH/DELETE /api/:collection`, filter/sort/paginate ✅ | Record browser: DataTable + dynamic RecordForm ✅ | `collection(name).getList/getFullList/getOne/create/update/delete` ✅ |
+| 🔐 **Auth** | Superuser JWT + auth collection JWT (`auth-with-password`/`auth-refresh`/`auth-methods`) + OAuth2 (Google/GitHub/generic via Assent) ✅ | Login page, auth guard, token persistence, auto-redirect ✅ | `login/me/logout`, `AuthStore` with pluggable storage (localStorage-backed by default) ✅ |
+| 🛡️ **Rules** | Three-state rules (nil = superuser, `""` = public, filter expr), enforced on all CRUD + `manageRule` ✅ | Rule editor with lock/unlock per field ✅ | — |
+| ⚡ **Realtime** | Phoenix Channels, rule-enforced join, anonymous allowed on public/rule-based collections ✅ | Live record updates via `client.realtime.subscribe()` ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`, auto-connects without a token for public reads ✅ |
+| 📁 **File Storage** | Upload/serve/delete, local + S3 adapters, thumbnails + on-demand scaling ✅ | Upload in record form, image picker, thumbnails in list/form ✅ | `files.upload/list/delete`, `getFileUrl`, `getThumbUrl`, `getScaleUrl` ✅ |
+| 🪝 **Hooks** | PocketBase-style event hooks (`use Lazypock.Hooks.Hook`, `e.next()` chain, ~80 hook points), custom API routes via `Router.add` ✅ | — | — |
+| ⏰ **Cron Jobs** | Persisted `_crons` scheduler: 5/6-field expressions, per-job IANA timezone, SQL / HTTP-webhook / Elixir-hook actions, run-now, pg advisory-lock guarded execution ✅ | Settings → Cron dashboard: CRUD, enable/disable, run-now, next-run preview, last-run status ✅ | — |
+| 🎨 **Admin Dashboard** | Serves the Studio SPA at `/_/*`, dev proxy support ✅ | Collections sidebar, record CRUD, field editor, rules, indexes, API keys, import/export, backups ✅ | — |
+
+> **API keys** can be generated from Studio **Settings → API Keys**. Keys are stored as a SHA-256 hash (raw value shown once at generation) and are scoped to collection listing — enough for codegen (`GET /collections`) without a login round-trip. See [lazypock-ts](https://github.com/gnuzd/lazypock-ts).
 
 ---
 
 ## Project Structure (Monorepo)
 
-```
+```text
 LazyPock/
 ├── core/                  # Elixir backend (Phoenix app)
 │   ├── lib/
@@ -24,6 +93,7 @@ LazyPock/
 │   │   │   ├── hooks/           # PocketBase-parity event hooks (Event, Registry, Router)
 │   │   │   ├── auth/            # Superuser JWT auth + token
 │   │   │   ├── files/           # File storage (local + S3 adapters)
+│   │   │   ├── cron/            # Cron scheduler (persisted _crons)
 │   │   │   └── realtime/        # Broadcaster (Phoenix PubSub)
 │   │   └── lazypock_web/        # Web layer (controllers, channels)
 │   │       ├── controllers/     # CollectionController, DynamicController, etc.
@@ -47,6 +117,7 @@ LazyPock/
 │   └── package.json
 │
 ├── PLAN.md                # Full architecture & development plan
+├── docker-compose.yml     # Postgres 16 for local dev (the app is not containerized)
 └── README.md
 ```
 
@@ -54,55 +125,17 @@ LazyPock/
 
 ---
 
-## What Works Now
-
-| Feature | BE (core) | FE (Studio) | SDK (lazypock-ts) |
-| --- | --- | --- | --- |
-| 🗄️ **Dynamic Collections** | DDL create/drop/add field. Real Pg tables with real columns. ✅ | Collection CRUD in side pane. Field editor (add/remove/reorder). ✅ | — |
-| 🌐 **REST API** | `GET/POST/PATCH/DELETE /api/:collection`. Filter, sort, paginate. ✅ | Record browser with DataTable + dynamic RecordForm. ✅ | `client.collection(name).getList/getFullList/getOne/create/update/delete` ✅ |
-| 🔐 **Auth System** | Superuser JWT (setup/login/verify) + **auth collection JWT** (`/:collection/auth-with-password`, `/:collection/auth-refresh`, `/:collection/auth-methods`) + **OAuth2 providers** (`/:collection/auth-with-oauth2`, `/api/oauth2-redirect` popup flow, `_external_auths` linking via Assent — Google/GitHub/generic). Dual token verification in Plug. ✅ | Login page. Auth guard. Token persistence. Auto-redirect. ✅ | `client.login/me/logout`, `authStore` (localStorage-backed) ✅ |
-| 🛡️ **Rules** | Three-state (nil=superuser, ""=public, filter). Enforcer for all CRUD + manageRule. Auth user support (non-superusers evaluated against rules). ✅ | Rule editor with lock/unlock per field. `manageRule` field. ✅ | — |
-| ⚡ **Realtime** | Phoenix Channels. Broadcaster wired into DynamicController. Rule-enforced join (anonymous allowed on public/rule-based collections). ✅ | Real-time record updates via `client.realtime.subscribe()`. ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`; auto-connects without a token for anon/rule-based access ✅ |
-| 📁 **File Storage** | Upload, serve, delete. Local + S3 adapters. ✅ | Upload in record form, image library picker, thumbnails in list/form. ✅ | `files.upload/list/delete`, `getThumbUrl`, `getScaleUrl` ✅ |
-| 🪝 **Hooks** | PocketBase-compatible event hooks: `use Lazypock.Hooks.Hook` modules in `priv/hooks/`, `function(e)` + `e.next()` chain, ~70 hooks (App/Record/Collection/BaseModel/Request/Mailer/Realtime), custom API routes via `on_before_serve` + `Router.add`. Legacy Lifecycle/Dispatcher still work (deprecated). ✅ | — | — |
-| ⏰ **Cron Jobs** | Persisted `_crons` scheduler: 5/6-field expressions, per-job IANA timezone, SQL / HTTP-webhook / Elixir-hook actions, run-now, pg advisory-lock guarded execution. ✅ | Settings → Cron dashboard: CRUD, enable/disable, run-now, next-run preview, last-run status. ✅ | — |
-| 🎨 **Admin Dashboard** | Serves Svelte SPA at `/_/*`. Proxy support in dev. ✅ | Collections sidebar. Record CRUD. Field editor. Rules. Indexes. API key management (Settings → API Keys). Import/Export (Settings → Export/Import Collections). ✅ | — |
-
----
-
-> **API keys** can be generated from the Studio **Settings → API Keys** dashboard.
-> Keys are stored as a SHA-256 hash (raw value shown once at generation) and are
-> scoped to collection listing — enough for codegen (`GET /collections`) without
-> a login round-trip. See the [lazypock-ts repo](https://github.com/gnuzd/lazypock-ts).
-
 ## How to Run
-
-### Docker (easiest — no toolchain needed)
-
-The fastest way to try LazyPock: `docker compose up` starts Postgres + LazyPock
-(the **latest release**, built with ImageMagick included) plus example hooks
-and a starter migration.
-
-```bash
-git clone git@github.com:gnuzd/lazypock.git
-cd lazypock/example/docker
-docker compose up --build
-```
-
-- Server + Studio admin UI: <http://localhost:4000> (`/_/`)
-- Superuser (auto-created on first boot): `admin@lazypock.app` / `admin123`
-
-See [example/](example/) for details (example hooks, migrations, and frontend apps).
 
 ### Prerequisites
 
 - **Elixir 1.17+** + **Erlang/OTP 26+**
-- **PostgreSQL 15+**
+- **PostgreSQL 15+** (no Postgres handy? the repo's `docker-compose.yml` starts one — see [Development](#development))
 - **Node.js 20+** (for Studio admin UI)
-- **ImageMagick 7+** (`magick`/`convert`) — required for image thumbnails and
-  on-demand scaling (see [File Storage & Thumbnails](#file-storage--thumbnails));
-  uploads work without it but no resizing is available
+- **ImageMagick 7+** (`magick`/`convert`) — required for image thumbnails and on-demand scaling (see [File Storage & Thumbnails](#file-storage--thumbnails)); uploads work without it but no resizing is available
 - `zig` and `xz` installed (for Burrito release builds)
+
+Just want to click around? Skip straight to [Try it in 60 seconds](#try-it-in-60-seconds) above — none of this is needed.
 
 ### Development
 
@@ -116,6 +149,8 @@ mix setup          # Install deps, create DB, run migrations, seed
 mix phx.server     # Starts Phoenix on http://localhost:4000
 ```
 
+No Postgres handy? `docker compose up -d` at the repo root starts a Postgres 16 (user/password `postgres`/`postgres`, database `lazypock_dev`, port 5432) that matches the `DATABASE_URL` above.
+
 #### 2. Studio (SvelteKit Admin UI)
 
 ```bash
@@ -127,11 +162,17 @@ npm run dev         # Starts Vite dev server on http://localhost:5173
 
 > The SvelteKit dev server proxies `/api` requests to the Phoenix backend (port 4000). The Studio is served at `http://localhost:5173/_/`.
 >
-> For production, the SPA is built into `core/priv/static/studio/` (gitignored —
-> generated, not committed). Run `mix assets.build` (or `mix assets.deploy`)
-> in `core/` to produce it; the release workflow does this automatically.
+> For production, the SPA is built into `core/priv/static/studio/` (gitignored — generated, not committed). Run `mix assets.build` (or `mix assets.deploy`) in `core/` to produce it; the release workflow does this automatically.
 
 #### 3. TypeScript SDK
+
+Consumers just install the published package:
+
+```bash
+npm install lazypock
+```
+
+Or build it from source:
 
 ```bash
 git clone git@github.com:gnuzd/lazypock-ts.git
@@ -140,18 +181,12 @@ npm install
 npm run build
 ```
 
-Consumers just install the published package:
-
-```bash
-npm install lazypock
-```
-
 ### First-Time Setup
 
-1. Open Studio at `http://localhost:5173/_/` (or `/_` if serving from Phoenix)
+1. Open Studio at `http://localhost:5173/_/` (or `/_/` if serving from Phoenix directly)
 2. You'll be redirected to the login page
 3. Click **Setup** to create the first superuser account
-4. Login and start managing collections
+4. Log in and start managing collections
 
 ### Production Release (Burrito single binary)
 
@@ -161,20 +196,24 @@ MIX_ENV=prod mix release
 # Binary: core/burrito_out/lazypock_macos_silicon
 ```
 
+Prebuilt binaries for macOS (arm64) and Linux (x86_64) are also published on [Releases](https://github.com/gnuzd/lazypock/releases) — no build toolchain needed.
+
 #### Required Environment Variables
 
 | Variable | Description | Example |
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string | `ecto://postgres:postgres@localhost:5432/lazypock_dev` |
-| `SECRET_KEY_BASE` | Secret for signing cookies | (generate with `mix phx.gen.secret`) |
+| `SECRET_KEY_BASE` | Secret for signing cookies | (generate with `mix phx.gen.secret` or `openssl rand -base64 48`) |
 | `PHX_HOST` | Public hostname (optional, defaults to `example.com`) | `localhost` |
 | `PORT` | HTTP port (optional, defaults to `4000`) | `4000` |
 | `POOL_SIZE` | DB connection pool size (optional, defaults to `10`) | `10` |
+| `LAZYPOCK_DATA_DIR` | Base data dir for migrations/hooks/seeds (default: `~/.lazypock`) | `/data/lazypock` |
 | `LAZYPOCK_SUPERUSER_EMAIL` | Auto-create superuser on boot | `admin@lazypock.app` |
 | `LAZYPOCK_SUPERUSER_PASSWORD` | Auto-create superuser on boot | `your-password` |
 | `LAZYPOCK_THUMBNAILS` | Set to `0` to disable thumbnail/scaling generation (see [File Storage & Thumbnails](#file-storage--thumbnails)) | `0` |
-| `LAZYPOCK_MIGRATIONS_DIR` | Directory for migrations (default: `~/.lazypock/migrations`) | `/data/lazypock/migrations` |
+| `LAZYPOCK_MIGRATIONS_DIR` | Directory for user migrations (default: `~/.lazypock/migrations`) | `/data/lazypock/migrations` |
 | `LAZYPOCK_AUTOMIGRATE` | Set to `0` to disable auto-migrate on boot (then use `lazypock migrate`) | `0` |
+| `LAZYPOCK_AUTOSEED` | Set to `0` to disable boot-time seeding | `0` |
 | `LAZYPOCK_HOOKS_DIR` | Directory for user hooks (default: `~/.lazypock/hooks`) | `/data/lazypock/hooks` |
 | `LAZYPOCK_SEEDS_FILE` | Seed file path (default: `~/.lazypock/seeds.exs`) | `/data/lazypock/seeds.exs` |
 
@@ -188,10 +227,9 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
   ./core/burrito_out/lazypock_macos_silicon
 ```
 
-The HTTP server is **always started** — no `PHX_SERVER` needed; just run the
-binary (or `bin/lazypock start`).
+The HTTP server is **always started** — no `PHX_SERVER` needed; just run the binary (or `bin/lazypock start`).
 
-Note: The release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
+Note: the release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
 
 ### Migrations (PocketBase-style)
 
@@ -396,7 +434,7 @@ silence the warning).
 
 Any uploaded **image** can be resized on request (no pre-configuration needed):
 
-```
+```text
 GET /api/files/:id/scale/:size
 ```
 
@@ -558,7 +596,7 @@ lazypock restore FILE   # restore schema + data from a backup JSON (upsert by id
 
 ## Architecture
 
-```
+```text
  Admin Dashboard (SvelteKit SPA)
          │
    ┌─────┼──────┐
@@ -600,7 +638,7 @@ Schema  Hooks  Rules  ← Dynamic engine layer
 
 See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 
-**Current Status:** BE core (Phases 1–7) done. Auth collections (Phase 3 — user JWT, login/refresh, rule integration) ✅. Studio SPA (Phase 8) **ready for beta test**. TypeScript SDK (Phase 9 — [lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) **ready for beta test**. Release setup (Phase 10 — Burrito single binary + GitHub Actions release workflow) done.
+**Current Status:** BE core (Phases 1–7) done. Auth collections (Phase 3 — user JWT, login/refresh, rule integration) ✅. Studio SPA (Phase 8) ✅. TypeScript SDK (Phase 9 — [lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) ✅ — published on npm, codegen CLI included. Release setup (Phase 10 — Burrito single binary + GitHub Actions release workflow) done; polish items pending.
 
 | Phase | What | Status |
 | --- | --- | --- |
@@ -611,8 +649,8 @@ See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 | 5 | Realtime (Phoenix Channels, Broadcaster) | ✅ Complete |
 | 6 | File Storage (upload, serve, local + S3) | ✅ Complete |
 | 7 | Hook System (PocketBase-parity event hooks: Event + `e.next()` chain, Router for custom API routes) | ✅ Complete |
-| 8 | Studio Admin SPA (SvelteKit) | ✅ **Ready for beta test** — collections, records, rules, logs, settings shipped |
-| 9 | TypeScript SDK ([lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) | ✅ **Ready for beta test** — published on npm, codegen CLI included |
+| 8 | Studio Admin SPA (SvelteKit) | ✅ Complete — collections, records, rules, cron, settings shipped |
+| 9 | TypeScript SDK ([lazypock-ts](https://github.com/gnuzd/lazypock-ts), npm: `lazypock`) | ✅ Complete — published on npm, codegen CLI included |
 | 10 | Polish & Release | 🔧 **Release setup done** — Burrito single binary + GitHub Actions release workflow; polish items pending |
 
 ---
@@ -635,11 +673,17 @@ See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 | Database | Ecto + Postgrex + PostgreSQL 15+ |
 | Auth | Joken + bcrypt_elixir |
 | Admin UI | **SvelteKit SPA** (`studio/`) — built to `core/priv/static/studio/` |
-| Image Processing | Vix (libvips) |
+| Image Processing | ImageMagick CLI (`magick`/`convert`) — thumbnails + on-demand scaling |
 | JS SDK | TypeScript — separate repo: [gnuzd/lazypock-ts](https://github.com/gnuzd/lazypock-ts) |
 | CSS | Tailwind CSS (Studio), none (core) |
 
 ---
+
+## Contributing
+
+Issues and PRs are welcome. Read [PLAN.md](https://github.com/gnuzd/lazypock/blob/main/PLAN.md) first for the architecture and current priorities, then open an issue to discuss anything non-trivial before sending a PR.
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please), so commits on `main` should follow [Conventional Commits](https://www.conventionalcommits.org/) (`fix:`, `feat:`, `BREAKING CHANGE:`) so the next version is chosen correctly.
 
 ## License
 
