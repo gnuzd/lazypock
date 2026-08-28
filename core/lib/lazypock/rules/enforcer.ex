@@ -277,23 +277,30 @@ defmodule Lazypock.Rules.Enforcer do
     if record_id do
       table = TypeMapper.quote_ident(collection_name)
 
-      # Postgrex expects 16-byte binary for UUID columns, not string
-      uuid_bin = Ecto.UUID.dump!(record_id)
+      # Postgrex expects 16-byte binary for UUID columns, not string. A
+      # malformed id (e.g. from a caller passing a hand-built record map) must
+      # deny, not crash with a 500 — the same fail-closed rule as query errors.
+      case TypeMapper.coerce_value(TypeMapper.id_column_type(), record_id) do
+        {:ok, uuid_bin} ->
+          # The record id is bound as $1 with an explicit cast pulled from
+          # TypeMapper (every collection's id column is uuid). Rule params are
+          # already cast/coerced by FilterCompiler, so the rule's placeholders
+          # are shifted up by one to make room for $1.
+          rule_sql = FilterCompiler.shift_placeholders(sql, 1)
 
-      # The record id is bound as $1 with an explicit cast pulled from
-      # TypeMapper (every collection's id column is uuid). Rule params are
-      # already cast/coerced by FilterCompiler, so the rule's placeholders are
-      # shifted up by one to make room for $1.
-      rule_sql = FilterCompiler.shift_placeholders(sql, 1)
+          # A failing query (undefined column, bad expression) must deny, not
+          # crash.
+          case Ecto.Adapters.SQL.query(
+                 Repo,
+                 "SELECT 1 FROM #{table} WHERE id = $1::#{TypeMapper.id_column_type()} AND (#{rule_sql}) LIMIT 1",
+                 [uuid_bin | params]
+               ) do
+            {:ok, %{rows: rows}} -> length(rows) > 0
+            {:error, _} -> false
+          end
 
-      # A failing query (undefined column, bad expression) must deny, not crash.
-      case Ecto.Adapters.SQL.query(
-             Repo,
-             "SELECT 1 FROM #{table} WHERE id = $1::#{TypeMapper.id_column_type()} AND (#{rule_sql}) LIMIT 1",
-             [uuid_bin | params]
-           ) do
-        {:ok, %{rows: rows}} -> length(rows) > 0
-        {:error, _} -> false
+        :error ->
+          false
       end
     else
       # No id yet (create action) — check what we can

@@ -290,6 +290,16 @@ defmodule Lazypock.Rules.EnforcerGapsTest do
       assert :ok = Enforcer.authorize_view(name, owner, record)
       assert {:error, _} = Enforcer.authorize_view(name, stranger, record)
     end
+
+    test "record with a malformed id denies instead of crashing" do
+      name = cname("badid")
+      create_test_collection(name, %{"viewRule" => "title != ''"})
+
+      # A hand-built record map whose id is not a uuid must deny (fail closed),
+      # not raise — previously Ecto.UUID.dump!/1 crashed with a 500.
+      assert {:error, _} =
+               Enforcer.authorize_view(name, auth_user(), %{"id" => "not-a-uuid", "title" => "x"})
+    end
   end
 
   describe "superuser bypass on mutations with nil rules" do
