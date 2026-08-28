@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/gnuzd/lazypock/compare/v0.6.1...v0.6.2) (2026-08-28)
+
+
+### Bug Fixes
+
+* **enforcer:** deny instead of crashing on malformed record id in rule eval ([c1f4ed0](https://github.com/gnuzd/lazypock/commit/c1f4ed023215f5fecfcaf878bb8f04e6595114f5))
+* **enforcer:** deny instead of crashing on malformed record id in rule eval ([25581d1](https://github.com/gnuzd/lazypock/commit/25581d1a27c169c2b92715215446558f352ad4ae))
+
 ## [0.6.1](https://github.com/gnuzd/lazypock/compare/v0.6.0...v0.6.1) (2026-08-25)
 
 
