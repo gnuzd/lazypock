@@ -65,7 +65,12 @@ defmodule Lazypock.Rules.EnforcerGapsTest do
   describe "manageRule short-circuit on mutations" do
     test "manageRule match allows view when viewRule is nil" do
       name = cname("mgmt_view")
-      create_test_collection(name, %{"viewRule" => nil, "manageRule" => "@request.auth.role = 'admin'"})
+
+      create_test_collection(name, %{
+        "viewRule" => nil,
+        "manageRule" => "@request.auth.role = 'admin'"
+      })
+
       record = insert_record(name, %{title: "x"})
       assert :ok = Enforcer.authorize_view(name, auth_user(%{"role" => "admin"}), record)
       assert {:error, _} = Enforcer.authorize_view(name, auth_user(%{"role" => "user"}), record)
@@ -81,16 +86,28 @@ defmodule Lazypock.Rules.EnforcerGapsTest do
 
     test "manageRule match allows update when updateRule is nil" do
       name = cname("mgmt_update")
-      create_test_collection(name, %{"updateRule" => nil, "manageRule" => "@request.auth.role = 'editor'"})
+
+      create_test_collection(name, %{
+        "updateRule" => nil,
+        "manageRule" => "@request.auth.role = 'editor'"
+      })
+
       record = insert_record(name, %{title: "x"})
       editor = auth_user(%{"role" => "editor"})
       assert :ok = Enforcer.authorize_update(name, editor, record)
-      assert {:error, _} = Enforcer.authorize_update(name, auth_user(%{"role" => "viewer"}), record)
+
+      assert {:error, _} =
+               Enforcer.authorize_update(name, auth_user(%{"role" => "viewer"}), record)
     end
 
     test "manageRule match allows delete when deleteRule is nil" do
       name = cname("mgmt_delete")
-      create_test_collection(name, %{"deleteRule" => nil, "manageRule" => "@request.auth.id = 'root'"})
+
+      create_test_collection(name, %{
+        "deleteRule" => nil,
+        "manageRule" => "@request.auth.id = 'root'"
+      })
+
       record = insert_record(name, %{title: "x"})
       assert :ok = Enforcer.authorize_delete(name, auth_user(%{"id" => "root"}), record)
       assert {:error, _} = Enforcer.authorize_delete(name, auth_user(%{"id" => "other"}), record)
@@ -98,7 +115,12 @@ defmodule Lazypock.Rules.EnforcerGapsTest do
 
     test "manageRule evaluated against the record (record-field rule)" do
       name = cname("mgmt_record")
-      create_test_collection(name, %{"updateRule" => nil, "manageRule" => "owner_id = @request.auth.id"})
+
+      create_test_collection(name, %{
+        "updateRule" => nil,
+        "manageRule" => "owner_id = @request.auth.id"
+      })
+
       record = insert_record(name, %{owner_id: "user-1"})
       owner = auth_user(%{"id" => "user-1"})
       other = auth_user(%{"id" => "user-2"})
@@ -273,7 +295,14 @@ defmodule Lazypock.Rules.EnforcerGapsTest do
   describe "superuser bypass on mutations with nil rules" do
     test "superuser bypasses nil rules for view/create/update/delete" do
       name = cname("subypass")
-      create_test_collection(name, %{"viewRule" => nil, "createRule" => nil, "updateRule" => nil, "deleteRule" => nil})
+
+      create_test_collection(name, %{
+        "viewRule" => nil,
+        "createRule" => nil,
+        "updateRule" => nil,
+        "deleteRule" => nil
+      })
+
       record = insert_record(name, %{title: "x"})
       su = superuser()
 

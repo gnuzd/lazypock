@@ -181,6 +181,40 @@ npm install
 npm run build
 ```
 
+### Testing
+
+The backend test suite runs against a real PostgreSQL database — point
+`DATABASE_URL` at your dev database (see [Development](#development)) and run:
+
+```bash
+cd core
+
+mix test                          # Full suite
+mix test test/lazypock/rules/     # Access-control rule engine (enforcer + filter compiler)
+mix test test/lazypock/auth/      # Auth: tokens, plug, rate limiting, OAuth2
+```
+
+#### What the rule-engine tests cover
+
+The `core/test/lazypock/rules/` suite exercises the full rule pipeline end to
+end against Postgres:
+
+* **Three-state rule logic** — `nil` = superuser-only, `""` = public, filter =
+  conditional, plus the superuser bypass and `manageRule` delegation.
+* **`@request.auth.*` token resolution** — user `id`/`email`/`role` are bound
+  as SQL parameters, never interpolated into the query text.
+* **Typed-column casts** — values are bound with explicit Postgres casts
+  (`$1::UUID`, `$1::TEXT`, `$1::NUMERIC`) pulled from
+  `Lazypock.Schema.TypeMapper`, so uuid/numeric/text comparisons work with
+  bound parameters (see the *typed column casts* cases in
+  `enforcer_gaps_test.exs`).
+* **SQL injection / escaping** — rule values containing single quotes or
+  backslashes are handled safely (match exactly, never break out of the query),
+  including a regression for multi-condition token rules ([#38](https://github.com/gnuzd/lazypock/issues/38)).
+
+A module-by-module coverage inventory (what's tested, what's not, and by which
+file) lives in [`TEST_COVERAGE_AUDIT.md`](TEST_COVERAGE_AUDIT.md).
+
 ### First-Time Setup
 
 1. Open Studio at `http://localhost:5173/_/` (or `/_/` if serving from Phoenix directly)

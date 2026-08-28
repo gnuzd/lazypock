@@ -300,8 +300,11 @@ defmodule Lazypock.Schemas.FilterCompiler do
   defp coerce_ast({op, {:field, f}, {:param, n}}, types, token_values)
        when op in ~w(= != > >= < <=) do
     case types[column_name(f)] do
-      nil -> {:ok, {op, {:field, f}, {:param, n}}}
-      pg_type -> coerce_compare({op, {:field, f}, {:param, n}}, pg_type, token_value(token_values, n))
+      nil ->
+        {:ok, {op, {:field, f}, {:param, n}}}
+
+      pg_type ->
+        coerce_compare({op, {:field, f}, {:param, n}}, pg_type, token_value(token_values, n))
     end
   end
 
@@ -318,8 +321,11 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   defp coerce_ast({op, {:field, f}, {:param, n}}, types, token_values) when op in ~w(~ !~) do
     case types[column_name(f)] do
-      nil -> {:ok, {op, {:field, f}, {:param, n}}}
-      _pg_type -> coerce_compare({op, {:field, f}, {:param, n}}, "TEXT", token_value(token_values, n))
+      nil ->
+        {:ok, {op, {:field, f}, {:param, n}}}
+
+      _pg_type ->
+        coerce_compare({op, {:field, f}, {:param, n}}, "TEXT", token_value(token_values, n))
     end
   end
 
@@ -359,7 +365,9 @@ defmodule Lazypock.Schemas.FilterCompiler do
   # `token_values` list (coercion pre-pass) and the `{types, token_values}`
   # emit context.
   defp token_value({_types, token_values}, n), do: Enum.at(token_values, n - 1, "")
-  defp token_value(token_values, n) when is_list(token_values), do: Enum.at(token_values, n - 1, "")
+
+  defp token_value(token_values, n) when is_list(token_values),
+    do: Enum.at(token_values, n - 1, "")
 
   # ── Code generator ───────────────────────────────────
 
@@ -416,7 +424,8 @@ defmodule Lazypock.Schemas.FilterCompiler do
   end
 
   # Literal OP Literal — e.g. '' != '' (from @request.auth.id != '' when unauthenticated)
-  defp emit_simple({op, {:literal, left}, {:literal, right}}, _ctx) when op in ~w(= != > >= < <=) do
+  defp emit_simple({op, {:literal, left}, {:literal, right}}, _ctx)
+       when op in ~w(= != > >= < <=) do
     {~s[$1 #{op} $2], [left, right]}
   end
 

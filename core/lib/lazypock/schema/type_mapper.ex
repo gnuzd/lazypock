@@ -141,6 +141,7 @@ defmodule Lazypock.Schema.TypeMapper do
   Returns the SQL default value expression for a field definition.
   """
   def default_sql(%{"default" => nil}), do: ""
+
   def default_sql(%{"default" => default, "type" => type}) do
     case type do
       "text" -> "DEFAULT '#{escape_string(default)}'"
@@ -150,6 +151,7 @@ defmodule Lazypock.Schema.TypeMapper do
       _ -> ""
     end
   end
+
   def default_sql(_), do: ""
 
   @spec escape_string(String.t()) :: String.t()
