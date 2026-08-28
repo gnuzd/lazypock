@@ -3,6 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Elixir](https://img.shields.io/badge/Elixir-1.17%2B-4B275F?logo=elixir)](https://elixir-lang.org)
 [![Phoenix](https://img.shields.io/badge/Phoenix-1.7%2B-FD4F00)](https://www.phoenixframework.org)
+[![Tests](https://img.shields.io/github/actions/workflow/status/gnuzd/lazypock/test.yml?branch=main&label=tests&logo=github)](https://github.com/gnuzd/lazypock/actions/workflows/test.yml)
 
 > **Your whole backend. In one lazy pocket.**
 
@@ -199,16 +200,16 @@ mix test test/lazypock/auth/      # Auth: tokens, plug, rate limiting, OAuth2
 The `core/test/lazypock/rules/` suite exercises the full rule pipeline end to
 end against Postgres:
 
-* **Three-state rule logic** — `nil` = superuser-only, `""` = public, filter =
+- **Three-state rule logic** — `nil` = superuser-only, `""` = public, filter =
   conditional, plus the superuser bypass and `manageRule` delegation.
-* **`@request.auth.*` token resolution** — user `id`/`email`/`role` are bound
+- **`@request.auth.*` token resolution** — user `id`/`email`/`role` are bound
   as SQL parameters, never interpolated into the query text.
-* **Typed-column casts** — values are bound with explicit Postgres casts
+- **Typed-column casts** — values are bound with explicit Postgres casts
   (`$1::UUID`, `$1::TEXT`, `$1::NUMERIC`) pulled from
   `Lazypock.Schema.TypeMapper`, so uuid/numeric/text comparisons work with
   bound parameters (see the *typed column casts* cases in
   `enforcer_gaps_test.exs`).
-* **SQL injection / escaping** — rule values containing single quotes or
+- **SQL injection / escaping** — rule values containing single quotes or
   backslashes are handled safely (match exactly, never break out of the query),
   including a regression for multi-condition token rules ([#38](https://github.com/gnuzd/lazypock/issues/38)).
 
