@@ -1,0 +1,202 @@
+@import 'tailwindcss';
+
+/*
+  Đăng ký các custom-property `--color-*` / `--radius-*` với Tailwind v4
+  để engine sinh ra các utility tương ứng: bg-base-100, text-primary-content,
+  rounded-box, rounded-field, v.v. (đúng convention daisyUI 5).
+  Giá trị mặc định ở đây = theme wabisabi-light.
+*/
+@theme {
+	--color-base-100: oklch(96.8% 0.012 85);
+	--color-base-200: oklch(91.8% 0.024 85);
+	--color-base-300: oklch(83.8% 0.038 85);
+	--color-base-content: oklch(18.2% 0.012 150);
+
+	--color-primary: oklch(38.2% 0.068 152);
+	--color-primary-content: oklch(100% 0 0);
+
+	--color-secondary: oklch(42.8% 0.118 25);
+	--color-secondary-content: oklch(100% 0 0);
+
+	--color-accent: oklch(44.5% 0.042 142);
+	--color-accent-content: oklch(100% 0 0);
+
+	--color-neutral: oklch(18.2% 0.012 150);
+	--color-neutral-content: oklch(100% 0 0);
+
+	--color-info: oklch(40.2% 0.072 222);
+	--color-info-content: oklch(100% 0 0);
+
+	--color-success: oklch(38.8% 0.078 148);
+	--color-success-content: oklch(100% 0 0);
+
+	--color-warning: oklch(46.2% 0.118 62);
+	--color-warning-content: oklch(100% 0 0);
+
+	--color-error: oklch(42% 0.142 25);
+	--color-error-content: oklch(100% 0 0);
+
+	--radius-selector: 0.25rem;
+	--radius-field: 0.25rem;
+	--radius-box: 0.375rem;
+
+	--spacing-selector: 0.25rem;
+	--spacing-field: 0.25rem;
+}
+
+/*
+  Runtime theme values. Giữ nguyên nguyên văn khối bạn đưa để sau này
+  có thể thêm theme khác (vd wabisabi-dark) bằng cách thêm 1 block
+  [data-theme='wabisabi-dark'] { ... } tương tự.
+*/
+:root,
+:root:has(input.theme-controller[value='wabisabi-light']:checked),
+[data-theme='wabisabi-light'] {
+	--color-base-100: oklch(96.8% 0.012 85);
+	--color-base-200: oklch(91.8% 0.024 85);
+	--color-base-300: oklch(83.8% 0.038 85);
+	--color-base-content: oklch(18.2% 0.012 150);
+
+	/* Brand Colors */
+	--color-primary: oklch(38.2% 0.068 152);
+	--color-primary-content: oklch(100% 0 0);
+
+	--color-secondary: oklch(42.8% 0.118 25);
+	--color-secondary-content: oklch(100% 0 0);
+
+	--color-accent: oklch(44.5% 0.042 142);
+	--color-accent-content: oklch(100% 0 0);
+
+	--color-neutral: oklch(18.2% 0.012 150);
+	--color-neutral-content: oklch(100% 0 0);
+
+	/* Status Colors */
+	--color-info: oklch(40.2% 0.072 222);
+	--color-info-content: oklch(100% 0 0);
+
+	--color-success: oklch(38.8% 0.078 148);
+	--color-success-content: oklch(100% 0 0);
+
+	--color-warning: oklch(46.2% 0.118 62);
+	--color-warning-content: oklch(100% 0 0);
+
+	--color-error: oklch(42% 0.142 25);
+	--color-error-content: oklch(100% 0 0);
+
+	/* UI & Shape Variables */
+	--radius-selector: 0.25rem;
+	--radius-field: 0.25rem;
+	--radius-box: 0.375rem;
+	--size-selector: 0.25rem;
+	--size-field: 0.25rem;
+	--border: 1px;
+	--depth: 0;
+	--noise: 0;
+}
+
+html {
+	scroll-behavior: smooth;
+	scroll-padding-top: 5rem;
+}
+
+body {
+	font-family:
+		ui-sans-serif,
+		system-ui,
+		-apple-system,
+		'Segoe UI',
+		Roboto,
+		'Helvetica Neue',
+		Arial,
+		sans-serif;
+}
+
+/* Khối code kiểu PocketBase docs */
+pre.doc-code {
+	background: var(--color-neutral);
+	color: var(--color-neutral-content);
+	border-radius: var(--radius-box);
+	overflow-x: auto;
+}
+
+pre.doc-code code {
+	font-family:
+		ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+/* highlight.js token colors — tuned to fit wabisabi-light's earthy palette
+   on the dark --color-neutral code background */
+.hljs-comment,
+.hljs-quote {
+	color: oklch(65% 0.02 150);
+	font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-subst {
+	color: oklch(78% 0.09 152);
+}
+.hljs-string,
+.hljs-doctag,
+.hljs-regexp {
+	color: oklch(80% 0.1 62);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+	color: oklch(80% 0.09 25);
+}
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+	color: oklch(82% 0.09 222);
+	font-weight: 600;
+}
+.hljs-type,
+.hljs-class .hljs-title {
+	color: oklch(82% 0.06 222);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+	color: oklch(85% 0.05 142);
+}
+.hljs-built_in,
+.hljs-builtin-name {
+	color: oklch(82% 0.08 62);
+}
+.hljs-meta,
+.hljs-meta-keyword {
+	color: oklch(70% 0.03 150);
+}
+.hljs-deletion {
+	color: oklch(70% 0.14 25);
+}
+.hljs-addition {
+	color: oklch(75% 0.09 148);
+}
+.hljs-emphasis {
+	font-style: italic;
+}
+.hljs-strong {
+	font-weight: 700;
+}
+
+code.doc-inline {
+	background: color-mix(in oklch, var(--color-base-content) 8%, transparent);
+	color: color-mix(in oklch, var(--color-base-content) 88%, var(--color-primary) 12%);
+	border-radius: var(--radius-field);
+	font-family:
+		ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+	font-size: 0.85em;
+	font-weight: 500;
+}
+
+::selection {
+	background: var(--color-primary);
+	color: var(--color-primary-content);
+}
