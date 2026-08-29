@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/gnuzd/lazypock/compare/v0.6.2...v0.7.0) (2026-08-29)
+
+
+### Features
+
+* **docs:** add SvelteKit documentation site for lazypock-ts ([151b12a](https://github.com/gnuzd/lazypock/commit/151b12a6ddfd0ff8b9daa68c0d9b823d19e38321))
+
 ## [0.6.2](https://github.com/gnuzd/lazypock/compare/v0.6.1...v0.6.2) (2026-08-28)
 
 
