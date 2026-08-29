@@ -37,16 +37,17 @@ export const nav: NavSection[] = [
 	{
 		title: "SDKs",
 		items: [
-			{ href: "/sdk", label: "Overview" },
 			...sdkNav.map((sdk) => ({
 				href: `/sdk/${sdk.slug}`,
 				label: sdk.name,
 				children: sdk.pages.map((p) => ({
-					href: `/sdk/${sdk.slug}/${p.slug}`,
+					href: `/sdk/${sdk.slug}#${p.slug}`,
 					label: p.label,
 				})),
 			})),
 			{ href: "/sdk/swift", label: "Swift", badge: "coming soon" },
+			{ href: "/sdk/android", label: "Android", badge: "coming soon" },
+			{ href: "/sdk/godot", label: "Godot", badge: "coming soon" },
 		],
 	},
 	{

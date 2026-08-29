@@ -1,5 +1,11 @@
 <script lang="ts">
 	import { sdkNav } from '$lib/sdk-nav.generated';
+
+	const comingSoon = [
+		{ name: 'Swift', href: '/sdk/swift' },
+		{ name: 'Android', href: '/sdk/android' },
+		{ name: 'Godot', href: '/sdk/godot' }
+	];
 </script>
 
 <svelte:head>
@@ -25,10 +31,12 @@
 
 <h2>Coming soon</h2>
 
-<a href="/sdk/swift" class="card-link" aria-disabled="true">
-	<p class="font-semibold">Swift</p>
-	<p class="text-sm text-base-content/70">Not released yet — this slot will follow the same structure.</p>
-</a>
+{#each comingSoon as sdk}
+	<a href={sdk.href} class="card-link" aria-disabled="true">
+		<p class="font-semibold">{sdk.name}</p>
+		<p class="text-sm text-base-content/70">Not released yet — this slot will follow the same structure.</p>
+	</a>
+{/each}
 
 <p>
 	Adding a new SDK? It gets its own section under <code>/sdk/&lt;name&gt;</code> with a

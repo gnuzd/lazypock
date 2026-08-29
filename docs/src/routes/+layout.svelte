@@ -5,11 +5,20 @@
 
 	let { children } = $props();
 	let sidebarOpen = $state(false);
+	let collapsed = $state<Record<string, boolean>>({});
 
 	function isActive(item: NavItem): boolean {
-		const base = item.href.split('#')[0];
-		if (base === '/' && page.url.pathname !== '/') return false;
-		return page.url.pathname.startsWith(base) || page.url.pathname === item.href;
+		const [base, hash] = item.href.split('#');
+		if (item.children) {
+			// Section parent: active while on its page (any anchor).
+			return page.url.pathname === base;
+		}
+		if (hash) {
+			// Anchor child: active only when on the page at that anchor.
+			return page.url.pathname === base && page.url.hash === `#${hash}`;
+		}
+		// Plain link: exact pathname match.
+		return page.url.pathname === base;
 	}
 </script>
 
@@ -59,41 +68,57 @@
 			{sidebarOpen ? 'translate-x-0' : '-translate-x-full'}"
 		>
 			{#each nav as section}
-				<div class="mb-6">
-					<p class="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-base-content/50">
-						{section.title}
-					</p>
-					<ul class="space-y-0.5">
-						{#each section.items as item}
-							<li>
-								<a
-									href={item.href}
-									class="block rounded-field px-2 py-1.5 text-sm text-base-content/80 hover:bg-base-200 hover:text-primary {isActive(item) ? 'bg-base-200 text-primary font-medium' : ''}"
-									onclick={() => (sidebarOpen = false)}
-								>
-									{item.label}
-									{#if item.badge}
-										<span class="ml-1.5 rounded-field bg-warning/10 text-warning px-1.5 py-0.5 text-[10px] font-medium align-middle">{item.badge}</span>
+				<div class="mb-5">
+					<button
+						class="flex w-full items-center justify-between gap-1 rounded-field px-2 py-1 text-xs font-semibold uppercase tracking-wide text-base-content/50 hover:bg-base-200 hover:text-base-content"
+						onclick={() => (collapsed[section.title] = !collapsed[section.title])}
+						aria-expanded={!collapsed[section.title]}
+					>
+						<span>{section.title}</span>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							class="h-3 w-3 shrink-0 transition-transform {collapsed[section.title] ? '' : 'rotate-90'}"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.5"
+						>
+							<path stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6" />
+						</svg>
+					</button>
+					{#if !collapsed[section.title]}
+						<ul class="mt-1 space-y-0.5">
+							{#each section.items as item}
+								<li>
+									<a
+										href={item.href}
+										class="block rounded-field px-2 py-1.5 text-sm text-base-content/80 hover:bg-base-200 hover:text-primary {isActive(item) ? 'bg-base-200 text-primary font-medium' : ''}"
+										onclick={() => (sidebarOpen = false)}
+									>
+										{item.label}
+										{#if item.badge}
+											<span class="ml-1.5 rounded-field bg-warning/10 text-warning px-1.5 py-0.5 text-[10px] font-medium align-middle">{item.badge}</span>
+										{/if}
+									</a>
+									{#if item.children}
+										<ul class="mt-0.5 ml-3 space-y-0.5 border-l border-base-300 pl-2">
+											{#each item.children as child}
+												<li>
+													<a
+														href={child.href}
+														class="block rounded-field px-2 py-1 text-[13px] text-base-content/60 hover:bg-base-200 hover:text-primary {isActive(child) ? 'text-primary font-medium' : ''}"
+														onclick={() => (sidebarOpen = false)}
+													>
+														{child.label}
+													</a>
+												</li>
+											{/each}
+										</ul>
 									{/if}
-								</a>
-								{#if item.children}
-									<ul class="mt-0.5 ml-3 space-y-0.5 border-l border-base-300 pl-2">
-										{#each item.children as child}
-											<li>
-												<a
-													href={child.href}
-													class="block rounded-field px-2 py-1 text-[13px] text-base-content/60 hover:bg-base-200 hover:text-primary {isActive(child) ? 'text-primary font-medium' : ''}"
-													onclick={() => (sidebarOpen = false)}
-												>
-													{child.label}
-												</a>
-											</li>
-										{/each}
-									</ul>
-								{/if}
-							</li>
-						{/each}
-					</ul>
+								</li>
+							{/each}
+						</ul>
+					{/if}
 				</div>
 			{/each}
 		</aside>

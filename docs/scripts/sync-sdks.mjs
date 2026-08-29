@@ -2,23 +2,20 @@
 // Syncs per-SDK markdown docs from their repos into the docs site.
 //
 // Source of truth for SDK docs lives in each SDK repo (e.g. gnuzd/lazypock-ts
-// -> docs/*.md). This script copies those files into src/routes/sdk/<slug>/
-// and regenerates src/lib/sdk-nav.generated.ts so the sidebar nav always
-// matches the pages that actually exist.
+// -> docs/*.md). This script merges those files into ONE scrollable page per
+// SDK (src/routes/sdk/<slug>/+page.md) — each file becomes an <h2> section
+// with an id anchor, mirroring the Server Guide's in-page scrolling — and
+// regenerates src/lib/sdk-nav.generated.ts from the rendered sections.
 //
 // Resolution order for an SDK's source:
 //   1. $LAZYPOCK_TS_DIR (env field per SDK in the registry) — local clone override
 //   2. a cached git clone in .sdk-cache/<slug>
-//   3. (fallback) the already-committed copies in src/routes/sdk/<slug>
-//
-// When neither a local override nor a clone containing a docs/ folder is
-// available, the committed copies are kept and a warning is printed, so the
-// site always builds.
+//   3. (fallback) the already-committed merged +page.md — nav is re-derived
+//      from its <h2 id> sections, so the site always builds offline
 //
 // Usage: node scripts/sync-sdks.mjs   (from docs/)
 import { execSync } from "node:child_process";
 import {
-	cpSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -42,7 +39,7 @@ const SDKs = [
 		name: "TypeScript",
 		docsDir: "docs",
 		env: "LAZYPOCK_TS_DIR",
-		// Sidebar order; pages present in the repo but missing here get appended.
+		// Section order; pages present in the repo but missing here get appended.
 		order: [
 			"install",
 			"quick-start",
@@ -53,6 +50,9 @@ const SDKs = [
 			"auth",
 			"api-reference",
 		],
+		intro:
+			"The official TypeScript client for Lazypock — fully typed via codegen, " +
+			"PocketBase-compatible API surface, and runtime schema support.",
 	},
 ];
 
@@ -84,14 +84,34 @@ function resolveSource(sdk) {
 	return { dir, from: "cached clone" };
 }
 
-function frontmatterTitle(md, fallback) {
-	const fm = md.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-	if (fm) {
-		const m = fm[1].match(/^title:\s*["']?(.+?)["']?\s*$/m);
-		if (m) return m[1].trim();
-	}
-	const h1 = md.match(/^#\s+(.+)$/m);
-	return h1 ? h1[1].trim() : fallback;
+function parseFrontmatter(md) {
+	const m = md.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+	if (!m) return { title: null, body: md };
+	const title =
+		m[1].match(/^title:\s*["']?(.+?)["']?\s*$/m)?.[1]?.trim() ?? null;
+	return { title, body: md.slice(m[0].length) };
+}
+
+function stripLeadingH1(body) {
+	// Remove the file's own `# Title` (allow leading blank lines after the
+	// frontmatter slice) — the section header is emitted separately.
+	return body.replace(/^\s*#\s+.+\r?\n\r?\n?/, "");
+}
+
+function demoteHeadings(body) {
+	// Demote every heading one level (## -> ###) so per-file subsections nest
+	// under the merged section headers. Fenced code blocks are skipped — a
+	// line starting with `# ` inside a bash block is not a heading.
+	let inFence = false;
+	return body
+		.split("\n")
+		.map((line) => {
+			const trimmed = line.trim();
+			if (trimmed.startsWith("```")) inFence = !inFence;
+			if (inFence) return line;
+			return line.replace(/^(#{1,5}) /, (_, hashes) => "#" + hashes + " ");
+		})
+		.join("\n");
 }
 
 function syncSdk(sdk) {
@@ -102,57 +122,59 @@ function syncSdk(sdk) {
 	const srcDir = path.join(dir, sdk.docsDir);
 	if (!existsSync(srcDir)) {
 		console.log(
-			`  [!] ${sdk.name}: no ${sdk.docsDir}/ in ${from} — keeping committed pages`,
+			`  [!] ${sdk.name}: no ${sdk.docsDir}/ in ${from} — keeping committed page`,
 		);
 		return;
 	}
-	const files = readdirSync(srcDir).filter((f) => f.endsWith(".md"));
-	if (files.length === 0) {
+	const available = readdirSync(srcDir)
+		.filter((f) => f.endsWith(".md"))
+		.map((f) => f.replace(/\.md$/, ""));
+	const slugs = [
+		...sdk.order.filter((slug) => available.includes(slug)),
+		...available.filter((slug) => !sdk.order.includes(slug)).sort(),
+	];
+	if (slugs.length === 0) {
 		console.log(
-			`  [!] ${sdk.name}: ${sdk.docsDir}/ is empty in ${from} — keeping committed pages`,
+			`  [!] ${sdk.name}: no markdown pages in ${srcDir} — keeping committed page`,
 		);
 		return;
 	}
-	// SvelteKit only treats +page.md files as routes, so each doc page becomes
-	// src/routes/sdk/<slug>/<page>/+page.md. Drop previously synced pages that
-	// are no longer in the source (keep the hand-written +page.svelte index).
+
+	const sections = [];
+	for (const slug of slugs) {
+		const md = readFileSync(path.join(srcDir, `${slug}.md`), "utf8");
+		const { title, body } = parseFrontmatter(md);
+		const content = demoteHeadings(stripLeadingH1(body)).trim();
+		sections.push(`<h2 id="${slug}">${title ?? slug}</h2>\n\n${content}`);
+	}
+
+	const page = `---\ntitle: ${sdk.name} SDK\n---\n\n# ${sdk.name} SDK\n\n${
+		sdk.intro ?? ""
+	}\n\n${sections.join("\n\n---\n\n")}\n`;
+
+	// The merged +page.md is the only file we keep in the SDK's route dir.
 	for (const entry of readdirSync(targetDir)) {
-		if (entry.startsWith("+")) continue;
 		rmSync(path.join(targetDir, entry), { recursive: true, force: true });
 	}
-	for (const f of files) {
-		const slug = f.replace(/\.md$/, "");
-		const pageDir = path.join(targetDir, slug);
-		mkdirSync(pageDir, { recursive: true });
-		cpSync(path.join(srcDir, f), path.join(pageDir, "+page.md"));
-	}
-	console.log(`  ✓ ${sdk.name}: synced ${files.length} pages from ${from}`);
+	writeFileSync(path.join(targetDir, "+page.md"), page);
+	console.log(`  ✓ ${sdk.name}: merged ${slugs.length} sections from ${from}`);
 }
 
-// Regenerate sdk-nav.generated.ts from the pages present in src/routes/sdk/<slug>.
+// Regenerate sdk-nav.generated.ts from the <h2 id> sections of each merged page.
 function generateNav() {
 	const entries = SDKs.map((sdk) => {
-		const dir = path.join(routesDir, sdk.slug);
-		const files = readdirSync(dir)
-			.filter(
-				(entry) =>
-					!entry.startsWith("+") && existsSync(path.join(dir, entry, "+page.md")),
-			)
-			.map((entry) => entry);
-		const ordered = [];
-		for (const slug of sdk.order) if (files.includes(slug)) ordered.push(slug);
-		for (const slug of files.sort())
-			if (!ordered.includes(slug)) ordered.push(slug);
-		const pages = ordered.map((slug) => {
-			const md = existsSync(path.join(dir, slug, "+page.md"))
-				? readFileSync(path.join(dir, slug, "+page.md"), "utf8")
-				: "";
-			return { slug, label: frontmatterTitle(md, slug) };
-		});
+		const mdPath = path.join(routesDir, sdk.slug, "+page.md");
+		const pages = [];
+		if (existsSync(mdPath)) {
+			const md = readFileSync(mdPath, "utf8");
+			for (const m of md.matchAll(/<h2 id="([^"]+)">([^<]+)<\/h2>/g)) {
+				pages.push({ slug: m[1], label: m[2].trim() });
+			}
+		}
 		return { slug: sdk.slug, name: sdk.name, pages };
 	});
 	const ts = `// AUTO-GENERATED by scripts/sync-sdks.mjs — do not edit.
-// Regenerated on every build; reflects the SDK pages present in src/routes/sdk/.
+// Regenerated on every build; reflects the <h2> sections of each SDK page.
 
 export interface SdkPage {
 	slug: string;
@@ -169,7 +191,7 @@ export const sdkNav: SdkNavEntry[] = ${JSON.stringify(entries, null, "\t")};
 `;
 	writeFileSync(path.join(libDir, "sdk-nav.generated.ts"), ts);
 	const total = entries.reduce((n, e) => n + e.pages.length, 0);
-	console.log(`nav: ${entries.length} SDK(s), ${total} pages`);
+	console.log(`nav: ${entries.length} SDK(s), ${total} sections`);
 }
 
 console.log("Syncing SDK docs…");
