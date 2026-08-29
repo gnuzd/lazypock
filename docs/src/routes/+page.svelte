@@ -160,7 +160,6 @@ chmod +x lazypock_macos_silicon   # or the binary matching your OS/arch
 
 export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
 export SECRET_KEY_BASE="$(openssl rand -base64 48)"
-export PHX_SERVER=true
 LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \\
   ./lazypock_macos_silicon`}
 		/>
@@ -239,12 +238,15 @@ MIX_ENV=prod mix release
 		<p class="mt-3 text-base-content/80 leading-relaxed">Minimal production run example:</p>
 		<CodeBlock
 			lang="bash" code={`export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
-export PHX_SERVER=true
 export SECRET_KEY_BASE="$(mix phx.gen.secret)"
 export PHX_HOST="localhost"
 LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \\
   ./core/burrito_out/lazypock_macos_silicon`}
 		/>
+		<p class="mt-3 text-sm text-base-content/70">
+			The HTTP server is <strong>always started</strong> — no <code class="doc-inline px-1 py-0.5">PHX_SERVER</code>
+			needed; just run the binary (or <code class="doc-inline px-1 py-0.5">bin/lazypock start</code>).
+		</p>
 		<p class="mt-3 text-sm text-base-content/70">
 			The release runs with <code class="doc-inline px-1 py-0.5">RUNTIME_CONFIG=false</code>, so config is baked
 			in at build time; environment variables are still read at boot via the Elixir config provider.
@@ -267,11 +269,6 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
 						<td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">DATABASE_URL</code></td>
 						<td class="px-3 py-2">PostgreSQL connection string</td>
 						<td class="px-3 py-2 font-mono text-xs">ecto://postgres:postgres@localhost:5432/lazypock_dev</td>
-					</tr>
-					<tr>
-						<td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">PHX_SERVER</code></td>
-						<td class="px-3 py-2">Enable the HTTP server (set to <code class="doc-inline px-1 py-0.5">true</code>)</td>
-						<td class="px-3 py-2 font-mono text-xs">true</td>
 					</tr>
 					<tr>
 						<td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">SECRET_KEY_BASE</code></td>
