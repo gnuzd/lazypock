@@ -68,11 +68,11 @@ client.collection('posts').subscribe((e) => console.log(e.action, e.record));
 
 ### Next steps
 
-- [Type Safety](/sdk/typescript/type-safety) — codegen a fully typed client
-- [Queries](/sdk/typescript/queries) — `select()`, filters, sort, expand
-- [Realtime](/sdk/typescript/realtime) — live subscriptions
-- [Files](/sdk/typescript/files) — uploads and file URLs
-- [Auth](/sdk/typescript/auth) — auth collections and token handling
+- [Type Safety](/sdk/typescript#type-safety) — codegen a fully typed client
+- [Queries](/sdk/typescript#queries) — `select()`, filters, sort, expand
+- [Realtime](/sdk/typescript#realtime) — live subscriptions
+- [Files](/sdk/typescript#files) — uploads and file URLs
+- [Auth](/sdk/typescript#auth) — auth collections and token handling
 
 ---
 
