@@ -1,6 +1,10 @@
+import { sdkNav } from "./sdk-nav.generated";
+
 export interface NavItem {
 	href: string;
 	label: string;
+	badge?: string;
+	children?: NavItem[];
 }
 
 export interface NavSection {
@@ -10,69 +14,43 @@ export interface NavSection {
 
 export const nav: NavSection[] = [
 	{
-		title: 'Getting Started',
-		items: [
-			{ href: '#overview', label: 'Overview' },
-			{ href: '#installation', label: 'Installation' },
-			{ href: '#quick-start', label: 'Quick Start' }
-		]
+		title: "Getting Started",
+		items: [{ href: "/", label: "What is Lazypock" }],
 	},
 	{
-		title: 'Server Setup',
+		title: "Server",
 		items: [
-			{ href: '#prerequisites', label: 'Prerequisites' },
-			{ href: '#docker-quickstart', label: 'A. Docker Compose (quickest)' },
-			{ href: '#download-binary', label: 'B. Prebuilt binary' },
-			{ href: '#run-backend', label: 'C. Manual: run the backend' },
-			{ href: '#run-studio', label: 'C. Manual: run Studio' },
-			{ href: '#run-sdk', label: 'C. Manual: install the SDK' },
-			{ href: '#first-time-setup', label: 'First-time setup' },
-			{ href: '#production', label: 'Production release' },
-			{ href: '#env-vars', label: 'Environment variables' }
-		]
+			{
+				href: "/server",
+				label: "Server Guide",
+				children: [
+					{ href: "/server#quick-start", label: "Quick Start" },
+					{ href: "/server#binary", label: "Prebuilt binary" },
+					{ href: "/server#manual", label: "Manual setup" },
+					{ href: "/server#first-time", label: "First-time setup" },
+					{ href: "/server#production", label: "Production" },
+					{ href: "/server#env-vars", label: "Environment variables" },
+				],
+			},
+		],
 	},
 	{
-		title: 'Type Safety',
+		title: "SDKs",
 		items: [
-			{ href: '#type-safety', label: 'Overview' },
-			{ href: '#codegen', label: '1. Codegen (recommended)' },
-			{ href: '#hand-written-generics', label: '2. Hand-written generics' },
-			{ href: '#runtime-schema', label: '3. Runtime schema' },
-			{ href: '#cli-reference', label: 'CLI reference' }
-		]
+			{ href: "/sdk", label: "Overview" },
+			...sdkNav.map((sdk) => ({
+				href: `/sdk/${sdk.slug}`,
+				label: sdk.name,
+				children: sdk.pages.map((p) => ({
+					href: `/sdk/${sdk.slug}/${p.slug}`,
+					label: p.label,
+				})),
+			})),
+			{ href: "/sdk/swift", label: "Swift", badge: "coming soon" },
+		],
 	},
 	{
-		title: 'Querying Data',
-		items: [
-			{ href: '#select', label: 'select() — field projection' },
-			{ href: '#filter-sort-expand', label: 'filter / sort / expand' }
-		]
+		title: "More",
+		items: [{ href: "/#license", label: "License" }],
 	},
-	{
-		title: 'API Reference',
-		items: [
-			{ href: '#client', label: 'LazypockClient' },
-			{ href: '#constructor-options', label: 'Constructor Options' },
-			{ href: '#auth-methods', label: 'Authentication' },
-			{ href: '#collections-service', label: 'Collections Service' },
-			{ href: '#file-operations', label: 'File Operations' },
-			{ href: '#realtime-api', label: 'Realtime (low-level)' },
-			{ href: '#collection-service', label: 'CollectionService' },
-			{ href: '#auth-store', label: 'AuthStore' },
-			{ href: '#types', label: 'Types' }
-		]
-	},
-	{
-		title: 'Advanced',
-		items: [
-			{ href: '#auto-cancellation', label: 'Auto Cancellation' },
-			{ href: '#error-handling', label: 'Error Handling' },
-			{ href: '#configuration', label: 'Configuration' },
-			{ href: '#realtime-subscriptions', label: 'Real-time Subscriptions' }
-		]
-	},
-	{
-		title: 'More',
-		items: [{ href: '#license', label: 'License' }]
-	}
 ];

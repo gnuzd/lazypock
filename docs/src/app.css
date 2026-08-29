@@ -186,7 +186,8 @@ pre.doc-code code {
 	font-weight: 700;
 }
 
-code.doc-inline {
+code.doc-inline,
+.prose-md :not(pre) > code {
 	background: color-mix(in oklch, var(--color-base-content) 8%, transparent);
 	color: color-mix(in oklch, var(--color-base-content) 88%, var(--color-primary) 12%);
 	border-radius: var(--radius-field);
@@ -199,4 +200,154 @@ code.doc-inline {
 ::selection {
 	background: var(--color-primary);
 	color: var(--color-primary-content);
+}
+
+/* ── Markdown pages (SDK docs, rendered via mdsvex) ── */
+.prose-md {
+	line-height: 1.7;
+	color: color-mix(in oklch, var(--color-base-content) 85%, transparent);
+}
+
+.prose-md h1 {
+	font-size: 1.875rem;
+	font-weight: 700;
+	letter-spacing: -0.025em;
+	color: var(--color-base-content);
+	margin: 0 0 1rem;
+}
+
+.prose-md h2 {
+	font-size: 1.25rem;
+	font-weight: 600;
+	color: var(--color-base-content);
+	border-bottom: 1px solid var(--color-base-300);
+	padding-bottom: 0.5rem;
+	margin: 2.25rem 0 1rem;
+}
+
+.prose-md h3 {
+	font-size: 1.125rem;
+	font-weight: 600;
+	color: var(--color-base-content);
+	margin: 1.75rem 0 0.75rem;
+}
+
+.prose-md h4 {
+	font-size: 1rem;
+	font-weight: 600;
+	color: var(--color-base-content);
+	margin: 1.5rem 0 0.5rem;
+}
+
+.prose-md p {
+	margin: 0.75rem 0;
+}
+
+.prose-md ul,
+.prose-md ol {
+	margin: 0.75rem 0;
+	padding-left: 1.5rem;
+}
+
+.prose-md ul {
+	list-style: disc;
+}
+
+.prose-md ol {
+	list-style: decimal;
+}
+
+.prose-md li {
+	margin: 0.3rem 0;
+}
+
+.prose-md a {
+	color: var(--color-primary);
+	text-decoration: underline;
+}
+
+.prose-md strong {
+	color: var(--color-base-content);
+}
+
+.prose-md blockquote {
+	border-left: 3px solid var(--color-primary);
+	background: var(--color-base-200);
+	border-radius: var(--radius-field);
+	padding: 0.75rem 1rem;
+	margin: 1rem 0;
+}
+
+.prose-md blockquote p {
+	margin: 0.25rem 0;
+}
+
+.prose-md hr {
+	border: none;
+	border-top: 1px solid var(--color-base-300);
+	margin: 2rem 0;
+}
+
+.prose-md table {
+	display: block;
+	width: 100%;
+	overflow-x: auto;
+	font-size: 0.875rem;
+	margin: 1rem 0;
+	border-collapse: collapse;
+}
+
+.prose-md thead {
+	background: var(--color-base-200);
+}
+
+.prose-md th,
+.prose-md td {
+	text-align: left;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--color-base-300);
+}
+
+.prose-md th {
+	font-weight: 600;
+}
+
+.prose-md td {
+	vertical-align: top;
+}
+
+.prose-md pre {
+	background: var(--color-neutral);
+	color: var(--color-neutral-content);
+	border-radius: var(--radius-box);
+	padding: 1rem;
+	overflow-x: auto;
+	margin: 1rem 0;
+	font-size: 0.8125rem;
+	line-height: 1.6;
+}
+
+.prose-md pre code {
+	background: transparent;
+	padding: 0;
+	color: inherit;
+	font-size: inherit;
+	font-weight: inherit;
+	border-radius: 0;
+}
+
+.prose-md a.card-link {
+	color: inherit;
+	text-decoration: none;
+	display: block;
+	border: 1px solid var(--color-base-300);
+	border-radius: var(--radius-box);
+	padding: 1rem;
+	margin: 0.75rem 0;
+	transition: border-color 150ms, background-color 150ms;
+}
+
+.prose-md a.card-link:hover {
+	border-color: var(--color-primary);
+	background: var(--color-base-200);
 }

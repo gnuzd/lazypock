@@ -1,9 +1,16 @@
 <script lang="ts">
 	import '../app.css';
-	import { nav } from '$lib/nav';
+	import { page } from '$app/state';
+	import { nav, type NavItem } from '$lib/nav';
 
 	let { children } = $props();
 	let sidebarOpen = $state(false);
+
+	function isActive(item: NavItem): boolean {
+		const base = item.href.split('#')[0];
+		if (base === '/' && page.url.pathname !== '/') return false;
+		return page.url.pathname.startsWith(base) || page.url.pathname === item.href;
+	}
 </script>
 
 <div class="min-h-screen flex flex-col bg-base-100 text-base-content">
@@ -21,25 +28,24 @@
 					<path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
 				</svg>
 			</button>
-			<a href="#overview" class="flex items-center gap-2 font-semibold text-lg">
+			<a href="/" class="flex items-center gap-2 font-semibold text-lg">
 				<span
 					class="inline-flex h-7 w-7 items-center justify-center rounded-box bg-primary text-primary-content text-sm font-bold"
 					>L</span
 				>
-				<span>lazypock<span class="text-primary">-ts</span></span>
+				<span>lazypock<span class="text-primary"> docs</span></span>
 			</a>
 			<span class="hidden sm:inline-block rounded-field bg-base-200 px-2 py-0.5 text-xs text-base-content/70"
-				>TypeScript SDK</span
+				>server + SDKs</span
 			>
 		</div>
 
 		<nav class="hidden md:flex items-center gap-4 text-sm">
-			<a class="hover:text-primary" href="#quick-start">Quick Start</a>
-			<a class="hover:text-primary" href="#type-safety">Type Safety</a>
-			<a class="hover:text-primary" href="#client">API</a>
+			<a class="hover:text-primary" href="/server">Server</a>
+			<a class="hover:text-primary" href="/sdk">SDKs</a>
 			<a
 				class="rounded-field bg-neutral text-neutral-content px-3 py-1.5 font-medium hover:opacity-90"
-				href="https://github.com/gnuzd/lazypock-ts"
+				href="https://github.com/gnuzd/lazypock"
 				target="_blank"
 				rel="noreferrer">GitHub</a
 			>
@@ -62,11 +68,29 @@
 							<li>
 								<a
 									href={item.href}
-									class="block rounded-field px-2 py-1.5 text-sm text-base-content/80 hover:bg-base-200 hover:text-primary"
+									class="block rounded-field px-2 py-1.5 text-sm text-base-content/80 hover:bg-base-200 hover:text-primary {isActive(item) ? 'bg-base-200 text-primary font-medium' : ''}"
 									onclick={() => (sidebarOpen = false)}
 								>
 									{item.label}
+									{#if item.badge}
+										<span class="ml-1.5 rounded-field bg-warning/10 text-warning px-1.5 py-0.5 text-[10px] font-medium align-middle">{item.badge}</span>
+									{/if}
 								</a>
+								{#if item.children}
+									<ul class="mt-0.5 ml-3 space-y-0.5 border-l border-base-300 pl-2">
+										{#each item.children as child}
+											<li>
+												<a
+													href={child.href}
+													class="block rounded-field px-2 py-1 text-[13px] text-base-content/60 hover:bg-base-200 hover:text-primary {isActive(child) ? 'text-primary font-medium' : ''}"
+													onclick={() => (sidebarOpen = false)}
+												>
+													{child.label}
+												</a>
+											</li>
+										{/each}
+									</ul>
+								{/if}
 							</li>
 						{/each}
 					</ul>

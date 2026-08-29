@@ -12,7 +12,7 @@ LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoeni
 
 **Status:** Beta. The backend (schema engine, REST API, rules, realtime, file storage, hooks, cron, auth incl. OAuth2), the Studio admin UI, and the TypeScript SDK are all complete and usable end-to-end. See [What Works Now](#what-works-now) for the full breakdown.
 
-📚 **Full documentation:** [lazypock.gnuzd.dev](https://lazypock.gnuzd.dev/)
+📚 **Docs:** [What is Lazypock](https://lazypock.gnuzd.dev/) · [Server Guide](https://lazypock.gnuzd.dev/server) · [TypeScript SDK](https://lazypock.gnuzd.dev/sdk/typescript) · [all SDKs](https://lazypock.gnuzd.dev/sdk)
 
 ---
 
@@ -61,7 +61,7 @@ const posts = await client.collection('posts').getList(1, 30);
 client.collection('posts').subscribe((e) => console.log(e.action, e.record));
 ```
 
-Full SDK docs (type-safe codegen, filters, realtime, file uploads): **[gnuzd/lazypock-ts](https://github.com/gnuzd/lazypock-ts)**.
+Full SDK docs (install, codegen, type safety, queries, realtime, files, auth): **[lazypock.gnuzd.dev/sdk/typescript](https://lazypock.gnuzd.dev/sdk/typescript)**.
 
 ---
 
@@ -137,9 +137,11 @@ LazyPock/
 - **PostgreSQL 15+** (no Postgres handy? the repo's `docker-compose.yml` starts one — see [Development](#development))
 - **Node.js 20+** (for Studio admin UI)
 - **ImageMagick 7+** (`magick`/`convert`) — required for image thumbnails and on-demand scaling (see [File Storage & Thumbnails](#file-storage--thumbnails)); uploads work without it but no resizing is available
-- `zig` and `xz` installed (for Burrito release builds)
+- `zig` and `xz` (for Burrito release builds)
 
 Just want to click around? Skip straight to [Try it in 60 seconds](#try-it-in-60-seconds) above — none of this is needed.
+
+For the full walkthrough (Docker, prebuilt binary, from source, Studio, env vars, production) see the **[Server Guide](https://lazypock.gnuzd.dev/server)**.
 
 ### Development
 
@@ -170,20 +172,7 @@ npm run dev         # Starts Vite dev server on http://localhost:5173
 
 #### 3. TypeScript SDK
 
-Consumers just install the published package:
-
-```bash
-npm install lazypock
-```
-
-Or build it from source:
-
-```bash
-git clone git@github.com:gnuzd/lazypock-ts.git
-cd lazypock-ts
-npm install
-npm run build
-```
+Consumers install the published package (`npm install lazypock`). Install, quick start, codegen, and API reference: **[lazypock.gnuzd.dev/sdk/typescript](https://lazypock.gnuzd.dev/sdk/typescript)**.
 
 ### Testing
 
@@ -221,10 +210,7 @@ file) lives in [`TEST_COVERAGE_AUDIT.md`](TEST_COVERAGE_AUDIT.md).
 
 ### First-Time Setup
 
-1. Open Studio at `http://localhost:5173/_/` (or `/_/` if serving from Phoenix directly)
-2. You'll be redirected to the login page
-3. Click **Setup** to create the first superuser account
-4. Log in and start managing collections
+Open Studio, click **Setup** to create the first superuser, then start creating collections — full walkthrough in the [Server Guide](https://lazypock.gnuzd.dev/server#first-time).
 
 ### Production Release (Burrito single binary)
 
@@ -236,38 +222,7 @@ MIX_ENV=prod mix release
 
 Prebuilt binaries for macOS (arm64) and Linux (x86_64) are also published on [Releases](https://github.com/gnuzd/lazypock/releases) — no build toolchain needed.
 
-#### Required Environment Variables
-
-| Variable | Description | Example |
-| --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string | `ecto://postgres:postgres@localhost:5432/lazypock_dev` |
-| `SECRET_KEY_BASE` | Secret for signing cookies | (generate with `mix phx.gen.secret` or `openssl rand -base64 48`) |
-| `PHX_HOST` | Public hostname (optional, defaults to `example.com`) | `localhost` |
-| `PORT` | HTTP port (optional, defaults to `4000`) | `4000` |
-| `POOL_SIZE` | DB connection pool size (optional, defaults to `10`) | `10` |
-| `LAZYPOCK_DATA_DIR` | Base data dir for migrations/hooks/seeds (default: `~/.lazypock`) | `/data/lazypock` |
-| `LAZYPOCK_SUPERUSER_EMAIL` | Auto-create superuser on boot | `admin@lazypock.app` |
-| `LAZYPOCK_SUPERUSER_PASSWORD` | Auto-create superuser on boot | `your-password` |
-| `LAZYPOCK_THUMBNAILS` | Set to `0` to disable thumbnail/scaling generation (see [File Storage & Thumbnails](#file-storage--thumbnails)) | `0` |
-| `LAZYPOCK_MIGRATIONS_DIR` | Directory for user migrations (default: `~/.lazypock/migrations`) | `/data/lazypock/migrations` |
-| `LAZYPOCK_AUTOMIGRATE` | Set to `0` to disable auto-migrate on boot (then use `lazypock migrate`) | `0` |
-| `LAZYPOCK_AUTOSEED` | Set to `0` to disable boot-time seeding | `0` |
-| `LAZYPOCK_HOOKS_DIR` | Directory for user hooks (default: `~/.lazypock/hooks`) | `/data/lazypock/hooks` |
-| `LAZYPOCK_SEEDS_FILE` | Seed file path (default: `~/.lazypock/seeds.exs`) | `/data/lazypock/seeds.exs` |
-
-**Minimal production example:**
-
-```bash
-export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
-export SECRET_KEY_BASE="$(mix phx.gen.secret)"
-export PHX_HOST="localhost"
-LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \
-  ./core/burrito_out/lazypock_macos_silicon
-```
-
-The HTTP server is **always started** — no `PHX_SERVER` needed; just run the binary (or `bin/lazypock start`).
-
-Note: the release uses `RUNTIME_CONFIG=false` (set in `sys.config`), so all configuration is baked in at build time. Environment variables are read by `runtime.exs` via the Elixir config provider during startup.
+Env vars, the minimal production run, and release notes: **[Server Guide → Production](https://lazypock.gnuzd.dev/server#production)**.
 
 ### Migrations (PocketBase-style)
 
