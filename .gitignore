@@ -19,3 +19,7 @@ lazypock-ts/
 .repowise
 /.claude
 /.vscode
+
+# Local tooling config (machine-specific)
+.mcp.json
+.pi-lens.json
