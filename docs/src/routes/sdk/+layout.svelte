@@ -5,17 +5,13 @@
 
 	let { children } = $props();
 
-	// e.g. ['sdk', 'typescript', 'type-safety']
+	// e.g. ['sdk', 'typescript'] — each SDK is a single scrollable page now.
 	const segments = $derived(page.url.pathname.split('/').filter(Boolean));
 	const sdk = $derived(sdkNav.find((s) => s.slug === segments[1]));
 
 	const crumbs = $derived.by(() => {
 		const parts: { label: string; href?: string }[] = [{ label: 'SDKs', href: '/sdk' }];
-		if (sdk) {
-			parts.push({ label: sdk.name, href: `/sdk/${sdk.slug}` });
-			const p = sdk.pages.find((pg) => pg.slug === segments[2]);
-			if (p) parts.push({ label: p.label });
-		}
+		if (sdk) parts.push({ label: sdk.name, href: `/sdk/${sdk.slug}` });
 		return parts;
 	});
 

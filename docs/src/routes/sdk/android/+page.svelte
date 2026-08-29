@@ -2,4 +2,4 @@
 	import ComingSoon from '$lib/components/ComingSoon.svelte';
 </script>
 
-<ComingSoon name="Swift" />
+<ComingSoon name="Android" />
