@@ -88,105 +88,63 @@ client.collection('posts').subscribe((e) => console.log(e.action, e.record));`}
 	<section id="docker-quickstart" class="scroll-mt-20 mb-10">
 		<h3 class="text-lg font-semibold">Option A: Docker Compose (quickest)</h3>
 		<p class="mt-2 text-base-content/80 leading-relaxed">
-			The fastest way to try Lazypock is a single <code class="doc-inline px-1 py-0.5">docker compose up</code> —
-			no local Elixir, Erlang, or PostgreSQL install needed. Save the following as
-			<code class="doc-inline px-1 py-0.5">compose.yml</code> (this spins up Postgres + Lazypock together,
-			pulling the latest release from git and auto-creating a superuser):
+			No Elixir, Erlang, or source checkout needed — just Docker (for Postgres) and a prebuilt binary. Clone the
+			repo and start Postgres with its
+			<code class="doc-inline px-1 py-0.5">docker-compose.yml</code> (Postgres 16:
+			<code class="doc-inline px-1 py-0.5">postgres/postgres@localhost:5432</code>, database
+			<code class="doc-inline px-1 py-0.5">lazypock_dev</code>):
+		</p>
+		<CodeBlock lang="bash" code={`# 1. Start Postgres (the repo's docker-compose.yml runs Postgres 16:
+#    postgres/postgres@localhost:5432, database lazypock_dev)
+docker compose up -d`} />
+		<p class="mt-3 text-base-content/80 leading-relaxed">
+			2. Grab the prebuilt binary for your platform from
+			<a class="text-primary underline" href="https://github.com/gnuzd/lazypock/releases" target="_blank" rel="noreferrer">Releases</a>
+			(macOS arm64 + Linux x86_64; checksums included):
+		</p>
+		<CodeBlock lang="bash" code={`# 2. Grab the prebuilt binary for your platform from Releases:
+#    https://github.com/gnuzd/lazypock/releases
+#    (macOS arm64 + Linux x86_64; checksums included)`} />
+		<p class="mt-3 text-base-content/80 leading-relaxed">
+			3. Run it — the superuser is auto-created on first boot:
 		</p>
 		<CodeBlock
-			lang="yaml" code={`# LazyPock out-of-the-box example: Postgres + LazyPock (latest release from git)
-#
-#   docker compose up --build
-#
-# - Server + Studio admin UI:  http://localhost:4000  (login at /_/)
-#   (superuser is auto-created on first boot: admin@lazypock.app / admin123)
-# - REST API:                  http://localhost:4000/api/...
-# - Example hooks are mounted from ./hooks  \u2192  custom API routes:
-#     GET /api/hello/{name}   and   GET /api/example/time
-# - Example migration in ./migrations creates the \`example_notes\` table
-# - ImageMagick is included in the image (thumbnails / image scaling)
-name: lazypock-example
-
-services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: lazypock
-    ports:
-      - "5432:5432"
-    volumes:
-      - example_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d lazypock"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  lazypock:
-    build: .
-    ports:
-      - "4000:4000"
-    environment:
-      DATABASE_URL: ecto://postgres:postgres@db/lazypock
-      # Any 64-char secret \u2014 generate one with \`mix phx.gen.secret\` or openssl
-      SECRET_KEY_BASE: >-
-        i8x7VDmk6wY43hNFE9q0pXc2RaB5uTg1sLfzHj6nQdOe8WvKyOCmM4bJcS3PAr
-      PHX_HOST: localhost
-      LAZYPOCK_DATA_DIR: /data/lazypock
-      LAZYPOCK_SUPERUSER_EMAIL: admin@lazypock.app
-      LAZYPOCK_SUPERUSER_PASSWORD: admin123
-      LAZYPOCK_CORS_ORIGINS: "*"
-      # Example user hooks + migrations (edit \u2192 docker compose restart lazypock)
-      LAZYPOCK_HOOKS_DIR: /hooks
-      LAZYPOCK_MIGRATIONS_DIR: /migrations
-    volumes:
-      - ./hooks:/hooks
-      - ./migrations:/migrations
-      - example_lazypock_data:/data/lazypock
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: unless-stopped
-
-volumes:
-  example_postgres_data:
-  example_lazypock_data:`}
+			lang="bash" code={`DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev" \\
+SECRET_KEY_BASE="$(openssl rand -base64 48)" \\
+LAZYPOCK_SUPERUSER_EMAIL=admin@lazypock.app \\
+LAZYPOCK_SUPERUSER_PASSWORD=admin123 \\
+  ./lazypock`}
 		/>
-		<p class="mt-3 text-base-content/80 leading-relaxed">
-			Then just run it — the image is built from the <code class="doc-inline px-1 py-0.5">Dockerfile</code> in
-			the same directory (pulls the latest Lazypock release from git and bundles ImageMagick for thumbnails):
-		</p>
-		<CodeBlock lang="bash" code={`docker compose up --build`} />
 		<div class="rounded-box border border-base-300 bg-base-200/60 p-4 my-4 text-sm leading-relaxed">
-			<p class="mb-2">Once it's up:</p>
 			<ul class="space-y-1.5 list-disc list-inside">
-				<li>Server + Studio admin UI: <code class="doc-inline px-1 py-0.5">http://localhost:4000</code> (login at <code class="doc-inline px-1 py-0.5">/_/</code>)</li>
-				<li>Superuser is auto-created on first boot: <code class="doc-inline px-1 py-0.5">admin@lazypock.app</code> / <code class="doc-inline px-1 py-0.5">admin123</code></li>
+				<li>Server + Studio admin UI: <code class="doc-inline px-1 py-0.5">http://localhost:4000</code> (login at <code class="doc-inline px-1 py-0.5">/_/</code> with the superuser above)</li>
 				<li>REST API: <code class="doc-inline px-1 py-0.5">http://localhost:4000/api/...</code></li>
-				<li>Example hooks mounted from <code class="doc-inline px-1 py-0.5">./hooks</code> add custom routes: <code class="doc-inline px-1 py-0.5">GET /api/hello/{'{'}name{'}'}</code> and <code class="doc-inline px-1 py-0.5">GET /api/example/time</code></li>
-				<li>Example migration in <code class="doc-inline px-1 py-0.5">./migrations</code> creates an <code class="doc-inline px-1 py-0.5">example_notes</code> table</li>
 			</ul>
 		</div>
 		<p class="mt-3 text-base-content/80 leading-relaxed">
-			Point <code class="doc-inline px-1 py-0.5">lazypock-ts</code> at it right away — no manual setup needed:
+			To reset everything (including the database):
+		</p>
+		<CodeBlock lang="bash" code={`docker compose down -v`} />
+		<p class="mt-3 text-base-content/80 leading-relaxed">
+			Prefer no Docker at all? Any PostgreSQL 15+ works — just point
+			<code class="doc-inline px-1 py-0.5">DATABASE_URL</code> at it. Or run from source — see
+			<a class="text-primary underline" href="#run-backend">Option C</a> below.
+		</p>
+		<p class="mt-3 text-base-content/80 leading-relaxed">
+			Point <code class="doc-inline px-1 py-0.5">lazypock-ts</code> at it right away:
 		</p>
 		<CodeBlock
 			lang="typescript" code={`import { LazypockClient } from 'lazypock';
 
 const client = new LazypockClient({ baseUrl: 'http://localhost:4000/api' });
-await client.login('admin@lazypock.app', 'admin123');`}
+await client.login('admin@lazypock.app', 'admin123');
+
+// after creating a \`posts\` collection in the Studio
+const posts = await client.collection('posts').getList(1, 30);
+client.collection('posts').subscribe((e) => console.log(e.action, e.record));`}
 		/>
-		<p class="mt-3 text-base-content/80 leading-relaxed">
-			To reset everything (including the database), tear the stack down and drop the named volumes:
-		</p>
-		<CodeBlock lang="bash" code={`docker compose down -v`} />
-		<p class="mt-3 text-sm text-base-content/70">
-			Editing <code class="doc-inline px-1 py-0.5">./hooks</code> or <code class="doc-inline px-1 py-0.5">./migrations</code>?
-			Restart just the app container to pick up changes: <code class="doc-inline px-1 py-0.5">docker compose restart lazypock</code>.
-		</p>
 	</section>
+
 
 	<section id="download-binary" class="scroll-mt-20 mb-10">
 		<h3 class="text-lg font-semibold">Option B: Download a prebuilt binary</h3>
