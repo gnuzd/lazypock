@@ -4,12 +4,15 @@
 [![Elixir](https://img.shields.io/badge/Elixir-1.17%2B-4B275F?logo=elixir)](https://elixir-lang.org)
 [![Phoenix](https://img.shields.io/badge/Phoenix-1.7%2B-FD4F00)](https://www.phoenixframework.org)
 [![Tests](https://img.shields.io/github/actions/workflow/status/gnuzd/lazypock/test.yml?branch=main&label=tests&logo=github)](https://github.com/gnuzd/lazypock/actions/workflows/test.yml)
+[![Docs](https://img.shields.io/badge/docs-lazypock.gnuzd.dev-4B275F?logo=readme&logoColor=white)](https://lazypock.gnuzd.dev/)
 
 > **Your whole backend. In one lazy pocket.**
 
 LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoenix + PostgreSQL**. Define collections in the Studio admin UI, get instant REST API + realtime subscriptions + file storage + auth — all with hooks, rules, and zero boilerplate.
 
 **Status:** Beta. The backend (schema engine, REST API, rules, realtime, file storage, hooks, cron, auth incl. OAuth2), the Studio admin UI, and the TypeScript SDK are all complete and usable end-to-end. See [What Works Now](#what-works-now) for the full breakdown.
+
+📚 **Full documentation:** [lazypock.gnuzd.dev](https://lazypock.gnuzd.dev/)
 
 ---
 
