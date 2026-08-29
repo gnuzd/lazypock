@@ -8,7 +8,7 @@
       "extra-files": [
         { "type": "generic", "path": "core/mix.exs" }
       ],
-      "exclude-paths": ["example"]
+      "exclude-paths": ["example", "docs"]
     }
   }
 }
