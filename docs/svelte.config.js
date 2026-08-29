@@ -1,27 +1,27 @@
-import adapter from '@sveltejs/adapter-auto';
-import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
-import { mdsvex } from 'mdsvex';
-import hljs from 'highlight.js/lib/core';
-import bash from 'highlight.js/lib/languages/bash';
-import typescript from 'highlight.js/lib/languages/typescript';
-import javascript from 'highlight.js/lib/languages/javascript';
-import json from 'highlight.js/lib/languages/json';
-import yaml from 'highlight.js/lib/languages/yaml';
-import elixir from 'highlight.js/lib/languages/elixir';
-import plaintext from 'highlight.js/lib/languages/plaintext';
+import adapter from "@sveltejs/adapter-auto";
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
+import { mdsvex } from "mdsvex";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import typescript from "highlight.js/lib/languages/typescript";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import yaml from "highlight.js/lib/languages/yaml";
+import elixir from "highlight.js/lib/languages/elixir";
+import plaintext from "highlight.js/lib/languages/plaintext";
 
 // Same language set as src/lib/components/CodeBlock.svelte.
-hljs.registerLanguage('bash', bash);
-hljs.registerLanguage('sh', bash);
-hljs.registerLanguage('typescript', typescript);
-hljs.registerLanguage('ts', typescript);
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('js', javascript);
-hljs.registerLanguage('json', json);
-hljs.registerLanguage('yaml', yaml);
-hljs.registerLanguage('yml', yaml);
-hljs.registerLanguage('elixir', elixir);
-hljs.registerLanguage('plaintext', plaintext);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("sh", bash);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("ts", typescript);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("js", javascript);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("yml", yaml);
+hljs.registerLanguage("elixir", elixir);
+hljs.registerLanguage("plaintext", plaintext);
 
 // The highlighter's return value replaces the whole code node and lands in
 // the generated Svelte component's template, so curlies/backticks from the
@@ -29,11 +29,11 @@ hljs.registerLanguage('plaintext', plaintext);
 // Prism highlighter) or the Svelte compiler chokes on them.
 const escapeSvelty = (str) =>
 	str
-		.replace(/[{}`]/g, (c) => ({ '{': '&#123;', '}': '&#125;', '`': '&#96;' }[c]))
-		.replace(/\\([trn])/g, '&#92;$1');
+		.replace(/[{}`]/g, (c) => ({ "{": "&#123;", "}": "&#125;", "`": "&#96;" })[c])
+		.replace(/\\([trn])/g, "&#92;$1");
 
 function highlighter(code, lang) {
-	const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
+	const language = lang && hljs.getLanguage(lang) ? lang : "plaintext";
 	let highlighted;
 	try {
 		highlighted = hljs.highlight(code, { language }).value;
@@ -47,17 +47,17 @@ function highlighter(code, lang) {
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
-	extensions: ['.svelte', '.md'],
+	extensions: [".svelte", ".md"],
 	preprocess: [
 		vitePreprocess(),
 		mdsvex({
-			extensions: ['.md'],
-			highlight: { highlighter }
-		})
+			extensions: [".md"],
+			highlight: { highlighter },
+		}),
 	],
 	kit: {
-		adapter: adapter()
-	}
+		adapter: adapter(),
+	},
 };
 
 export default config;

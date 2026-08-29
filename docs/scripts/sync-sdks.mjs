@@ -16,41 +16,49 @@
 // site always builds.
 //
 // Usage: node scripts/sync-sdks.mjs   (from docs/)
-import { execSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { execSync } from "node:child_process";
+import {
+	cpSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url))); // docs/
-const routesDir = path.join(root, 'src', 'routes', 'sdk');
-const libDir = path.join(root, 'src', 'lib');
-const cacheDir = path.join(root, '.sdk-cache');
+const routesDir = path.join(root, "src", "routes", "sdk");
+const libDir = path.join(root, "src", "lib");
+const cacheDir = path.join(root, ".sdk-cache");
 
 /** Registry: every SDK the docs site documents. Add lazypock-swift here. */
 const SDKs = [
 	{
-		repo: 'gnuzd/lazypock-ts',
-		slug: 'typescript',
-		name: 'TypeScript',
-		docsDir: 'docs',
-		env: 'LAZYPOCK_TS_DIR',
+		repo: "gnuzd/lazypock-ts",
+		slug: "typescript",
+		name: "TypeScript",
+		docsDir: "docs",
+		env: "LAZYPOCK_TS_DIR",
 		// Sidebar order; pages present in the repo but missing here get appended.
 		order: [
-			'install',
-			'quick-start',
-			'type-safety',
-			'queries',
-			'realtime',
-			'files',
-			'auth',
-			'api-reference'
-		]
-	}
+			"install",
+			"quick-start",
+			"type-safety",
+			"queries",
+			"realtime",
+			"files",
+			"auth",
+			"api-reference",
+		],
+	},
 ];
 
 function git(args, cwd) {
 	try {
-		execSync(`git ${args}`, { stdio: 'inherit', cwd });
+		execSync(`git ${args}`, { stdio: "inherit", cwd });
 		return true;
 	} catch (err) {
 		console.warn(`  [!] git ${args} failed (${err?.message ?? err})`);
@@ -64,7 +72,7 @@ function resolveSource(sdk) {
 	}
 	const dir = path.join(cacheDir, sdk.slug);
 	mkdirSync(cacheDir, { recursive: true });
-	if (existsSync(path.join(dir, '.git'))) {
+	if (existsSync(path.join(dir, ".git"))) {
 		console.log(`  refreshing cached clone ${dir}`);
 		if (git(`fetch origin --depth 1`, dir)) {
 			git(`reset --hard origin/main`, dir);
@@ -73,7 +81,7 @@ function resolveSource(sdk) {
 		console.log(`  cloning https://github.com/${sdk.repo} -> ${dir}`);
 		git(`clone --depth 1 https://github.com/${sdk.repo}.git "${dir}"`, cacheDir);
 	}
-	return { dir, from: 'cached clone' };
+	return { dir, from: "cached clone" };
 }
 
 function frontmatterTitle(md, fallback) {
@@ -93,26 +101,30 @@ function syncSdk(sdk) {
 	const { dir, from } = resolveSource(sdk);
 	const srcDir = path.join(dir, sdk.docsDir);
 	if (!existsSync(srcDir)) {
-		console.log(`  [!] ${sdk.name}: no ${sdk.docsDir}/ in ${from} — keeping committed pages`);
+		console.log(
+			`  [!] ${sdk.name}: no ${sdk.docsDir}/ in ${from} — keeping committed pages`,
+		);
 		return;
 	}
-	const files = readdirSync(srcDir).filter((f) => f.endsWith('.md'));
+	const files = readdirSync(srcDir).filter((f) => f.endsWith(".md"));
 	if (files.length === 0) {
-		console.log(`  [!] ${sdk.name}: ${sdk.docsDir}/ is empty in ${from} — keeping committed pages`);
+		console.log(
+			`  [!] ${sdk.name}: ${sdk.docsDir}/ is empty in ${from} — keeping committed pages`,
+		);
 		return;
 	}
 	// SvelteKit only treats +page.md files as routes, so each doc page becomes
 	// src/routes/sdk/<slug>/<page>/+page.md. Drop previously synced pages that
 	// are no longer in the source (keep the hand-written +page.svelte index).
 	for (const entry of readdirSync(targetDir)) {
-		if (entry.startsWith('+')) continue;
+		if (entry.startsWith("+")) continue;
 		rmSync(path.join(targetDir, entry), { recursive: true, force: true });
 	}
 	for (const f of files) {
-		const slug = f.replace(/\.md$/, '');
+		const slug = f.replace(/\.md$/, "");
 		const pageDir = path.join(targetDir, slug);
 		mkdirSync(pageDir, { recursive: true });
-		cpSync(path.join(srcDir, f), path.join(pageDir, '+page.md'));
+		cpSync(path.join(srcDir, f), path.join(pageDir, "+page.md"));
 	}
 	console.log(`  ✓ ${sdk.name}: synced ${files.length} pages from ${from}`);
 }
@@ -122,15 +134,19 @@ function generateNav() {
 	const entries = SDKs.map((sdk) => {
 		const dir = path.join(routesDir, sdk.slug);
 		const files = readdirSync(dir)
-			.filter((entry) => !entry.startsWith('+') && existsSync(path.join(dir, entry, '+page.md')))
+			.filter(
+				(entry) =>
+					!entry.startsWith("+") && existsSync(path.join(dir, entry, "+page.md")),
+			)
 			.map((entry) => entry);
 		const ordered = [];
 		for (const slug of sdk.order) if (files.includes(slug)) ordered.push(slug);
-		for (const slug of files.sort()) if (!ordered.includes(slug)) ordered.push(slug);
+		for (const slug of files.sort())
+			if (!ordered.includes(slug)) ordered.push(slug);
 		const pages = ordered.map((slug) => {
-			const md = existsSync(path.join(dir, slug, '+page.md'))
-				? readFileSync(path.join(dir, slug, '+page.md'), 'utf8')
-				: '';
+			const md = existsSync(path.join(dir, slug, "+page.md"))
+				? readFileSync(path.join(dir, slug, "+page.md"), "utf8")
+				: "";
 			return { slug, label: frontmatterTitle(md, slug) };
 		});
 		return { slug: sdk.slug, name: sdk.name, pages };
@@ -149,14 +165,14 @@ export interface SdkNavEntry {
 	pages: SdkPage[];
 }
 
-export const sdkNav: SdkNavEntry[] = ${JSON.stringify(entries, null, '\t')};
+export const sdkNav: SdkNavEntry[] = ${JSON.stringify(entries, null, "\t")};
 `;
-	writeFileSync(path.join(libDir, 'sdk-nav.generated.ts'), ts);
+	writeFileSync(path.join(libDir, "sdk-nav.generated.ts"), ts);
 	const total = entries.reduce((n, e) => n + e.pages.length, 0);
 	console.log(`nav: ${entries.length} SDK(s), ${total} pages`);
 }
 
-console.log('Syncing SDK docs…');
+console.log("Syncing SDK docs…");
 for (const sdk of SDKs) syncSdk(sdk);
 generateNav();
-console.log('Done.');
+console.log("Done.");

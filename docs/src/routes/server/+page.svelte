@@ -248,6 +248,11 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
 						<td class="px-3 py-2 font-mono text-xs">0</td>
 					</tr>
 					<tr>
+						<td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">LAZYPOCK_DATA_DIR</code></td>
+						<td class="px-3 py-2">Base data dir for migrations/hooks/seeds (default: <code class="doc-inline px-1 py-0.5">~/.lazypock</code>)</td>
+						<td class="px-3 py-2 font-mono text-xs">/data/lazypock</td>
+					</tr>
+					<tr>
 						<td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">LAZYPOCK_MIGRATIONS_DIR</code></td>
 						<td class="px-3 py-2">Directory for migrations (default: <code class="doc-inline px-1 py-0.5">~/.lazypock/migrations</code>)</td>
 						<td class="px-3 py-2 font-mono text-xs">/data/lazypock/migrations</td>
@@ -255,6 +260,11 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
 					<tr>
 						<td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">LAZYPOCK_AUTOMIGRATE</code></td>
 						<td class="px-3 py-2">Set to <code class="doc-inline px-1 py-0.5">0</code> to disable auto-migrate on boot (then use <code class="doc-inline px-1 py-0.5">lazypock migrate</code>)</td>
+						<td class="px-3 py-2 font-mono text-xs">0</td>
+					</tr>
+					<tr>
+						<td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">LAZYPOCK_AUTOSEED</code></td>
+						<td class="px-3 py-2">Set to <code class="doc-inline px-1 py-0.5">0</code> to disable boot-time seeding</td>
 						<td class="px-3 py-2 font-mono text-xs">0</td>
 					</tr>
 					<tr>
