@@ -85,7 +85,10 @@
 		}
 		// Fetch records from target collection
 		try {
-			const result = await client.collection(targetColl).getList(1, 200);
+			// Request all fields (see record browser): the SDK's default projection
+			// comes from the static codegen snapshot and would drop fields added
+			// after codegen, breaking relation labels/presentable fields.
+			const result = await client.collection(targetColl).getList(1, 200, { fields: '*' });
 			relationCache[targetColl] = (result?.items ?? []) as Record<string, unknown>[];
 			relationCache = { ...relationCache };
 			relationOpen[fieldName] = true;

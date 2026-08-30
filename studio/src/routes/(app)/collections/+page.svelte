@@ -81,7 +81,14 @@
 		try {
 			const [coll, recs] = await Promise.all([
 				client.collections.getOne(name),
-				client.collection(name).getList(targetPage, perPage)
+				// Always request every field explicitly: the SDK otherwise projects
+				// responses against the static codegen schema snapshot
+				// (lazypock.types.ts), which goes stale the moment a field is added
+				// or removed via the Studio. The server applies strict projection,
+				// so new fields (e.g. a select field added to `users`) would be
+				// silently dropped from the table and the edit pane. `*` = all
+				// non-password fields (password stripping happens server-side).
+				client.collection(name).getList(targetPage, perPage, { fields: '*' })
 			]);
 			collection = coll;
 			rows = (recs?.items as Record<string, unknown>[]) || [];
