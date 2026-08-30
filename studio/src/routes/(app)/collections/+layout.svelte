@@ -71,6 +71,11 @@
 				>
 					<Folder class="h-4 w-4 shrink-0 opacity-60" />
 					<span class="flex-1 truncate">{coll.name as string}</span>
+					{#if (coll.type as string) === 'view'}
+						<span class="rounded bg-info/20 px-1 py-0.5 text-[10px] font-medium text-info"
+							>view</span
+						>
+					{/if}
 					<span class="mr-1 text-xs opacity-40">{(coll.schema as unknown[])?.length ?? 0}</span>
 				</div>
 			{/each}

@@ -48,6 +48,13 @@
 	let typeOpen = $state(false);
 	let newFields = $state<FieldDefinition[]>([]);
 	let newIndexes = $state<string[]>([]);
+	// ── View collections: query + live dry-run state (PocketBase parity) ──
+	let viewQuery = $state('');
+	let dryRunState = $state<'idle' | 'testing' | 'ok' | 'error'>('idle');
+	let dryRunSample = $state<Record<string, unknown>[]>([]);
+	let dryRunFields = $state<FieldDefinition[]>([]);
+	let dryRunError = $state('');
+	let dryRunTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 	let activeTab = $state('Fields');
 	let saving = $state(false);
 	let error = $state('');
@@ -96,6 +103,7 @@
 					(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
 				) as unknown as FieldDefinition[];
 			newIndexes = ((coll.indexes as string[]) ?? []).filter(Boolean);
+			viewQuery = (coll.viewQuery as string) ?? '';
 			const rules = (coll.rules as Record<string, unknown>) ?? {};
 			listRule = (rules['listRule'] as string | null) ?? null;
 			viewRule = (rules['viewRule'] as string | null) ?? null;
@@ -144,6 +152,7 @@
 		return JSON.stringify({
 			name: newName,
 			type: newType,
+			viewQuery: newType === 'view' ? viewQuery : '',
 			fields: newFields
 				.filter((f) => !f['@toDelete'])
 				.map((f) => {
@@ -268,6 +277,39 @@
 		};
 	});
 
+	// ── View query live dry-run (debounced 200ms, PocketBase parity) ──
+	$effect(() => {
+		if (newType !== 'view') return;
+		const q = viewQuery;
+		clearTimeout(dryRunTimer);
+		if (!q.trim()) {
+			dryRunState = 'idle';
+			dryRunSample = [];
+			dryRunFields = [];
+			dryRunError = '';
+			return;
+		}
+		dryRunState = 'testing';
+		dryRunTimer = setTimeout(async () => {
+			try {
+				const res = (await client.http.post('/collections/meta/dry-run-view', {
+					query: q
+				})) as { fields: FieldDefinition[]; sample: Record<string, unknown>[] };
+				dryRunFields = (res?.fields as FieldDefinition[]) ?? [];
+				dryRunSample = (res?.sample as Record<string, unknown>[]) ?? [];
+				dryRunError = '';
+				dryRunState = 'ok';
+			} catch (e) {
+				dryRunError =
+					((e as { message?: string })?.message ?? '').replace(/^Invalid view query\. Raw error: \s*/, '') ||
+					'Invalid query';
+				dryRunSample = [];
+				dryRunFields = [];
+				dryRunState = 'error';
+			}
+		}, 200);
+	});
+
 	async function handleSave() {
 		if (saving) return;
 
@@ -275,6 +317,7 @@
 		const payload: Record<string, unknown> = {
 			name: newName.trim(),
 			type: newType,
+			...(newType === 'view' ? { viewQuery: viewQuery.trim() } : {}),
 			indexes: newIndexes,
 			fields: newFields
 				.filter((f) => !f['@toDelete'])
@@ -298,6 +341,13 @@
 		const result = collectionSchema.safeParse(payload);
 		if (!result.success) {
 			error = result.error.issues[0]?.message || 'Invalid form data';
+			return;
+		}
+
+		// View collections must have a query (server-side introspection will
+		// surface any SQL errors with a clear message).
+		if (newType === 'view' && !viewQuery.trim()) {
+			error = 'View collections require a SELECT query';
 			return;
 		}
 
@@ -406,7 +456,88 @@
 
 	<!-- Tab content -->
 	<div class="flex-1 overflow-y-auto p-4">
-		{#if activeTab === 'Fields'}
+		{#if activeTab === 'Fields' && newType === 'view'}
+			<!-- View collections: query-driven schema (PocketBase parity) -->
+			<div class="flex flex-col gap-3">
+				<div class="rounded-field border border-base-300 bg-base-200/40 p-3 text-xs text-base-content/70">
+					<p class="mb-1 font-medium text-base-content">Query caveats</p>
+					<ul class="list-disc pl-4">
+						<li>Wildcard columns (<code>*</code>) are not supported.</li>
+						<li>
+							The query must have a unique <code>id</code> column. If your query doesn't have a
+							suitable one, use
+							<code>(ROW_NUMBER() OVER()) as id</code>.
+						</li>
+						<li>Expressions must be aliased, e.g. <code>MAX(balance) as maxBalance</code>.</li>
+						<li>Only a single SELECT statement is allowed.</li>
+					</ul>
+				</div>
+
+				<div class="flex flex-col gap-1">
+					<label for="coll-view-query" class="flex items-center gap-2 text-sm font-medium">
+						<span>Select query</span>
+						{#if dryRunState === 'testing'}
+							<span class="text-xs text-base-content/50">Testing…</span>
+						{:else if dryRunState === 'ok'}
+							<span class="text-xs text-success">✓ Valid query</span>
+						{:else if dryRunState === 'error'}
+							<span class="text-xs text-error">✗ Invalid query</span>
+						{/if}
+					</label>
+					<textarea
+						id="coll-view-query"
+						class="input input-sm h-40 w-full resize-y font-mono text-xs"
+						spellcheck={false}
+						placeholder="SELECT posts.id, posts.title, count(comments.id) as totalComments FROM posts LEFT JOIN comments ON comments.postId = posts.id GROUP BY posts.id"
+						bind:value={viewQuery}
+					></textarea>
+				</div>
+
+				{#if dryRunError}
+					<div class="rounded-field border border-error/30 bg-error/10 p-3 font-mono text-xs text-error">
+						{dryRunError}
+					</div>
+				{/if}
+
+				{#if dryRunState === 'ok' || newFields.length > 0}
+					<div class="flex flex-col gap-1">
+						<p class="text-sm font-medium">Generated fields</p>
+						{#if dryRunState === 'ok'}
+							<div class="flex flex-wrap gap-1">
+								{#each dryRunFields as f (f.name)}
+									<span class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-xs">{f.name}</span>
+									<span class="text-xs text-base-content/50">{f.type}</span>
+								{/each}
+							</div>
+						{:else}
+							<div class="flex flex-wrap gap-1">
+								{#each newFields as f (f.name)}
+									<span class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-xs">{f.name}</span>
+									<span class="text-xs text-base-content/50">{f.type}</span>
+								{/each}
+							</div>
+						{/if}
+						<p class="text-xs text-base-content/50">
+							Fields are auto-generated from the query on save — they can't be edited directly.
+						</p>
+					</div>
+				{/if}
+
+				{#if dryRunState === 'ok'}
+					<div class="flex flex-col gap-1">
+						<p class="text-sm font-medium">Sample output ({dryRunSample.length})</p>
+						{#if dryRunSample.length > 0}
+							<pre
+								class="max-h-56 overflow-auto rounded-field border border-base-300 bg-base-200/60 p-3 font-mono text-xs"
+							><code>{JSON.stringify(dryRunSample.slice(0, 3), null, 2)}</code></pre
+							>
+						{:else}
+							<p class="text-xs text-base-content/50">No records match the query.</p>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		{:else if activeTab === 'Fields'}
 			<!-- Fields list with drag-reorder -->
 			<div class="space-y-1" bind:this={fieldsListEl}>
 				{#each newFields as field, i (field)}
@@ -502,10 +633,16 @@
 
 				<RuleField label="List/Search rule" name="listRule" bind:value={listRule} />
 				<RuleField label="View rule" name="viewRule" bind:value={viewRule} />
-				<RuleField label="Create rule" name="createRule" bind:value={createRule} />
-				<RuleField label="Update rule" name="updateRule" bind:value={updateRule} />
-				<RuleField label="Delete rule" name="deleteRule" bind:value={deleteRule} />
-				<RuleField label="Manage rule" name="manageRule" bind:value={manageRule} />
+				{#if newType !== 'view'}
+					<RuleField label="Create rule" name="createRule" bind:value={createRule} />
+					<RuleField label="Update rule" name="updateRule" bind:value={updateRule} />
+					<RuleField label="Delete rule" name="deleteRule" bind:value={deleteRule} />
+					<RuleField label="Manage rule" name="manageRule" bind:value={manageRule} />
+				{:else}
+					<p class="text-xs text-base-content/50">
+						View collections are read-only — only the List and View rules apply.
+					</p>
+				{/if}
 			</div>
 		{/if}
 	</div>

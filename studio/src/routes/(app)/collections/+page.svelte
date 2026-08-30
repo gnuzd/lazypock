@@ -141,14 +141,19 @@
 		});
 	});
 
+	// View collections are read-only: no record create/update/delete.
+	const isViewCollection = $derived((collection?.type as string) === 'view');
+
 	// ── Record CRUD ──
 	function newRecord() {
+		if (isViewCollection) return;
 		editingRecordId = null;
 		recordData = {};
 		showRecordPane = true;
 	}
 
 	function editRecord(row: Record<string, unknown>) {
+		if (isViewCollection) return;
 		editingRecordId = (row.id as string) ?? null;
 		// Copy from live fields — skip password fields
 		const schemaFields = (collection?.fields as Record<string, unknown>[]) ?? [];
@@ -234,6 +239,12 @@
 				<span class="text-base-content/50">Collections</span>
 				<span class="text-xs opacity-30">/</span>
 				<span class="font-medium">{(collection.name as string) ?? '...'}</span>
+				{#if isViewCollection}
+					<span
+						class="rounded bg-info/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-info"
+						>view</span
+					>
+				{/if}
 				<button
 					type="button"
 					class="ml-2 cursor-pointer rounded border-none bg-transparent p-0.5 text-base-content opacity-40 transition-opacity hover:opacity-100"
@@ -243,7 +254,11 @@
 					<Settings class="h-4 w-4" />
 				</button>
 			</nav>
-			<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+			{#if !isViewCollection}
+				<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+			{:else}
+				<span class="text-sm text-base-content/50">Read-only view</span>
+			{/if}
 		</div>
 
 		<div class="min-h-0">
@@ -251,11 +266,11 @@
 				{columns}
 				{rows}
 				fillHeight
-				selectable
+				selectable={!isViewCollection}
 				bind:selectedIds
 				emptyLabel="No records yet. Create your first record to get started."
-				emptyActionLabel="+ New Record"
-				onemptyaction={newRecord}
+				emptyActionLabel={isViewCollection ? '' : '+ New Record'}
+				onemptyaction={isViewCollection ? undefined : newRecord}
 				onrowclick={(row) => editRecord(row)}
 			>
 				{#snippet selectionActions()}
