@@ -2,10 +2,11 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import { Folder, Plus } from '@lucide/svelte';
+	import { Folder, Plus, Network } from '@lucide/svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import CollectionEditor from '$lib/components/CollectionEditor.svelte';
+	import CollectionsOverviewModal from '$lib/components/CollectionsOverviewModal.svelte';
 	import SidePane from '$lib/components/SidePane.svelte';
 	import {
 		activeName,
@@ -43,10 +44,22 @@
 
 	// ── New-Collection side pane state ──
 	let showNewPane = $state(false);
+	// ── Collections overview modal (ERD + rules) ──
+	let showOverview = $state(false);
 </script>
 
 {#snippet headerContent()}
-	<input type="text" class="input input-sm w-full" placeholder="Search..." bind:value={search} />
+	<div class="flex items-center gap-1">
+		<input type="text" class="input input-sm w-full" placeholder="Search..." bind:value={search} />
+		<button
+			type="button"
+			class="btn btn-ghost btn-sm shrink-0 px-2"
+			title="Collections overview"
+			onclick={() => (showOverview = true)}
+		>
+			<Network class="h-4 w-4" />
+		</button>
+	</div>
 {/snippet}
 
 {#snippet bodyContent()}
@@ -166,3 +179,6 @@
 		}}
 	/>
 </SidePane>
+
+<!-- Collections overview modal (ERD + rules, PocketBase parity) -->
+<CollectionsOverviewModal bind:show={showOverview} />
