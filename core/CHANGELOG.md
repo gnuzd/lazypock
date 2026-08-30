@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/gnuzd/lazypock/compare/v0.7.0...v0.7.1) (2026-08-30)
+
+
+### Bug Fixes
+
+* **studio:** always request all fields for record reads ([607ad61](https://github.com/gnuzd/lazypock/commit/607ad61569ad0f69ea0751d29bebc58dc83d3f7b))
+* **studio:** always request all fields for record reads (stale schema projection drops new fields) ([530bdab](https://github.com/gnuzd/lazypock/commit/530bdaba5d6cee159671703779e48aeb6e4555a0))
+
 ## [0.7.0](https://github.com/gnuzd/lazypock/compare/v0.6.2...v0.7.0) (2026-08-29)
 
 
