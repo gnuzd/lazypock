@@ -54,7 +54,7 @@
           class="inline-flex h-7 w-7 items-center justify-center rounded-box bg-primary text-primary-content text-sm font-bold"
           >L</span
         >
-        <span>lazypock<span class="text-primary"> docs</span></span>
+        <span>Lazypock</span>
       </a>
       <span
         class="hidden sm:inline-block rounded-field bg-base-200 px-2 py-0.5 text-xs text-base-content/70"
