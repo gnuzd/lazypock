@@ -26,6 +26,7 @@ defmodule LazypockWeb.DynamicController do
   alias Lazypock.Collections.Registry
   alias Lazypock.Schemas.GenericRecord
   alias Lazypock.Schemas.FilterCompiler
+  alias Lazypock.Schema.TypeMapper
   alias LazypockWeb.DynamicView
   alias Lazypock.Rules.Enforcer
   alias Lazypock.Realtime.Broadcaster
@@ -112,7 +113,8 @@ defmodule LazypockWeb.DynamicController do
     user = resolve_user(conn)
 
     with {:ok, collection} <- Registry.get(name),
-         record when not is_nil(record) <- GenericRecord.get(name, id),
+         record when not is_nil(record) <-
+           GenericRecord.get(name, id, plain_id: collection.type == "view"),
          :ok <- Enforcer.authorize_view(name, user, record) do
       item = DynamicView.format_item(record, name, params["fields"])
       [item] = DynamicView.expand_records([item], params["expand"], name)
@@ -149,6 +151,7 @@ defmodule LazypockWeb.DynamicController do
     user = resolve_user(conn)
 
     with {:ok, collection} <- Registry.get(name),
+         :ok <- ensure_mutable(collection),
          raw_attrs = Map.get(params, "data") || Map.drop(params, ["collection"]),
          attrs = sanitize_attrs(raw_attrs, collection),
          :ok <- Enforcer.authorize_create(name, user, attrs) do
@@ -168,6 +171,7 @@ defmodule LazypockWeb.DynamicController do
 
               Hooks.dispatch_after_create(record, context)
               Broadcaster.broadcast_create(name, record, conn.assigns[:connection_id])
+              Lazypock.Realtime.Views.after_mutation(name)
 
               conn
               |> put_status(201)
@@ -192,6 +196,11 @@ defmodule LazypockWeb.DynamicController do
         |> put_status(404)
         |> json(error_response(404, "Collection not found"))
 
+      {:error, {:unsupported_collection_type, message}} ->
+        conn
+        |> put_status(400)
+        |> json(error_response(400, message))
+
       {:error, reason} ->
         conn
         |> put_status(403)
@@ -205,6 +214,7 @@ defmodule LazypockWeb.DynamicController do
     user = resolve_user(conn)
 
     with {:ok, collection} <- Registry.get(name),
+         :ok <- ensure_mutable(collection),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_update(name, user, record) do
       context = %{collection_name: name, collection: collection, user: user, conn: conn}
@@ -229,6 +239,7 @@ defmodule LazypockWeb.DynamicController do
 
             Hooks.dispatch_after_update(updated_record, context)
             Broadcaster.broadcast_update(name, updated_record, conn.assigns[:connection_id])
+            Lazypock.Realtime.Views.after_mutation(name)
             conn |> json(DynamicView.format_item(updated_record, name))
           else
             Hooks.dispatch_after_update_error(attrs, :update_failed, context)
@@ -254,6 +265,11 @@ defmodule LazypockWeb.DynamicController do
         |> put_status(404)
         |> json(error_response(404, "Collection not found"))
 
+      {:error, {:unsupported_collection_type, message}} ->
+        conn
+        |> put_status(400)
+        |> json(error_response(400, message))
+
       {:error, reason} ->
         conn
         |> put_status(403)
@@ -267,6 +283,7 @@ defmodule LazypockWeb.DynamicController do
     user = resolve_user(conn)
 
     with {:ok, collection} <- Registry.get(name),
+         :ok <- ensure_mutable(collection),
          record when not is_nil(record) <- GenericRecord.get(name, id),
          :ok <- Enforcer.authorize_delete(name, user, record) do
       context = %{collection_name: name, collection: collection, user: user, conn: conn}
@@ -278,6 +295,7 @@ defmodule LazypockWeb.DynamicController do
             :ok ->
               Store.delete_by_record(name, id)
               Broadcaster.broadcast_delete(name, id, conn.assigns[:connection_id])
+              Lazypock.Realtime.Views.after_mutation(name)
               Hooks.dispatch_after_delete(record, context)
               conn |> put_status(204) |> json(nil)
 
@@ -305,6 +323,11 @@ defmodule LazypockWeb.DynamicController do
         |> put_status(404)
         |> json(error_response(404, "Collection not found"))
 
+      {:error, {:unsupported_collection_type, message}} ->
+        conn
+        |> put_status(400)
+        |> json(error_response(400, message))
+
       {:error, reason} ->
         conn
         |> put_status(403)
@@ -313,6 +336,14 @@ defmodule LazypockWeb.DynamicController do
   end
 
   # ── Private helpers ─────────────────────────────────
+
+  # View collections are read-only (PocketBase parity): create/update/delete
+  # are rejected with a 400 "Unsupported collection type." error.
+  defp ensure_mutable(%{type: "view"}) do
+    {:error, {:unsupported_collection_type, "Unsupported collection type."}}
+  end
+
+  defp ensure_mutable(_collection), do: :ok
 
   defp build_filter(nil), do: {"", []}
 
@@ -327,6 +358,18 @@ defmodule LazypockWeb.DynamicController do
 
       {:error, _} ->
         {"", []}
+    end
+  end
+
+  defp build_sort(nil, %{type: "view"} = collection) do
+    # Views only have created_at if the query selects it. Default to the
+    # required `id` column otherwise (PocketBase sorts views by id when no
+    # created column is present).
+    case Enum.find(collection.fields || [], fn f ->
+           String.downcase(f.name) in ["created_at", "createdat"]
+         end) do
+      nil -> "ORDER BY \"id\" ASC"
+      field -> "ORDER BY #{TypeMapper.quote_ident(field.name)} DESC"
     end
   end
 

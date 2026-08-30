@@ -92,7 +92,7 @@ defmodule Lazypock.Collections.Collection do
     struct
     |> cast(attrs, [:name, :type, :schema, :rules, :options, :hooks, :managed, :system])
     |> validate_required([:name, :type])
-    |> validate_inclusion(:type, ["base", "auth"])
+    |> validate_inclusion(:type, ["base", "auth", "view"])
     |> validate_format(:name, ~r/^[a-z][a-z0-9_]*$/,
       message:
         "must start with a letter and contain only lowercase letters, numbers, and underscores"

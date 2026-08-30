@@ -66,6 +66,42 @@ defmodule LazypockWeb.CollectionController do
     end
   end
 
+  # Dry-run a view query (PocketBase parity): validates the query and returns
+  # the generated fields plus a sample of up to 10 records.
+  # POST /api/collections/meta/dry-run-view
+  def dry_run_view(conn, %{"query" => query}) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_dry_run_view(conn, query)
+  end
+
+  def dry_run_view(conn, _params) do
+    conn = require_superuser!(conn)
+
+    if conn.halted do
+      conn
+    else
+      conn
+      |> put_status(400)
+      |> json(%{code: 400, message: "Missing query parameter", data: %{}})
+    end
+  end
+
+  defp do_dry_run_view(conn, query) do
+    case Lazypock.Schema.Views.dry_run(query, 10) do
+      {:ok, %{fields: fields, sample: sample}} ->
+        json(conn, %{fields: fields, sample: sample})
+
+      {:error, reason} ->
+        conn
+        |> put_status(400)
+        |> json(%{
+          code: 400,
+          message: "Invalid view query. Raw error: \n#{reason}",
+          data: %{}
+        })
+    end
+  end
+
   # Create a new collection
   def create(conn, %{"name" => name} = params) do
     conn = require_superuser!(conn)
@@ -76,11 +112,17 @@ defmodule LazypockWeb.CollectionController do
     type = params["type"] || "base"
     fields = params["fields"] || []
     indexes = params["indexes"] || []
+    options = build_options(params)
 
     # Fire onCollectionCreateRequest (PocketBase parity)
     case Lazypock.Hooks.Request.trigger_collection_create(conn, %{name: name, type: type}) do
       {:ok, _event} ->
-        case DDL.create_collection(name, type: type, fields: fields, indexes: indexes) do
+        case DDL.create_collection(name,
+               type: type,
+               fields: fields,
+               indexes: indexes,
+               options: options
+             ) do
           {:ok, collection} ->
             Lazypock.Hooks.Collection.trigger_after_create_success(collection)
             Broadcaster.broadcast_collection_event("create", collection_json(collection))
@@ -92,6 +134,20 @@ defmodule LazypockWeb.CollectionController do
 
       {:error, reason} ->
         conn |> put_status(400) |> json(%{error: reason})
+    end
+  end
+
+  # Builds the collection options map for create/update. Accepts both the
+  # PB-style top-level `viewQuery` param and an explicit `options` map;
+  # `viewQuery` is stored as `options["view_query"]`. Returns `nil` when
+  # neither is present so callers can skip the options update entirely
+  # (preserving existing options on partial updates).
+  defp build_options(params) do
+    case {params["options"], params["viewQuery"]} do
+      {nil, nil} -> nil
+      {options, nil} -> options
+      {options, q} when is_binary(q) -> Map.put(options || %{}, "view_query", q)
+      {options, _} -> options
     end
   end
 
@@ -189,7 +245,7 @@ defmodule LazypockWeb.CollectionController do
               |> maybe_put(:type, params["type"])
               |> maybe_put(:fields, params["fields"])
               |> maybe_put(:rules, rules)
-              |> maybe_put(:options, params["options"])
+              |> maybe_put(:options, build_options(params))
               |> maybe_put(:hooks, params["hooks"])
               |> maybe_put(:indexes, params["indexes"])
 
@@ -257,6 +313,7 @@ defmodule LazypockWeb.CollectionController do
       system: Map.get(collection, :system, false),
       schema: collection.schema,
       indexes: Map.get(opts, "indexes", []) || [],
+      viewQuery: if(collection.type == "view", do: Map.get(opts, "view_query"), else: nil),
       fields:
         (collection.fields || [])
         |> Enum.sort_by(& &1.sort_order, :asc)
