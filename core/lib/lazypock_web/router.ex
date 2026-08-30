@@ -66,6 +66,7 @@ defmodule LazypockWeb.Router do
     # Collection management (DDL operations — enforcer checks superuser/rules)
     get("/collections", CollectionController, :list)
     post("/collections", CollectionController, :create)
+    post("/collections/meta/dry-run-view", CollectionController, :dry_run_view)
     get("/collections/:id", CollectionController, :show)
     patch("/collections/:id", CollectionController, :update)
     delete("/collections/:id", CollectionController, :delete)

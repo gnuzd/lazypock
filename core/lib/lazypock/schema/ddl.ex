@@ -14,6 +14,8 @@ defmodule Lazypock.Schema.DDL do
 
   alias Lazypock.Repo
   alias Lazypock.Schema.TypeMapper
+  alias Lazypock.Schema.Views
+  require Logger
   import Ecto.Query
 
   # Broadcast a schema event to the in-process Registry, unless PubSub isn't
@@ -51,27 +53,35 @@ defmodule Lazypock.Schema.DDL do
     result =
       Repo.transaction(fn ->
         with :ok <- validate_collection_name(name),
-             :ok <- validate_collection_not_exists(name),
-             :ok <- validate_fields(fields) do
+             :ok <- validate_collection_not_exists(name) do
           lock_key = :erlang.phash2({:create_collection, name})
           Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
-          collection =
-            create_collection_metadata!(name, type, fields, indexes, rules, options, hooks)
+          if type == "view" do
+            # View collections: schema is derived from the view query, no table.
+            create_view_collection!(name, opts)
+          else
+            with :ok <- validate_fields(fields) do
+              collection =
+                create_collection_metadata!(name, type, fields, indexes, rules, options, hooks)
 
-          sql = build_create_table_sql(name, fields)
-          Ecto.Adapters.SQL.query!(Repo, sql, [])
+              sql = build_create_table_sql(name, fields)
+              Ecto.Adapters.SQL.query!(Repo, sql, [])
 
-          create_indexes(name, fields)
-          apply_custom_indexes!(name, indexes)
-          create_field_metadata!(collection.id, fields)
+              create_indexes(name, fields)
+              apply_custom_indexes!(name, indexes)
+              create_field_metadata!(collection.id, fields)
 
-          Repo.preload(collection, :fields)
+              Repo.preload(collection, :fields)
+            else
+              # Validation failures must roll back so the transaction returns
+              # {:error, reason} — otherwise the caller would receive the
+              # double-wrapped {:ok, {:error, reason}} and treat a failure as
+              # success (and broadcast a malformed message to the Registry).
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end
         else
-          # Validation failures must roll back so the transaction returns
-          # {:error, reason} — otherwise the caller would receive the
-          # double-wrapped {:ok, {:error, reason}} and treat a failure as
-          # success (and broadcast a malformed message to the Registry).
           {:error, reason} -> Repo.rollback(reason)
         end
       end)
@@ -84,6 +94,205 @@ defmodule Lazypock.Schema.DDL do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # ── View collections ────────────────────────────────
+
+  # Creates a view collection: validates the query, derives the fields from
+  # its result columns, creates the physical Postgres view, and stores the
+  # metadata. Mirrors PocketBase's view-collection save flow.
+  defp create_view_collection!(name, opts) do
+    options = normalize_view_options(Keyword.get(opts, :options) || %{}, opts)
+    query = Map.get(options, "view_query")
+
+    cond do
+      not is_binary(query) or query == "" ->
+        Repo.rollback("view query is required")
+
+      true ->
+        case Views.build_fields(query) do
+          {:ok, fields} ->
+            collection =
+              create_collection_metadata!(
+                name,
+                "view",
+                fields,
+                [],
+                opts[:rules],
+                options,
+                opts[:hooks]
+              )
+
+            case Views.create_view(name, query) do
+              {:ok, _columns} ->
+                create_field_metadata!(collection.id, fields)
+                Lazypock.Realtime.Views.reset_view(name)
+                Repo.preload(collection, :fields)
+
+              {:error, reason} ->
+                Repo.rollback(reason)
+            end
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+    end
+  end
+
+  # Merges a top-level :view_query keyword (internal callers) into the
+  # options map so options["view_query"] is the single source of truth.
+  defp normalize_view_options(options, opts) do
+    case Keyword.get(opts, :view_query) do
+      nil -> options
+      query -> Map.put(options, "view_query", query)
+    end
+  end
+
+  # Updates a view collection. The schema is derived from the view query, so
+  # field payloads are rejected; the physical view is rebuilt (and fields
+  # re-detected) whenever the query changes or the collection is renamed.
+  # Mirrors PocketBase's view-collection save flow.
+  defp update_view_collection!(old_name, collection, opts) do
+    new_name = Keyword.get(opts, :name, old_name)
+
+    cond do
+      collection.system and new_name != old_name ->
+        Repo.rollback("Cannot rename system collection '#{old_name}'")
+
+      Keyword.has_key?(opts, :type) and Keyword.get(opts, :type) != "view" ->
+        Repo.rollback("Cannot change the type of a view collection")
+
+      Keyword.has_key?(opts, :fields) ->
+        Repo.rollback("View collection fields are auto-generated from the view query")
+
+      true ->
+        lock_key = :erlang.phash2({:update_collection, old_name})
+        Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
+
+        old_options = collection.options || %{}
+        new_options = Keyword.get(opts, :options, old_options) || old_options
+        old_query = Map.get(old_options, "view_query")
+        new_query = Map.get(new_options, "view_query")
+        effective_query = new_query || old_query
+        query_changed = is_binary(new_query) and new_query != old_query
+        renamed = new_name != old_name
+
+        # Rebuild the physical view + fields only when the query changed or
+        # on rename (rules/options-only updates leave the view untouched).
+        if query_changed or renamed do
+          if not is_binary(effective_query) or effective_query == "" do
+            Repo.rollback("view query is required")
+          end
+
+          case Views.build_fields(effective_query) do
+            {:ok, fields} ->
+              if renamed do
+                Views.drop_view(old_name)
+              end
+
+              case Views.create_view(new_name, effective_query) do
+                {:ok, _columns} ->
+                  if renamed do
+                    Repo.update_all(
+                      from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
+                      set: [name: new_name]
+                    )
+                  end
+
+                  Repo.delete_all(
+                    from(f in Lazypock.Collections.Field,
+                      where: f.collection_id == ^collection.id
+                    )
+                  )
+
+                  create_field_metadata!(collection.id, fields)
+                  Lazypock.Realtime.Views.reset_view(new_name)
+                  if renamed, do: Lazypock.Realtime.Views.reset_view(old_name)
+
+                {:error, reason} ->
+                  Repo.rollback(reason)
+              end
+
+            {:error, reason} ->
+              Repo.rollback(reason)
+          end
+        end
+
+        # Save metadata (rules/options/hooks) — mirrors the base path.
+        metadata = [:rules, :options, :hooks]
+
+        metadata_updates =
+          metadata
+          |> Enum.reduce(%{}, fn key, acc ->
+            case Keyword.fetch(opts, key) do
+              {:ok, value} -> Map.put(acc, key, value)
+              :error -> acc
+            end
+          end)
+
+        unless metadata_updates == %{} do
+          collection
+          |> Ecto.Changeset.change(metadata_updates)
+          |> Repo.update!()
+        end
+
+        collection_refresh =
+          Repo.get!(Lazypock.Collections.Collection, collection.id) |> Repo.preload(:fields)
+
+        update_collection_schema!(collection_refresh)
+        collection_refresh
+    end
+  end
+
+  @doc """
+  Re-saves all view collections except `exclude_name`, mirroring PocketBase's
+  `resaveViewsWithChangedFields`: after a base/auth collection is saved, its
+  renamed/retyped columns can drift view field metadata, so every view is
+  re-introspected and its physical view rebuilt.
+
+  Errors are logged, never raised — a problematic view query must be fixed
+  from the UI (PocketBase behavior).
+  """
+  @spec sync_dependent_views(String.t()) :: :ok
+  def sync_dependent_views(exclude_name) do
+    views =
+      Repo.all(from(c in Lazypock.Collections.Collection, where: c.type == "view"))
+      |> Enum.reject(&(&1.name == exclude_name))
+      |> Repo.preload(:fields)
+
+    Enum.each(views, fn view ->
+      query = Map.get(view.options || %{}, "view_query")
+
+      if is_binary(query) and query != "" do
+        try do
+          Repo.transaction(fn ->
+            case Views.build_fields(query) do
+              {:ok, fields} ->
+                case Views.create_view(view.name, query) do
+                  {:ok, _columns} ->
+                    Repo.delete_all(
+                      from(f in Lazypock.Collections.Field, where: f.collection_id == ^view.id)
+                    )
+
+                    create_field_metadata!(view.id, fields)
+                    update_collection_schema!(view)
+                    Lazypock.Realtime.Views.reset_view(view.name)
+
+                  {:error, reason} ->
+                    Repo.rollback(reason)
+                end
+
+              {:error, reason} ->
+                Repo.rollback(reason)
+            end
+          end)
+        rescue
+          e -> Logger.error("Failed to sync view '#{view.name}': #{Exception.message(e)}")
+        end
+      end
+    end)
+
+    :ok
   end
 
   # ── Add field ──────────────────────────────────────
@@ -215,181 +424,191 @@ defmodule Lazypock.Schema.DDL do
       Repo.transaction(fn ->
         {:ok, collection} = get_collection(old_name)
 
-        # System collections cannot be renamed
-        if collection.system and new_name != old_name do
-          Repo.rollback("Cannot rename system collection '#{old_name}'")
-        else
-          lock_key = :erlang.phash2({:update_collection, old_name})
-          Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
+        cond do
+          collection.type == "view" ->
+            # View collections have their own update path (query-driven fields).
+            update_view_collection!(old_name, collection, opts)
 
-          if new_name != old_name do
-            Ecto.Adapters.SQL.query!(
-              Repo,
-              "ALTER TABLE #{TypeMapper.quote_ident(old_name)} RENAME TO #{TypeMapper.quote_ident(new_name)}",
-              []
+          type == "view" ->
+            Repo.rollback(
+              "Converting an existing collection to a view is not supported - create a new view collection instead"
             )
 
-            Repo.update_all(
-              from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
-              set: [name: new_name]
-            )
-          end
+          collection.system and new_name != old_name ->
+            Repo.rollback("Cannot rename system collection '#{old_name}'")
 
-          if type do
-            Repo.update_all(
-              from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
-              set: [type: type]
-            )
-          end
+          true ->
+            lock_key = :erlang.phash2({:update_collection, old_name})
+            Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
-          # Save metadata fields if provided (rules, options, hooks)
-          metadata = [:rules, :options, :hooks]
-
-          metadata_updates =
-            metadata
-            |> Enum.reduce(%{}, fn key, acc ->
-              case Keyword.fetch(opts, key) do
-                {:ok, value} when is_map(value) ->
-                  Map.put(acc, key, value)
-
-                {:ok, value} ->
-                  Map.put(acc, key, value)
-
-                :error ->
-                  acc
-              end
-            end)
-
-          unless metadata_updates == %{} do
-            collection
-            |> Ecto.Changeset.change(metadata_updates)
-            |> Repo.update!()
-          end
-
-          # Sync custom indexes (options["indexes"]) with actual DB indexes.
-          if not is_nil(new_indexes) do
-            # Base the merge on the incoming :options when provided (e.g. an
-            # export→import round-trip) so other option keys from the payload
-            # aren't clobbered by the stale pre-update collection struct.
-            old_options =
-              case Keyword.fetch(opts, :options) do
-                {:ok, value} when is_map(value) -> value
-                _ -> collection.options || %{}
-              end
-
-            old_indexes = Map.get(old_options, "indexes", []) || []
-
-            sync_custom_indexes!(new_name, old_indexes, new_indexes)
-
-            # Persist the new list in options (merged with any other option keys).
-            merged_opts = Map.put(old_options, "indexes", new_indexes)
-
-            collection
-            |> Ecto.Changeset.change(%{options: merged_opts})
-            |> Repo.update!()
-          end
-
-          # Sync fields ONLY when explicitly provided. Omitting :fields (e.g. a
-          # bare rename or rules-only update) must NOT silently drop every column:
-          # the controller sends the full field list on schema edits, and
-          # anything else is a partial update that should leave columns alone.
-          if not is_nil(new_fields) do
-            existing_fields =
-              Repo.all(
-                from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
-              )
-
-            existing_names = MapSet.new(existing_fields, & &1.name)
-            incoming_names = MapSet.new(new_fields, & &1["name"])
-
-            # Remove deleted fields (only when deletion is requested; system
-            # fields are never removed — e.g. verified/email_visibility on the
-            # auth users collection).
-            for f <- existing_fields,
-                not MapSet.member?(incoming_names, f.name),
-                delete_missing_fields,
-                not f.system do
+            if new_name != old_name do
               Ecto.Adapters.SQL.query!(
                 Repo,
-                "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
+                "ALTER TABLE #{TypeMapper.quote_ident(old_name)} RENAME TO #{TypeMapper.quote_ident(new_name)}",
                 []
               )
 
-              Repo.delete_all(
-                from(fld in Lazypock.Collections.Field,
-                  where: fld.collection_id == ^collection.id and fld.name == ^f.name
-                )
+              Repo.update_all(
+                from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
+                set: [name: new_name]
               )
             end
 
-            # Update existing fields with new options/properties
-            # Derive sort_order from array position so drag-reorder works
-            fields_with_sort =
-              new_fields
-              |> Enum.with_index()
-              |> Enum.map(fn {f, idx} ->
-                Map.put(f, "sort_order", idx)
+            if type do
+              Repo.update_all(
+                from(c in Lazypock.Collections.Collection, where: c.id == ^collection.id),
+                set: [type: type]
+              )
+            end
+
+            # Save metadata fields if provided (rules, options, hooks)
+            metadata = [:rules, :options, :hooks]
+
+            metadata_updates =
+              metadata
+              |> Enum.reduce(%{}, fn key, acc ->
+                case Keyword.fetch(opts, key) do
+                  {:ok, value} when is_map(value) ->
+                    Map.put(acc, key, value)
+
+                  {:ok, value} ->
+                    Map.put(acc, key, value)
+
+                  :error ->
+                    acc
+                end
               end)
 
-            for f <- fields_with_sort, MapSet.member?(existing_names, f["name"]) do
-              opts =
-                if f["type"] == "relation" do
-                  normalize_relation_opts(f)
-                else
-                  Map.get(f, "options", %{})
+            unless metadata_updates == %{} do
+              collection
+              |> Ecto.Changeset.change(metadata_updates)
+              |> Repo.update!()
+            end
+
+            # Sync custom indexes (options["indexes"]) with actual DB indexes.
+            if not is_nil(new_indexes) do
+              # Base the merge on the incoming :options when provided (e.g. an
+              # export→import round-trip) so other option keys from the payload
+              # aren't clobbered by the stale pre-update collection struct.
+              old_options =
+                case Keyword.fetch(opts, :options) do
+                  {:ok, value} when is_map(value) -> value
+                  _ -> collection.options || %{}
                 end
 
-              old = Enum.find(existing_fields, &(&1.name == f["name"]))
-              new_unique = Map.get(f, "unique", false)
-              new_indexed = Map.get(f, "indexed", false)
+              old_indexes = Map.get(old_options, "indexes", []) || []
 
-              # Sync actual DB indexes with the requested unique/indexed flags:
-              # drop the old index(es) when the flags change, then recreate.
-              if old do
-                if old.unique != new_unique or old.indexed != new_indexed do
-                  drop_index_if_exists(new_name, f["name"])
-                end
+              sync_custom_indexes!(new_name, old_indexes, new_indexes)
 
-                if new_indexed, do: create_index(new_name, f["name"])
-                if new_unique, do: create_unique_index(new_name, f["name"])
+              # Persist the new list in options (merged with any other option keys).
+              merged_opts = Map.put(old_options, "indexes", new_indexes)
+
+              collection
+              |> Ecto.Changeset.change(%{options: merged_opts})
+              |> Repo.update!()
+            end
+
+            # Sync fields ONLY when explicitly provided. Omitting :fields (e.g. a
+            # bare rename or rules-only update) must NOT silently drop every column:
+            # the controller sends the full field list on schema edits, and
+            # anything else is a partial update that should leave columns alone.
+            if not is_nil(new_fields) do
+              existing_fields =
+                Repo.all(
+                  from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
+                )
+
+              existing_names = MapSet.new(existing_fields, & &1.name)
+              incoming_names = MapSet.new(new_fields, & &1["name"])
+
+              # Remove deleted fields (only when deletion is requested; system
+              # fields are never removed — e.g. verified/email_visibility on the
+              # auth users collection).
+              for f <- existing_fields,
+                  not MapSet.member?(incoming_names, f.name),
+                  delete_missing_fields,
+                  not f.system do
+                Ecto.Adapters.SQL.query!(
+                  Repo,
+                  "ALTER TABLE #{TypeMapper.quote_ident(new_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(f.name)} CASCADE",
+                  []
+                )
+
+                Repo.delete_all(
+                  from(fld in Lazypock.Collections.Field,
+                    where: fld.collection_id == ^collection.id and fld.name == ^f.name
+                  )
+                )
               end
 
-              Repo.update_all(
-                from(fld in Lazypock.Collections.Field,
-                  where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
-                ),
-                set: [
-                  required: Map.get(f, "required", false),
-                  unique: new_unique,
-                  hidden: Map.get(f, "hidden", false),
-                  system: Map.get(f, "system", false),
-                  options: opts,
-                  indexed: new_indexed,
-                  sort_order: f["sort_order"]
-                ]
-              )
+              # Update existing fields with new options/properties
+              # Derive sort_order from array position so drag-reorder works
+              fields_with_sort =
+                new_fields
+                |> Enum.with_index()
+                |> Enum.map(fn {f, idx} ->
+                  Map.put(f, "sort_order", idx)
+                end)
+
+              for f <- fields_with_sort, MapSet.member?(existing_names, f["name"]) do
+                opts =
+                  if f["type"] == "relation" do
+                    normalize_relation_opts(f)
+                  else
+                    Map.get(f, "options", %{})
+                  end
+
+                old = Enum.find(existing_fields, &(&1.name == f["name"]))
+                new_unique = Map.get(f, "unique", false)
+                new_indexed = Map.get(f, "indexed", false)
+
+                # Sync actual DB indexes with the requested unique/indexed flags:
+                # drop the old index(es) when the flags change, then recreate.
+                if old do
+                  if old.unique != new_unique or old.indexed != new_indexed do
+                    drop_index_if_exists(new_name, f["name"])
+                  end
+
+                  if new_indexed, do: create_index(new_name, f["name"])
+                  if new_unique, do: create_unique_index(new_name, f["name"])
+                end
+
+                Repo.update_all(
+                  from(fld in Lazypock.Collections.Field,
+                    where: fld.collection_id == ^collection.id and fld.name == ^f["name"]
+                  ),
+                  set: [
+                    required: Map.get(f, "required", false),
+                    unique: new_unique,
+                    hidden: Map.get(f, "hidden", false),
+                    system: Map.get(f, "system", false),
+                    options: opts,
+                    indexed: new_indexed,
+                    sort_order: f["sort_order"]
+                  ]
+                )
+              end
+
+              # Add new fields (also derive sort_order from position)
+              for f <- fields_with_sort, not MapSet.member?(existing_names, f["name"]) do
+                :ok = validate_field_name!(f["name"])
+                :ok = validate_field_type(f["type"])
+
+                sql =
+                  "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(column_name(f["name"]))} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
+
+                Ecto.Adapters.SQL.query!(Repo, sql, [])
+                if f["indexed"], do: create_index(new_name, f["name"])
+                if f["unique"], do: create_unique_index(new_name, f["name"])
+                create_field_metadata_entry!(collection.id, f)
+              end
             end
 
-            # Add new fields (also derive sort_order from position)
-            for f <- fields_with_sort, not MapSet.member?(existing_names, f["name"]) do
-              :ok = validate_field_name!(f["name"])
-              :ok = validate_field_type(f["type"])
+            collection_refresh =
+              Repo.get!(Lazypock.Collections.Collection, collection.id) |> Repo.preload(:fields)
 
-              sql =
-                "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(column_name(f["name"]))} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
-
-              Ecto.Adapters.SQL.query!(Repo, sql, [])
-              if f["indexed"], do: create_index(new_name, f["name"])
-              if f["unique"], do: create_unique_index(new_name, f["name"])
-              create_field_metadata_entry!(collection.id, f)
-            end
-          end
-
-          collection_refresh =
-            Repo.get!(Lazypock.Collections.Collection, collection.id) |> Repo.preload(:fields)
-
-          update_collection_schema!(collection_refresh)
-          collection_refresh
+            update_collection_schema!(collection_refresh)
+            collection_refresh
         end
       end)
 
@@ -430,11 +649,21 @@ defmodule Lazypock.Schema.DDL do
             {:error, "Cannot delete system collection '#{collection.name}'"}
 
           collection.managed ->
-            Ecto.Adapters.SQL.query!(
-              Repo,
-              "DROP TABLE IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
-              []
-            )
+            if collection.type == "view" do
+              Ecto.Adapters.SQL.query!(
+                Repo,
+                "DROP VIEW IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
+                []
+              )
+
+              Lazypock.Realtime.Views.reset_view(collection.name)
+            else
+              Ecto.Adapters.SQL.query!(
+                Repo,
+                "DROP TABLE IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
+                []
+              )
+            end
 
             Repo.delete!(collection)
             :ok
@@ -740,6 +969,7 @@ defmodule Lazypock.Schema.DDL do
       default_value: field_def["default"],
       options: normalized_opts,
       indexed: Map.get(field_def, "indexed", false),
+      system: Map.get(field_def, "system", false),
       sort_order: Map.get(field_def, "sort_order", 0)
     })
     |> Repo.insert!()

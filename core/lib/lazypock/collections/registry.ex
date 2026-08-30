@@ -86,6 +86,17 @@ defmodule Lazypock.Collections.Registry do
         read_concurrency: true
       ])
 
+    # Snapshot table for view-collection realtime diffs. Owned by this
+    # long-lived GenServer so its lifetime isn't tied to per-request
+    # processes (a request-scoped owner would destroy the table — and the
+    # view diff state — when the request process exits).
+    :ets.new(:lazypock_view_rows, [
+      :named_table,
+      :public,
+      :set,
+      read_concurrency: true
+    ])
+
     load_all_into_cache()
 
     # Subscribe to schema change broadcasts

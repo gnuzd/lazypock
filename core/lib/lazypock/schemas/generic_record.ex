@@ -94,11 +94,19 @@ defmodule Lazypock.Schemas.GenericRecord do
 
   @doc """
   Returns a single record by ID, or nil.
+
+  `opts[:plain_id]` (used for view collections, whose `id` column is always
+  text) passes the id through without the UUID->binary dump that regular
+  uuid-backed tables need.
   """
   @spec get(String.t(), String.t()) :: map() | nil
   def get(collection_name, id) when is_binary(collection_name) do
+    get(collection_name, id, [])
+  end
+
+  def get(collection_name, id, opts) when is_binary(collection_name) do
     sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)} WHERE id = $1"
-    id_bin = maybe_uuid_to_bin(id)
+    id_bin = if Keyword.get(opts, :plain_id, false), do: id, else: maybe_uuid_to_bin(id)
 
     case Ecto.Adapters.SQL.query(Repo, sql, [id_bin]) do
       {:ok, %{rows: [row], columns: cols}} ->
