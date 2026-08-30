@@ -169,9 +169,7 @@ export function buildRecordSchema(
 				if (type === 'password') {
 					// Create: a required password must be set. Edit: empty = keep existing.
 					if (isCreate && required) {
-						shape[name] = z
-							.string()
-							.min(8, 'Password must be at least 8 characters');
+						shape[name] = z.string().min(8, 'Password must be at least 8 characters');
 					} else {
 						shape[name] = z.string().nullable().optional();
 					}

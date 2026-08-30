@@ -90,9 +90,11 @@
 				{/each}
 			</nav>
 
-			<div class="min-h-0 flex-1 overflow-auto p-4">
+			<div
+				class="min-h-0 flex-1 overflow-auto p-4 {activeTab === 'Fields and relations' ? 'flex flex-col' : ''}"
+			>
 				{#if activeTab === 'Fields and relations'}
-					<div class="h-full min-h-[420px]">
+					<div class="relative min-h-[420px] flex-1">
 						<Erd collections={visibleCollections} />
 					</div>
 				{:else}
