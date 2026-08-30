@@ -49,6 +49,7 @@
 </script>
 
 {#if show}
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
 		role="dialog"
@@ -56,7 +57,7 @@
 		tabindex="-1"
 		onclick={() => (show = false)}
 	>
-		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div
 			class="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-box bg-base-100 shadow-xl"
 			onclick={(e) => e.stopPropagation()}
