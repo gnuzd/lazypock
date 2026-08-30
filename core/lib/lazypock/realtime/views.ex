@@ -28,12 +28,17 @@ defmodule Lazypock.Realtime.Views do
   @table :lazypock_view_rows
 
   @doc """
-  Ensures the ETS snapshot table exists. Idempotent — safe to call on every
-  mutation.
+  Ensures the ETS snapshot table exists. The table is normally created by
+  `Lazypock.Collections.Registry` (a long-lived GenServer) so its lifetime
+  isn't tied to any per-request process; this fallback only covers the edge
+  case where the table is missing (e.g. during hot code reload).
   """
   @spec init() :: :ok
   def init do
     if :ets.whereis(@table) == :undefined do
+      # Owner = the calling process. Prefer the Registry-created table; this
+      # fallback is ephemeral (dies with the request process) but never
+      # resurrects a snapshot that would double-broadcast.
       :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
     end
 
