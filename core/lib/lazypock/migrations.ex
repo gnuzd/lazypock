@@ -57,6 +57,15 @@ defmodule Lazypock.Migrations do
            end
          end
 
+     **Relation fields fail fast.** A `relation` field must name its target
+     collection — either `options.collection` (the target's name) or a
+     `collectionId` (UUID or name) — and that collection must already exist
+     in `_collections`. If it doesn't (typo, missing `create_collection` for
+     the target, out-of-order creation), the helper returns `{:error, msg}`
+     and the migration fails loudly instead of silently persisting a broken
+     relation. Create the target collection before the field that references
+     it.
+
   2. **Automatic** — a raw `create table(:posts)` migration "just works".
      After every migration run, any public table that exists but is **not**
      registered in `_collections` is registered as a `base` collection with
@@ -216,7 +225,9 @@ defmodule Lazypock.Migrations do
   @spec create_collection(String.t(), keyword()) ::
           {:ok, Lazypock.Collections.Collection.t()} | {:error, term()}
   def create_collection(name, opts \\ []) when is_binary(name) do
-    Lazypock.Schema.DDL.create_collection(name, opts)
+    with :ok <- validate_relation_targets(Keyword.get(opts, :fields, [])) do
+      Lazypock.Schema.DDL.create_collection(name, opts)
+    end
   end
 
   @doc """
@@ -238,7 +249,9 @@ defmodule Lazypock.Migrations do
   """
   @spec add_field(String.t(), map()) :: :ok | {:error, term()}
   def add_field(collection_name, field_def) when is_binary(collection_name) do
-    Lazypock.Schema.DDL.add_field(collection_name, field_def)
+    with :ok <- validate_relation_targets([field_def]) do
+      Lazypock.Schema.DDL.add_field(collection_name, field_def)
+    end
   end
 
   @doc """
@@ -259,6 +272,26 @@ defmodule Lazypock.Migrations do
   @spec drop_collection(String.t()) :: :ok | {:error, term()}
   def drop_collection(name) when is_binary(name) do
     Lazypock.Schema.DDL.drop_collection(name)
+  end
+
+  # Fail-fast for migration authoring: a relation field must point at a
+  # collection that exists in `_collections`. The DDL engine itself stays
+  # lenient (the Studio, importer and backup restore tolerate dangling
+  # targets), but a migration that creates a broken relation — a typo'd
+  # `options.collection` name, an unresolvable `collectionId`, or no target
+  # at all — should fail loudly at boot instead of silently persisting a
+  # field the Studio dropdown and API `expand` can never resolve.
+  defp validate_relation_targets(fields) do
+    Enum.reduce_while(fields, :ok, fn
+      %{"type" => "relation"} = field, :ok ->
+        case Lazypock.Schema.DDL.resolve_relation_target(field) do
+          {:ok, _collection} -> {:cont, :ok}
+          {:error, msg} -> {:halt, {:error, msg}}
+        end
+
+      _field, :ok ->
+        {:cont, :ok}
+    end)
   end
 
   defp seed_already_run? do

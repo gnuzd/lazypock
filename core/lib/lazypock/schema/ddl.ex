@@ -991,34 +991,84 @@ defmodule Lazypock.Schema.DDL do
     |> Repo.insert!()
   end
 
+  @doc """
+  Resolves a relation field's target collection.
+
+  The target may be given as a pre-set `options["collection"]` name or as a
+  `collectionId` (top-level or inside `options`) holding a UUID or a name.
+  Returns `{:ok, collection}` or `{:error, message}`. The error form lets
+  callers fail fast on unresolvable targets (see `Lazypock.Migrations`)
+  instead of silently persisting a broken relation.
+  """
+  @spec resolve_relation_target(map()) ::
+          {:ok, Lazypock.Collections.Collection.t()} | {:error, String.t()}
+  def resolve_relation_target(field_def) do
+    name = field_def["name"] || ""
+    opts = Map.get(field_def, "options", %{})
+
+    cond do
+      # Pre-set options.collection is a collection name — verify it exists.
+      is_binary(opts["collection"]) and opts["collection"] != "" ->
+        case get_collection(opts["collection"]) do
+          {:ok, collection} ->
+            {:ok, collection}
+
+          {:error, :not_found} ->
+            {:error,
+             "Relation field \"#{name}\" references unknown collection \"#{opts["collection"]}\""}
+        end
+
+      true ->
+        # Try to resolve collectionId (UUID from SPA, or collection name) to a
+        # collection name. The id column is :binary_id, so only query by id when
+        # the value is actually a UUID. Note: Ecto.UUID.cast/1 also hex-encodes
+        # any 16-byte binary, so a bare name of exactly 16 characters must not
+        # be mistaken for a UUID — gate on the canonical 36-char form and use
+        # the cast *result* (the raw string would fail to dump to :binary_id).
+        raw_id = field_def["collectionId"] || opts["collectionId"]
+
+        if is_binary(raw_id) and raw_id != "" do
+          collection =
+            case Ecto.UUID.cast(raw_id) do
+              {:ok, uuid} when byte_size(raw_id) == 36 ->
+                Repo.get_by(Lazypock.Collections.Collection, id: uuid) ||
+                  Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
+
+              _ ->
+                Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
+            end
+
+          case collection do
+            nil ->
+              {:error,
+               "Relation field \"#{name}\" references unknown collection \"#{raw_id}\""}
+
+            collection ->
+              {:ok, collection}
+          end
+        else
+          {:error,
+           "Relation field \"#{name}\" requires a target collection (set options.collection or collectionId)"}
+        end
+    end
+  end
+
   defp normalize_relation_opts(field_def) do
     opts = Map.get(field_def, "options", %{})
+
     # If options already has a "collection" key pointing to a name, use it
     if is_binary(opts["collection"]) and opts["collection"] != "" do
       opts
     else
       # Try to resolve collectionId (UUID from SPA, or collection name) to a
-      # collection name. The id column is :binary_id, so only query by id when
-      # the value is actually a UUID — a PocketBase collection id (e.g.
-      # "kanban_columns_col") or a bare name would otherwise crash the query.
-      raw_id = field_def["collectionId"] || opts["collectionId"]
-
-      if is_binary(raw_id) and raw_id != "" do
-        collection =
-          if match?({:ok, _}, Ecto.UUID.cast(raw_id)) do
-            Lazypock.Repo.get_by(Lazypock.Collections.Collection, id: raw_id) ||
-              Lazypock.Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
-          else
-            Lazypock.Repo.get_by(Lazypock.Collections.Collection, name: raw_id)
-          end
-
-        if collection do
-          Map.put(opts, "collection", collection.name)
-        else
-          opts
-        end
-      else
-        opts
+      # collection name. Failures are tolerated here on purpose — this path
+      # serves the Studio, importer and backup restore, where a dangling
+      # target (collection deleted after the field was created, out-of-order
+      # import, reference to a collection outside the import set) must not
+      # block the save.
+      case resolve_relation_target(field_def) do
+        {:ok, collection} -> Map.put(opts, "collection", collection.name)
+        {:error, _msg} -> opts
       end
     end
   end
