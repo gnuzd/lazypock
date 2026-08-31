@@ -22,9 +22,20 @@ defmodule LazypockWeb.Plugs.RequestLogger do
       if loggable?(conn) do
         body = capture_body(conn)
 
-        Task.start(fn ->
+        # Production inserts asynchronously so the response is never blocked.
+        # Under test (ExUnit loaded) we insert synchronously instead: the Ecto
+        # sandbox hands DB connections to the test process only, and a spawned
+        # task that outlives the test crashes with "Postgrex.Protocol
+        # disconnected: owner exited" noise once the owner exits. The
+        # request-logger tests poll for the row anyway, so a synchronous insert
+        # is behaviorally identical there.
+        if Code.ensure_loaded?(ExUnit) do
           log_request(conn, duration, body)
-        end)
+        else
+          Task.start(fn ->
+            log_request(conn, duration, body)
+          end)
+        end
       end
 
       conn

@@ -111,60 +111,69 @@ defmodule Lazypock.Collections.Registry do
     {:reply, :ok, state}
   end
 
+  # Synchronous variant of the PubSub broadcast handlers below. DDL calls
+  # this under test (see DDL.safe_broadcast/2) so a schema change's cache
+  # update — which hits the DB in this process — is finished before the DDL
+  # call returns. Otherwise the reload can still be in flight when the test's
+  # sandbox owner exits, which logs Postgrex "owner exited" disconnect noise.
   @impl true
-  def handle_info({:collection_created, %Lazypock.Collections.Collection{} = collection}, state) do
+  def handle_call({:apply_event, message}, _from, state) do
+    handle_broadcast(message)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info(message, state) do
+    handle_broadcast(message)
+    {:noreply, state}
+  end
+
+  defp handle_broadcast({:collection_created, %Lazypock.Collections.Collection{} = collection}) do
     # Reload the specific collection with its fields preloaded
     collection = Repo.preload(collection, :fields)
     :ets.insert(@table_name, {collection.name, collection})
-    {:noreply, state}
+    :ok
   end
 
   # Defense in depth: never crash on a malformed broadcast (e.g. a buggy
   # caller broadcasting {:error, reason} as the collection payload).
-  def handle_info({:collection_created, _malformed}, state) do
+  defp handle_broadcast({:collection_created, _malformed}) do
     load_all_into_cache()
-    {:noreply, state}
+    :ok
   end
 
-  @impl true
-  def handle_info({:field_added, _collection_name, _field_def}, state) do
+  defp handle_broadcast({:field_added, _collection_name, _field_def}) do
     # Easiest: reload all. For a large number of collections, optimize later.
     load_all_into_cache()
-    {:noreply, state}
+    :ok
   end
 
-  @impl true
-  def handle_info({:field_removed, _collection_name, _field_name}, state) do
+  defp handle_broadcast({:field_removed, _collection_name, _field_name}) do
     load_all_into_cache()
-    {:noreply, state}
+    :ok
   end
 
-  @impl true
-  def handle_info({:collection_updated, %Lazypock.Collections.Collection{} = collection}, state) do
+  defp handle_broadcast({:collection_updated, %Lazypock.Collections.Collection{} = collection}) do
     # Reload the specific collection with its fields preloaded
     collection = Repo.preload(collection, :fields)
     :ets.insert(@table_name, {collection.name, collection})
-    {:noreply, state}
+    :ok
   end
 
   # Defense in depth: never crash on a malformed broadcast payload.
-  def handle_info({:collection_updated, _malformed}, state) do
+  defp handle_broadcast({:collection_updated, _malformed}) do
     load_all_into_cache()
-    {:noreply, state}
+    :ok
   end
 
-  @impl true
-  def handle_info({:collection_deleted, name}, state) do
+  defp handle_broadcast({:collection_deleted, name}) do
     :ets.delete(@table_name, name)
-    {:noreply, state}
+    :ok
   end
 
-  # ── Private ──────────────────────────────────────────────
-
-  @impl true
-  def handle_info(_msg, state) do
+  defp handle_broadcast(_msg) do
     # Ignore unknown messages (e.g. schema broadcasts we don't handle)
-    {:noreply, state}
+    :ok
   end
 
   defp load_all_into_cache do

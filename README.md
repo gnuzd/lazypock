@@ -274,7 +274,10 @@ automatically on boot (idempotent) and are listed by `lazypock migrations`.
   > any public table that isn't registered in `_collections` is automatically
   > registered as a `base` collection (columns inferred from the Postgres
   > schema), so it shows up in the Studio and is served through
-  > `/api/:collection`. Ecto `timestamps()` tables get their `inserted_at`
+  > `/api/:collection`. Foreign-key columns (`references(:other)`) are
+  > inferred as `relation` fields pointing at the referenced table, so the
+  > Studio shows a relation dropdown and the API's `expand` resolves the
+  > related record. Ecto `timestamps()` tables get their `inserted_at`
   > renamed to `created_at` and a missing `updated_at` added, so CRUD works
   > out of the box. Internal `_`-prefixed tables are never touched. Use the
   > helpers above when you want explicit control (rules, indexes, auth type).
@@ -282,6 +285,41 @@ automatically on boot (idempotent) and are listed by `lazypock migrations`.
 - **Check status**: `lazypock migrations`
 - **Disable auto-migrate on boot**: `LAZYPOCK_AUTOMIGRATE=0 lazypock`
   (then apply manually with `lazypock migrate`)
+
+### Use an Existing PostgreSQL Database
+
+LazyPock is designed to run on top of a database you already have. Point
+`DATABASE_URL` at any Postgres 15+ instance and its existing public tables
+are **auto-registered as collections** on boot, so they show up in the Studio
+and are served through the dynamic `/api/:collection` routes — no schema
+conversion or import step needed:
+
+```bash
+export DATABASE_URL="ecto://user:password@db-host:5432/my_existing_db"
+export SECRET_KEY_BASE="$(openssl rand -base64 48)"
+LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \
+  ./lazypock_macos_silicon   # or the binary for your OS/arch
+```
+
+On first boot LazyPock:
+
+1. **Runs its system migrations** — creates the `_`-prefixed internal tables
+   (`_collections`, `_fields`, `_superusers`, `_request_logs`, …) and
+   `schema_migrations`. These are namespaced and never touch your tables.
+2. **Registers every public table** that isn't already a collection as a
+   `base` collection, inferring column types from the Postgres schema.
+   Foreign-key columns become `relation` fields pointing at the referenced
+   table (Studio relation dropdown + API `expand` work out of the box).
+3. **Reconciles the LazyPock shape** so CRUD works immediately: Ecto
+   `timestamps()` tables get `inserted_at` → `created_at` renamed and a
+   missing `updated_at` added.
+
+Internal `_`-prefixed tables and `schema_migrations` are never registered.
+Set `LAZYPOCK_AUTOMIGRATE=0` to run migrations manually (`lazypock migrate`);
+auto-registration runs as part of every migrate, so tables created later by
+other tools are picked up on the next migrate or restart. Log in with the
+superuser created on first boot (Studio **Setup** flow or the
+`LAZYPOCK_SUPERUSER_EMAIL`/`LAZYPOCK_SUPERUSER_PASSWORD` env vars above).
 
 ### User Hooks (PocketBase `pb_hooks` style)
 

@@ -204,6 +204,95 @@ defmodule Lazypock.MigrationsTest do
       assert :ok = Lazypock.Schemas.GenericRecord.delete(name, rec["id"])
     end
 
+    test "foreign-key columns become relation fields pointing at the referenced table" do
+      target = "mig_authors_#{:erlang.unique_integer([:positive])}"
+      referencing = "mig_books_#{:erlang.unique_integer([:positive])}"
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        CREATE TABLE #{target} (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+        []
+      )
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        CREATE TABLE #{referencing} (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          title TEXT NOT NULL,
+          author_id UUID REFERENCES #{target}(id),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """,
+        []
+      )
+
+      on_exit(fn ->
+        Ecto.Adapters.SQL.query!(Repo, "DROP TABLE IF EXISTS #{referencing}", [])
+        Ecto.Adapters.SQL.query!(Repo, "DROP TABLE IF EXISTS #{target}", [])
+      end)
+
+      assert :ok = Migrations.register_unregistered_tables()
+      Registry.reload!()
+
+      {:ok, coll} = Registry.get(referencing)
+      author_field = Enum.find(coll.fields, &(&1.name == "author_id"))
+      assert author_field.type == "relation"
+      assert author_field.options == %{"collection" => target}
+
+      # The referenced table is registered too, so the relation target resolves
+      # through the registry (the Studio dropdown + expand depend on this).
+      assert {:ok, _target_coll} = Registry.get(target)
+
+      # And the field is exposed to the API with a resolved collectionId.
+      {:ok, %{rows: field_rows}} =
+        Repo.query(
+          "SELECT name, type, options FROM _fields WHERE collection_id = $1",
+          [Ecto.UUID.dump!(coll.id)]
+        )
+
+      assert ["author_id", "relation", %{"collection" => ^target}] =
+               Enum.find(field_rows, fn [name, _type, _opts] -> name == "author_id" end)
+
+      # End-to-end: a record in the referencing table stores the target id, and
+      # the API's expand path resolves it to the related record (this is what
+      # the Studio's record browser renders as the dropdown value).
+      {:ok, author} = Lazypock.Schemas.GenericRecord.insert(target, %{"name" => "Ada"})
+
+      # Seed the referencing row like a raw migration's own data would (the
+      # FK column here is `uuid`, so the id goes in as a 16-byte binary).
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        INSERT INTO #{referencing} (title, author_id, created_at, updated_at)
+        VALUES ('Notes', $1, now(), now()) RETURNING id
+        """,
+        [Ecto.UUID.dump!(author["id"])]
+      )
+
+      book =
+        Repo.query!("SELECT * FROM #{referencing}", [])
+        |> then(fn %{rows: [row], columns: cols} ->
+          cols
+          |> Enum.zip(row)
+          |> Map.new()
+          |> Map.new(fn {k, v} ->
+            {k, if(is_binary(v) and byte_size(v) == 16, do: Ecto.UUID.cast!(v), else: v)}
+          end)
+        end)
+
+      [expanded] = LazypockWeb.DynamicView.expand_records([book], "author_id", referencing)
+      assert expanded["expand"]["author_id"]["name"] == "Ada"
+    end
+
     test "internal _ tables and schema_migrations are never registered" do
       name = "_mig_internal_#{:erlang.unique_integer([:positive])}"
 

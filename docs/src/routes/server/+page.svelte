@@ -253,6 +253,77 @@ npm run dev          # starts Vite dev server on http://localhost:5173`}
     </ol>
   </section>
 
+  <!-- EXISTING POSTGRES DATABASE -->
+  <section id="existing-db" class="scroll-mt-20 mb-10">
+    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
+      Connect an existing PostgreSQL database
+    </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      LazyPock is designed to run on top of a database you already have —
+      point it at an existing Postgres (15+) instance and its tables show up
+      in the Studio automatically. Just set
+      <code class="doc-inline px-1 py-0.5">DATABASE_URL</code> to your
+      database:
+    </p>
+    <CodeBlock
+      lang="bash"
+      code={`export DATABASE_URL="ecto://user:password@db-host:5432/my_existing_db"
+export SECRET_KEY_BASE="$(openssl rand -base64 48)"
+LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \
+  ./lazypock_macos_silicon`}
+    />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      On boot LazyPock does three things to the database:
+    </p>
+    <ol class="mt-3 list-decimal list-inside space-y-1 text-base-content/80">
+      <li>
+        <strong>System migrations</strong> create its internal
+        <code class="doc-inline px-1 py-0.5">_</code>-prefixed tables
+        (<code class="doc-inline px-1 py-0.5">_collections</code>,
+        <code class="doc-inline px-1 py-0.5">_fields</code>,
+        <code class="doc-inline px-1 py-0.5">_superusers</code>,
+        <code class="doc-inline px-1 py-0.5">_request_logs</code>, …) plus
+        <code class="doc-inline px-1 py-0.5">schema_migrations</code>. These
+        are namespaced and never touch your tables.
+      </li>
+      <li>
+        <strong>Auto-registration</strong>: every public table that isn't
+        already a LazyPock collection becomes a <code
+          class="doc-inline px-1 py-0.5">base</code> collection, with columns
+        inferred from the Postgres schema — so your existing tables appear in
+        the Studio sidebar and are served through the dynamic
+        <code class="doc-inline px-1 py-0.5">/api/:collection</code> routes
+        immediately.
+      </li>
+      <li>
+        <strong>Shape reconciliation</strong> so CRUD works out of the box:
+        Ecto <code class="doc-inline px-1 py-0.5">timestamps()</code>
+        columns are normalized (<code
+          class="doc-inline px-1 py-0.5">inserted_at</code> → <code
+          class="doc-inline px-1 py-0.5">created_at</code>, a missing
+        <code class="doc-inline px-1 py-0.5">updated_at</code> is added), and
+        foreign-key columns become <strong>relation fields</strong> pointing
+        at the referenced table — so the Studio shows a relation dropdown and
+        the API supports <code class="doc-inline px-1 py-0.5">expand</code>
+        on them.
+      </li>
+    </ol>
+    <p class="mt-3 text-sm text-base-content/70">
+      Internal <code class="doc-inline px-1 py-0.5">_</code>-prefixed tables
+      and <code class="doc-inline px-1 py-0.5">schema_migrations</code> are
+      never registered. Set
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_AUTOMIGRATE=0</code> if
+      you'd rather run migrations manually with
+      <code class="doc-inline px-1 py-0.5">lazypock migrate</code> — note
+      that auto-registration runs as part of every migrate, so tables added
+      later by other tools are picked up on the next
+      <code class="doc-inline px-1 py-0.5">lazypock migrate</code> (or
+      restart). Log in to the Studio with the superuser created on first boot
+      (or via the env vars above) and your data is ready to browse, query,
+      and edit.
+    </p>
+  </section>
+
   <!-- PRODUCTION -->
   <section id="production" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
