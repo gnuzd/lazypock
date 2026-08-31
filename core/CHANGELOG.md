@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/gnuzd/lazypock/compare/v0.8.0...v0.8.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* **core,studio:** relation dropdowns for migrated tables, clean test DB logs, docs ([c80fd11](https://github.com/gnuzd/lazypock/commit/c80fd11bc41589d67d4344c5a2a184ef70a59983))
+
 ## [0.8.0](https://github.com/gnuzd/lazypock/compare/v0.7.1...v0.8.0) (2026-08-30)
 
 
