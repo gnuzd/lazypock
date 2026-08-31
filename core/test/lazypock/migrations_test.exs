@@ -73,6 +73,91 @@ defmodule Lazypock.MigrationsTest do
       refute Enum.any?(coll.fields, &(&1.name == "body"))
     end
 
+    test "create_collection/2 rejects a relation to an unknown collection" do
+      name = "mig_relbad_#{:erlang.unique_integer([:positive])}"
+      missing = "mig_nope_#{:erlang.unique_integer([:positive])}"
+
+      assert {:error, msg} =
+               Migrations.create_collection(name,
+                 type: "base",
+                 fields: [
+                   %{
+                     "name" => "owner",
+                     "type" => "relation",
+                     "options" => %{"collection" => missing, "maxSelect" => 1}
+                   }
+                 ]
+               )
+
+      assert msg =~ "owner"
+      assert msg =~ missing
+
+      # Fail-fast: nothing was persisted (no collection, no table).
+      assert {:error, _} = Registry.get(name)
+      assert {:ok, %{rows: [[nil]]}} = Repo.query("SELECT to_regclass('public.\"#{name}\"')")
+    end
+
+    test "create_collection/2 accepts a relation to an existing collection" do
+      target = "mig_reltarget_#{:erlang.unique_integer([:positive])}"
+      assert {:ok, _} = Migrations.create_collection(target, type: "base", fields: [])
+
+      name = "mig_relok_#{:erlang.unique_integer([:positive])}"
+
+      assert {:ok, _collection} =
+               Migrations.create_collection(name,
+                 type: "base",
+                 fields: [
+                   %{
+                     "name" => "owner",
+                     "type" => "relation",
+                     "options" => %{"collection" => target, "maxSelect" => 1}
+                   }
+                 ]
+               )
+
+      Registry.reload!()
+      {:ok, coll} = Registry.get(name)
+      owner = Enum.find(coll.fields, &(&1.name == "owner"))
+      assert owner.options["collection"] == target
+    end
+
+    test "add_field/2 rejects a relation to an unknown collection" do
+      name = "mig_reladdbad_#{:erlang.unique_integer([:positive])}"
+      assert {:ok, _} = Migrations.create_collection(name, type: "base", fields: [])
+
+      missing = "mig_nope2_#{:erlang.unique_integer([:positive])}"
+
+      assert {:error, msg} =
+               Migrations.add_field(name, %{
+                 "name" => "parent",
+                 "type" => "relation",
+                 "options" => %{"collection" => missing, "maxSelect" => 1}
+               })
+
+      assert msg =~ "parent"
+      assert msg =~ missing
+    end
+
+    test "add_field/2 accepts a relation to an existing collection" do
+      target = "mig_reladdtarget_#{:erlang.unique_integer([:positive])}"
+      assert {:ok, _} = Migrations.create_collection(target, type: "base", fields: [])
+
+      name = "mig_reladdok_#{:erlang.unique_integer([:positive])}"
+      assert {:ok, _} = Migrations.create_collection(name, type: "base", fields: [])
+
+      assert :ok =
+               Migrations.add_field(name, %{
+                 "name" => "parent",
+                 "type" => "relation",
+                 "options" => %{"collection" => target, "maxSelect" => 1}
+               })
+
+      Registry.reload!()
+      {:ok, coll} = Registry.get(name)
+      parent = Enum.find(coll.fields, &(&1.name == "parent"))
+      assert parent.options["collection"] == target
+    end
+
     test "update_collection/2 and drop_collection/1 round-trip" do
       name = "mig_upd_#{:erlang.unique_integer([:positive])}"
       assert {:ok, _} = Migrations.create_collection(name, type: "base", fields: [])

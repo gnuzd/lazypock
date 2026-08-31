@@ -284,6 +284,76 @@ defmodule Lazypock.Schema.DDLTest do
       # collectionId refers to src (relsrc), so the normalized option is src's name
       assert rel.options["collection"] == name
     end
+
+    test "resolve_relation_target/1 resolves options.collection names" do
+      target = cname("reltarget")
+      {:ok, _} = DDL.create_collection(target, type: "base", fields: [])
+
+      assert {:ok, coll} =
+               DDL.resolve_relation_target(%{
+                 "name" => "parent",
+                 "type" => "relation",
+                 "options" => %{"collection" => target, "maxSelect" => 1}
+               })
+
+      assert coll.name == target
+    end
+
+    test "resolve_relation_target/1 resolves collectionId by name" do
+      target = cname("reltarget2")
+      {:ok, _} = DDL.create_collection(target, type: "base", fields: [])
+
+      assert {:ok, coll} =
+               DDL.resolve_relation_target(%{
+                 "name" => "parent",
+                 "type" => "relation",
+                 "collectionId" => target,
+                 "options" => %{}
+               })
+
+      assert coll.name == target
+    end
+
+    test "resolve_relation_target/1 rejects an unknown options.collection name" do
+      missing = cname("relmissing")
+
+      assert {:error, msg} =
+               DDL.resolve_relation_target(%{
+                 "name" => "parent",
+                 "type" => "relation",
+                 "options" => %{"collection" => missing, "maxSelect" => 1}
+               })
+
+      assert msg =~ "parent"
+      assert msg =~ missing
+    end
+
+    test "resolve_relation_target/1 rejects an unknown collectionId" do
+      missing = cname("relmissing2")
+
+      assert {:error, msg} =
+               DDL.resolve_relation_target(%{
+                 "name" => "parent",
+                 "type" => "relation",
+                 "collectionId" => missing,
+                 "options" => %{}
+               })
+
+      assert msg =~ "parent"
+      assert msg =~ missing
+    end
+
+    test "resolve_relation_target/1 rejects a relation with no target" do
+      assert {:error, msg} =
+               DDL.resolve_relation_target(%{
+                 "name" => "parent",
+                 "type" => "relation",
+                 "options" => %{"maxSelect" => 1}
+               })
+
+      assert msg =~ "parent"
+      assert msg =~ "target"
+    end
   end
 
   describe "drop_field/3" do
