@@ -21,9 +21,25 @@ defmodule Lazypock.Schema.DDL do
   # Broadcast a schema event to the in-process Registry, unless PubSub isn't
   # started yet (CLI migrate / boot-time migrations). The Registry reloads
   # from the DB on startup, so a skipped broadcast is always reconciled.
+  #
+  # Under test the Ecto sandbox ties DB connections to the test process, and
+  # the Registry applies schema broadcasts with its own DB queries. If one is
+  # still in flight when the test exits, Postgrex logs "owner exited"
+  # disconnect noise. We therefore also apply the event synchronously (a
+  # GenServer.call) so the registry's cache is updated before the DDL call
+  # returns. No-op in production (the PubSub delivery above already keeps the
+  # registry in sync, asynchronously) and whenever the registry isn't running
+  # (lazypock migrate CLI / boot-time migrations).
   defp safe_broadcast(topic, message) do
     if Process.whereis(Lazypock.PubSub) do
       Phoenix.PubSub.broadcast(Lazypock.PubSub, topic, message)
+    end
+
+    if Code.ensure_loaded?(ExUnit) do
+      case Process.whereis(Lazypock.Collections.Registry) do
+        nil -> :ok
+        _pid -> GenServer.call(Lazypock.Collections.Registry, {:apply_event, message})
+      end
     end
 
     :ok

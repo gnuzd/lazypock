@@ -38,9 +38,46 @@
 	/** Last collection name the effect processed (avoids duplicate loads/subscribes). */
 	let lastHandledName = $state('');
 
-	function formatValue(field: Record<string, unknown>, value: unknown): string {
+	/**
+	 * Human-readable label for an expanded related record. Picks the target
+	 * collection's presentable field (or name/title/email), falling back to
+	 * the raw id — mirrors RecordForm's relation label logic.
+	 */
+	function relationLabel(field: Record<string, unknown>, rec: Record<string, unknown>): string {
+		const opts = (field.options ?? {}) as Record<string, unknown>;
+		const target = (opts['collection'] as string | undefined) ?? '';
+		const targetColl = $collections.find((c) => c.name === target);
+		const targetFields = ((targetColl?.fields as Record<string, unknown>[]) ?? []) as Record<
+			string,
+			unknown
+		>[];
+		const presentable =
+			targetFields.find((f) => f.presentable && f.name !== 'id') ??
+			targetFields.find((f) => f.name === 'name' || f.name === 'title' || f.name === 'email');
+		const id = String(rec['id'] ?? '');
+		if (presentable) {
+			const val = rec[presentable.name as string];
+			if (val != null && val !== '') return `${String(val)} (${id.slice(0, 8)}...)`;
+		}
+		return id;
+	}
+
+	function formatValue(
+		field: Record<string, unknown>,
+		value: unknown,
+		record?: Record<string, unknown>
+	): string {
 		if (value == null) return '—';
 		if (field.type === 'bool') return value ? '✓' : '✗';
+		if (field.type === 'relation') {
+			// Prefer the expanded related record (the API returns it when the
+			// list request carries `expand`), so the table shows the related
+			// record's label instead of a raw id.
+			const expanded = (record?.expand as Record<string, unknown> | undefined)?.[
+				field.name as string
+			] as Record<string, unknown> | undefined;
+			if (expanded) return relationLabel(field, expanded);
+		}
 		if (typeof value === 'object') return JSON.stringify(value).slice(0, 50);
 		return String(value);
 	}
@@ -61,7 +98,7 @@
 			cols.push({
 				key: f.name as string,
 				label: f.name as string,
-				render: (r) => formatValue(f, r[f.name as string]),
+				render: (r) => formatValue(f, r[f.name as string], r),
 				...(isFile && thumbSize
 					? {
 							thumbs: (r: Record<string, unknown>) => {
@@ -79,8 +116,12 @@
 	async function loadCollection(name: string, targetPage: number = currentPage) {
 		loading = true;
 		try {
-			const [coll, recs] = await Promise.all([
-				client.collections.getOne(name),
+			// Fetch the collection first so we know which relation fields to
+			// expand in the record list request.
+			const coll = await client.collections.getOne(name);
+			if (!coll) return;
+			collection = coll;
+			const recs = await client.collection(name).getList(targetPage, perPage, {
 				// Always request every field explicitly: the SDK otherwise projects
 				// responses against the static codegen schema snapshot
 				// (lazypock.types.ts), which goes stale the moment a field is added
@@ -88,9 +129,11 @@
 				// so new fields (e.g. a select field added to `users`) would be
 				// silently dropped from the table and the edit pane. `*` = all
 				// non-password fields (password stripping happens server-side).
-				client.collection(name).getList(targetPage, perPage, { fields: '*' })
-			]);
-			collection = coll;
+				// Relation fields are expanded so the table shows the related
+				// record's label instead of a raw id.
+				fields: '*',
+				expand: relationFieldNames(coll)
+			});
 			rows = (recs?.items as Record<string, unknown>[]) || [];
 			totalItems = recs?.totalItems ?? 0;
 			totalPages = Math.max(1, recs?.totalPages ?? 1);
@@ -100,6 +143,14 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	/** Comma-separated names of the collection's relation fields (for `expand`). */
+	function relationFieldNames(coll: Record<string, unknown>): string {
+		return ((coll.fields as Record<string, unknown>[]) ?? [])
+			.filter((f) => f.type === 'relation')
+			.map((f) => f.name as string)
+			.join(',');
 	}
 
 	// Sync activeName from URL param (or first collection)
@@ -241,7 +292,7 @@
 				<span class="font-medium">{(collection.name as string) ?? '...'}</span>
 				{#if isViewCollection}
 					<span
-						class="rounded bg-info/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-info"
+						class="rounded bg-info/20 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-info uppercase"
 						>view</span
 					>
 				{/if}

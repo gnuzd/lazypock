@@ -61,10 +61,13 @@ defmodule Lazypock.Migrations do
      After every migration run, any public table that exists but is **not**
      registered in `_collections` is registered as a `base` collection with
      its columns inferred from the Postgres schema (so it shows up in the
-     Studio and is served through `/api/:collection`). Tables that use
-     Ecto's `timestamps()` get their `inserted_at` renamed to LazyPock's
-     `created_at` convention, and a missing `updated_at` is added, so
-     create/update/delete work out of the box.
+     Studio and is served through `/api/:collection`). Foreign-key columns
+     (`references(:other)`) are inferred as `relation` fields pointing at
+     the referenced table, so the Studio shows a relation dropdown and
+     `expand` works on the API. Tables that use Ecto's `timestamps()` get
+     their `inserted_at` renamed to LazyPock's `created_at` convention, and
+     a missing `updated_at` is added, so create/update/delete work out of
+     the box.
 
      Internal `_`-prefixed tables and `schema_migrations` are never
      touched. Tables created at runtime by the app (request logs, settings,
@@ -450,12 +453,14 @@ defmodule Lazypock.Migrations do
   # only — the table itself is never recreated). Reconciles the LazyPock
   # shape first so raw Ecto `timestamps()` tables (inserted_at/updated_at)
   # become fully usable: `inserted_at` → `created_at`, missing `updated_at`
-  # added. Best-effort: failures are logged, never raised.
+  # added. Foreign-key columns are inferred as `relation` fields pointing at
+  # the referenced table. Best-effort: failures are logged, never raised.
   defp register_table!(table_name) do
     Repo.transaction(fn ->
       reconcile_timestamps!(table_name)
       columns = fetch_columns!(table_name)
-      fields = infer_fields(columns)
+      foreign_keys = fetch_foreign_keys!(table_name)
+      fields = infer_fields(columns, foreign_keys)
 
       collection =
         %Lazypock.Collections.Collection{}
@@ -545,24 +550,69 @@ defmodule Lazypock.Migrations do
     end)
   end
 
+  # Maps each foreign-key column of the table to the referenced table name
+  # (`column_name => referenced_table`). Lets raw `create table` migrations
+  # with `references(...)` columns come through as real `relation` fields
+  # (options.collection = target) instead of plain text, so the Studio shows
+  # the relation dropdown and the record browser can expand the value.
+  defp fetch_foreign_keys!(table_name) do
+    case Repo.query(
+           """
+           SELECT kcu.column_name, ccu.table_name AS referenced_table
+           FROM information_schema.table_constraints tc
+           JOIN information_schema.key_column_usage kcu
+             ON tc.constraint_name = kcu.constraint_name
+            AND tc.constraint_schema = kcu.constraint_schema
+           JOIN information_schema.constraint_column_usage ccu
+             ON ccu.constraint_name = tc.constraint_name
+            AND ccu.constraint_schema = tc.constraint_schema
+           WHERE tc.constraint_type = 'FOREIGN KEY'
+             AND tc.table_schema = 'public'
+             AND tc.table_name = $1
+           """,
+           [table_name]
+         ) do
+      {:ok, %{rows: rows}} ->
+        Map.new(rows, fn [column_name, referenced] -> {column_name, referenced} end)
+
+      _ ->
+        %{}
+    end
+  end
+
   # Skips the implicit LazyPock columns (id/created_at/updated_at) and maps
   # Postgres column types to LazyPock field types. Best-effort: anything
   # unrecognized becomes "text" so the collection is still usable.
-  defp infer_fields(columns) do
+  #
+  # Foreign-key columns become `relation` fields pointing at the referenced
+  # table (`options.collection`), so the Studio renders a relation dropdown.
+  defp infer_fields(columns, foreign_keys) do
     implicit = MapSet.new(["id", "created_at", "updated_at"])
 
     columns
     |> Enum.reject(&MapSet.member?(implicit, &1["column_name"]))
     |> Enum.map(fn col ->
-      %{
-        "name" => col["column_name"],
-        "type" => infer_field_type(col),
-        "required" => col["is_nullable"] == "NO" and is_nil(col["column_default"]),
-        "unique" => false,
-        "options" => %{},
-        "indexed" => false,
-        "default" => nil
-      }
+      if referenced = Map.get(foreign_keys, col["column_name"]) do
+        %{
+          "name" => col["column_name"],
+          "type" => "relation",
+          "required" => col["is_nullable"] == "NO" and is_nil(col["column_default"]),
+          "unique" => false,
+          "options" => %{"collection" => referenced},
+          "indexed" => false,
+          "default" => nil
+        }
+      else
+        %{
+          "name" => col["column_name"],
+          "type" => infer_field_type(col),
+          "required" => col["is_nullable"] == "NO" and is_nil(col["column_default"]),
+          "unique" => false,
+          "options" => %{},
+          "indexed" => false,
+          "default" => nil
+        }
+      end
     end)
   end
 
