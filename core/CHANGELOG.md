@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/gnuzd/lazypock/compare/v0.7.1...v0.8.0) (2026-08-30)
+
+
+### Features
+
+* **core:** view collections with realtime (PocketBase parity) ([c5f2e92](https://github.com/gnuzd/lazypock/commit/c5f2e9273fdb414a512497018514f306c2a1f832))
+* **studio:** collections overview modal (PocketBase parity) ([7d8570c](https://github.com/gnuzd/lazypock/commit/7d8570ccfff95658805b798b17a44b8cfdc724e0))
+* **studio:** rebuild ERD on Svelte Flow (zoom/pan, relation edges) ([ac09a0d](https://github.com/gnuzd/lazypock/commit/ac09a0d832d992a2a4afbd6c0b2ca97e145122c9))
+* **studio:** view collection UX ([fed70da](https://github.com/gnuzd/lazypock/commit/fed70da60c20dcc1b7ca9ec84bb8da4e5593ad0c))
+
+
+### Bug Fixes
+
+* **realtime:** own the view-diff ETS snapshot in the Registry ([927cff5](https://github.com/gnuzd/lazypock/commit/927cff51c1cf663f615d4a2ba792035b219353a0))
+
 ## [0.7.1](https://github.com/gnuzd/lazypock/compare/v0.7.0...v0.7.1) (2026-08-30)
 
 
