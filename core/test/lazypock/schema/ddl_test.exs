@@ -173,6 +173,88 @@ defmodule Lazypock.Schema.DDLTest do
       assert msg =~ "Invalid field type"
     end
 
+    test "accepts autodate as a valid field type" do
+      name = cname("autodate")
+
+      {:ok, _} =
+        DDL.create_collection(name,
+          type: "base",
+          fields: [
+            %{"name" => "last_seen_at", "type" => "autodate", "options" => %{"onCreate" => true}}
+          ]
+        )
+
+      cols = table_columns(name) |> Enum.map(fn [c, t, _n, d] -> {c, t, d} end)
+      assert {"last_seen_at", "timestamp with time zone", "now()"} in cols
+    end
+
+    test "reconciles user-defined created_at/updated_at autodate fields with system columns" do
+      # Migration-authoring scenario from the bug: the user lists the
+      # PocketBase-style autodate created_at/updated_at fields. The DDL must
+      # not emit duplicate columns — the system columns win, and the
+      # metadata entries are persisted as system fields.
+      name = cname("dedupe")
+
+      {:ok, coll} =
+        DDL.create_collection(name,
+          type: "base",
+          fields: [
+            %{"name" => "title", "type" => "text"},
+            %{"name" => "created_at", "type" => "autodate", "options" => %{"onCreate" => true}},
+            %{
+              "name" => "updated_at",
+              "type" => "autodate",
+              "options" => %{"onCreate" => true, "onUpdate" => true}
+            }
+          ]
+        )
+
+      # Single set of timestamp columns, with the system NOT NULL now() shape.
+      cols = table_columns(name)
+      created = Enum.filter(cols, fn [c, _t, _n, _d] -> c == "created_at" end)
+      updated = Enum.filter(cols, fn [c, _t, _n, _d] -> c == "updated_at" end)
+      assert length(created) == 1
+      assert length(updated) == 1
+      assert [_, "timestamp with time zone", "NO", "now()"] = hd(created)
+      assert [_, "timestamp with time zone", "NO", "now()"] = hd(updated)
+
+      # Metadata: the autodate timestamp fields exist and are system-protected
+      # (so update_collection's delete-on-remove can never drop the column).
+      fields = Repo.all(from(f in Lazypock.Collections.Field, where: f.collection_id == ^coll.id))
+      created_meta = Enum.find(fields, &(&1.name == "created_at"))
+      updated_meta = Enum.find(fields, &(&1.name == "updated_at"))
+      assert created_meta.type == "autodate"
+      assert created_meta.system == true
+      assert updated_meta.system == true
+    end
+
+    test "rejects created_at/updated_at fields with non-autodate types" do
+      name = cname("reserved")
+
+      assert {:error, msg} =
+               DDL.create_collection(name,
+                 type: "base",
+                 fields: [%{"name" => "created_at", "type" => "date"}]
+               )
+
+      assert msg =~ "system field"
+    end
+
+    test "rejects a mix of case where created_at is non-autodate" do
+      name = cname("reserved2")
+
+      assert {:error, msg} =
+               DDL.create_collection(name,
+                 type: "base",
+                 fields: [
+                   %{"name" => "Title", "type" => "text"},
+                   %{"name" => "Updated_At", "type" => "datetime"}
+                 ]
+               )
+
+      assert msg =~ "system field"
+    end
+
     test "multi_select and multi_file fields create array columns" do
       name = cname("arrays")
 
@@ -262,6 +344,48 @@ defmodule Lazypock.Schema.DDLTest do
 
       assert {:error, msg} = DDL.add_field(name, %{"name" => "ok", "type" => "bogus"})
       assert msg =~ "Invalid field type"
+    end
+
+    test "rejects adding the system created_at/updated_at columns" do
+      name = cname("noaddt")
+
+      {:ok, _} =
+        DDL.create_collection(name,
+          type: "base",
+          fields: [%{"name" => "title", "type" => "text"}]
+        )
+
+      assert {:error, msg} = DDL.add_field(name, %{"name" => "created_at", "type" => "date"})
+      assert msg =~ "system column"
+
+      assert {:error, msg} =
+               DDL.add_field(name, %{
+                 "name" => "updated_at",
+                 "type" => "autodate",
+                 "options" => %{"onCreate" => true}
+               })
+
+      assert msg =~ "system column"
+    end
+
+    test "autodate fields added later get DEFAULT now() when onCreate" do
+      name = cname("addauto")
+
+      {:ok, _} =
+        DDL.create_collection(name,
+          type: "base",
+          fields: [%{"name" => "title", "type" => "text"}]
+        )
+
+      assert :ok =
+               DDL.add_field(name, %{
+                 "name" => "last_seen_at",
+                 "type" => "autodate",
+                 "options" => %{"onCreate" => true}
+               })
+
+      cols = table_columns(name) |> Enum.map(fn [c, t, _n, d] -> {c, t, d} end)
+      assert {"last_seen_at", "timestamp with time zone", "now()"} in cols
     end
 
     test "relation field resolves collectionId to a collection name" do

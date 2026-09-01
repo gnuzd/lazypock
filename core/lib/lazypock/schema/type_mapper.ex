@@ -18,8 +18,35 @@ defmodule Lazypock.Schema.TypeMapper do
     "relation" => "TEXT",
     "editor" => "TEXT",
     "password" => "TEXT",
-    "geo" => "JSONB"
+    "geo" => "JSONB",
+    "autodate" => "TIMESTAMPTZ"
   }
+
+  @doc """
+  Names of the system timestamp columns every collection gets (see
+  `DDL.build_create_table_sql/2`): always `created_at` and `updated_at`,
+  managed by the DDL engine and the write path — user field definitions
+  that collide with these names are reconciled against the system columns.
+  """
+  @system_timestamp_columns ~w(created_at updated_at)
+  def system_timestamp_columns, do: @system_timestamp_columns
+
+  @doc """
+  Returns true when a field definition is an `autodate` field whose
+  options enable the given trigger (`:on_create` or `:on_update`).
+
+  Accepts either a raw field map (`%{"type" => ..., "options" => ...}`) or a
+  `Lazypock.Collections.Field` struct (atom keys), mirroring
+  `column_pg_type/1`.
+  """
+  @spec autodate_trigger?(map(), :on_create | :on_update) :: boolean()
+  def autodate_trigger?(field, trigger) when is_map(field) do
+    type = Map.get(field, "type") || Map.get(field, :type)
+    opts = Map.get(field, "options") || Map.get(field, :options) || %{}
+
+    type == "autodate" and
+      Map.get(opts, (trigger == :on_create && "onCreate") || "onUpdate") == true
+  end
 
   @doc """
   Returns the PostgreSQL DDL type, considering options like maxSelect.
@@ -139,7 +166,17 @@ defmodule Lazypock.Schema.TypeMapper do
 
   @doc """
   Returns the SQL default value expression for a field definition.
+
+  `autodate` fields with `options.onCreate` render `DEFAULT now()` — the
+  same expression the system `created_at`/`updated_at` columns always use
+  — so an arbitrary autodate field (e.g. `last_seen_at`) is initialized by
+  the database on insert. Autodate fields without `onCreate` (update-only)
+  get no default: they are filled by the write path instead.
   """
+  def default_sql(%{"type" => "autodate"} = field) do
+    if autodate_trigger?(field, :on_create), do: "DEFAULT now()", else: ""
+  end
+
   def default_sql(%{"default" => nil}), do: ""
 
   def default_sql(%{"default" => default, "type" => type}) do

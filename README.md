@@ -531,6 +531,40 @@ curl -X POST http://localhost:4000/api/posts \
   -d '{"title": "Hello World", "body": "My first post"}'
 ```
 
+#### System fields & `autodate`
+
+Every collection automatically gets three system fields — **`id`** (UUID),
+**`created_at`**, and **`updated_at`** (`TIMESTAMPTZ NOT NULL DEFAULT now()`,
+PocketBase-style). You don't need to (and shouldn't) add them yourself: the
+write path maintains them on every insert/update.
+
+If you're porting a PocketBase schema, you can still *list* them as `autodate`
+fields in your migration/API payload — they are reconciled against the built-in
+columns instead of being created twice:
+
+```elixir
+Lazypock.Migrations.create_collection("posts",
+  type: "base",
+  fields: [
+    %{"name" => "title", "type" => "text"},
+    %{"name" => "created_at", "type" => "autodate", "options" => %{"onCreate" => true}},
+    %{"name" => "updated_at", "type" => "autodate", "options" => %{"onCreate" => true, "onUpdate" => true}}
+  ]
+)
+```
+
+`autodate` is a first-class field type (the Studio shows it in the field
+type picker). **Arbitrary autodate fields work too** — e.g. a `last_seen_at`
+field:
+
+- `options.onCreate: true` → the column is created with `DEFAULT now()` and
+  stamped on insert.
+- `options.onUpdate: true` → the value is set to the current time on every
+  update (the write path maintains it — caller-supplied values are
+  overwritten, matching PocketBase).
+- `created_at` / `updated_at` are reserved names: defining them with any type
+  other than `autodate` is rejected with a clear error.
+
 ### Auth collections & creating users
 
 Collections come in two types: **base** (plain records) and **auth** (accounts

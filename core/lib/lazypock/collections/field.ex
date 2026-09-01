@@ -26,7 +26,10 @@ defmodule Lazypock.Collections.Field do
           sort_order: integer()
         }
 
-  @valid_types ~w(text number bool email url date datetime select multi_select file multi_file json relation editor password geo)
+  # Valid field types are derived from the TypeMapper so the metadata layer
+  # and the DDL engine can never drift apart (e.g. `autodate` was accepted
+  # by the Studio and stored for system fields while the DDL rejected it).
+  @valid_types Lazypock.Schema.TypeMapper.valid_types()
 
   @primary_key {:id, :binary_id, autogenerate: true}
   schema "_fields" do
