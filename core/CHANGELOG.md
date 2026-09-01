@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/gnuzd/lazypock/compare/v0.8.1...v0.9.0) (2026-09-01)
+
+
+### Features
+
+* **schema:** support autodate field type with write-path maintenance ([28cbb17](https://github.com/gnuzd/lazypock/commit/28cbb17e0a1c5486714748c2c9d0fcbf81f3e021))
+* **schema:** support autodate field type with write-path maintenance ([7b3e872](https://github.com/gnuzd/lazypock/commit/7b3e8720c9563521451368660e2d95be19fb38d4))
+
+
+### Bug Fixes
+
+* **migrations:** fail fast on unresolvable relation targets ([0fb9a85](https://github.com/gnuzd/lazypock/commit/0fb9a8571c2e50d9c72c7acc6f83188b06feefd0))
+* **migrations:** fail fast on unresolvable relation targets ([9bd81d4](https://github.com/gnuzd/lazypock/commit/9bd81d43d4fe24dbfb0ddafa6cedca34d91d91bf))
+
 ## [0.8.1](https://github.com/gnuzd/lazypock/compare/v0.8.0...v0.8.1) (2026-08-31)
 
 
