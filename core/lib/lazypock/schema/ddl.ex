@@ -321,7 +321,8 @@ defmodule Lazypock.Schema.DDL do
     result =
       Repo.transaction(fn ->
         with :ok <- validate_field_name!(field_def["name"]),
-             :ok <- validate_field_type(field_def["type"]) do
+             :ok <- validate_field_type(field_def["type"]),
+             :ok <- validate_not_system_timestamp(field_def["name"]) do
           lock_key = :erlang.phash2({:add_field, collection_name, field_def["name"]})
           Ecto.Adapters.SQL.query!(Repo, "SELECT pg_advisory_xact_lock(#{lock_key})", [])
 
@@ -609,6 +610,7 @@ defmodule Lazypock.Schema.DDL do
               for f <- fields_with_sort, not MapSet.member?(existing_names, f["name"]) do
                 :ok = validate_field_name!(f["name"])
                 :ok = validate_field_type(f["type"])
+                :ok = validate_not_system_timestamp(f["name"])
 
                 sql =
                   "ALTER TABLE #{TypeMapper.quote_ident(new_name)} ADD COLUMN #{TypeMapper.quote_ident(column_name(f["name"]))} #{TypeMapper.to_pg_with_opts(f["type"], f["options"] || %{})} #{if f["required"], do: " NOT NULL", else: ""} #{TypeMapper.default_sql(f)}"
@@ -738,9 +740,22 @@ defmodule Lazypock.Schema.DDL do
       Enum.any?(fields, &(not TypeMapper.valid_type?(&1["type"]))) ->
         {:error, "Invalid field type"}
 
+      Enum.any?(fields, &invalid_system_timestamp_field?/1) ->
+        {:error,
+         "\"created_at\" and \"updated_at\" are system fields: define them with type \"autodate\" (they are reconciled against the built-in columns) or omit them entirely"}
+
       true ->
         :ok
     end
+  end
+
+  # A user field may carry the system timestamp names ONLY as `autodate` —
+  # the column itself always comes from the DDL engine (`NOT NULL DEFAULT
+  # now()`), so any other type would silently mismatch what the write path
+  # manages. See build_create_table_sql/2 for the column dedupe.
+  defp invalid_system_timestamp_field?(field) do
+    column_name(field["name"]) in TypeMapper.system_timestamp_columns() and
+      field["type"] != "autodate"
   end
 
   defp validate_field_name!(field_name) do
@@ -766,7 +781,28 @@ defmodule Lazypock.Schema.DDL do
     if TypeMapper.valid_type?(type), do: :ok, else: {:error, "Invalid field type: #{type}"}
   end
 
+  # `created_at` / `updated_at` are system columns on every managed
+  # collection — adding them as user fields must fail cleanly instead of
+  # crashing with Postgres' duplicate_column error.
+  defp validate_not_system_timestamp(name) do
+    col = column_name(name)
+
+    if col in TypeMapper.system_timestamp_columns() do
+      {:error, "\"#{col}\" is a system column and already exists on every collection"}
+    else
+      :ok
+    end
+  end
+
   defp build_create_table_sql(name, fields) do
+    # System timestamp columns always win: a user field named `created_at` /
+    # `updated_at` (allowed only as `autodate`, see validate_fields/1) is
+    # dropped from the column list so Postgres never sees a duplicate column
+    # — its metadata entry is still persisted and reconciled against the
+    # system column by the write path.
+    fields =
+      Enum.reject(fields, &(column_name(&1["name"]) in TypeMapper.system_timestamp_columns()))
+
     columns = Enum.map(fields, &column_def/1)
     pk = "id UUID PRIMARY KEY DEFAULT gen_random_uuid()"
 
@@ -975,6 +1011,12 @@ defmodule Lazypock.Schema.DDL do
         Map.get(field_def, "options", %{})
       end
 
+    # A user-defined `created_at`/`updated_at` (autodate) field is a view of
+    # the system column — mark it `system: true` so the delete-on-remove
+    # sync in update_collection/2 can never drop the system column.
+    is_system_timestamp =
+      column_name(field_def["name"]) in TypeMapper.system_timestamp_columns()
+
     %Lazypock.Collections.Field{}
     |> Lazypock.Collections.Field.changeset(%{
       collection_id: collection_id,
@@ -985,7 +1027,7 @@ defmodule Lazypock.Schema.DDL do
       default_value: field_def["default"],
       options: normalized_opts,
       indexed: Map.get(field_def, "indexed", false),
-      system: Map.get(field_def, "system", false),
+      system: Map.get(field_def, "system", false) or is_system_timestamp,
       sort_order: Map.get(field_def, "sort_order", 0)
     })
     |> Repo.insert!()
@@ -1040,8 +1082,7 @@ defmodule Lazypock.Schema.DDL do
 
           case collection do
             nil ->
-              {:error,
-               "Relation field \"#{name}\" references unknown collection \"#{raw_id}\""}
+              {:error, "Relation field \"#{name}\" references unknown collection \"#{raw_id}\""}
 
             collection ->
               {:ok, collection}

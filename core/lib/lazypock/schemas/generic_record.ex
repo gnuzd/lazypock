@@ -32,6 +32,7 @@ defmodule Lazypock.Schemas.GenericRecord do
       |> Map.new()
       |> Map.put("created_at", now)
       |> Map.put("updated_at", now)
+      |> put_autodate_now(collection_name, :on_create, now)
       |> coerce_values_for_db()
 
     columns = Map.keys(data) |> Enum.map(&TypeMapper.quote_ident/1) |> Enum.join(", ")
@@ -125,10 +126,16 @@ defmodule Lazypock.Schemas.GenericRecord do
   """
   @spec update(String.t(), String.t(), map()) :: map() | nil
   def update(collection_name, id, attrs) when is_binary(collection_name) and is_map(attrs) do
+    now = DateTime.utc_now()
+
+    # `updated_at` is always bumped by this function (see below) — drop it
+    # from the incoming attrs so it can never appear twice in the SET list.
     data =
       attrs
       |> Enum.map(fn {k, v} -> {to_string(k), v} end)
       |> Map.new()
+      |> Map.drop(["updated_at"])
+      |> put_autodate_now(collection_name, :on_update, now)
       |> coerce_values_for_db()
 
     set_clauses =
@@ -149,7 +156,7 @@ defmodule Lazypock.Schemas.GenericRecord do
     """
 
     id_bin = maybe_uuid_to_bin(id)
-    values = Map.values(data) ++ [id_bin, DateTime.utc_now()]
+    values = Map.values(data) ++ [id_bin, now]
 
     case Ecto.Adapters.SQL.query(Repo, sql, values) do
       {:ok, %{rows: [row], columns: cols}} ->
@@ -296,6 +303,45 @@ defmodule Lazypock.Schemas.GenericRecord do
     data
     |> Map.put_new("created_at", now)
     |> Map.put_new("updated_at", now)
+  end
+
+  # ── Autodate fields ─────────────────────────────────
+
+  # Autodate fields (PocketBase-style, type `autodate` with an
+  # `onCreate`/`onUpdate` option) are maintained by the write path:
+  # onCreate fields are stamped with `now` on insert, onUpdate fields on
+  # update. Values are looked up from the collection's field metadata via
+  # the Registry (no-op when the registry isn't loaded, e.g. before the
+  # app has booted — at that point no record writes happen).
+  #
+  # The system `created_at`/`updated_at` columns are excluded: insert/2
+  # stamps them explicitly and update/3 always bumps `updated_at` in its
+  # own SET clause — including them again would emit the column twice.
+  defp put_autodate_now(data, collection_name, trigger, now) do
+    Enum.reduce(autodate_columns(collection_name, trigger), data, fn col, acc ->
+      Map.put(acc, col, now)
+    end)
+  end
+
+  defp autodate_columns(collection_name, trigger) do
+    (collection_fields(collection_name) || [])
+    |> Enum.flat_map(fn field ->
+      name = to_string(field.name)
+
+      if name not in TypeMapper.system_timestamp_columns() and
+           TypeMapper.autodate_trigger?(field, trigger) do
+        [name]
+      else
+        []
+      end
+    end)
+  end
+
+  defp collection_fields(collection_name) do
+    case Lazypock.Collections.Registry.get(collection_name) do
+      {:ok, collection} -> collection.fields
+      _ -> nil
+    end
   end
 
   # ── Private ──

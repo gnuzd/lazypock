@@ -21,7 +21,8 @@ defmodule Lazypock.Schema.TypeMapperTest do
         "relation" => "TEXT",
         "editor" => "TEXT",
         "password" => "TEXT",
-        "geo" => "JSONB"
+        "geo" => "JSONB",
+        "autodate" => "TIMESTAMPTZ"
       }
 
       for {type, pg} <- expected do
@@ -53,13 +54,27 @@ defmodule Lazypock.Schema.TypeMapperTest do
     test "valid_types includes all supported strings" do
       types = TypeMapper.valid_types()
 
-      for t <- ["text", "number", "bool", "email", "url", "date", "datetime", "select",
-                "multi_select", "file", "multi_file", "json", "relation", "editor",
-                "password", "geo"] do
+      for t <- [
+            "text",
+            "number",
+            "bool",
+            "email",
+            "url",
+            "date",
+            "datetime",
+            "select",
+            "multi_select",
+            "file",
+            "multi_file",
+            "json",
+            "relation",
+            "editor",
+            "password",
+            "geo",
+            "autodate"
+          ] do
         assert t in types
       end
-
-      refute "autodate" in types
     end
 
     test "valid_type? accepts known and rejects unknown" do
@@ -103,8 +118,71 @@ defmodule Lazypock.Schema.TypeMapperTest do
                "DEFAULT '2026-01-01'"
     end
 
+    test "autodate with onCreate renders DEFAULT now()" do
+      assert TypeMapper.default_sql(%{"type" => "autodate", "options" => %{"onCreate" => true}}) ==
+               "DEFAULT now()"
+
+      assert TypeMapper.default_sql(%{
+               "type" => "autodate",
+               "options" => %{"onCreate" => true, "onUpdate" => true}
+             }) == "DEFAULT now()"
+    end
+
+    test "autodate without onCreate (update-only) has no default" do
+      assert TypeMapper.default_sql(%{"type" => "autodate", "options" => %{"onUpdate" => true}}) ==
+               ""
+
+      assert TypeMapper.default_sql(%{"type" => "autodate", "options" => %{}}) == ""
+      assert TypeMapper.default_sql(%{"type" => "autodate"}) == ""
+    end
+
     test "unsupported types produce no default clause" do
       assert TypeMapper.default_sql(%{"default" => "x", "type" => "json"}) == ""
+    end
+  end
+
+  describe "autodate_trigger?/2" do
+    test "detects onCreate/onUpdate from raw field maps" do
+      assert TypeMapper.autodate_trigger?(
+               %{"type" => "autodate", "options" => %{"onCreate" => true}},
+               :on_create
+             )
+
+      refute TypeMapper.autodate_trigger?(
+               %{"type" => "autodate", "options" => %{"onCreate" => true}},
+               :on_update
+             )
+
+      assert TypeMapper.autodate_trigger?(
+               %{"type" => "autodate", "options" => %{"onCreate" => true, "onUpdate" => true}},
+               :on_update
+             )
+    end
+
+    test "detects triggers from Field structs (atom keys)" do
+      field = %Lazypock.Collections.Field{
+        type: "autodate",
+        options: %{"onUpdate" => true}
+      }
+
+      assert TypeMapper.autodate_trigger?(field, :on_update)
+      refute TypeMapper.autodate_trigger?(field, :on_create)
+    end
+
+    test "non-autodate types never trigger" do
+      refute TypeMapper.autodate_trigger?(%{"type" => "date", "options" => %{}}, :on_create)
+      refute TypeMapper.autodate_trigger?(%{"type" => "text"}, :on_update)
+    end
+
+    test "missing options never trigger" do
+      refute TypeMapper.autodate_trigger?(%{"type" => "autodate"}, :on_create)
+      refute TypeMapper.autodate_trigger?(%{"type" => "autodate", "options" => nil}, :on_create)
+    end
+  end
+
+  describe "system_timestamp_columns/0" do
+    test "returns the reserved system column names" do
+      assert TypeMapper.system_timestamp_columns() == ["created_at", "updated_at"]
     end
   end
 
