@@ -63,6 +63,7 @@
     </div>
 
     <nav class="hidden md:flex items-center gap-4 text-sm">
+      <a class="hover:text-primary" href="/architecture">Architecture</a>
       <a class="hover:text-primary" href="/server">Server</a>
       <a class="hover:text-primary" href="/sdk">SDKs</a>
       <a
