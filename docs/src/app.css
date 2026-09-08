@@ -195,6 +195,7 @@ code.doc-inline,
 		ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 	font-size: 0.85em;
 	font-weight: 500;
+	overflow-wrap: anywhere;
 }
 
 ::selection {

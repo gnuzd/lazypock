@@ -18,6 +18,23 @@ export const nav: NavSection[] = [
 		items: [{ href: "/", label: "What is Lazypock" }],
 	},
 	{
+		title: "Architecture",
+		items: [
+			{
+				href: "/architecture",
+				label: "How it works",
+				children: [
+					{ href: "/architecture#overview", label: "Overview" },
+					{ href: "/architecture#layers", label: "System layers" },
+					{ href: "/architecture#lifecycle", label: "Request lifecycle" },
+					{ href: "/architecture#realtime", label: "Realtime flow" },
+					{ href: "/architecture#design", label: "Design decisions" },
+					{ href: "/architecture#deep-dive", label: "Going deeper" },
+				],
+			},
+		],
+	},
+	{
 		title: "Server",
 		items: [
 			{
