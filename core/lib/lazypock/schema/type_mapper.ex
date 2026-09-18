@@ -66,6 +66,24 @@ defmodule Lazypock.Schema.TypeMapper do
   def id_column_type, do: "UUID"
 
   @doc """
+  PostgreSQL type of the `id` column of a given collection (Ecto struct).
+
+  Base/auth collections expose a system `id UUID` column that lives outside
+  the user-defined field metadata. View collections are different: their
+  `id` is a column of the underlying SQL view and is always `TEXT` (see
+  `Lazypock.Schema.Views.create_view/2`, which CASTs a non-text id to TEXT
+  so record lookups behave like on regular collections).
+
+  Rule compilation and single-record rule checks must use this type so the
+  emitted casts/bindings match the physical column (e.g. `\"id\" = $1::TEXT`
+  on a view instead of `$1::UUID`, which PostgreSQL rejects against a text
+  column with "operator does not exist: text = uuid").
+  """
+  @spec collection_id_pg_type(map()) :: String.t()
+  def collection_id_pg_type(%{type: "view"}), do: "TEXT"
+  def collection_id_pg_type(_collection), do: "UUID"
+
+  @doc """
   Returns the PostgreSQL type of a field definition for use in casts.
 
   Accepts either a raw field map (`%{"type" => ...}`) or a

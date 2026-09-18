@@ -52,6 +52,25 @@
 
 	const colspan = $derived(columns.length + (selectable ? 1 : 0));
 
+	// Rows are keyed by their `id` when it's present and unique on the page
+	// (normal tables, and validated view collections). A view's `id` uniqueness
+	// is only sampled at creation time, so a page can legitimately contain two
+	// rows sharing an id — keyed each blocks crash with each_key_duplicate on
+	// duplicate keys, so those rows fall back to their index key instead of
+	// taking the whole table down.
+	const duplicateRowIds = $derived.by(() => {
+		const ids = rows.map((r) => r.id);
+		return ids.filter(
+			(id, i) => typeof id === 'string' && id !== '' && ids.indexOf(id) !== i
+		);
+	});
+
+	function rowKey(row: Record<string, unknown>, i: number): string | number {
+		const id = row.id;
+		if (typeof id !== 'string' || id === '' || duplicateRowIds.includes(id)) return i;
+		return id;
+	}
+
 	const allSelected = $derived(
 		rows.length > 0 && rows.every((r) => selectedIds.includes(r.id as string))
 	);
@@ -125,7 +144,7 @@
 						</td>
 					</tr>
 				{:else}
-					{#each rows as row, i (row.id ?? i)}
+					{#each rows as row, i (rowKey(row, i))}
 						<tr
 							class="transition-[background] duration-(--animation-speed-fast) hover:bg-base-200 {isSelected(
 								row
