@@ -1,19 +1,20 @@
 <script lang="ts">
-	import { client } from '$lib/client';
-	import Input from '$lib/components/Input.svelte';
-	import Button from '$lib/components/Button.svelte';
-	import { createForm } from '$lib/createForm.svelte';
-
+	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
+
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
-	import { loginSchema, setupSchema } from '$lib/validation';
-	import { onMount } from 'svelte';
 
-	let loginForm = $state(createForm(loginSchema, { email: '', password: '' }));
-	let setupForm = $state(
-		createForm(setupSchema, { email: '', password: '', confirmPassword: '' })
-	);
+	import { client } from '$lib/client';
+	import { createForm } from '$lib/createForm.svelte';
+	import { loginSchema, setupSchema } from '$lib/validation';
+
+	import Input from '$lib/components/Input.svelte';
+	import Button from '$lib/components/Button.svelte';
+	import { goto } from '$app/navigation';
+
+	let loginForm = createForm(loginSchema, { email: '', password: '' });
+	let setupForm = createForm(setupSchema, { email: '', password: '', confirmPassword: '' });
 	let checking = $state(true);
 	let needsSetup = $state(false);
 
@@ -32,7 +33,7 @@
 		try {
 			await client.login(data.email, data.password);
 			await client.me();
-			if (browser) window.location.href = base + '/collections?collection=users';
+			if (browser) goto(base + '/collections?collection=users', { replaceState: true });
 		} catch (err) {
 			toast.error((err as { message?: string }).message || 'Login failed');
 		}
@@ -45,7 +46,7 @@
 			await client.me();
 			const res = await client.collections.getList({ page: 1, perPage: 200 });
 			const name = res?.items?.[0]?.name ?? '';
-			if (browser) window.location.href = base + '/collections?collection=' + name;
+			if (browser) goto(base + '/collections?collection=' + name, { replaceState: true });
 		} catch (err) {
 			toast.error((err as { message?: string }).message || 'Setup failed');
 		}
@@ -56,10 +57,7 @@
 	{#if checking}
 		<div class="text-sm text-base-content/40">Checking...</div>
 	{:else if needsSetup}
-		<form
-			class="flex w-full max-w-md flex-col gap-3 p-[30px]"
-			onsubmit={(e) => setupForm.handleSubmit(e, handleSetup)}
-		>
+		<form class="flex w-full max-w-md flex-col gap-3 p-7.5" use:setupForm.enhance={handleSetup}>
 			<div class="mb-3 text-center">
 				<h1 class="mt-2.5 text-[22px] font-semibold">Lazypock Setup</h1>
 				<p class="mt-1 text-sm text-base-content/60">Create the first superuser account</p>
@@ -70,7 +68,7 @@
 				type="email"
 				label="Email"
 				placeholder="admin@example.com"
-				bind:value={setupForm.values.email}
+				bind:value={setupForm.form.email}
 				error={setupForm.errors.email}
 				required
 			/>
@@ -80,7 +78,7 @@
 				type="password"
 				label="Password"
 				placeholder="password"
-				bind:value={setupForm.values.password}
+				bind:value={setupForm.form.password}
 				error={setupForm.errors.password}
 				required
 			/>
@@ -90,7 +88,7 @@
 				type="password"
 				label="Confirm Password"
 				placeholder="password"
-				bind:value={setupForm.values.confirmPassword}
+				bind:value={setupForm.form.confirmPassword}
 				error={setupForm.errors.confirmPassword}
 				required
 			/>
@@ -105,10 +103,7 @@
 			</Button>
 		</form>
 	{:else}
-		<form
-			class="flex w-full max-w-md flex-col gap-3 p-[30px]"
-			onsubmit={(e) => loginForm.handleSubmit(e, handleLogin)}
-		>
+		<form class="flex w-full max-w-md flex-col gap-3 p-7.5" use:loginForm.enhance={handleLogin}>
 			<div class="mb-3 text-center">
 				<h1 class="mt-2.5 text-[22px] font-semibold">Lazypock</h1>
 			</div>
@@ -118,7 +113,7 @@
 				type="email"
 				label="Email"
 				placeholder="superuser@example.com"
-				bind:value={loginForm.values.email}
+				bind:value={loginForm.form.email}
 				error={loginForm.errors.email}
 				required
 			/>
@@ -128,7 +123,7 @@
 				type="password"
 				label="Password"
 				placeholder="password"
-				bind:value={loginForm.values.password}
+				bind:value={loginForm.form.password}
 				error={loginForm.errors.password}
 				required
 			/>
