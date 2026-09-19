@@ -16,7 +16,7 @@
 	let importFileInput: HTMLInputElement | undefined = $state();
 	const importPlaceholder = '[{ "id": "...", "name": "...", "type": "base", "fields": [] }]';
 	let importLoadingFile = $state(false);
-	let parsedCollections: { id: string; name: string; type: string }[] = [];
+	let parsedCollections: { id: string; name: string; type: string }[] = $state([]);
 	let oldCollections: { id: string; name: string; type: string }[] = [];
 	let loadingOldCollections = $state(false);
 	let importing = $state(false);
@@ -41,7 +41,7 @@
 		const reader = new FileReader();
 		reader.onload = async (event) => {
 			importLoadingFile = false;
-			importForm.values.schemas = (event.target?.result as string) ?? '';
+			importForm.form.schemas = (event.target?.result as string) ?? '';
 			if (importFileInput) importFileInput.value = '';
 			parseImport();
 		};
@@ -57,7 +57,7 @@
 		parsedCollections = [];
 		importResult = null;
 		try {
-			const data = JSON.parse(importForm.values.schemas);
+			const data = JSON.parse(importForm.form.schemas);
 			// Accept both a bare array of collections and the backup envelope
 			// ({ "collections": [...] }) produced by Settings → Backups.
 			const collections = Array.isArray(data) ? data : data?.collections;
@@ -89,7 +89,7 @@
 	}
 
 	let isValidImport = $derived(
-		!!importForm.values.schemas && parsedCollections.length > 0 && !importResult
+		!!importForm.form.schemas && parsedCollections.length > 0 && !importResult
 	);
 
 	// Detect changes — keyed by id when present, else by name.
@@ -103,7 +103,7 @@
 
 		for (const c of oldCollections) {
 			if (!newKeys.has(c.id)) {
-				if (importForm.values.deleteMissing) removed.push(c.name);
+				if (importForm.form.deleteMissing) removed.push(c.name);
 			}
 		}
 
@@ -129,11 +129,11 @@
 		importing = true;
 		importResult = null;
 		try {
-			const data = JSON.parse(importForm.values.schemas);
+			const data = JSON.parse(importForm.form.schemas);
 			const collections = Array.isArray(data) ? data : data?.collections;
 			const res = (await client.http.post('/import', {
 				collections,
-				deleteMissing: importForm.values.deleteMissing
+				deleteMissing: importForm.form.deleteMissing
 			})) as { imported?: unknown[]; errors?: unknown[] } | null;
 			const importedCount = (res?.imported as unknown[])?.length ?? 0;
 			const errorCount = (res?.errors as unknown[])?.length ?? 0;
@@ -186,13 +186,13 @@
 			<textarea
 				id="import-schemas"
 				class="field-input font-mono text-xs"
-				class:border-error={importForm.values.schemas && !isValidImport}
+				class:border-error={importForm.form.schemas && !isValidImport}
 				spellcheck="false"
 				rows="16"
 				placeholder={importPlaceholder}
-				bind:value={importForm.values.schemas}
+				bind:value={importForm.form.schemas}
 				oninput={parseImport}></textarea>
-			{#if importForm.values.schemas && !isValidImport}
+			{#if importForm.form.schemas && !isValidImport}
 				<p class="mt-1 text-xs text-error">
 					{importResult || 'Invalid collections configuration.'}
 				</p>
@@ -207,7 +207,7 @@
 				<input
 					id="delete-missing"
 					type="checkbox"
-					bind:checked={importForm.values.deleteMissing}
+					bind:checked={importForm.form.deleteMissing}
 					disabled={!isValidImport}
 				/>
 				<span class="switch-slider"></span>
@@ -251,7 +251,7 @@
 		{/if}
 
 		<div class="flex items-center justify-between">
-			{#if importForm.values.schemas}
+			{#if importForm.form.schemas}
 				<button
 					type="button"
 					class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
