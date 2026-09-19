@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { slide } from 'svelte/transition';
+	import { getFileUrl, getThumbUrl, type FileRecord } from 'lazypock';
+
 	import RichEditor from '$lib/components/RichEditor.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
 
 	import { client } from '$lib/client';
 	import Modal from '$lib/components/Modal.svelte';
-	import { getFileUrl, getThumbUrl, type FileRecord } from 'lazypock';
 
 	let {
 		fields,
@@ -490,17 +491,17 @@
 							{...isMulti ? { multiple: true } : {}}
 							onchange={(e) => uploadFile(name, (e.target as HTMLInputElement).files)}
 						/>
-						<span
-							>{fileUploading[name]
+						<span>
+							{fileUploading[name]
 								? 'Uploading…'
 								: currentFiles.length
 									? 'Add file'
-									: 'Upload file'}</span
-						>
+									: 'Upload file'}
+						</span>
 					</label>
-					<button type="button" class="btn-text" {disabled} onclick={() => openPicker(name)}
-						>Library</button
-					>
+					<button type="button" class="btn-text" {disabled} onclick={() => openPicker(name)}>
+						Library
+					</button>
 				</div>
 
 				<span class="field-help"
@@ -519,115 +520,40 @@
 		{:else if type === 'relation'}
 			{@const targetColl = resolveTargetCollection(field)}
 			{@const isMultiRel = (options?.maxSelect as number) > 1}
+
 			<div class="field" class:required>
-				<label for="f_{name}">{name}</label>
-				<div class="relation-wrap">
-					{#if targetColl}
-						<!-- Button-style trigger showing the selected label(s) -->
-						<div
-							class="relation-trigger"
-							class:open={relationOpen[name]}
-							role="button"
-							tabindex="0"
-							{...disabled ? { 'aria-disabled': 'true' } : {}}
-							onclick={() => {
-								if (disabled) return;
-								if (relationOpen[name]) {
-									relationOpen[name] = false;
-									relationOpen = { ...relationOpen };
-								} else {
-									openRelationDropdown(name, targetColl);
-								}
-							}}
-							onkeydown={(e: KeyboardEvent) => {
-								if (e.key === 'Enter' || e.key === ' ') {
-									e.preventDefault();
-									if (!disabled) {
-										if (relationOpen[name]) {
-											relationOpen[name] = false;
-											relationOpen = { ...relationOpen };
-										} else {
-											openRelationDropdown(name, targetColl);
-										}
-									}
-								}
-							}}
-						>
-							{#if selectedLabels(name, targetColl).length > 0}
-								<div class="relation-trigger-labels">
-									{#each selectedLabels(name, targetColl) as lbl, li (lbl)}
-										<span class="relation-chip">
-											{lbl}
-											{#if !disabled && isMultiRel}
-												<button
-													type="button"
-													class="relation-chip-x"
-													tabindex="-1"
-													onclick={(e) => {
-														e.stopPropagation();
-														removeRelationValue(name, recordValue(name)[li]);
-													}}>×</button
-												>
-											{/if}
-										</span>
-									{/each}
-								</div>
-							{:else}
-								<span class="relation-trigger-placeholder"
-									>Select {targetColl} record{isMultiRel ? 's' : ''}...</span
-								>
-							{/if}
-							<span class="relation-caret">▾</span>
-						</div>
-						{#if relationOpen[name]}
-							{@const filtered = getFilteredOptions(name, targetColl)}
-							<div class="relation-dropdown">
-								<input
-									type="text"
-									class="relation-search"
-									placeholder="Type to filter..."
-									value={relationSearch[name] ?? ''}
-									// Keep clicks inside the dropdown from bubbling to the trigger's toggle
-									onclick={(e) => e.stopPropagation()}
-									oninput={(e: Event) => {
-										relationSearch[name] = (e.target as HTMLInputElement).value;
-										relationSearch = { ...relationSearch };
-									}}
-								/>
-								<div class="relation-options">
-									{#each filtered as opt (opt.value)}
-										<button
-											type="button"
-											class="relation-option"
-											class:active={isMultiRel
-												? recordValue(name).includes(opt.value)
-												: data[name] === opt.value}
-											onclick={(e) => {
-												e.stopPropagation();
-												toggleRelationOption(
-													name,
-													opt.value,
-													isMultiRel ? (options?.maxSelect as number) : 1
-												);
-											}}>{opt.label}</button
-										>
-									{/each}
-									{#if filtered.length === 0}
-										<div class="relation-empty">No matching records</div>
-									{/if}
-								</div>
-							</div>
-						{/if}
-					{:else}
-						<div class="relation-missing">
-							No target collection configured. Edit the collection to pick one.
-						</div>
-					{/if}
-				</div>
-				<span class="field-help"
-					>Related record{isMultiRel ? 's (multi-select)' : ''} from
-					{targetColl ?? 'unknown collection'}</span
-				>
+				<!-- svelte-ignore a11y_label_has_associated_control -->
+				<label>{name}</label>
+				{#if targetColl}
+					{@const filtered = getFilteredOptions(name, targetColl)}
+
+					<SelectField
+						choices={filtered}
+						maxSelect={options?.maxSelect as number}
+						bind:value={data[name]}
+						{disabled}
+						onOpen={() => {
+							if (disabled) return;
+							console.log(relationOpen[name]);
+							if (relationOpen[name]) {
+								relationOpen[name] = false;
+								relationOpen = { ...relationOpen };
+							} else {
+								openRelationDropdown(name, targetColl);
+							}
+						}}
+					/>
+				{:else}
+					<div class="relation-missing">
+						No target collection configured. Edit the collection to pick one.
+					</div>
+				{/if}
+
+				<span class="field-help">
+					Related record{isMultiRel ? 's (multi-select)' : ''} from
+					{targetColl ?? 'unknown collection'}
+				</span>
+
 				{#if errors[name]}
 					<span class="field-error">{errors[name]}</span>
 				{/if}
@@ -1170,16 +1096,17 @@
 		gap: 6px;
 		min-height: 38px;
 		padding: 8px 12px;
-		border: 1px solid var(--color-base-300);
-		border-radius: var(--radius-field);
-		background: var(--color-base-100);
+		/* border: 1px solid var(--color-base-300); */
+		/* border-radius: var(--radius-field); */
+		/* background: var(--color-base-100); */
 		cursor: pointer;
 		transition: border-color 0.15s;
 		box-sizing: border-box;
 	}
 
 	.relation-trigger:hover {
-		border-color: var(--color-base-content);
+		/* border-color: var(--color-base-content); */
+		background: color-mix(in oklab, var(--color-base-content) 4%, transparent);
 	}
 
 	.relation-trigger.open {
@@ -1199,7 +1126,7 @@
 		gap: 4px;
 		padding: 2px 8px;
 		border-radius: 999px;
-		background: color-mix(in oklab, var(--color-primary) 12%, var(--color-base-100));
+		background: color-mix(in oklab, var(--color-primary) 20%, var(--color-base-100));
 		color: var(--color-base-content);
 		font-size: 0.75rem;
 		max-width: 100%;
@@ -1246,7 +1173,7 @@
 		right: 0;
 		z-index: 100;
 		background: var(--color-base-100);
-		border: 1px solid var(--color-base-300);
+		border: 2px solid var(--color-primary);
 		border-radius: var(--radius-field);
 		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 		max-height: 240px;
@@ -1305,6 +1232,7 @@
 		display: flex;
 		gap: 8px;
 		align-items: center;
+		padding: 8px;
 	}
 
 	.picker-status {

@@ -39,8 +39,7 @@
 		'stroke: var(--color-base-content); stroke-opacity: 0.45; stroke-width: 1.5';
 	const DIM_EDGE_STYLE =
 		'stroke: var(--color-base-content); stroke-opacity: 0.1; stroke-width: 1.5';
-	const BRIGHT_EDGE_STYLE =
-		'stroke: var(--color-primary); stroke-opacity: 1; stroke-width: 2';
+	const BRIGHT_EDGE_STYLE = 'stroke: var(--color-primary); stroke-opacity: 1; stroke-width: 2';
 
 	let selectedIds = new Set<string>();
 	let hasSelection = $state(false);
@@ -107,13 +106,8 @@
 					sourceHandle: `field-${f.name}`,
 					targetHandle: 'in',
 					label: f.name as string,
-					labelStyle:
-						'fill: var(--color-base-content); font-size: 10px; font-family: monospace',
-					style: !hasSelection
-						? BASE_EDGE_STYLE
-						: connected
-							? BRIGHT_EDGE_STYLE
-							: DIM_EDGE_STYLE
+					labelStyle: 'fill: var(--color-base-content); font-size: 10px; font-family: monospace',
+					style: !hasSelection ? BASE_EDGE_STYLE : connected ? BRIGHT_EDGE_STYLE : DIM_EDGE_STYLE
 				});
 			});
 		}
@@ -159,7 +153,7 @@
 	{nodeTypes}
 	fitView={false}
 	minZoom={0.15}
-	maxZoom={2.5}
+	maxZoom={1}
 	nodesConnectable={false}
 	nodesDraggable
 	zoomOnScroll
@@ -179,5 +173,9 @@
 	:global(.has-selection .svelte-flow__node:not(.selected)) {
 		opacity: 0.35;
 		transition: opacity 120ms ease;
+	}
+
+	:global(.svelte-flow__panel) {
+		display: none;
 	}
 </style>
