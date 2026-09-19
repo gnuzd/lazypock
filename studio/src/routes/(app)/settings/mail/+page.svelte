@@ -31,20 +31,18 @@
 			}
 		});
 
-	let mailForm = $state(
-		createForm(mailSchema, {
-			mailEnabled: false,
-			senderName: '',
-			senderAddress: '',
-			smtpHost: '',
-			smtpPort: '587',
-			smtpUser: '',
-			smtpPass: '',
-			smtpTls: false,
-			smtpAuthMethod: 'PLAIN',
-			smtpLocalName: ''
-		})
-	);
+	let mailForm = createForm(mailSchema, {
+		mailEnabled: false,
+		senderName: '',
+		senderAddress: '',
+		smtpHost: '',
+		smtpPort: '587',
+		smtpUser: '',
+		smtpPass: '',
+		smtpTls: false,
+		smtpAuthMethod: 'PLAIN',
+		smtpLocalName: ''
+	});
 	let showMoreMail = $state(false);
 
 	onMount(async () => {
@@ -52,7 +50,7 @@
 			const res = (await client.http.get('/settings')) as Record<string, unknown> | null;
 			if (!res) return;
 			const mail = (res.mail as Record<string, unknown>) ?? {};
-			const v = mailForm.values;
+			const v = mailForm.form;
 			v.mailEnabled = (mail.enabled as boolean) ?? false;
 			v.senderName = (mail.sender_name as string) ?? '';
 			v.senderAddress = (mail.sender_address as string) ?? '';
@@ -94,7 +92,7 @@
 <form
 	class="rounded-box border border-base-300 bg-base-100 p-6"
 	autocomplete="off"
-	onsubmit={(e) => mailForm.handleSubmit(e, saveMail)}
+	use:mailForm.enhance={saveMail}
 >
 	<div class="mb-4 text-sm text-base-content/60">
 		<p>Configure common settings for sending emails.</p>
@@ -102,14 +100,14 @@
 
 	<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start">
 		<div class="flex-1">
-			<Input label="Sender name" placeholder="John Doe" bind:value={mailForm.values.senderName} />
+			<Input label="Sender name" placeholder="John Doe" bind:value={mailForm.form.senderName} />
 		</div>
 		<div class="flex-1">
 			<Input
 				label="Sender address"
 				placeholder="noreply@example.com"
 				type="email"
-				bind:value={mailForm.values.senderAddress}
+				bind:value={mailForm.form.senderAddress}
 				error={mailForm.errors.senderAddress}
 			/>
 		</div>
@@ -121,41 +119,41 @@
 			<span class="txt">Use SMTP mail server <strong>(recommended)</strong></span>
 		</label>
 		<label class="switch">
-			<input id="mail-enabled" type="checkbox" bind:checked={mailForm.values.mailEnabled} />
+			<input id="mail-enabled" type="checkbox" bind:checked={mailForm.form.mailEnabled} />
 			<span class="switch-slider"></span>
 		</label>
 	</div>
 
-	{#if mailForm.values.mailEnabled}
+	{#if mailForm.form.mailEnabled}
 		<div transition:slide={{ duration: 150 }}>
 			<div class="flex flex-col gap-3 sm:flex-row">
-				<div class="flex-[5]">
+				<div class="flex-5">
 					<Input
 						label="SMTP server host"
 						placeholder="smtp.example.com"
-						bind:value={mailForm.values.smtpHost}
+						bind:value={mailForm.form.smtpHost}
 						error={mailForm.errors.smtpHost}
 						required
 					/>
 				</div>
-				<div class="flex-[3]">
+				<div class="flex-3">
 					<Input
 						label="Port"
 						placeholder="587"
-						bind:value={mailForm.values.smtpPort}
+						bind:value={mailForm.form.smtpPort}
 						error={mailForm.errors.smtpPort}
 						required
 					/>
 				</div>
-				<div class="flex-[4]">
-					<Input label="Username" bind:value={mailForm.values.smtpUser} />
+				<div class="flex-4">
+					<Input label="Username" bind:value={mailForm.form.smtpUser} />
 				</div>
-				<div class="flex-[4]">
+				<div class="flex-4">
 					<Input
 						label="Password"
 						type="password"
 						autocomplete="new-password"
-						bind:value={mailForm.values.smtpPass}
+						bind:value={mailForm.form.smtpPass}
 					/>
 				</div>
 			</div>
@@ -171,39 +169,39 @@
 			{#if showMoreMail}
 				<div transition:slide={{ duration: 150 }}>
 					<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12">
-					<div class="lg:col-span-4">
-						<div class="field">
-							<span class="field-label">TLS encryption</span>
-							<Select
-								variant="plain"
-								triggerClass="w-full py-2.5"
-								options={[
-									{ value: false, label: 'Auto (StartTLS)' },
-									{ value: true, label: 'Always' }
-								]}
-								bind:value={mailForm.values.smtpTls}
-							/>
+						<div class="lg:col-span-4">
+							<div class="field">
+								<span class="field-label">TLS encryption</span>
+								<Select
+									variant="plain"
+									triggerClass="w-full py-2.5"
+									options={[
+										{ value: false, label: 'Auto (StartTLS)' },
+										{ value: true, label: 'Always' }
+									]}
+									bind:value={mailForm.form.smtpTls}
+								/>
+							</div>
 						</div>
-					</div>
-					<div class="lg:col-span-4">
-						<div class="field">
-							<span class="field-label">AUTH method</span>
-							<Select
-								variant="plain"
-								triggerClass="w-full py-2.5"
-								options={[
-									{ value: 'PLAIN', label: 'PLAIN (default)' },
-									{ value: 'LOGIN', label: 'LOGIN' }
-								]}
-								bind:value={mailForm.values.smtpAuthMethod}
-							/>
+						<div class="lg:col-span-4">
+							<div class="field">
+								<span class="field-label">AUTH method</span>
+								<Select
+									variant="plain"
+									triggerClass="w-full py-2.5"
+									options={[
+										{ value: 'PLAIN', label: 'PLAIN (default)' },
+										{ value: 'LOGIN', label: 'LOGIN' }
+									]}
+									bind:value={mailForm.form.smtpAuthMethod}
+								/>
+							</div>
 						</div>
-					</div>
 						<div class="lg:col-span-4">
 							<Input
 								label="EHLO/HELO domain"
 								placeholder="Default to localhost"
-								bind:value={mailForm.values.smtpLocalName}
+								bind:value={mailForm.form.smtpLocalName}
 							/>
 						</div>
 					</div>

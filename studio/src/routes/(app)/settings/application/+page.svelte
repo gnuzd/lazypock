@@ -18,9 +18,9 @@
 		try {
 			const res = (await client.http.get('/settings')) as Record<string, unknown> | null;
 			if (!res) return;
-			appForm.values.appName = (res.app_name as string) ?? '';
+			appForm.form.appName = (res.app_name as string) ?? '';
 			const origins = res.cors_origins;
-			corsForm.values.origins = Array.isArray(origins)
+			corsForm.form.origins = Array.isArray(origins)
 				? origins.join(', ')
 				: ((origins as string) ?? '');
 		} catch {
@@ -58,14 +58,11 @@
 </script>
 
 <h2 class="mb-4 text-lg font-semibold">Application Settings</h2>
-<form
-	class="rounded-box border border-base-300 bg-base-100 p-6"
-	onsubmit={(e) => appForm.handleSubmit(e, saveApp)}
->
+<form class="rounded-box border border-base-300 bg-base-100 p-6" use:appForm.enhance={saveApp}>
 	<Input
 		label="App Name"
 		placeholder="Lazypock"
-		bind:value={appForm.values.appName}
+		bind:value={appForm.form.appName}
 		help="Displayed in the admin UI header."
 	/>
 	<div class="mt-4 flex items-center gap-3">
@@ -81,7 +78,7 @@
 
 <form
 	class="mt-6 rounded-box border border-base-300 bg-base-100 p-6"
-	onsubmit={(e) => corsForm.handleSubmit(e, saveCors)}
+	use:corsForm.enhance={saveCors}
 >
 	<h3 class="mb-2 text-base font-semibold">Allowed Origins (CORS)</h3>
 	<p class="mb-3 text-xs text-base-content/70">
@@ -91,7 +88,7 @@
 	<Input
 		label="Origins"
 		placeholder="http://localhost:1420, https://app.example.com"
-		bind:value={corsForm.values.origins}
+		bind:value={corsForm.form.origins}
 		help="Example: http://localhost:1420"
 		error={corsForm.errors.origins}
 	/>

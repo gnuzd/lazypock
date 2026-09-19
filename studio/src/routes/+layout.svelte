@@ -7,6 +7,7 @@
 	import { client } from '$lib/client';
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
 
 	let { children } = $props();
 	let initialized = $state(false);
@@ -14,8 +15,6 @@
 		try {
 			const theme = localStorage.getItem('lazypock-theme');
 			if (theme) document.documentElement.setAttribute('data-theme', theme);
-
-			await client.authStore.init();
 
 			if (!browser) return;
 
@@ -34,19 +33,19 @@
 					) {
 						return;
 					}
-					window.location.href = base + '/collections?collection=users';
+					goto(base + '/collections?collection=users');
 					return;
 				} catch {
 					// Token is stale — clear it and show login
 					client.authStore.clear();
 					if (!isLoginPage) {
-						window.location.href = base + '/login';
+						goto(base + '/login');
 						return;
 					}
 					// Already on login page — let it render
 				}
 			} else if (!isLoginPage) {
-				window.location.href = base + '/login';
+				goto(base + '/login');
 				return;
 			}
 		} finally {
