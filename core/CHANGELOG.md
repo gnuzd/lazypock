@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/gnuzd/lazypock/compare/v0.9.0...v0.10.0) (2026-09-19)
+
+
+### Features
+
+* update super form ([63d8611](https://github.com/gnuzd/lazypock/commit/63d86116777e0a47e74f25e8b20c13187159116e))
+
+
+### Bug Fixes
+
+* polish ui ([0656bc5](https://github.com/gnuzd/lazypock/commit/0656bc58f19167e293d49baeea0b3987683debd2))
+
 ## [0.9.0](https://github.com/gnuzd/lazypock/compare/v0.8.1...v0.9.0) (2026-09-01)
 
 
