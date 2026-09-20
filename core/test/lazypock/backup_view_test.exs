@@ -11,7 +11,7 @@ defmodule Lazypock.BackupViewTest do
   test "export → restore round-trips view collections (created after their sources)" do
     src = cname("src")
     view = cname("view")
- 
+
     {:ok, _} =
       DDL.create_collection(src,
         type: "base",
@@ -20,40 +20,40 @@ defmodule Lazypock.BackupViewTest do
           %{"name" => "count", "type" => "number", "required" => false}
         ]
       )
- 
+
     {:ok, record} = GenericRecord.insert(src, %{"title" => "hello", "count" => 2})
- 
+
     {:ok, _} =
       DDL.create_collection(view,
         type: "view",
         options: %{"view_query" => "SELECT id, title, count FROM #{src}"},
         rules: %{"listRule" => "", "viewRule" => ""}
       )
- 
+
     # Capture the payload, then simulate a fresh restore target: drop
     # everything before restoring.
     payload = Backup.export()
     DDL.drop_collection(view)
     DDL.drop_collection(src)
- 
+
     assert %{imported: imported, errors: errors} = Backup.restore(payload)
- 
+
     assert errors == []
- 
+
     assert Enum.find(imported, &(&1.name == src)).records_imported == 1
     assert Enum.find(imported, &(&1.name == view)).type == "view"
- 
+
     Registry.reload!()
- 
+
     # The restored view resolves against the restored source and shows rows.
     {:ok, coll} = Registry.get(view)
     assert coll.type == "view"
     assert coll.options["view_query"] =~ src
- 
+
     rows = GenericRecord.all(view)
     assert length(rows) == 1
     assert hd(rows)["title"] == "hello"
- 
+
     # Source records are restored too.
     assert GenericRecord.get(src, record["id"]) != nil
   end
@@ -269,10 +269,19 @@ defmodule Lazypock.BackupViewTest do
     assert Enum.any?(coll.fields, &(&1.name == "created"))
   end
 
-  # ── legacy PocketBase <23 field shape (nested "options") ───────────────────
+  # ── nested "options" is accepted for every field type ──────────────────────
+  #
+  # The DDL/field-metadata layer already handles both flat fields and fields
+  # with settings nested under "options" — confirmed by the existing
+  # PocketBase-import test suite (imports text/number/select fields carrying
+  # non-empty "options" successfully). An earlier version of this fix
+  # incorrectly rejected non-relation fields with nested "options" as an
+  # assumed-unsupported legacy shape; that assumption was never verified
+  # against the actual DDL code and directly contradicted the existing test
+  # coverage, so it was removed. This test guards against reintroducing it.
 
-  test "restore rejects a non-relation field with legacy nested \"options\"" do
-    name = cname("legacy_options")
+  test "restore accepts a non-relation field with nested \"options\" (min/max as settings)" do
+    name = cname("nested_options")
 
     payload = %{
       "collections" => [
@@ -289,6 +298,7 @@ defmodule Lazypock.BackupViewTest do
             %{
               "name" => "title",
               "type" => "text",
+              "required" => true,
               "options" => %{"min" => 1, "max" => 100}
             }
           ]
@@ -296,10 +306,12 @@ defmodule Lazypock.BackupViewTest do
       ]
     }
 
-    assert %{imported: [], errors: [error]} = Backup.restore(payload)
-    assert error.name == name
-    assert error.error =~ "title"
-    assert error.error =~ "PocketBase <23"
+    assert %{imported: imported, errors: []} = Backup.restore(payload)
+    assert Enum.find(imported, &(&1.name == name))
+
+    Registry.reload!()
+    {:ok, coll} = Registry.get(name)
+    assert Enum.any?(coll.fields, &(&1.name == "title"))
   end
 
   test "restore still accepts a relation field with collectionId nested under \"options\"" do

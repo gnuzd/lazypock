@@ -265,27 +265,17 @@ defmodule Lazypock.Backup do
     end
   end
 
-  # Validates a single field entry. Relation fields keep tolerating a nested
-  # "options" map — resolve_relation/2 below deliberately reads collectionId
-  # from either "options" or the top level, independent of which PocketBase
-  # version a payload came from. Every other field type has no such
-  # mechanism anywhere downstream, so nested "options" there is the
-  # PocketBase <23 shape and is out of scope — rejected explicitly rather
-  # than silently producing a field with no constraints.
-  defp validate_field(%{"type" => "relation"} = f), do: {:ok, f}
-
-  # An empty "options" map (%{} — no settings inside) is not the legacy
-  # shape, just LazyPock's own default when a field is persisted without
-  # explicit options (e.g. Backup.export() round-tripping a field created
-  # via create_collection/2 with no "options" originally supplied). Only a
-  # non-empty options map is the PocketBase <23 signature worth rejecting.
-  defp validate_field(%{"options" => opts} = f) when is_map(opts) and map_size(opts) > 0 do
-    {:error,
-     "field #{inspect(f["name"])}: nested \"options\" (#{inspect(opts)}) is not " <>
-       "supported for type #{inspect(f["type"])} — this looks like a PocketBase " <>
-       "<23 export; only PocketBase 23+ (flat fields) is supported"}
-  end
-
+  # Validates a single field entry is at least structurally a map. Both flat
+  # fields (settings directly on the field, PocketBase 23+ shape) and fields
+  # with settings nested under "options" (relation's collectionId, but also
+  # ordinary min/max/values-style settings on other types) are accepted —
+  # the DDL/field-metadata layer already handles both shapes on its own
+  # (confirmed by the existing PocketBase-import test suite, which imports
+  # text/number/select fields carrying non-empty "options" successfully).
+  # An earlier version of this function rejected non-relation fields with
+  # nested "options" as an assumed-unsupported "PocketBase <23" shape — that
+  # assumption was never verified against the actual DDL code and directly
+  # contradicted this existing, passing test coverage, so it's removed.
   defp validate_field(f) when is_map(f), do: {:ok, f}
 
   defp validate_field(other) do
@@ -305,9 +295,9 @@ defmodule Lazypock.Backup do
   # resolve_schema/1 + validate_field/1 for one collection, collapsed to a
   # single {:ok, list} | {:error, reason} so normalize_import_payload/1
   # doesn't need to thread multiple failure shapes through its Enum.map.
-  # System fields are stripped last, after validation, so a malformed
-  # non-system field still surfaces as an error rather than being masked
-  # by unrelated system fields elsewhere in the same list.
+  # System fields are stripped last, after validation, so a malformed field
+  # (e.g. not a map at all) still surfaces as an error rather than being
+  # masked by unrelated system fields elsewhere in the same list.
   defp resolve_and_validate_schema(c) do
     with {:ok, raw_fields} <- resolve_schema(c) do
       raw_fields
@@ -337,8 +327,8 @@ defmodule Lazypock.Backup do
   #
   # Each collection's field list is resolved via resolve_and_validate_schema/1
   # first (honoring both the "schema" and "fields" keys, rejecting
-  # malformed/ambiguous/legacy-shaped field data, and stripping
-  # system-managed fields) — a collection that fails this step is tagged
+  # malformed/ambiguous field data, and stripping system-managed fields) —
+  # a collection that fails this step is tagged
   # with "__schema_error__" instead of being processed, so restore/2 can
   # report it in `errors` without ever calling
   # create_collection/update_collection with an incorrectly-emptied (or
