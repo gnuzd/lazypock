@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.2](https://github.com/gnuzd/lazypock/compare/v0.10.1...v0.10.2) (2026-09-20)
+
+
+### Bug Fixes
+
+* reject legacy options ([7152abd](https://github.com/gnuzd/lazypock/commit/7152abda40754c11f918cbe6d904f95a99318d47))
+* test validate_field ([0333017](https://github.com/gnuzd/lazypock/commit/03330177b28757dc12aeb1bceec688d78d1c6fce))
+* update backup/restore pb type ([04c1c5d](https://github.com/gnuzd/lazypock/commit/04c1c5dfc8c8a5a30d60b08f9b401386e13836e1))
+
 ## [0.10.1](https://github.com/gnuzd/lazypock/compare/v0.10.0...v0.10.1) (2026-09-19)
 
 
