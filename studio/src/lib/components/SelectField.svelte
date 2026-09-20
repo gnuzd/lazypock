@@ -1,20 +1,32 @@
 <script lang="ts">
-	let {
-		choices = [] as string[],
-		maxSelect = 1,
-		value = $bindable(),
-		disabled = false
-	}: {
-		choices: string[];
+	type Choice = string | { label: string; value: string };
+
+	interface Props {
+		choices: Choice[];
 		maxSelect: number;
 		value: unknown;
 		disabled?: boolean;
-	} = $props();
+		onOpen?: () => void;
+	}
 
-	const isMulti = maxSelect > 1;
+	let {
+		choices = [],
+		maxSelect = 1,
+		value = $bindable(),
+		disabled = false,
+		onOpen
+	}: Props = $props();
+
+	const isMulti = $derived(maxSelect > 1);
 	const selected = $derived(isMulti ? (value as string[]) || [] : [(value as string) || '']);
 	const filtered = $derived(
-		choices.filter((c) => !search || c.toLowerCase().includes(search.toLowerCase()))
+		choices.filter((c) => {
+			if (typeof c === 'string') {
+				return !search || c.toLowerCase().includes(search.toLowerCase());
+			}
+
+			return !search || c.label.toLowerCase().includes(search.toLowerCase());
+		})
 	);
 
 	let search = $state('');
@@ -25,27 +37,40 @@
 		if (disabled) return;
 		open = !open;
 		search = '';
+		if (open) {
+			onOpen?.();
+		}
 	}
 
-	function selectOption(choice: string) {
+	function selectOption(choice: Choice) {
+		const choiceValue = getValue(choice);
+
 		if (isMulti) {
 			const cur = (value as string[]) || [];
-			if (cur.includes(choice)) {
-				const next = cur.filter((s) => s !== choice);
+			if (cur.includes(choiceValue)) {
+				const next = cur.filter((s) => s !== choiceValue);
 				value = next.length > 0 ? next : null;
 			} else {
-				value = [...cur, choice];
+				value = [...cur, choiceValue];
 			}
 		} else {
-			value = choice;
+			value = choiceValue;
 			open = false;
 		}
 	}
 
-	function removeChip(choice: string) {
+	function removeChip(choiceValue: string) {
 		const cur = (value as string[]) || [];
-		const next = cur.filter((s) => s !== choice);
+		const next = cur.filter((s) => s !== choiceValue);
 		value = next.length > 0 ? next : null;
+	}
+
+	function getValue(choice: Choice): string {
+		return typeof choice === 'string' ? choice : choice.value;
+	}
+
+	function getLabel(choice: Choice): string {
+		return typeof choice === 'string' ? choice : choice.label;
 	}
 
 	$effect(() => {
@@ -76,8 +101,9 @@
 			{#if selected.length > 0}
 				<div class="selected-chips">
 					{#each selected as s (s)}
+						{@const label = getLabel(filtered.find((c) => getValue(c) === s) ?? s)}
 						<span class="selected-chip">
-							{s}
+							{label}
 							<button type="button" class="chip-remove" onclick={() => removeChip(s)}>×</button>
 						</span>
 					{/each}
@@ -103,19 +129,24 @@
 		<div class="select-dropdown">
 			<input type="text" class="select-search" bind:value={search} placeholder="Search..." />
 			<div class="select-options">
-				{#each filtered as choice (choice)}
+				{#each filtered as choice (typeof choice === 'string' ? choice : choice.value)}
+					{@const choiceValue = typeof choice === 'string' ? choice : choice.value}
+					{@const choiceLabel = typeof choice === 'string' ? choice : choice.label}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 					<label
 						class="select-option"
-						class:selected={selected.includes(choice)}
-						onclick={() => selectOption(choice)}>
+						class:selected={selected.includes(choiceValue)}
+						onclick={() => selectOption(choiceValue)}
+					>
 						{#if isMulti}
 							<input
 								type="checkbox"
-								checked={selected.includes(choice)}
-								onchange={() => selectOption(choice)}
+								checked={selected.includes(choiceValue)}
+								onchange={() => selectOption(choiceValue)}
 							/>
 						{/if}
-						<span>{choice}</span>
+						<span>{choiceLabel}</span>
 					</label>
 				{/each}
 				{#if filtered.length === 0}

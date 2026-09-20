@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.10.1](https://github.com/gnuzd/lazypock/compare/v0.10.0...v0.10.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* missing form fields settings import ([b622d73](https://github.com/gnuzd/lazypock/commit/b622d737a4d5eac42eafe6ffe1901f3a2752b9bc))
+* missing form fields settings import ([d059af5](https://github.com/gnuzd/lazypock/commit/d059af5721c97c7f8420eb6e73d938a99d16531b))
+
+## [0.10.0](https://github.com/gnuzd/lazypock/compare/v0.9.0...v0.10.0) (2026-09-19)
+
+
+### Features
+
+* update super form ([63d8611](https://github.com/gnuzd/lazypock/commit/63d86116777e0a47e74f25e8b20c13187159116e))
+
+
+### Bug Fixes
+
+* polish ui ([0656bc5](https://github.com/gnuzd/lazypock/commit/0656bc58f19167e293d49baeea0b3987683debd2))
+
 ## [0.9.0](https://github.com/gnuzd/lazypock/compare/v0.8.1...v0.9.0) (2026-09-01)
 
 

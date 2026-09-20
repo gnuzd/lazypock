@@ -23,22 +23,20 @@
 			}
 		});
 
-	let storageForm = $state(
-		createForm(storageSchema, {
-			storageEnabled: false,
-			s3Bucket: '',
-			s3Region: 'us-east-1',
-			s3AccessKey: '',
-			s3SecretKey: '',
-			s3Endpoint: ''
-		})
-	);
+	let storageForm = createForm(storageSchema, {
+		storageEnabled: false,
+		s3Bucket: '',
+		s3Region: 'us-east-1',
+		s3AccessKey: '',
+		s3SecretKey: '',
+		s3Endpoint: ''
+	});
 
 	onMount(async () => {
 		try {
 			const res = (await client.http.get('/settings')) as Record<string, unknown> | null;
 			if (!res) return;
-			const v = storageForm.values;
+			const v = storageForm.form;
 			v.storageEnabled = (res.s3_enabled as boolean) ?? false;
 			const s3 = (res.s3 as Record<string, string>) ?? {};
 			v.s3Bucket = s3.bucket ?? '';
@@ -74,7 +72,7 @@
 <h2 class="mb-4 text-lg font-semibold">Files Storage</h2>
 <form
 	class="rounded-box border border-base-300 bg-base-100 p-6"
-	onsubmit={(e) => storageForm.handleSubmit(e, saveStorage)}
+	use:storageForm.enhance={saveStorage}
 >
 	<div class="mb-4 text-sm text-base-content/60">
 		<p>By default Lazypock uses the local file system to store uploaded files.</p>
@@ -87,41 +85,37 @@
 			<span class="txt">Use S3 storage</span>
 		</label>
 		<label class="switch">
-			<input
-				id="storage-enabled"
-				type="checkbox"
-				bind:checked={storageForm.values.storageEnabled}
-			/>
+			<input id="storage-enabled" type="checkbox" bind:checked={storageForm.form.storageEnabled} />
 			<span class="switch-slider"></span>
 		</label>
 	</div>
 
-	{#if storageForm.values.storageEnabled}
+	{#if storageForm.form.storageEnabled}
 		<div transition:slide={{ duration: 150 }}>
 			<div class="flex flex-col gap-3">
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 					<Input
 						label="S3 Bucket"
 						placeholder="my-bucket"
-						bind:value={storageForm.values.s3Bucket}
+						bind:value={storageForm.form.s3Bucket}
 						error={storageForm.errors.s3Bucket}
 						required
 					/>
-					<Input label="Region" placeholder="us-east-1" bind:value={storageForm.values.s3Region} />
+					<Input label="Region" placeholder="us-east-1" bind:value={storageForm.form.s3Region} />
 				</div>
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-					<Input label="Access Key" bind:value={storageForm.values.s3AccessKey} />
+					<Input label="Access Key" bind:value={storageForm.form.s3AccessKey} />
 					<Input
 						label="Secret Key"
 						type="password"
 						autocomplete="new-password"
-						bind:value={storageForm.values.s3SecretKey}
+						bind:value={storageForm.form.s3SecretKey}
 					/>
 				</div>
 				<Input
 					label="Endpoint (optional)"
 					placeholder="https://s3.amazonaws.com"
-					bind:value={storageForm.values.s3Endpoint}
+					bind:value={storageForm.form.s3Endpoint}
 				/>
 			</div>
 		</div>

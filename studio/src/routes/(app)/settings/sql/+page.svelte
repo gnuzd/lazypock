@@ -9,9 +9,9 @@
 		query: z.string().trim().min(1, 'Enter a query')
 	});
 
-	let sqlForm = $state(
-		createForm(sqlSchema, { query: 'SELECT name, type FROM _collections ORDER BY name' })
-	);
+	let sqlForm = createForm(sqlSchema, {
+		query: 'SELECT name, type FROM _collections ORDER BY name'
+	});
 	let sqlResults = $state<{ columns: string[]; rows: unknown[][] } | null>(null);
 	let sqlError = $state('');
 
@@ -52,10 +52,7 @@
 </script>
 
 <h2 class="mb-4 text-lg font-semibold">SQL Console</h2>
-<form
-	class="rounded-box border border-base-300 bg-base-100 p-6"
-	onsubmit={(e) => sqlForm.handleSubmit(e, runSql)}
->
+<form class="rounded-box border border-base-300 bg-base-100 p-6" use:sqlForm.enhance={runSql}>
 	<p class="mb-3 text-xs text-base-content/60">
 		Run read-only SQL queries against the database. Only SELECT, EXPLAIN, and WITH statements are
 		allowed.
@@ -64,7 +61,7 @@
 		class="input w-full font-mono text-xs outline-none focus:outline-none"
 		rows="12"
 		placeholder="SELECT * FROM _collections"
-		bind:value={sqlForm.values.query}></textarea>
+		bind:value={sqlForm.form.query}></textarea>
 	{#if sqlForm.errors.query}
 		<p class="mt-1 text-xs text-error">{sqlForm.errors.query}</p>
 	{/if}
