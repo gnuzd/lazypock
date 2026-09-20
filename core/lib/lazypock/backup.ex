@@ -274,7 +274,12 @@ defmodule Lazypock.Backup do
   # than silently producing a field with no constraints.
   defp validate_field(%{"type" => "relation"} = f), do: {:ok, f}
 
-  defp validate_field(%{"options" => opts} = f) do
+  # An empty "options" map (%{} — no settings inside) is not the legacy
+  # shape, just LazyPock's own default when a field is persisted without
+  # explicit options (e.g. Backup.export() round-tripping a field created
+  # via create_collection/2 with no "options" originally supplied). Only a
+  # non-empty options map is the PocketBase <23 signature worth rejecting.
+  defp validate_field(%{"options" => opts} = f) when is_map(opts) and map_size(opts) > 0 do
     {:error,
      "field #{inspect(f["name"])}: nested \"options\" (#{inspect(opts)}) is not " <>
        "supported for type #{inspect(f["type"])} — this looks like a PocketBase " <>
