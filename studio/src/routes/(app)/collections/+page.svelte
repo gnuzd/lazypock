@@ -88,6 +88,12 @@
 		];
 		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
 			.filter((f) => !f.hidden && f.type !== 'password')
+			// The ID column is always rendered explicitly above. A view collection
+			// auto-generates a system `id` field, so it must be skipped here —
+			// otherwise the keyed each blocks in DataTable ({@code col.key}) receive
+			// two 'id' keys and Svelte throws each_key_duplicate, breaking the whole
+			// table render for views.
+			.filter((f) => String(f.name ?? '').toLowerCase() !== 'id')
 			.toSorted((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0));
 		for (const f of fields) {
 			const isFile = f.type === 'file' || f.type === 'multi_file';

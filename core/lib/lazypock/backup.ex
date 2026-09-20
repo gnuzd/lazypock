@@ -16,9 +16,14 @@ defmodule Lazypock.Backup do
   ## Import / restore
 
   `restore/2` accepts either the export envelope (`%{"collections" => [...]}`)
-  or a bare collection list, in both the LazyPock backup format and the
-  PocketBase export format (camelCase field names, PB collection ids —
-  see `normalize_import_payload/1`).
+  or a bare collection list, in both the LazyPock backup format (`"schema"`
+  key) and the PocketBase 23+ export format (`"fields"` key, camelCase field
+  names, PB collection ids — see `normalize_import_payload/1`).
+
+  System-managed fields (`"system": true` in the payload — e.g. PocketBase's
+  own `id` primary key field) are stripped before a collection is created or
+  updated: LazyPock's DDL layer already generates its own `id` column, so a
+  payload that re-declares one explicitly would otherwise collide with it.
 
   Records are restored with `Lazypock.Schemas.GenericRecord.restore/2`, an
   **upsert by id**: ids (and timestamps) are preserved so relations between
@@ -81,6 +86,14 @@ defmodule Lazypock.Backup do
   Existing collections are updated (fields/rules/options/hooks), missing
   ones created, and records upserted by id via `GenericRecord.restore/2`.
 
+  Each collection's field list may be keyed `"schema"` (LazyPock's own
+  export) or `"fields"` (PocketBase 23+ export) — see
+  `normalize_import_payload/1`. A collection whose field data is missing,
+  ambiguous (both keys present), or malformed is reported in `errors`
+  rather than silently imported with no fields. Fields marked
+  `"system": true` (e.g. PocketBase's own `id` field) are dropped before
+  create/update, since LazyPock's DDL layer manages its own system columns.
+
   `delete_missing` additionally drops user collections (and fields) absent
   from the payload — system collections are always protected.
 
@@ -115,78 +128,90 @@ defmodule Lazypock.Backup do
     {imported_list, errors_list} =
       Enum.reduce(collections, {[], []}, fn coll_data, {imported_acc, errors_acc} ->
         name = coll_data["name"]
-        type = coll_data["type"] || "base"
-        # View fields are derived server-side from options["view_query"] — the
-        # exported schema is ignored to avoid replaying stale field metadata.
-        schema = if type == "view", do: [], else: coll_data["schema"] || []
-        records = coll_data["records"] || []
-        rules = coll_data["rules"]
-        options = coll_data["options"]
-        hooks = coll_data["hooks"]
 
-        # Custom indexes live inside options["indexes"] — extract so the DDL
-        # engine can (re)create the actual Postgres indexes, not just the
-        # metadata. Omitted when the payload doesn't carry options so existing
-        # target indexes are left untouched.
-        indexes =
-          case options do
-            %{"indexes" => idx} when is_list(idx) -> idx
-            _ -> nil
-          end
+        case coll_data["__schema_error__"] do
+          nil ->
+            type = coll_data["type"] || "base"
+            # View fields are derived server-side from options["view_query"] —
+            # the exported schema is ignored to avoid replaying stale field
+            # metadata. Safe to read coll_data["schema"] || [] here: by this
+            # point normalize_import_payload/1 has already resolved either
+            # "schema" or "fields" into "schema" (with system fields already
+            # stripped), or tagged the collection with __schema_error__ above
+            # (so this branch isn't reached).
+            schema = if type == "view", do: [], else: coll_data["schema"] || []
+            records = coll_data["records"] || []
+            rules = coll_data["rules"]
+            options = coll_data["options"]
+            hooks = coll_data["hooks"]
 
-        result =
-          if name in existing_names do
-            # Update existing collection — apply new schema fields plus any
-            # rules/options/hooks carried in the payload.
-            case Lazypock.Schema.DDL.update_collection(
-                   name,
-                   [fields: schema]
-                   |> maybe_put(:rules, rules)
-                   |> maybe_put(:options, options)
-                   |> maybe_put(:hooks, hooks)
-                   |> maybe_put(:indexes, indexes)
-                   |> Keyword.put(:delete_missing_fields, delete_missing)
-                 ) do
-              {:ok, _} -> {:ok, :updated}
-              other -> other
-            end
-          else
-            Lazypock.Schema.DDL.create_collection(
-              name,
-              [type: type, fields: schema]
-              |> maybe_put(:rules, rules)
-              |> maybe_put(:options, options)
-              |> maybe_put(:hooks, hooks)
-              |> maybe_put(:indexes, indexes)
-            )
-          end
+            # Custom indexes live inside options["indexes"] — extract so the DDL
+            # engine can (re)create the actual Postgres indexes, not just the
+            # metadata. Omitted when the payload doesn't carry options so existing
+            # target indexes are left untouched.
+            indexes =
+              case options do
+                %{"indexes" => idx} when is_list(idx) -> idx
+                _ -> nil
+              end
 
-        case result do
-          {:ok, _} ->
-            # View collections are read-only: rows are regenerated by the view
-            # query, so exported row data is never re-inserted.
-            inserted =
-              if type == "view" do
-                {:ok, 0}
+            result =
+              if name in existing_names do
+                # Update existing collection — apply new schema fields plus any
+                # rules/options/hooks carried in the payload.
+                case Lazypock.Schema.DDL.update_collection(
+                       name,
+                       [fields: schema]
+                       |> maybe_put(:rules, rules)
+                       |> maybe_put(:options, options)
+                       |> maybe_put(:hooks, hooks)
+                       |> maybe_put(:indexes, indexes)
+                       |> Keyword.put(:delete_missing_fields, delete_missing)
+                     ) do
+                  {:ok, _} -> {:ok, :updated}
+                  other -> other
+                end
               else
-                Enum.reduce_while(records, {:ok, 0}, fn record, {:ok, count} ->
-                  case GenericRecord.restore(name, record) do
-                    {:ok, _} -> {:cont, {:ok, count + 1}}
-                    {:error, _reason} -> {:cont, {:ok, count}}
+                Lazypock.Schema.DDL.create_collection(
+                  name,
+                  [type: type, fields: schema]
+                  |> maybe_put(:rules, rules)
+                  |> maybe_put(:options, options)
+                  |> maybe_put(:hooks, hooks)
+                  |> maybe_put(:indexes, indexes)
+                )
+              end
+
+            case result do
+              {:ok, _} ->
+                # View collections are read-only: rows are regenerated by the view
+                # query, so exported row data is never re-inserted.
+                inserted =
+                  if type == "view" do
+                    {:ok, 0}
+                  else
+                    Enum.reduce_while(records, {:ok, 0}, fn record, {:ok, count} ->
+                      case GenericRecord.restore(name, record) do
+                        {:ok, _} -> {:cont, {:ok, count + 1}}
+                        {:error, _reason} -> {:cont, {:ok, count}}
+                      end
+                    end)
                   end
-                end)
-              end
 
-            insert_count =
-              case inserted do
-                {:ok, c} -> c
-                _ -> 0
-              end
+                insert_count =
+                  case inserted do
+                    {:ok, c} -> c
+                    _ -> 0
+                  end
 
-            {[%{name: name, type: type, records_imported: insert_count} | imported_acc],
-             errors_acc}
+                {[%{name: name, type: type, records_imported: insert_count} | imported_acc],
+                 errors_acc}
 
-          {:error, reason} ->
+              {:error, reason} ->
+                {imported_acc, [%{name: name, error: reason} | errors_acc]}
+            end
+
+          reason ->
             {imported_acc, [%{name: name, error: reason} | errors_acc]}
         end
       end)
@@ -205,6 +230,90 @@ defmodule Lazypock.Backup do
     %{imported: Enum.reverse(imported_list), errors: Enum.reverse(errors_list)}
   end
 
+  # ── Field-list key resolution (schema vs. fields) ─────────────────────────
+
+  # Resolves the raw field list for one collection map, honoring both key
+  # names LazyPock accepts: "schema" (its own export) and "fields"
+  # (PocketBase 23+ export). Returns {:ok, list} | {:error, reason} — never
+  # implicitly defaults to [] except for view collections (fields are
+  # derived server-side) and a list that is explicitly empty in the payload.
+  defp resolve_schema(%{"type" => "view"}), do: {:ok, []}
+
+  defp resolve_schema(c) do
+    case {Map.fetch(c, "fields"), Map.fetch(c, "schema")} do
+      {{:ok, fields}, :error} when is_list(fields) ->
+        {:ok, fields}
+
+      {:error, {:ok, schema}} when is_list(schema) ->
+        {:ok, schema}
+
+      {{:ok, _}, {:ok, _}} ->
+        {:error,
+         "collection #{inspect(c["name"])}: payload has both \"fields\" and " <>
+           "\"schema\" — ambiguous, refusing to guess"}
+
+      {{:ok, other}, _} when not is_list(other) ->
+        {:error, "collection #{inspect(c["name"])}: \"fields\" must be a list"}
+
+      {_, {:ok, other}} when not is_list(other) ->
+        {:error, "collection #{inspect(c["name"])}: \"schema\" must be a list"}
+
+      {:error, :error} ->
+        {:error,
+         "collection #{inspect(c["name"])}: missing both \"fields\" and " <>
+           "\"schema\" — expected at least an empty list"}
+    end
+  end
+
+  # Validates a single field entry is at least structurally a map. Both flat
+  # fields (settings directly on the field, PocketBase 23+ shape) and fields
+  # with settings nested under "options" (relation's collectionId, but also
+  # ordinary min/max/values-style settings on other types) are accepted —
+  # the DDL/field-metadata layer already handles both shapes on its own
+  # (confirmed by the existing PocketBase-import test suite, which imports
+  # text/number/select fields carrying non-empty "options" successfully).
+  # An earlier version of this function rejected non-relation fields with
+  # nested "options" as an assumed-unsupported "PocketBase <23" shape — that
+  # assumption was never verified against the actual DDL code and directly
+  # contradicted this existing, passing test coverage, so it's removed.
+  defp validate_field(f) when is_map(f), do: {:ok, f}
+
+  defp validate_field(other) do
+    {:error, "field entry must be a map, got #{inspect(other)}"}
+  end
+
+  # Drops fields the payload marks as system-managed (e.g. PocketBase's own
+  # "id" primary key field, "system": true). LazyPock's DDL layer creates
+  # its own system columns when a collection is created — re-declaring one
+  # explicitly (as PocketBase's export does for "id") collides with it
+  # (Postgrex 42701 duplicate_column) rather than being a legitimate custom
+  # field, so these are removed rather than validated/imported.
+  defp strip_system_fields(fields) do
+    Enum.reject(fields, fn f -> f["system"] == true end)
+  end
+
+  # resolve_schema/1 + validate_field/1 for one collection, collapsed to a
+  # single {:ok, list} | {:error, reason} so normalize_import_payload/1
+  # doesn't need to thread multiple failure shapes through its Enum.map.
+  # System fields are stripped last, after validation, so a malformed field
+  # (e.g. not a map at all) still surfaces as an error rather than being
+  # masked by unrelated system fields elsewhere in the same list.
+  defp resolve_and_validate_schema(c) do
+    with {:ok, raw_fields} <- resolve_schema(c) do
+      raw_fields
+      |> Enum.reduce_while({:ok, []}, fn field, {:ok, acc} ->
+        case validate_field(field) do
+          {:ok, valid} -> {:cont, {:ok, [valid | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, list} -> {:ok, list |> Enum.reverse() |> strip_system_fields()}
+        {:error, _} = err -> err
+      end
+    end
+  end
+
   # ── PocketBase-format payload normalization ──────────────────────────────
 
   # PocketBase exports use camelCase field names, PB collection ids in relation
@@ -215,15 +324,30 @@ defmodule Lazypock.Backup do
   # an EXISTING column by its snake_case form (e.g. system users'
   # `passwordHash` ↔ LazyPock's `password_hash`) is aliased to that column so
   # no duplicate is created.
+  #
+  # Each collection's field list is resolved via resolve_and_validate_schema/1
+  # first (honoring both the "schema" and "fields" keys, rejecting
+  # malformed/ambiguous field data, and stripping system-managed fields) —
+  # a collection that fails this step is tagged
+  # with "__schema_error__" instead of being processed, so restore/2 can
+  # report it in `errors` without ever calling
+  # create_collection/update_collection with an incorrectly-emptied (or
+  # duplicate-"id"-colliding) field list.
   defp normalize_import_payload(collections) do
     id_to_name = Map.new(collections, fn c -> {c["id"], c["name"]} end)
 
     Enum.map(collections, fn c ->
-      {fields, name_map} = reconcile_field_names(c["name"], c["schema"] || [], id_to_name)
+      case resolve_and_validate_schema(c) do
+        {:ok, raw_fields} ->
+          {fields, name_map} = reconcile_field_names(c["name"], raw_fields, id_to_name)
 
-      c
-      |> Map.put("schema", fields)
-      |> Map.put("records", rekey_records(c["records"] || [], name_map))
+          c
+          |> Map.put("schema", fields)
+          |> Map.put("records", rekey_records(c["records"] || [], name_map))
+
+        {:error, reason} ->
+          Map.put(c, "__schema_error__", reason)
+      end
     end)
   end
 

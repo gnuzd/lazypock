@@ -160,4 +160,70 @@ defmodule LazypockWeb.ViewCollectionsControllerTest do
       assert %{"totalItems" => 2} = json_response(conn, 200)
     end
   end
+
+  describe "rules on view records behave like base collections" do
+    setup %{src: src} do
+      name = "vwrules_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      {:ok, _coll} =
+        DDL.create_collection(name,
+          type: "view",
+          options: %{"view_query" => "SELECT id, title, count FROM #{src}"}
+        )
+
+      {:ok, record} = GenericRecord.insert(src, %{"title" => "a", "count" => 1})
+      {:ok, other} = GenericRecord.insert(src, %{"title" => "b", "count" => 2})
+      Registry.reload!()
+      {:ok, name: name, record: record, other: other}
+    end
+
+    test "listRule on the view id column filters anonymously like on a base collection", %{
+      name: name,
+      record: record
+    } do
+      id = record["id"]
+
+      conn = auth_conn(build_conn())
+
+      conn =
+        patch(conn, "/api/collections/#{name}", %{
+          "rules" => %{"listRule" => "id = '#{id}'"}
+        })
+
+      assert %{"rules" => %{"listRule" => _}} = json_response(conn, 200)
+
+      # Anonymous access honors the rule. A view's id column is TEXT, so the
+      # rule must not be cast to uuid (previously that crashed Postgres and
+      # the swallowed error returned an empty list).
+      conn = build_conn()
+      conn = get(conn, "/api/#{name}")
+      assert %{"items" => [item], "totalItems" => 1} = json_response(conn, 200)
+      assert item["id"] == id
+      assert item["title"] == "a"
+    end
+
+    test "viewRule with a conditional expression grants show access on views", %{
+      name: name,
+      record: record,
+      other: other
+    } do
+      conn = auth_conn(build_conn())
+
+      conn =
+        patch(conn, "/api/collections/#{name}", %{
+          "rules" => %{"viewRule" => "title = 'a'"}
+        })
+
+      assert %{"rules" => %{"viewRule" => _}} = json_response(conn, 200)
+
+      conn = build_conn()
+      conn = get(conn, "/api/#{name}/#{record["id"]}")
+      assert %{"id" => id, "title" => "a"} = json_response(conn, 200)
+      assert id == record["id"]
+
+      conn = build_conn()
+      conn = get(conn, "/api/#{name}/#{other["id"]}")
+      assert %{"message" => "Access denied by viewRule"} = json_response(conn, 403)
+    end
+  end
 end

@@ -74,6 +74,110 @@ defmodule Lazypock.Rules.EnforcerTest do
     }
   end
 
+  # ── View collections (text `id` parity) ──────────────────
+
+  # View collections expose their `id` column as TEXT (see Views.create_view/2),
+  # unlike the system `id UUID` of base/auth collections. Rule compilation and
+  # single-record checks must honor that type, otherwise comparisons against
+  # the view's id emit `$1::UUID` and PostgreSQL raises "operator does not
+  # exist: text = uuid", which surfaces as silent denials / empty lists.
+  describe "view collections (text id parity)" do
+    defp create_view_source_collection(name) do
+      default_rules = %{
+        "listRule" => "",
+        "viewRule" => "",
+        "createRule" => "",
+        "updateRule" => "",
+        "deleteRule" => "",
+        "manageRule" => nil
+      }
+
+      fields = [
+        %{"name" => "title", "type" => "text", "required" => false, "indexed" => false},
+        %{"name" => "owner_id", "type" => "text", "required" => false, "indexed" => false}
+      ]
+
+      {:ok, coll} = DDL.create_collection(name, type: "base", fields: fields)
+
+      {:ok, coll} =
+        coll
+        |> Lazypock.Collections.Collection.changeset(%{rules: default_rules})
+        |> Lazypock.Repo.update()
+
+      Registry.reload!()
+      coll
+    end
+
+    defp set_view_rules(name, rules) do
+      {:ok, view} = Registry.get(name)
+
+      {:ok, view} =
+        view
+        |> Lazypock.Collections.Collection.changeset(%{rules: rules})
+        |> Lazypock.Repo.update()
+
+      Registry.reload!()
+      view
+    end
+
+    setup do
+      src = "vwsrc_#{System.unique_integer([:positive]) |> abs()}"
+      create_view_source_collection(src)
+      {:ok, record} = GenericRecord.insert(src, %{"title" => "Mine", "owner_id" => "user-1"})
+
+      view = "vwparity_#{System.unique_integer([:positive]) |> abs()}"
+
+      {:ok, _view} =
+        DDL.create_collection(view,
+          type: "view",
+          options: %{"view_query" => "SELECT id, title, owner_id FROM #{src}"}
+        )
+
+      Registry.reload!()
+      {:ok, view: view, src: src, record: record}
+    end
+
+    test "listRule comparing the view id binds TEXT and matches the row", %{
+      view: view,
+      record: record
+    } do
+      id = record["id"]
+      set_view_rules(view, %{"listRule" => "id = '#{id}'"})
+
+      # The compiled clause must cast against the view's text id column — not
+      # the uuid cast used for base collections.
+      assert {:ok, {sql, params}} = Enforcer.authorize_list(view, nil)
+      assert sql =~ ~s("id" = $1::TEXT)
+      assert params == [id]
+
+      # And it must actually match rows when executed (previously the uuid
+      # cast crashed with "operator does not exist: text = uuid" and the
+      # swallowed query error returned an empty list).
+      rows = GenericRecord.all_where(view, sql, params)
+      assert length(rows) == 1
+      assert hd(rows)["id"] == id
+    end
+
+    test "viewRule against a view record matches like on base collections", %{
+      view: view,
+      src: src,
+      record: record
+    } do
+      id = record["id"]
+      set_view_rules(view, %{"viewRule" => "title = 'Mine'"})
+
+      # Fetch the record the way DynamicController.show does for views
+      # (plain text id, no uuid dump).
+      record = GenericRecord.get(view, id, plain_id: true)
+      assert :ok = Enforcer.authorize_view(view, nil, record)
+
+      # A *different* row whose title does not satisfy the rule is denied.
+      {:ok, other} = GenericRecord.insert(src, %{"title" => "Other", "owner_id" => "user-2"})
+      other_record = GenericRecord.get(view, other["id"], plain_id: true)
+      assert {:error, _} = Enforcer.authorize_view(view, nil, other_record)
+    end
+  end
+
   # ── Superuser bypass behavior ───────────────────────────
 
   describe "superuser bypass" do
@@ -147,6 +251,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("list_filter_test", %{
         "listRule" => "owner_id = @request.auth.id"
       })
+
       user = auth_user(%{"id" => "user-123"})
       assert {:ok, {sql, params}} = Enforcer.authorize_list("list_filter_test", user)
       assert is_binary(sql) and sql != ""
@@ -157,6 +262,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("list_role_test", %{
         "listRule" => "@request.auth.role = 'admin'"
       })
+
       user = auth_user(%{"role" => "admin"})
       assert {:ok, {sql, _params}} = Enforcer.authorize_list("list_role_test", user)
       # The resolved rule should produce a SQL clause that can be evaluated
@@ -168,6 +274,7 @@ defmodule Lazypock.Rules.EnforcerTest do
         "listRule" => nil,
         "manageRule" => "@request.auth.role = 'admin'"
       })
+
       admin = auth_user(%{"role" => "admin"})
       assert {:ok, _} = Enforcer.authorize_list("manage_list_test", admin)
     end
@@ -177,6 +284,7 @@ defmodule Lazypock.Rules.EnforcerTest do
         "listRule" => nil,
         "manageRule" => "@request.auth.role = 'admin'"
       })
+
       user = auth_user(%{"role" => "user"})
       assert {:error, _} = Enforcer.authorize_list("manage_deny_test", user)
     end
@@ -215,6 +323,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("view_filter_test", %{
         "viewRule" => "owner_id = @request.auth.id"
       })
+
       record = insert_record("view_filter_test", %{title: "Mine", owner_id: "user-1"})
       owner = auth_user(%{"id" => "user-1"})
       stranger = auth_user(%{"id" => "user-2"})
@@ -248,7 +357,10 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("create_filter_test", %{
         "createRule" => "@request.auth.id != ''"
       })
-      assert :ok = Enforcer.authorize_create("create_filter_test", auth_user(%{"id" => "u1"}), %{})
+
+      assert :ok =
+               Enforcer.authorize_create("create_filter_test", auth_user(%{"id" => "u1"}), %{})
+
       assert {:error, _} = Enforcer.authorize_create("create_filter_test", nil, %{})
     end
 
@@ -256,8 +368,11 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("create_field_test", %{
         "createRule" => "status = 'draft'"
       })
+
       assert :ok = Enforcer.authorize_create("create_field_test", auth_user(), %{status: "draft"})
-      assert {:error, _} = Enforcer.authorize_create("create_field_test", auth_user(), %{status: "published"})
+
+      assert {:error, _} =
+               Enforcer.authorize_create("create_field_test", auth_user(), %{status: "published"})
     end
   end
 
@@ -286,6 +401,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("update_filter_test", %{
         "updateRule" => "owner_id = @request.auth.id"
       })
+
       record = insert_record("update_filter_test", %{title: "Mine", owner_id: "user-1"})
       owner = auth_user(%{"id" => "user-1"})
       stranger = auth_user(%{"id" => "user-2"})
@@ -319,6 +435,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("delete_filter_test", %{
         "deleteRule" => "owner_id = @request.auth.id"
       })
+
       record = insert_record("delete_filter_test", %{title: "Mine", owner_id: "user-1"})
       owner = auth_user(%{"id" => "user-1"})
       stranger = auth_user(%{"id" => "user-2"})
@@ -344,6 +461,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("manage_match_test", %{
         "manageRule" => "@request.auth.role = 'admin'"
       })
+
       admin = auth_user(%{"role" => "admin"})
       assert :ok = Enforcer.authorize_manage("manage_match_test", admin)
     end
@@ -352,6 +470,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("manage_nonmatch_test", %{
         "manageRule" => "@request.auth.role = 'admin'"
       })
+
       user = auth_user(%{"role" => "user"})
       assert {:error, _} = Enforcer.authorize_manage("manage_nonmatch_test", user)
     end
@@ -387,6 +506,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("unauth_filter", %{
         "listRule" => "@request.auth.id != ''"
       })
+
       assert {:ok, {sql, _}} = Enforcer.authorize_list("unauth_filter", nil)
       # The compiled SQL should resolve to '' != '' which is false
       assert sql != ""
@@ -400,6 +520,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("token_id_test", %{
         "viewRule" => "owner_id = @request.auth.id"
       })
+
       record = insert_record("token_id_test", %{title: "Mine", owner_id: "user-99"})
       owner = auth_user(%{"id" => "user-99"})
       assert :ok = Enforcer.authorize_view("token_id_test", owner, record)
@@ -409,6 +530,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("token_email_test", %{
         "viewRule" => "@request.auth.email = 'alice@test.com'"
       })
+
       record = insert_record("token_email_test", %{title: "Alice's record"})
       user = auth_user(%{"email" => "alice@test.com"})
       assert :ok = Enforcer.authorize_view("token_email_test", user, record)
@@ -418,6 +540,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("token_role_test", %{
         "viewRule" => "@request.auth.role = 'admin'"
       })
+
       record = insert_record("token_role_test", %{title: "Admin only"})
       admin = auth_user(%{"role" => "admin"})
       user = auth_user(%{"role" => "user"})
@@ -434,6 +557,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("token_multi_test", %{
         "viewRule" => "owner_id = @request.auth.id && @request.auth.role = 'admin'"
       })
+
       record = insert_record("token_multi_test", %{title: "Owned by admin", owner_id: "user-99"})
 
       # Owner with the right role → allowed
@@ -456,6 +580,7 @@ defmodule Lazypock.Rules.EnforcerTest do
       create_test_collection("token_multirole_test", %{
         "viewRule" => "@request.auth.role = 'admin' || @request.auth.role = 'board'"
       })
+
       record = insert_record("token_multirole_test", %{title: "Role gated"})
 
       assert :ok =

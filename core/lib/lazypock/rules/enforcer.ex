@@ -211,9 +211,18 @@ defmodule Lazypock.Rules.Enforcer do
         {String.downcase(field.name), TypeMapper.column_pg_type(field)}
       end)
 
-    # Every collection has a system `id UUID` column (DDL) that is not part of
-    # the user-defined fields.
-    Map.put(types, "id", TypeMapper.id_column_type())
+    # Every collection has an `id` column. Base/auth collections expose a
+    # system `id UUID` column that is not part of the user-defined fields, so
+    # it is added here. View collections instead declare `id` as a (system,
+    # text-typed) field whose physical column is TEXT (the view query CASTs it)
+    # — that metadata entry is already in `types` and must be kept, because
+    # emitting `$1::UUID` against a text column makes PostgreSQL fail with
+    # "operator does not exist: text = uuid" (silently denials/empty lists).
+    if Map.has_key?(types, "id") do
+      types
+    else
+      Map.put(types, "id", TypeMapper.collection_id_pg_type(collection))
+    end
   end
 
   # @request.auth.* tokens become `$N` placeholders whose values are bound as
@@ -277,23 +286,32 @@ defmodule Lazypock.Rules.Enforcer do
     if record_id do
       table = TypeMapper.quote_ident(collection_name)
 
-      # Postgrex expects 16-byte binary for UUID columns, not string. A
-      # malformed id (e.g. from a caller passing a hand-built record map) must
-      # deny, not crash with a 500 — the same fail-closed rule as query errors.
-      case TypeMapper.coerce_value(TypeMapper.id_column_type(), record_id) do
-        {:ok, uuid_bin} ->
-          # The record id is bound as $1 with an explicit cast pulled from
-          # TypeMapper (every collection's id column is uuid). Rule params are
-          # already cast/coerced by FilterCompiler, so the rule's placeholders
-          # are shifted up by one to make room for $1.
+      # Postgrex needs values encoded against the *actual* column type of the
+      # collection's `id` column: 16-byte binary for the system UUID column of
+      # base/auth collections, but a plain string for view collections (whose
+      # `id` column is TEXT, see Views.create_view/2). A malformed value (e.g.
+      # from a caller passing a hand-built record map) must deny, not crash
+      # with a 500 — the same fail-closed rule as query errors.
+      id_type =
+        case Registry.get(collection_name) do
+          {:ok, collection} -> TypeMapper.collection_id_pg_type(collection)
+          _ -> TypeMapper.id_column_type()
+        end
+
+      case TypeMapper.coerce_value(id_type, record_id) do
+        {:ok, id_value} ->
+          # The record id is bound as $1 with an explicit cast matching the
+          # collection's id column type (uuid for base/auth, text for views).
+          # Rule params are already cast/coerced by FilterCompiler, so the
+          # rule's placeholders are shifted up by one to make room for $1.
           rule_sql = FilterCompiler.shift_placeholders(sql, 1)
 
           # A failing query (undefined column, bad expression) must deny, not
           # crash.
           case Ecto.Adapters.SQL.query(
                  Repo,
-                 "SELECT 1 FROM #{table} WHERE id = $1::#{TypeMapper.id_column_type()} AND (#{rule_sql}) LIMIT 1",
-                 [uuid_bin | params]
+                 "SELECT 1 FROM #{table} WHERE id = $1::#{id_type} AND (#{rule_sql}) LIMIT 1",
+                 [id_value | params]
                ) do
             {:ok, %{rows: rows}} -> length(rows) > 0
             {:error, _} -> false
