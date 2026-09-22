@@ -241,13 +241,38 @@ await postsSvc.getList(1, 20, { expand: 'author' }); // ✓ field suggested
 await postsSvc.getOne('abc', { expand: 'author' });
 ```
 
-- `filter` — `field op value` clauses with `= != ~ !~ > >= < <=` operators; `&&`, `||`, `!`, and
+- `filter` — `field op value` clauses with `= != ~ !~ > >= < <=` operators, plus the PocketBase
+  `?`-prefixed array operators `?= ?!= ?~ ?!~ ?> ?>= ?< ?<=` (see below); `&&`, `||`, `!`, and
   parentheses are allowed after the first clause.
 - `sort` — `field`, `-field` (desc), `+field`, or comma-separated.
 - `expand` — comma-separated relation field names; non-relation fields warn at runtime when a schema
   is available.
 - The **untyped** client (`client.collection('posts')` without `typed<T>()`) still accepts any
   string — suggestions kick in once the service is typed.
+
+#### The `?` operators — any/at-least-one-of
+
+PocketBase array-valued fields (multi-select, multiple relation, multiple file) apply a **match-all**
+constraint by default. Prefix the operator with `?` for an **any/at-least-one-of** constraint:
+
+```typescript
+// tags is a multi-select field (string[])
+await postsSvc.getList(1, 20, { filter: "tags ?= 'news'" }); // has 'news'
+await postsSvc.getList(1, 20, { filter: "tags ?!= 'news'" }); // has a tag ≠ 'news'
+await postsSvc.getList(1, 20, { filter: "tags ?~ 'new'" }); // a tag contains 'new'
+await postsSvc.getList(1, 20, { filter: "tags ?= 'news' && published = true" });
+```
+
+| Operator | Meaning |
+| --- | --- |
+| `?=` | any element equals |
+| `?!=` | any element differs |
+| `?~` | any element matches (auto-wrapped in `%…%`) |
+| `?!~` | any element does not match |
+| `?>` / `?>=` / `?<` / `?<=` | any element compares |
+
+The backend compiles `?=` to `= ANY (...)` and `?~` / `?!~` to an `ILIKE` over `unnest(...)`, so the
+suggestion types accept these operators wherever the server does.
 
 ---
 

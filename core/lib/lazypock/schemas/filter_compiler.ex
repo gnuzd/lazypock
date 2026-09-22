@@ -6,6 +6,15 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   alias Lazypock.Schema.TypeMapper
 
+  # Standard comparison operators.
+  @standard_ops ~w(= != ~ !~ > >= < <=)
+
+  # PocketBase "?" prefix operators — "any/at least one of" conditions over
+  # array-valued fields (multi_select / multi_file / multi-relation → TEXT[]).
+  @array_ops ["?=", "?!=", "?~", "?!~", "?>", "?>=", "?<", "?<="]
+
+  @comparison_ops @standard_ops ++ @array_ops
+
   @doc """
   Compiles a PocketBase filter string into a SQL WHERE clause with parameters.
 
@@ -118,7 +127,9 @@ defmodule Lazypock.Schemas.FilterCompiler do
   defp tokenize(str) do
     tokens =
       Regex.split(
-        ~r/(&&|\|\||>=|<=|!=|!~|>|<|~|=|!|[()])/,
+        # Longest match first: the "?" operators must be tried before their
+        # shorter "?" / bare-operator prefixes (e.g. `?>=` before `?>`).
+        ~r/(&&|\|\||\?>=|\?<=|\?!=|\?!~|\?=|\?~|\?>|\?<|>=|<=|!=|!~|>|<|~|=|!|[()])/,
         str,
         include_captures: true,
         trim: true
@@ -174,7 +185,7 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   defp parse_comparison(tokens) do
     case parse_primary(tokens) do
-      {:ok, left, [op | value_tokens]} when op in ~w(= != ~ !~ > >= < <=) ->
+      {:ok, left, [op | value_tokens]} when op in @comparison_ops ->
         case value_tokens do
           [token | rest] ->
             value =
@@ -329,6 +340,21 @@ defmodule Lazypock.Schemas.FilterCompiler do
     end
   end
 
+  # PocketBase "?" prefix operators ("any/at least one of") apply to
+  # array-valued columns. Only TEXT[] is supported: the value is coerced to
+  # its text representation so `= ANY` / `ILIKE ANY` compare text-to-text.
+  # A known non-array column (scalar or JSONB) means the operator doesn't
+  # apply → fail closed, matching the inline-literal behavior.
+  defp coerce_ast({op, {:field, f}, {:literal, val}}, types, _token_values)
+       when op in @array_ops do
+    array_coerce(op, f, val, types)
+  end
+
+  defp coerce_ast({op, {:field, f}, {:param, n}}, types, token_values)
+       when op in @array_ops do
+    array_coerce(op, f, token_value(token_values, n), types)
+  end
+
   defp coerce_ast({:or, left, right}, types, token_values) do
     with {:ok, left} <- coerce_ast(left, types, token_values),
          {:ok, right} <- coerce_ast(right, types, token_values) do
@@ -360,6 +386,25 @@ defmodule Lazypock.Schemas.FilterCompiler do
   end
 
   defp replace_compare_value({op, left, _value}, coerced), do: {op, left, {:literal, coerced}}
+
+  defp array_coerce(op, f, val, types) do
+    case types[column_name(f)] do
+      nil -> {:ok, {op, {:field, f}, {:literal, val}}}
+      "TEXT[]" -> {:ok, {op, {:field, f}, {:literal, to_text_value(val)}}}
+      _ -> :error
+    end
+  end
+
+  # Element representation for a TEXT[] column comparison. Filter literals are
+  # strings/numbers/booleans/Decimals; `= ANY` / `ILIKE ANY` need text on both
+  # sides so the bound value must match the array's element type.
+  defp to_text_value(v) when is_binary(v), do: v
+  defp to_text_value(v) when is_integer(v), do: Integer.to_string(v)
+  defp to_text_value(v) when is_boolean(v), do: to_string(v)
+  defp to_text_value(%Decimal{} = v), do: Decimal.to_string(v)
+  defp to_text_value(v) when is_float(v), do: to_string(v)
+  defp to_text_value(nil), do: nil
+  defp to_text_value(v), do: to_string(v)
 
   # Bound token value for a `{:param, n}` node. Accepts both the plain
   # `token_values` list (coercion pre-pass) and the `{types, token_values}`
@@ -444,6 +489,36 @@ defmodule Lazypock.Schemas.FilterCompiler do
     {~s[$1 #{op} $2], [token_value(ctx, a), token_value(ctx, b)]}
   end
 
+  # PocketBase "?" prefix operators — array ("any/at least one of") conditions.
+  # The value is already coerced to its text form by `coerce_ast/3`. `ANY`
+  # OR-combines the per-element predicate; the negated forms use
+  # `NOT (<predicate> ALL(...))`, which is true when at least one element
+  # fails the predicate (PocketBase's "any/at least one of NOT ...").
+  defp emit_simple({op, {:field, f}, {:literal, val}}, _ctx) when op in @array_ops do
+    col = column_name(f)
+
+    case op do
+      # ILIKE needs the array element as the *left* operand and the pattern on
+      # the right, so `$1 ILIKE ANY(col)` would reverse them. `unnest` + EXISTS
+      # keeps the element/pattern order correct.
+      "?~" ->
+        {~s[EXISTS (SELECT 1 FROM unnest("#{col}") AS x WHERE x ILIKE $1)], ["%#{val}%"]}
+
+      "?!~" ->
+        {~s[EXISTS (SELECT 1 FROM unnest("#{col}") AS x WHERE x NOT ILIKE $1)],
+         ["%#{val}%"]}
+
+      _ ->
+        {cmp, negate} = array_op(op)
+
+        if negate do
+          {~s[NOT ($1 #{cmp} ALL("#{col}"))], [val]}
+        else
+          {~s[$1 #{cmp} ANY("#{col}")], [val]}
+        end
+    end
+  end
+
   # Standalone field
   defp emit_simple({:field, name}, _ctx) do
     {~s["#{column_name(name)}"], []}
@@ -461,6 +536,17 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   # Catch-all: unknown AST node → no-op
   defp emit_simple(_ast, _ctx), do: {"", []}
+
+  # Map a "?" operator to its per-element predicate: {sql_cmp, negate}.
+  # `negate` turns the positive `x ANY` form into `NOT (x ALL)`, i.e.
+  # "at least one fails". The ILIKE forms (`?~` / `?!~`) are handled
+  # separately because `ANY` would put the pattern on the wrong side.
+  defp array_op("?="), do: {"=", false}
+  defp array_op("?!="), do: {"=", true}
+  defp array_op("?>"), do: {"<", false}
+  defp array_op("?>="), do: {"<=", false}
+  defp array_op("?<"), do: {">", false}
+  defp array_op("?<="), do: {">=", false}
 
   defp emit_one(ast, idx, ctx) do
     {sql, params} = emit(ast, idx, ctx)

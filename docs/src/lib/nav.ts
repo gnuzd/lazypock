@@ -45,6 +45,7 @@ export const nav: NavSection[] = [
 					{ href: "/server#binary", label: "Prebuilt binary" },
 					{ href: "/server#manual", label: "Manual setup" },
 					{ href: "/server#first-time", label: "First-time setup" },
+					{ href: "/server#filters", label: "Filters" },
 					{ href: "/server#production", label: "Production" },
 					{ href: "/server#env-vars", label: "Environment variables" },
 				],

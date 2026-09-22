@@ -8,14 +8,34 @@ export interface RuleValidationResult {
 	error?: string;
 }
 
-// Operators that produce conditions
-const COMPARISON_OPS = new Set(["=", "!=", ">", ">=", "<", "<=", "~", "!~"]);
+// Operators that produce conditions. The `?`-prefixed forms are PocketBase's
+// "any/at least one of" operators for array-valued fields.
+const COMPARISON_OPS = new Set([
+	"=",
+	"!=",
+	">",
+	">=",
+	"<",
+	"<=",
+	"~",
+	"!~",
+	"?=",
+	"?!=",
+	"?>",
+	"?>=",
+	"?<",
+	"?<=",
+	"?~",
+	"?!~",
+]);
 const LOGICAL_OPS = new Set(["&&", "||"]);
 
 /** Tokenize a rule string into tokens */
 function tokenize(rule: string): string[] {
 	return rule
-		.split(/(&&|\|\||>=|<=|!=|!~|>|<|~|=|!|[()])/)
+		// Longest match first: the `?` operators must be tried before their
+		// shorter `?` / bare-operator prefixes (e.g. `?>=` before `?>`).
+		.split(/(&&|\|\||\?>=|\?<=|\?!=|\?!~|\?=|\?~|\?>|\?<|>=|<=|!=|!~|>|<|~|=|!|[()])/)
 		.map((t) => t.trim())
 		.filter((t) => t !== "");
 }
