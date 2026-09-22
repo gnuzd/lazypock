@@ -1,7 +1,10 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { fly, slide } from 'svelte/transition';
+	import { ArrowDown, ArrowUp, ArrowUpDown } from '@lucide/svelte';
 	import Button from '$lib/components/Button.svelte';
+
+	type SortDir = 'asc' | 'desc';
 
 	type Column = {
 		key: string;
@@ -10,6 +13,8 @@
 		render?: (row: Record<string, unknown>) => string;
 		/** Return thumbnail URLs for this cell; rendered as <img> rows (no {@html}). */
 		thumbs?: (row: Record<string, unknown>) => string[];
+		/** Per-column opt-out when the table is `sortable` (defaults to true). */
+		sortable?: boolean;
 	};
 
 	let {
@@ -23,6 +28,10 @@
 		zebra = false,
 		selectable = false,
 		fillHeight = false,
+		sortable = false,
+		sortKey = null,
+		sortDir = 'asc',
+		onsortchange,
 		selectedIds = $bindable([] as string[]),
 		expandedId = $bindable(null as string | null),
 		cell,
@@ -40,6 +49,13 @@
 		selectable?: boolean;
 		/** Fill the parent's height (flex-1 container) with an internal scroll area. */
 		fillHeight?: boolean;
+		/** Render sortable column headers (click cycles asc → desc → none). */
+		sortable?: boolean;
+		/** Column key currently sorted by, or null when unsorted. */
+		sortKey?: string | null;
+		sortDir?: SortDir;
+		/** Fired on header click; `dir` is null when the sort is cleared. */
+		onsortchange?: (key: string, dir: SortDir | null) => void;
 		selectedIds?: string[];
 		/** Row id currently expanded (accordion) when `detail` is provided. */
 		expandedId?: string | null;
@@ -86,6 +102,22 @@
 		selectedIds = checked ? rows.map((r) => r.id as string) : [];
 	}
 
+	/** Column is sortable when the table enables it and the column doesn't opt out. */
+	function isSortable(col: Column): boolean {
+		return sortable && col.sortable !== false;
+	}
+
+	function handleSortClick(col: Column) {
+		if (!isSortable(col)) return;
+		if (sortKey !== col.key) {
+			onsortchange?.(col.key, 'asc');
+		} else if (sortDir === 'asc') {
+			onsortchange?.(col.key, 'desc');
+		} else {
+			onsortchange?.(col.key, null);
+		}
+	}
+
 	function handleRowClick(row: Record<string, unknown>) {
 		if (detail) {
 			// Accordion: clicking the same row collapses, another row switches.
@@ -118,10 +150,41 @@
 						</th>
 					{/if}
 					{#each columns as col (col.key)}
+						{@const canSort = isSortable(col)}
 						<th
 							class="sticky top-0 z-10 border-b border-base-300 bg-base-200 px-3.5 py-2.5 text-left whitespace-nowrap {col.class ??
-								''}">{col.label}</th
+								''}"
+							aria-sort={canSort
+								? sortKey === col.key
+									? sortDir === 'asc'
+										? 'ascending'
+										: 'descending'
+									: 'none'
+								: undefined}
 						>
+							{#if canSort}
+								<button
+									type="button"
+									class="group inline-flex cursor-pointer items-center gap-1 font-semibold tracking-wider uppercase transition-colors hover:text-base-content"
+									onclick={() => handleSortClick(col)}
+								>
+									<span>{col.label}</span>
+									{#if sortKey === col.key}
+										{#if sortDir === 'asc'}
+											<ArrowUp class="h-3.5 w-3.5" />
+										{:else}
+											<ArrowDown class="h-3.5 w-3.5" />
+										{/if}
+									{:else}
+										<ArrowUpDown
+											class="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-50"
+										/>
+									{/if}
+								</button>
+							{:else}
+								{col.label}
+							{/if}
+						</th>
 					{/each}
 				</tr>
 			</thead>
