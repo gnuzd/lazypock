@@ -490,8 +490,8 @@ defmodule Lazypock.Schemas.FilterCompiler do
   end
 
   # Field identifiers in filters/rules reference the metadata name (which may
-  # be mixed case, e.g. `tagColor`); DB columns are their lowercase form
-  # (e.g. `tagcolor`), so emit the column name.
-  defp column_name(name) when is_binary(name), do: String.downcase(name)
-  defp column_name(name), do: name
+  # be mixed case, e.g. `tagColor`). That name is kept verbatim as the
+  # physical column (quoted identifiers preserve case), so emit it unchanged.
+  defp column_name(name) when is_binary(name), do: name
+  defp column_name(name), do: to_string(name)
 end

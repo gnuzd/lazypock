@@ -50,10 +50,9 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
       assert params == ["1", "2"]
     end
 
-    test "camelCase field identifiers are lowercased to DB column names" do
+    test "camelCase field identifiers are emitted verbatim (matching the column)" do
       assert {:ok, {sql, params}} = FilterCompiler.compile(~s[tagColor = 'red'])
-      assert sql =~ ~s["tagcolor" = $1]
-      refute sql =~ "tagColor"
+      assert sql =~ ~s["tagColor" = $1]
       assert params == ["red"]
     end
 

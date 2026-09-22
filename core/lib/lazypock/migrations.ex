@@ -493,7 +493,12 @@ defmodule Lazypock.Migrations do
       reconcile_timestamps!(table_name)
       columns = fetch_columns!(table_name)
       foreign_keys = fetch_foreign_keys!(table_name)
-      fields = infer_fields(columns, foreign_keys)
+      # Inferred user fields first, then the system `created_at`/`updated_at`
+      # fields every collection exposes (same definitions as
+      # DDL.create_collection/2). `reconcile_timestamps!/1` guarantees both
+      # physical columns exist.
+      fields =
+        infer_fields(columns, foreign_keys) ++ Lazypock.Schema.DDL.system_timestamp_fields()
 
       collection =
         %Lazypock.Collections.Collection{}
@@ -521,6 +526,8 @@ defmodule Lazypock.Migrations do
           default_value: field["default"],
           options: field["options"],
           indexed: field["indexed"],
+          hidden: Map.get(field, "hidden", false),
+          system: Map.get(field, "system", false),
           sort_order: order
         })
         |> Repo.insert!()
@@ -547,19 +554,26 @@ defmodule Lazypock.Migrations do
     columns = fetch_columns!(table_name)
     names = MapSet.new(columns, & &1["column_name"])
 
-    if "inserted_at" in names and "created_at" not in names do
-      Ecto.Adapters.SQL.query!(
-        Repo,
-        "ALTER TABLE #{TypeMapper.quote_ident(table_name)} RENAME COLUMN inserted_at TO created_at",
-        []
-      )
-    end
+    names =
+      if "inserted_at" in names and "created_at" not in names do
+        Ecto.Adapters.SQL.query!(
+          Repo,
+          "ALTER TABLE #{TypeMapper.quote_ident(table_name)} RENAME COLUMN inserted_at TO created_at",
+          []
+        )
 
-    if "updated_at" not in names do
+        MapSet.put(names, "created_at")
+      else
+        names
+      end
+
+    # Every LazyPock collection exposes both system timestamps — add whichever
+    # is missing so the registered field metadata always matches the table.
+    for column <- ["created_at", "updated_at"], column not in names do
       Ecto.Adapters.SQL.query!(
         Repo,
         "ALTER TABLE #{TypeMapper.quote_ident(table_name)} " <>
-          "ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+          "ADD COLUMN #{TypeMapper.quote_ident(column)} TIMESTAMPTZ NOT NULL DEFAULT now()",
         []
       )
     end

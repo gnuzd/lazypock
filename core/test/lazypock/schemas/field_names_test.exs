@@ -16,22 +16,16 @@ defmodule Lazypock.Schemas.FieldNamesTest do
   end
 
   describe "row_to_api/2" do
-    test "maps lowercase DB columns to camelCase metadata names" do
+    test "keeps verbatim column keys (metadata name == physical column)" do
       row = %{
         "email" => "a@b.com",
         "password_hash" => "hash",
-        "emailvisibility" => true,
-        "verificationtoken" => "tok",
+        "emailVisibility" => true,
+        "verificationToken" => "tok",
         "name" => "Jane"
       }
 
-      assert FieldNames.row_to_api(row, users_collection()) == %{
-               "email" => "a@b.com",
-               "password_hash" => "hash",
-               "emailVisibility" => true,
-               "verificationToken" => "tok",
-               "name" => "Jane"
-             }
+      assert FieldNames.row_to_api(row, users_collection()) == row
     end
 
     test "leaves unknown columns unchanged" do
@@ -42,18 +36,15 @@ defmodule Lazypock.Schemas.FieldNamesTest do
   end
 
   describe "attrs_to_columns/2" do
-    test "maps camelCase metadata names to lowercase DB columns" do
+    test "keeps verbatim metadata names (no case folding)" do
       attrs = %{
         "email" => "a@b.com",
         "emailVisibility" => false,
-        "verificationToken" => "tok"
+        "verificationToken" => "tok",
+        "tagColor" => "red"
       }
 
-      assert FieldNames.attrs_to_columns(attrs, users_collection()) == %{
-               "email" => "a@b.com",
-               "emailvisibility" => false,
-               "verificationtoken" => "tok"
-             }
+      assert FieldNames.attrs_to_columns(attrs, users_collection()) == attrs
     end
 
     test "leaves unknown keys unchanged" do

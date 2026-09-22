@@ -201,14 +201,15 @@ defmodule Lazypock.Rules.Enforcer do
     FilterCompiler.compile(resolved, token_values, field_types(collection_name))
   end
 
-  # Column name (lowercase, matching FilterCompiler's emitted identifiers) →
-  # PostgreSQL type, so the compiler can emit explicit casts like `$1::UUID`.
+  # Column name (verbatim field name, matching FilterCompiler's emitted
+  # identifiers) → PostgreSQL type, so the compiler can emit explicit casts
+  # like `$1::UUID`.
   defp field_types(collection_name) do
     {:ok, collection} = Registry.get(collection_name)
 
     types =
       Map.new(collection.fields, fn field ->
-        {String.downcase(field.name), TypeMapper.column_pg_type(field)}
+        {field.name, TypeMapper.column_pg_type(field)}
       end)
 
     # Every collection has an `id` column. Base/auth collections expose a

@@ -399,8 +399,6 @@ defmodule Lazypock.Backup do
     end
   end
 
-  defp normalize_field_options(other), do: other
-
   # Returns {fields, %{payload_name => field_name}}. New fields keep their
   # payload name verbatim; existing fields are matched by exact name first,
   # then by snake_case-normalized name (passwordHash → password_hash).

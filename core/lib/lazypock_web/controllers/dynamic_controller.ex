@@ -366,7 +366,7 @@ defmodule LazypockWeb.DynamicController do
     # required `id` column otherwise (PocketBase sorts views by id when no
     # created column is present).
     case Enum.find(collection.fields || [], fn f ->
-           String.downcase(f.name) in ["created_at", "createdat"]
+           f.name in ["created_at", "createdAt"]
          end) do
       nil -> "ORDER BY \"id\" ASC"
       field -> "ORDER BY #{TypeMapper.quote_ident(field.name)} DESC"
@@ -427,24 +427,33 @@ defmodule LazypockWeb.DynamicController do
           end
       end
 
-    # Map API (camelCase) keys to actual DB column names first.
-    # e.g. emailVisibility (metadata) → emailvisibility (Postgres column).
+    # Map API keys to actual DB column names. Field names are kept verbatim
+    # (metadata name == API key == physical column), so this is an identity
+    # map; the seam is kept for the (rare) case a collection needs an alias.
     attrs = Lazypock.Schemas.FieldNames.attrs_to_columns(attrs, collection)
 
     field_types =
       (collection.fields || [])
-      |> Enum.map(fn f -> {String.downcase(f.name), f.type} end)
+      |> Enum.map(fn f -> {f.name, f.type} end)
       |> Map.new()
 
     non_text_types = MapSet.new(["number", "bool", "date", "datetime"])
-    system_fields = MapSet.new(["id", "created_at", "updated_at", "collectionName", "collection"])
+
+    system_fields =
+      MapSet.new([
+        "id",
+        "created_at",
+        "updated_at",
+        "collectionId",
+        "collectionName",
+        "collection"
+      ])
 
     attrs
     |> Map.drop(MapSet.to_list(system_fields))
     |> Enum.reduce(%{}, fn {key, value}, acc ->
-      # key is now the DB column name (lowercase) — normalize for lookups
-      type_key = String.downcase(key)
-      type = Map.get(field_types, type_key, "text")
+      # key is now the DB column name (verbatim field name)
+      type = Map.get(field_types, key, "text")
 
       cond do
         # Empty password on update → skip entirely (keep existing)
@@ -471,7 +480,7 @@ defmodule LazypockWeb.DynamicController do
   defp password_column(collection) do
     case Enum.find(collection.fields || [], &(&1.type == "password")) do
       nil -> nil
-      field -> String.downcase(field.name)
+      field -> field.name
     end
   end
 end

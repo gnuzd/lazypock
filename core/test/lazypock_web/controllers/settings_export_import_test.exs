@@ -75,6 +75,46 @@ defmodule LazypockWeb.SettingsExportImportTest do
   end
 
   describe "POST /api/import" do
+    test "keeps field names verbatim — field_name and fieldName stay distinct" do
+      name = random_name("imp_verbatim_")
+
+      conn =
+        json_post(auth_conn(build_conn()), "/api/import", %{
+          collections: [
+            %{
+              "name" => name,
+              "type" => "base",
+              "schema" => [
+                %{"name" => "field_name", "type" => "text"},
+                %{"name" => "fieldName", "type" => "text"}
+              ],
+              "records" => []
+            }
+          ],
+          deleteMissing: false
+        })
+
+      assert json_response(conn, 200)["errors"] == []
+      Registry.reload!()
+
+      {:ok, coll} = Registry.get(name)
+
+      assert Enum.map(coll.fields, & &1.name) |> Enum.sort() ==
+               ["created_at", "fieldName", "field_name", "updated_at"]
+
+      cols =
+        Repo.query!(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+          [name]
+        )
+        |> Map.get(:rows)
+        |> List.flatten()
+
+      assert "field_name" in cols
+      assert "fieldName" in cols
+      refute "fieldname" in cols
+    end
+
     test "creates a new collection with rules, options, hooks and records" do
       name = random_name("imp_new_")
 
@@ -494,8 +534,23 @@ defmodule LazypockWeb.SettingsExportImportTest do
 
       {:ok, cards} = Registry.get("cards")
 
-      assert Enum.map(cards.fields, & &1.name) |> Enum.sort() ==
+      # Imports carry the system `created_at`/`updated_at` fields too; assert
+      # the imported (non-system) schema, then the full field set.
+      assert cards.fields |> Enum.reject(& &1.system) |> Enum.map(& &1.name) |> Enum.sort() ==
                ["assignee", "column", "description", "order", "tag", "tagColor", "title"]
+
+      assert Enum.map(cards.fields, & &1.name) |> Enum.sort() ==
+               [
+                 "assignee",
+                 "column",
+                 "created_at",
+                 "description",
+                 "order",
+                 "tag",
+                 "tagColor",
+                 "title",
+                 "updated_at"
+               ]
 
       column = Enum.find(cards.fields, &(&1.name == "column"))
       assert column.options["collection"] == "columns"
@@ -506,7 +561,9 @@ defmodule LazypockWeb.SettingsExportImportTest do
       assert assignee.options["collection"] == "users"
 
       {:ok, columns} = Registry.get("columns")
-      assert Enum.map(columns.fields, & &1.name) |> Enum.sort() == ["order", "title"]
+
+      assert columns.fields |> Enum.reject(& &1.system) |> Enum.map(& &1.name) |> Enum.sort() ==
+               ["order", "title"]
 
       # Re-import with deleteMissing=false: nothing is dropped or duplicated
       conn =
@@ -521,7 +578,7 @@ defmodule LazypockWeb.SettingsExportImportTest do
       Registry.reload!()
       {:ok, cards} = Registry.get("cards")
 
-      assert Enum.map(cards.fields, & &1.name) |> Enum.sort() ==
+      assert cards.fields |> Enum.reject(& &1.system) |> Enum.map(& &1.name) |> Enum.sort() ==
                ["assignee", "column", "description", "order", "tag", "tagColor", "title"]
     end
   end
