@@ -18,6 +18,29 @@ defmodule Lazypock.Schema.DDL do
   require Logger
   import Ecto.Query
 
+  # Metadata definitions for the system timestamp columns every managed
+  # collection gets from `build_create_table_sql/2`. They are appended to the
+  # user's field list on create (and backfilled by the
+  # `align_columns_and_system_timestamps` migration) so the schema, the Studio
+  # field list and the generated SDK types expose `created_at`/`updated_at` on
+  # every collection.
+  @system_timestamp_field_defs [
+    %{
+      "name" => "created_at",
+      "type" => "autodate",
+      "required" => true,
+      "system" => true,
+      "options" => %{"onCreate" => true}
+    },
+    %{
+      "name" => "updated_at",
+      "type" => "autodate",
+      "required" => true,
+      "system" => true,
+      "options" => %{"onCreate" => true, "onUpdate" => true}
+    }
+  ]
+
   # Broadcast a schema event to the in-process Registry, unless PubSub isn't
   # started yet (CLI migrate / boot-time migrations). The Registry reloads
   # from the DB on startup, so a skipped broadcast is always reconciled.
@@ -77,6 +100,8 @@ defmodule Lazypock.Schema.DDL do
             # View collections: schema is derived from the view query, no table.
             create_view_collection!(name, opts)
           else
+            fields = ensure_system_timestamp_fields(fields)
+
             with :ok <- validate_fields(fields) do
               collection =
                 create_collection_metadata!(name, type, fields, indexes, rules, options, hooks)
@@ -760,8 +785,8 @@ defmodule Lazypock.Schema.DDL do
 
   defp validate_field_name!(field_name) do
     # Mixed case is allowed (e.g. `tagColor`) — the name is kept verbatim as
-    # the metadata/API name; the DB column is derived (lowercased) and bridged
-    # by Lazypock.Schemas.FieldNames on reads/writes.
+    # the metadata/API name and as the physical column (quoted identifiers
+    # preserve case), so `field_name` and `fieldName` stay distinct.
     if field_name =~ ~r/^[A-Za-z][A-Za-z0-9_]*$/ do
       :ok
     else
@@ -770,11 +795,11 @@ defmodule Lazypock.Schema.DDL do
     end
   end
 
-  # DB column for a field name: the field name is kept verbatim as the
-  # metadata/API name (e.g. `tagColor`); the Postgres column is its lowercase
-  # form (e.g. `tagcolor`), matching how the system migrations create columns
-  # and what Lazypock.Schemas.FieldNames bridges on reads/writes.
-  # defp column_name(name) when is_binary(name), do: String.downcase(name)
+  # DB column for a field name: kept verbatim (metadata name == API key ==
+  # physical column). Columns are declared with quoted identifiers so
+  # PostgreSQL preserves the case (`"tagColor"`), matching
+  # Lazypock.Schemas.FieldNames on reads/writes.
+  defp column_name(name) when is_binary(name), do: name
   defp column_name(name), do: to_string(name)
 
   defp validate_field_type(type) do
@@ -792,6 +817,30 @@ defmodule Lazypock.Schema.DDL do
     else
       :ok
     end
+  end
+
+  @doc """
+  Metadata definitions for the system `created_at`/`updated_at` fields every
+  managed collection gets (see `build_create_table_sql/2`).
+  """
+  @spec system_timestamp_fields() :: [map()]
+  def system_timestamp_fields, do: @system_timestamp_field_defs
+
+  # Appends the system timestamp field definitions (unless the payload already
+  # defines one with that name, e.g. a PocketBase `autodate` import) so the
+  # collection's metadata/schema lists them alongside the physical columns
+  # `build_create_table_sql/2` always creates.
+  defp ensure_system_timestamp_fields(fields) do
+    existing = MapSet.new(fields, &column_name(&1["name"]))
+    offset = length(fields)
+
+    missing =
+      @system_timestamp_field_defs
+      |> Enum.reject(&MapSet.member?(existing, &1["name"]))
+      |> Enum.with_index(offset)
+      |> Enum.map(fn {field, idx} -> Map.put(field, "sort_order", idx) end)
+
+    fields ++ missing
   end
 
   defp build_create_table_sql(name, fields) do

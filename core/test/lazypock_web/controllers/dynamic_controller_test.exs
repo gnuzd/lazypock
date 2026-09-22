@@ -402,4 +402,76 @@ defmodule LazypockWeb.DynamicControllerTest do
       refute Map.has_key?(payload, "from_connection")
     end
   end
+
+  # ── Verbatim field names (regression) ─────────────────────
+  #
+  # Field names are kept verbatim end to end: metadata name == API key ==
+  # physical column (`field_name` stays `field_name`, `fieldName` stays
+  # `fieldName`). PR #110 made the DDL create case-preserving columns but
+  # left the read/write bridge lowercasing names, so writes to camelCase
+  # columns failed with Postgres 42703 (undefined_column).
+  describe "verbatim field names (camelCase / snake_case)" do
+    setup do
+      name = "verbatim_#{:erlang.unique_integer([:positive])}"
+
+      {:ok, _} =
+        DDL.create_collection(name,
+          type: "base",
+          fields: [
+            %{"name" => "fullName", "type" => "text", "required" => false},
+            %{"name" => "is_default", "type" => "bool", "required" => false}
+          ]
+        )
+
+      Registry.reload!()
+      %{name: name}
+    end
+
+    test "physical columns match the field names verbatim", %{name: name} do
+      cols =
+        Repo.query!(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+          [name]
+        )
+        |> Map.get(:rows)
+        |> List.flatten()
+
+      assert "fullName" in cols
+      assert "is_default" in cols
+      refute "fullname" in cols
+    end
+
+    test "create / filter / update round-trip camelCase and snake_case keys", %{name: name} do
+      # One authenticated conn for the whole test (auth_conn/1 inserts a
+      # superuser, and the email is not unique across calls in one sandbox).
+      authed = auth_conn(build_conn())
+
+      conn = post(authed, "/api/#{name}", %{data: %{"fullName" => "Jane", "is_default" => true}})
+
+      body = json_response(conn, 201)
+      assert body["fullName"] == "Jane"
+      assert body["is_default"] == true
+
+      # Filter by the camelCase key — the compiler must emit the same column.
+      conn = get(build_conn(), "/api/#{name}", %{filter: "fullName = 'Jane'"})
+      assert json_response(conn, 200)["totalItems"] == 1
+
+      # Update through the API.
+      conn = patch(authed, "/api/#{name}/#{body["id"]}", %{data: %{"fullName" => "Janet"}})
+
+      assert json_response(conn, 200)["fullName"] == "Janet"
+    end
+
+    test "the collection schema lists created_at/updated_at as system fields", %{name: name} do
+      {:ok, coll} = Registry.get(name)
+      names = Enum.map(coll.fields, & &1.name)
+
+      assert "created_at" in names
+      assert "updated_at" in names
+
+      assert Enum.all?(coll.fields, fn f ->
+               f.name not in ["created_at", "updated_at"] or f.system
+             end)
+    end
+  end
 end

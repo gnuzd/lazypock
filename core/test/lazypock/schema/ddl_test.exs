@@ -50,11 +50,17 @@ defmodule Lazypock.Schema.DDLTest do
       assert {"created_at", "timestamp with time zone"} in cols
       assert {"updated_at", "timestamp with time zone"} in cols
 
-      # Field metadata persisted
+      # Field metadata persisted: the user field plus the two system
+      # timestamps every collection exposes.
       fields = Repo.all(from(f in Lazypock.Collections.Field, where: f.collection_id == ^coll.id))
-      assert length(fields) == 1
-      assert hd(fields).name == "title"
-      assert hd(fields).required == true
+      assert Enum.map(fields, & &1.name) |> Enum.sort() == ["created_at", "title", "updated_at"]
+
+      title = Enum.find(fields, &(&1.name == "title"))
+      assert title.required == true
+
+      assert Enum.all?(fields, fn f ->
+               f.name in ["created_at", "updated_at"] or f.system == false
+             end)
     end
 
     test "base collections get PocketBase default rules" do
@@ -134,8 +140,9 @@ defmodule Lazypock.Schema.DDLTest do
                  ]
                )
 
-      # Metadata name verbatim
-      assert Enum.map(coll.fields, & &1.name) |> Enum.sort() == ["displayName", "tagColor"]
+      # Metadata name verbatim (ignoring the system timestamps)
+      assert coll.fields |> Enum.reject(& &1.system) |> Enum.map(& &1.name) |> Enum.sort() ==
+               ["displayName", "tagColor"]
 
       # DB columns also verbatim — case preserved
       cols =
@@ -615,7 +622,7 @@ defmodule Lazypock.Schema.DDLTest do
           )
         )
 
-      assert Enum.map(fields, & &1.name) == ["b", "a"]
+      assert fields |> Enum.reject(& &1.system) |> Enum.map(& &1.name) == ["b", "a"]
     end
   end
 

@@ -31,7 +31,17 @@ defmodule Lazypock.MigrationsTest do
       # created from a migration must show up there (issue: raw tables don't).
       assert {:ok, coll} = Registry.get(name)
       assert coll.type == "base"
-      assert Enum.map(coll.fields, & &1.name) |> Enum.sort() == ["published", "title"]
+
+      # Every collection also exposes the system timestamps (added by the DDL
+      # engine, mirrored in `_fields` metadata).
+      assert Enum.map(coll.fields, & &1.name) |> Enum.sort() == [
+               "created_at",
+               "published",
+               "title",
+               "updated_at"
+             ]
+
+      assert Enum.all?(coll.fields, &(&1.name in ["created_at", "updated_at"] or not &1.system))
 
       assert coll.fields |> Enum.find(&(&1.name == "published")) |> Map.get(:options) ==
                %{"defaultValue" => false}
@@ -202,7 +212,7 @@ defmodule Lazypock.MigrationsTest do
       assert coll.type == "base"
 
       names = Enum.map(coll.fields, & &1.name) |> Enum.sort()
-      assert names == ["published", "title", "views"]
+      assert names == ["created_at", "published", "title", "updated_at", "views"]
 
       types = Map.new(coll.fields, &{&1.name, &1.type})
       assert types["title"] == "text"
