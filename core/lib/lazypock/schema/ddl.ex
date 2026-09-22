@@ -774,8 +774,8 @@ defmodule Lazypock.Schema.DDL do
   # metadata/API name (e.g. `tagColor`); the Postgres column is its lowercase
   # form (e.g. `tagcolor`), matching how the system migrations create columns
   # and what Lazypock.Schemas.FieldNames bridges on reads/writes.
-  defp column_name(name) when is_binary(name), do: String.downcase(name)
-  defp column_name(name), do: name
+  # defp column_name(name) when is_binary(name), do: String.downcase(name)
+  defp column_name(name), do: to_string(name)
 
   defp validate_field_type(type) do
     if TypeMapper.valid_type?(type), do: :ok, else: {:error, "Invalid field type: #{type}"}

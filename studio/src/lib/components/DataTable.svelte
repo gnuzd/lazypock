@@ -60,9 +60,7 @@
 	// taking the whole table down.
 	const duplicateRowIds = $derived.by(() => {
 		const ids = rows.map((r) => r.id);
-		return ids.filter(
-			(id, i) => typeof id === 'string' && id !== '' && ids.indexOf(id) !== i
-		);
+		return ids.filter((id, i) => typeof id === 'string' && id !== '' && ids.indexOf(id) !== i);
 	});
 
 	function rowKey(row: Record<string, unknown>, i: number): string | number {
@@ -107,7 +105,7 @@
 	<div class={fillHeight ? 'no-scrollbar min-h-0 flex-1 overflow-auto' : ''}>
 		<table class="w-full border-collapse text-sm">
 			<thead>
-				<tr class="bg-base-200 text-xs font-semibold tracking-wider text-base-content/60 uppercase">
+				<tr class="bg-base-200 text-xs font-semibold tracking-wider text-base-content/60">
 					{#if selectable}
 						<th class="sticky top-0 z-10 w-10 border-b border-base-300 bg-base-200 px-3.5 py-2.5">
 							<input

@@ -5,7 +5,7 @@ config :lazypock, Lazypock.Repo,
   username: "postgres",
   password: "postgres",
   hostname: "localhost",
-  database: "lazypock_dev",
+  database: "nexora",
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10

@@ -122,7 +122,7 @@ defmodule Lazypock.Schema.DDLTest do
       assert msg =~ "Field names must start with a letter"
     end
 
-    test "allows mixed-case field names — column is lowercased, name kept verbatim" do
+    test "allows mixed-case field names — column preserves case verbatim" do
       name = cname("mixedcase")
 
       assert {:ok, coll} =
@@ -134,10 +134,10 @@ defmodule Lazypock.Schema.DDLTest do
                  ]
                )
 
-      # Metadata name is verbatim (camelCase)
+      # Metadata name verbatim
       assert Enum.map(coll.fields, & &1.name) |> Enum.sort() == ["displayName", "tagColor"]
 
-      # DB columns are the lowercase forms
+      # DB columns also verbatim — case preserved
       cols =
         Repo.query!(
           "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
@@ -146,19 +146,22 @@ defmodule Lazypock.Schema.DDLTest do
         |> Map.get(:rows)
         |> List.flatten()
 
-      assert "tagcolor" in cols
-      assert "displayname" in cols
-      refute "tagColor" in cols
+      assert "tagColor" in cols
+      assert "displayName" in cols
+      refute "tagcolor" in cols
+      refute "displayname" in cols
 
-      # FieldNames bridges: insert via lowercase column, read back via metadata name
-      assert {:ok, _} = Lazypock.Schemas.GenericRecord.insert(name, %{"tagcolor" => "red"})
+      # Insert with exact-case key — matches column directly
+      assert {:ok, _} =
+               Lazypock.Schemas.GenericRecord.insert(name, %{
+                 "tagColor" => "red",
+                 "displayName" => "Big Red"
+               })
 
-      {:ok, coll} = Lazypock.Collections.Registry.get(name)
-
-      assert [%{"tagColor" => "red"}] =
-               name
-               |> Lazypock.Schemas.GenericRecord.all()
-               |> Enum.map(&Lazypock.Schemas.FieldNames.row_to_api(&1, coll))
+      # Read back — keys match column names
+      [row] = Lazypock.Schemas.GenericRecord.all(name)
+      assert row["tagColor"] == "red"
+      assert row["displayName"] == "Big Red"
     end
 
     test "rejects invalid field types" do
@@ -240,10 +243,12 @@ defmodule Lazypock.Schema.DDLTest do
       assert msg =~ "system field"
     end
 
-    test "rejects a mix of case where created_at is non-autodate" do
+    test "mixed-case names that only differ from system columns by case are allowed as regular fields" do
       name = cname("reserved2")
 
-      assert {:error, msg} =
+      # `Updated_At` ≠ `updated_at` under case-sensitive comparison — this is a
+      # regular user field, not a collision with the system column.
+      assert {:ok, coll} =
                DDL.create_collection(name,
                  type: "base",
                  fields: [
@@ -252,7 +257,24 @@ defmodule Lazypock.Schema.DDLTest do
                  ]
                )
 
-      assert msg =~ "system field"
+      # Both fields persisted verbatim (case preserved)
+      field_names = Enum.map(coll.fields, & &1.name) |> Enum.sort()
+      assert "Title" in field_names
+      assert "Updated_At" in field_names
+
+      # DB columns also preserve case; system `updated_at` still exists separately
+      cols =
+        Repo.query!(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+          [name]
+        )
+        |> Map.get(:rows)
+        |> List.flatten()
+
+      assert "Title" in cols
+      assert "Updated_At" in cols
+      # System timestamp column is distinct from the user's `Updated_At`
+      assert "updated_at" in cols
     end
 
     test "multi_select and multi_file fields create array columns" do

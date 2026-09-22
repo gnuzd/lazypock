@@ -394,4 +394,263 @@ defmodule Lazypock.BackupViewTest do
     assert {:ok, _} = Registry.get(good)
     assert Registry.get(bad) == {:error, :not_found}
   end
+
+  test "add_field preserves camelCase column name" do
+    name = cname("case_col")
+
+    {:ok, _} = DDL.create_collection(name, type: "base", fields: [])
+    :ok = DDL.add_field(name, %{"name" => "sortOrder", "type" => "number"})
+
+    {:ok, %{rows: rows}} =
+      Lazypock.Repo.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+        [name]
+      )
+
+    cols = List.flatten(rows)
+    assert "sortOrder" in cols
+    refute "sortorder" in cols
+  end
+
+  test "create_collection preserves camelCase column name" do
+    name = cname("case_create")
+
+    {:ok, _} =
+      DDL.create_collection(name,
+        type: "base",
+        fields: [
+          %{"name" => "isFeatured", "type" => "bool"},
+          %{"name" => "priceOverride", "type" => "number"}
+        ]
+      )
+
+    {:ok, %{rows: rows}} =
+      Lazypock.Repo.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+        [name]
+      )
+
+    cols = List.flatten(rows)
+    assert "isFeatured" in cols
+    assert "priceOverride" in cols
+    refute "isfeatured" in cols
+  end
+
+  # ── select/file with maxSelect > 1 → TEXT[] (bug fix: to_pg_with_opts) ──
+
+  test "restore creates TEXT[] for multi-select and inserts list" do
+    name = cname("select_multi")
+
+    payload = %{
+      "collections" => [
+        %{
+          "id" => "pbc_sel",
+          "name" => name,
+          "type" => "base",
+          "fields" => [
+            %{
+              "name" => "tags",
+              "type" => "select",
+              "maxSelect" => 3,
+              "values" => ["Best Seller", "New", "Sale"]
+            }
+          ],
+          "records" => [%{"tags" => ["Best Seller", "New"]}]
+        }
+      ]
+    }
+
+    assert %{errors: [], imported: [%{records_imported: 1}]} = Backup.restore(payload)
+
+    {:ok, %{rows: [[data_type]]}} =
+      Lazypock.Repo.query(
+        "SELECT data_type FROM information_schema.columns
+         WHERE table_name = $1 AND column_name = 'tags'",
+        [name]
+      )
+
+    assert data_type == "ARRAY"
+
+    [rec] = GenericRecord.all(name)
+    assert rec["tags"] == ["Best Seller", "New"]
+  end
+
+  test "restore creates TEXT[] for multi-file" do
+    name = cname("file_multi")
+
+    payload = %{
+      "collections" => [
+        %{
+          "id" => "pbc_file",
+          "name" => name,
+          "type" => "base",
+          "fields" => [
+            %{
+              "name" => "images",
+              "type" => "file",
+              "maxSelect" => 8,
+              "maxSize" => 5_242_880,
+              "mimeTypes" => ["image/png", "image/jpeg"]
+            }
+          ],
+          "records" => [%{"images" => ["a.png", "b.jpg"]}]
+        }
+      ]
+    }
+
+    assert %{errors: [], imported: [%{records_imported: 1}]} = Backup.restore(payload)
+
+    {:ok, %{rows: [[data_type]]}} =
+      Lazypock.Repo.query(
+        "SELECT data_type FROM information_schema.columns
+         WHERE table_name = $1 AND column_name = 'images'",
+        [name]
+      )
+
+    assert data_type == "ARRAY"
+    [rec] = GenericRecord.all(name)
+    assert rec["images"] == ["a.png", "b.jpg"]
+  end
+
+  test "restore keeps TEXT for single-select" do
+    name = cname("select_single")
+
+    payload = %{
+      "collections" => [
+        %{
+          "id" => "pbc_sel1",
+          "name" => name,
+          "type" => "base",
+          "fields" => [
+            %{"name" => "size", "type" => "select", "maxSelect" => 1, "values" => ["S", "M", "L"]}
+          ],
+          "records" => [%{"size" => "M"}]
+        }
+      ]
+    }
+
+    assert %{errors: []} = Backup.restore(payload)
+
+    {:ok, %{rows: [[data_type]]}} =
+      Lazypock.Repo.query(
+        "SELECT data_type FROM information_schema.columns
+         WHERE table_name = $1 AND column_name = 'size'",
+        [name]
+      )
+
+    assert data_type == "text"
+  end
+
+  # ── autodate top-level options → nested + stamp (bug fix: normalize_field_options) ──
+
+  test "restore moves autodate top-level onCreate into options and stamps column" do
+    name = cname("autodate_pb")
+
+    payload = %{
+      "collections" => [
+        %{
+          "id" => "pbc_auto",
+          "name" => name,
+          "type" => "base",
+          "fields" => [
+            %{"name" => "title", "type" => "text", "required" => false},
+            %{
+              "name" => "lastSeen",
+              "type" => "autodate",
+              "system" => false,
+              "onCreate" => true,
+              "onUpdate" => true
+            }
+          ],
+          "records" => []
+        }
+      ]
+    }
+
+    assert %{errors: []} = Backup.restore(payload)
+
+    Registry.reload!()
+    {:ok, coll} = Registry.get(name)
+    last_seen = Enum.find(coll.fields, &(&1.name == "lastSeen"))
+    assert last_seen.options["onCreate"] == true
+    assert last_seen.options["onUpdate"] == true
+
+    {:ok, %{rows: [[column_default]]}} =
+      Lazypock.Repo.query(
+        "SELECT column_default FROM information_schema.columns
+         WHERE table_name = $1 AND column_name = 'lastSeen'",
+        [name]
+      )
+
+    assert column_default =~ "now()"
+
+    {:ok, rec} = GenericRecord.insert(name, %{"title" => "hello"})
+    refute is_nil(rec["lastSeen"])
+  end
+
+  # ── full integration: camelCase + multi-value + autodate ──
+
+  test "full PocketBase-style restore with camelCase + multi-select + autodate" do
+    name = cname("full_rt")
+
+    payload = %{
+      "collections" => [
+        %{
+          "id" => "pbc_full",
+          "name" => name,
+          "type" => "base",
+          "fields" => [
+            %{"name" => "name", "type" => "text", "required" => true},
+            %{"name" => "priceOverride", "type" => "number"},
+            %{"name" => "isFeatured", "type" => "bool"},
+            %{
+              "name" => "tags",
+              "type" => "select",
+              "maxSelect" => 3,
+              "values" => ["Best Seller", "New", "Sale"]
+            },
+            %{"name" => "created", "type" => "autodate", "onCreate" => true, "onUpdate" => false}
+          ],
+          "records" => [
+            %{
+              "id" => Ecto.UUID.generate(),
+              "name" => "Widget",
+              "priceOverride" => 9.99,
+              "isFeatured" => true,
+              "tags" => ["New", "Sale"]
+            }
+          ]
+        }
+      ]
+    }
+
+    assert %{errors: [], imported: [%{records_imported: 1}]} = Backup.restore(payload)
+
+    {:ok, %{rows: rows}} =
+      Lazypock.Repo.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+        [name]
+      )
+
+    cols = List.flatten(rows)
+
+    for c <- ["name", "priceOverride", "isFeatured", "tags", "created"] do
+      assert c in cols, "expected #{c} in #{inspect(cols)}"
+    end
+
+    refute "priceoverride" in cols
+    refute "isfeatured" in cols
+
+    [rec] = GenericRecord.all(name)
+    assert rec["tags"] == ["New", "Sale"]
+    assert rec["isFeatured"] == true
+    assert rec["priceOverride"] == 9.99
+    refute is_nil(rec["created"])
+
+    {:ok, new_rec} =
+      GenericRecord.insert(name, %{"name" => "Gadget", "tags" => ["Best Seller"]})
+
+    assert new_rec["tags"] == ["Best Seller"]
+    refute is_nil(new_rec["created"])
+  end
 end

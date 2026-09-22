@@ -241,6 +241,7 @@ defmodule Lazypock.Schemas.GenericRecord do
       |> coerce_values_for_db()
       |> restore_ensure_id(now)
       |> restore_ensure_timestamps(now)
+      |> restore_default_arrays(collection_name)
 
     # `id` needs Postgrex's 16-byte binary encoding for the UUID column.
     id_bin = maybe_uuid_to_bin(Map.fetch!(data, "id"))
@@ -303,6 +304,26 @@ defmodule Lazypock.Schemas.GenericRecord do
     data
     |> Map.put_new("created_at", now)
     |> Map.put_new("updated_at", now)
+  end
+
+  defp restore_default_arrays(data, collection_name) do
+    fields = collection_fields(collection_name) || []
+
+    Enum.reduce(fields, data, fn field, acc ->
+      name = to_string(field.name)
+      pg_type = Lazypock.Schema.TypeMapper.column_pg_type(field)
+
+      cond do
+        Map.has_key?(acc, name) ->
+          acc
+
+        pg_type == "TEXT[]" ->
+          Map.put(acc, name, [])
+
+        true ->
+          acc
+      end
+    end)
   end
 
   # ── Autodate fields ─────────────────────────────────

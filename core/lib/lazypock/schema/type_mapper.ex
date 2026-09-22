@@ -56,6 +56,14 @@ defmodule Lazypock.Schema.TypeMapper do
     "TEXT[]"
   end
 
+  def to_pg_with_opts("select", %{"maxSelect" => max}) when is_integer(max) and max > 1 do
+    "TEXT[]"
+  end
+
+  def to_pg_with_opts("file", %{"maxSelect" => max}) when is_integer(max) and max > 1 do
+    "TEXT[]"
+  end
+
   def to_pg_with_opts(type, _opts), do: Map.fetch!(@pg_types, type)
 
   @doc """

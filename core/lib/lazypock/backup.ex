@@ -193,7 +193,7 @@ defmodule Lazypock.Backup do
                     Enum.reduce_while(records, {:ok, 0}, fn record, {:ok, count} ->
                       case GenericRecord.restore(name, record) do
                         {:ok, _} -> {:cont, {:ok, count + 1}}
-                        {:error, _reason} -> {:cont, {:ok, count}}
+                        {:error, reason} -> {:halt, {:error, reason}}
                       end
                     end)
                   end
@@ -319,8 +319,8 @@ defmodule Lazypock.Backup do
   # PocketBase exports use camelCase field names, PB collection ids in relation
   # fields. Field names are kept VERBATIM (no snake_case/camelCase conversion)
   # — whatever the payload says (tagColor or tag_color) becomes the field name
-  # and the API/codegen name; the DB column is derived (lowercased) by the
-  # DDL/FieldNames layers. The only exception: an incoming name that matches
+  # and the API/codegen name; the DB column is derived verbatim from the field name by the
+  # DDL/FieldNames layers (case preserved). The only exception: an incoming name that matches
   # an EXISTING column by its snake_case form (e.g. system users'
   # `passwordHash` ↔ LazyPock's `password_hash`) is aliased to that column so
   # no duplicate is created.
@@ -351,6 +351,56 @@ defmodule Lazypock.Backup do
     end)
   end
 
+  # ── Field options normalization ─────────────────────────
+
+  # PocketBase exports put type-specific settings at the TOP LEVEL of each
+  # field map ("maxSelect", "values", "onCreate"...) while LazyPock's DDL and
+  # field-metadata layers read them from the field's nested "options" map.
+  # Without this step, a multi-select field with "maxSelect": > 1 would be
+  # created as plain TEXT instead of JSONB (→ "Postgrex expected a binary,
+  # got [...]"), and autodate fields would never stamp their column.
+  #
+  # Idempotent: fields that already nest their settings under "options" pass
+  # through unchanged (Map.put_new won't overwrite; Map.delete is a no-op).
+  @field_top_level_option_keys %{
+    "text" => ["min", "max", "pattern", "autogeneratePattern"],
+    "editor" => ["convertURLs"],
+    "number" => ["min", "max", "noDecimal", "onlyInt"],
+    "date" => ["min", "max"],
+    "autodate" => ["onCreate", "onUpdate"],
+    "select" => ["values", "maxSelect"],
+    "file" => ["maxSelect", "maxSize", "mimeTypes", "thumbs", "protected"],
+    "relation" => ["collectionId", "cascadeDelete", "minSelect", "maxSelect", "displayFields"],
+    "url" => ["exceptDomains", "onlyDomains"],
+    "email" => ["exceptDomains", "onlyDomains"],
+    "password" => ["min", "max", "pattern"],
+    "json" => ["maxSize"]
+  }
+
+  defp normalize_field_options(field) when is_map(field) do
+    case Map.get(@field_top_level_option_keys, field["type"], []) do
+      [] ->
+        field
+
+      keys ->
+        opts = Map.get(field, "options") || %{}
+
+        new_opts =
+          Enum.reduce(keys, opts, fn key, acc ->
+            case Map.fetch(field, key) do
+              {:ok, v} -> Map.put_new(acc, key, v)
+              :error -> acc
+            end
+          end)
+
+        cleaned = Enum.reduce(keys, field, fn key, acc -> Map.delete(acc, key) end)
+
+        Map.put(cleaned, "options", new_opts)
+    end
+  end
+
+  defp normalize_field_options(other), do: other
+
   # Returns {fields, %{payload_name => field_name}}. New fields keep their
   # payload name verbatim; existing fields are matched by exact name first,
   # then by snake_case-normalized name (passwordHash → password_hash).
@@ -365,6 +415,7 @@ defmodule Lazypock.Backup do
         normalized =
           f
           |> Map.put("name", lazy_name)
+          |> normalize_field_options()
           |> resolve_relation(id_to_name)
 
         {[normalized | acc], Map.put(name_map, payload_name, lazy_name)}
