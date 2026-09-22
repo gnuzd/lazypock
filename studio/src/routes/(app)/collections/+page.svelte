@@ -3,8 +3,9 @@
 
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { Settings, Plus, Trash } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Search, Settings, Plus, Trash, X } from '@lucide/svelte';
 	import { getThumbUrl } from 'lazypock';
+	import type { FilterString, ListOptions, SortString } from 'lazypock';
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import Select from '$lib/components/Select.svelte';
@@ -16,6 +17,8 @@
 	let collection = $state<Record<string, unknown> | null>(null);
 	let rows = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
+	/** Monotonic id guarding against out-of-order list responses. */
+	let loadSeq = 0;
 	// ── Pagination state ──
 	let currentPage = $state(1);
 	let perPage = $state(50);
@@ -32,6 +35,11 @@
 	// ── Bulk selection ──
 	let selectedIds = $state<string[]>([]);
 	let deletingSelected = $state(false);
+	// ── Search & sort ──
+	let search = $state('');
+	let sortKey = $state<string | null>(null);
+	let sortDir = $state<'asc' | 'desc'>('asc');
+	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	/** Unsubscribe fn returned by the SDK for the active collection's record events */
 	let unsubRecordEvents: (() => void) | null = null;
@@ -83,9 +91,13 @@
 	}
 
 	let columns = $derived.by(() => {
-		const cols: { key: string; label: string; render: (r: Record<string, unknown>) => string }[] = [
-			{ key: 'id', label: 'ID', render: (r) => (r.id as string) ?? '' }
-		];
+		const cols: {
+			key: string;
+			label: string;
+			sortable?: boolean;
+			render: (r: Record<string, unknown>) => string;
+			thumbs?: (r: Record<string, unknown>) => string[];
+		}[] = [{ key: 'id', label: 'ID', render: (r) => (r.id as string) ?? '' }];
 		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
 			.filter((f) => !f.hidden && f.type !== 'password')
 			// The ID column is always rendered explicitly above. A view collection
@@ -104,6 +116,9 @@
 			cols.push({
 				key: f.name as string,
 				label: f.name as string,
+				// Postgres can't ORDER BY JSONB (no ordering operator), so those
+				// columns get a non-sortable header.
+				sortable: !UNSORTABLE_TYPES.has(String(f.type ?? '')),
 				render: (r) => formatValue(f, r[f.name as string], r),
 				...(isFile && thumbSize
 					? {
@@ -120,14 +135,19 @@
 	});
 
 	async function loadCollection(name: string, targetPage: number = currentPage) {
+		// Filter/sort/pagination and live record events can overlap; a slower
+		// earlier request must not overwrite the newest one.
+		const seq = ++loadSeq;
 		loading = true;
 		try {
 			// Fetch the collection first so we know which relation fields to
 			// expand in the record list request.
 			const coll = await client.collections.getOne(name);
-			if (!coll) return;
+			if (!coll || seq !== loadSeq) return;
 			collection = coll;
-			const recs = await client.collection(name).getList(targetPage, perPage, {
+			const targetFilter = buildFilter();
+			const targetSort = buildSort();
+			const query: ListOptions = {
 				// Always request every field explicitly: the SDK otherwise projects
 				// responses against the static codegen schema snapshot
 				// (lazypock.types.ts), which goes stale the moment a field is added
@@ -139,7 +159,15 @@
 				// record's label instead of a raw id.
 				fields: '*',
 				expand: relationFieldNames(coll)
-			});
+			};
+			// Only send filter/sort when set — an empty `sort` would emit a bare
+			// `ORDER BY` and an empty `filter` is pointless. The cast is needed
+			// because the SDK's template-literal types can't express a runtime-built
+			// expression; the untyped client accepts any valid PocketBase syntax.
+			if (targetFilter) query.filter = targetFilter as FilterString<unknown>;
+			if (targetSort) query.sort = targetSort as SortString<unknown>;
+			const recs = await client.collection(name).getList(targetPage, perPage, query);
+			if (seq !== loadSeq) return;
 			rows = (recs?.items as Record<string, unknown>[]) || [];
 			totalItems = recs?.totalItems ?? 0;
 			totalPages = Math.max(1, recs?.totalPages ?? 1);
@@ -147,7 +175,7 @@
 		} catch (e) {
 			console.error('load collection:', e);
 		} finally {
-			loading = false;
+			if (seq === loadSeq) loading = false;
 		}
 	}
 
@@ -157,6 +185,56 @@
 			.filter((f) => f.type === 'relation')
 			.map((f) => f.name as string)
 			.join(',');
+	}
+
+	//
+	// Field types whose columns are text-comparable, so `~` (ILIKE) works
+	// without a type cast. Multi-value fields are stored as TEXT[] and need the
+	// PocketBase `?~` "any element" operator instead.
+	//
+	const SEARCHABLE_TYPES = new Set([
+		'text',
+		'editor',
+		'email',
+		'url',
+		'select',
+		'relation',
+		'file'
+	]);
+
+	/** Field types mapped to JSONB, which has no ORDER BY operator in Postgres. */
+	const UNSORTABLE_TYPES = new Set(['json', 'geo']);
+
+	/** True when a select/relation/file field holds multiple values (TEXT[]). */
+	function isMultiValue(field: Record<string, unknown>): boolean {
+		const opts = (field.options ?? {}) as Record<string, unknown>;
+		return Number(opts.maxSelect ?? 1) > 1;
+	}
+
+	/**
+	 * Build a PocketBase filter expression from the quick-search box: a
+	 * case-insensitive contains across every text-comparable field, OR-ed
+	 * together. Returns '' when there is nothing to filter by.
+	 */
+	function buildFilter(): string {
+		const q = search.trim();
+		if (!q) return '';
+		const like = q.replace(/'/g, "''");
+		return (((collection?.fields as Record<string, unknown>[]) ?? []) as Record<string, unknown>[])
+			.filter(
+				(f) => !f.hidden && f.type !== 'password' && SEARCHABLE_TYPES.has(String(f.type ?? ''))
+			)
+			.map((f) => {
+				const name = String(f.name ?? '');
+				return isMultiValue(f) ? `${name} ?~ '${like}'` : `${name} ~ '${like}'`;
+			})
+			.join(' || ');
+	}
+
+	/** Build the `sort` query value (`-field` for descending) from active sort. */
+	function buildSort(): string {
+		if (!sortKey) return '';
+		return (sortDir === 'desc' ? '-' : '') + sortKey;
 	}
 
 	// Sync activeName from URL param (or first collection)
@@ -180,6 +258,12 @@
 		if (name === lastHandledName) return;
 		lastHandledName = name;
 		currentPage = 1;
+		// A filter/sort built for the previous collection can reference fields
+		// this one doesn't have (which would make the server query fail), so
+		// reset both whenever the active collection changes.
+		search = '';
+		sortKey = null;
+		sortDir = 'asc';
 
 		loadCollection(name);
 
@@ -239,6 +323,41 @@
 		if ($activeName) loadCollection($activeName, 1);
 	}
 
+	// ── Search & sort ──
+
+	/** Debounced reload for the search box; `immediate` skips the debounce. */
+	function onSearchInput(immediate = false) {
+		clearTimeout(searchTimer);
+		const run = () => {
+			currentPage = 1;
+			if ($activeName) loadCollection($activeName, 1);
+		};
+		if (immediate) run();
+		else searchTimer = setTimeout(run, 300);
+	}
+
+	function clearSearch() {
+		clearTimeout(searchTimer);
+		if (!search) return;
+		search = '';
+		currentPage = 1;
+		if ($activeName) loadCollection($activeName, 1);
+	}
+
+	/** Header click handler: cycles asc → desc → cleared. */
+	function changeSort(key: string, dir: 'asc' | 'desc' | null) {
+		sortKey = dir ? key : null;
+		if (dir) sortDir = dir;
+		currentPage = 1;
+		if ($activeName) loadCollection($activeName, 1);
+	}
+
+	function clearSort() {
+		sortKey = null;
+		currentPage = 1;
+		if ($activeName) loadCollection($activeName, 1);
+	}
+
 	function editCollection() {
 		// Open the collection editor in a right-side pane (not a full page).
 		collectionEditName = $activeName;
@@ -246,6 +365,18 @@
 	}
 
 	const collName = $derived((collection?.name as string) ?? '');
+
+	/** True when the quick-search box is actually narrowing the table. */
+	const hasActiveFilter = $derived(buildFilter().length > 0);
+
+	/** Record counter shown in the footer regardless of pagination state. */
+	const countLabel = $derived.by(() => {
+		if (totalItems === 0) return hasActiveFilter ? 'No matching records' : 'No records';
+		const start = (currentPage - 1) * perPage + 1;
+		const end = Math.min(currentPage * perPage, totalItems);
+		const noun = totalItems === 1 ? 'record' : 'records';
+		return `Showing ${start}–${end} of ${totalItems} ${noun}`;
+	});
 
 	function downloadSelected() {
 		const selected = rows.filter((r) => selectedIds.includes(r.id as string));
@@ -283,7 +414,7 @@
 	}
 </script>
 
-{#if loading}
+{#if loading && !collection}
 	<div
 		class="flex min-h-[200px] flex-1 flex-col items-center justify-center gap-2 text-base-content/40"
 	>
@@ -318,16 +449,75 @@
 			{/if}
 		</div>
 
+		<!-- Filter + sort toolbar -->
+		<div class="mb-3 flex flex-wrap items-center gap-2">
+			<div class="relative w-full max-w-xs">
+				<Search
+					class="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-base-content/40"
+				/>
+				<input
+					type="text"
+					class="h-9 w-full rounded-field border-2 border-base-300 bg-base-100 pr-8 pl-8 text-sm text-base-content transition-colors outline-none placeholder:text-base-content/40 focus:border-primary"
+					placeholder="Search records…"
+					aria-label="Search records"
+					spellcheck="false"
+					bind:value={search}
+					oninput={() => onSearchInput()}
+					onkeydown={(e) => {
+						if (e.key === 'Enter') {
+							e.preventDefault();
+							onSearchInput(true);
+						} else if (e.key === 'Escape') {
+							clearSearch();
+						}
+					}}
+				/>
+				{#if search}
+					<button
+						type="button"
+						class="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-base-content/40 transition-colors hover:text-base-content"
+						title="Clear search"
+						onclick={clearSearch}
+					>
+						<X class="h-4 w-4" />
+					</button>
+				{/if}
+			</div>
+			{#if sortKey}
+				<button
+					type="button"
+					class="flex h-9 cursor-pointer items-center gap-1.5 rounded-field border-2 border-base-300 bg-base-100 px-2.5 text-xs text-base-content/70 transition-colors hover:border-primary"
+					title="Clear sort"
+					onclick={clearSort}
+				>
+					{sortKey}
+					{#if sortDir === 'desc'}
+						<ArrowDown class="h-3.5 w-3.5" />
+					{:else}
+						<ArrowUp class="h-3.5 w-3.5" />
+					{/if}
+					<X class="h-3.5 w-3.5 opacity-60" />
+				</button>
+			{/if}
+		</div>
+
 		<div class="min-h-0">
 			<DataTable
 				{columns}
 				{rows}
 				fillHeight
+				sortable
+				{sortKey}
+				{sortDir}
+				onsortchange={changeSort}
+				{loading}
 				selectable={!isViewCollection}
 				bind:selectedIds
-				emptyLabel="No records yet. Create your first record to get started."
-				emptyActionLabel={isViewCollection ? '' : '+ New Record'}
-				onemptyaction={isViewCollection ? undefined : newRecord}
+				emptyLabel={hasActiveFilter
+					? `No records match “${search.trim()}”.`
+					: 'No records yet. Create your first record to get started.'}
+				emptyActionLabel={isViewCollection || hasActiveFilter ? '' : '+ New Record'}
+				onemptyaction={isViewCollection || hasActiveFilter ? undefined : newRecord}
 				onrowclick={(row) => editRecord(row)}
 			>
 				{#snippet selectionActions()}
@@ -339,11 +529,9 @@
 			</DataTable>
 		</div>
 
-		{#if totalPages > 1}
-			<div class="mt-3 flex items-center justify-between gap-3">
-				<div class="text-sm text-base-content/60">
-					{totalItems} record{totalItems === 1 ? '' : 's'}
-				</div>
+		<div class="mt-3 flex items-center justify-between gap-3">
+			<div class="text-sm text-base-content/60">{countLabel}</div>
+			{#if totalPages > 1}
 				<div class="flex items-center gap-2">
 					<Select
 						options={[
@@ -369,8 +557,8 @@
 						onclick={() => goPage(currentPage + 1)}>Next</Button
 					>
 				</div>
-			</div>
-		{/if}
+			{/if}
+		</div>
 	</div>
 {:else}
 	<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>

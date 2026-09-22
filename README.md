@@ -70,7 +70,7 @@ Full SDK docs (install, codegen, type safety, queries, realtime, files, auth): *
 | Feature | Backend (core) | Studio (admin UI) | SDK (lazypock-ts) |
 | --- | --- | --- | --- |
 | 🗄️ **Dynamic Collections** | DDL create/drop/add field — real Postgres tables, real columns ✅ | Collection CRUD in side pane, field editor (add/remove/reorder) ✅ | — |
-| 🌐 **REST API** | `GET/POST/PATCH/DELETE /api/:collection`, filter/sort/paginate ✅ | Record browser: DataTable + dynamic RecordForm ✅ | `collection(name).getList/getFullList/getOne/create/update/delete` ✅ |
+| 🌐 **REST API** | `GET/POST/PATCH/DELETE /api/:collection`, filter/sort/paginate ✅ | Record browser: searchable/sortable DataTable with live record count + dynamic RecordForm ✅ | `collection(name).getList/getFullList/getOne/create/update/delete` ✅ |
 | 🔐 **Auth** | Superuser JWT + auth collection JWT (`auth-with-password`/`auth-refresh`/`auth-methods`) + OAuth2 (Google/GitHub/generic via Assent) ✅ | Login page, auth guard, token persistence, auto-redirect ✅ | `login/me/logout`, `AuthStore` with pluggable storage (localStorage-backed by default) ✅ |
 | 🛡️ **Rules** | Three-state rules (nil = superuser, `""` = public, filter expr), enforced on all CRUD + `manageRule` ✅ | Rule editor with lock/unlock per field ✅ | — |
 | ⚡ **Realtime** | Phoenix Channels, rule-enforced join, anonymous allowed on public/rule-based collections ✅ | Live record updates via `client.realtime.subscribe()` ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`, auto-connects without a token for public reads ✅ |
