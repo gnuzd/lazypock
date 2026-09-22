@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.0](https://github.com/gnuzd/lazypock/compare/v0.10.2...v0.11.0) (2026-09-22)
+
+
+### Features
+
+* **filters:** PocketBase ? operators for array fields ([3770177](https://github.com/gnuzd/lazypock/commit/37701779810dc16e491f466f591043b9404b8c91))
+* **filters:** PocketBase ? operators for array fields ([0117316](https://github.com/gnuzd/lazypock/commit/0117316df4c5d81a21ad409e083ea7d1e6f33cc3))
+* **studio:** add filter, sort and always-on record count to record tables ([0b6eb16](https://github.com/gnuzd/lazypock/commit/0b6eb16c4272c3360ee6b4cbf58efd8e6c77b535))
+
+
+### Bug Fixes
+
+* data import/export support camelCase and pb latest version ([8e570f5](https://github.com/gnuzd/lazypock/commit/8e570f5d4dbaf3e70437bc919e555b15192f05c5))
+* **schema:** keep field names verbatim as DB columns + system timestamps ([5f3eac2](https://github.com/gnuzd/lazypock/commit/5f3eac2b39c337f2c64304e3dd7b64117ebef2a9))
+* **schema:** keep field names verbatim as DB columns + system timestamps ([13c8d6d](https://github.com/gnuzd/lazypock/commit/13c8d6d472fe121ebd7e9736d09c407bf8278715))
+
 ## [0.10.2](https://github.com/gnuzd/lazypock/compare/v0.10.1...v0.10.2) (2026-09-20)
 
 
