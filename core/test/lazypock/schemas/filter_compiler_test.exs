@@ -401,6 +401,112 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
   end
 
+  describe "compile/1 — PocketBase ? operators (any/at least one of)" do
+    # The `?` prefix means "any/at least one of" over an array-valued column
+    # (multi_select / multi_file / multi-relation → TEXT[]). `ANY` OR-combines
+    # the per-element predicate; the negated forms use `NOT (… ALL(…))`, which
+    # is true when at least one element fails the predicate.
+
+    test "?= emits `= ANY`" do
+      assert {:ok, {~s[$1 = ANY("tags")], ["news"]}} =
+               FilterCompiler.compile(~s[tags ?= 'news'])
+    end
+
+    test "?!= emits `NOT (= ALL)` (at least one differs)" do
+      assert {:ok, {~s[NOT ($1 = ALL("tags"))], ["news"]}} =
+               FilterCompiler.compile(~s[tags ?!= 'news'])
+    end
+
+    test "?~ wraps the value in % and matches any element via unnest/EXISTS" do
+      assert {:ok, {~s[EXISTS (SELECT 1 FROM unnest("tags") AS x WHERE x ILIKE $1)], ["%news%"]}} =
+               FilterCompiler.compile(~s[tags ?~ 'news'])
+    end
+
+    test "?!~ wraps the value in % and matches any non-matching element" do
+      assert {:ok,
+              {~s[EXISTS (SELECT 1 FROM unnest("tags") AS x WHERE x NOT ILIKE $1)],
+               ["%news%"]}} = FilterCompiler.compile(~s[tags ?!~ 'news'])
+    end
+
+    test "?> emits `< ANY` (at least one element greater than)" do
+      assert {:ok, {~s[$1 < ANY("scores")], [10]}} =
+               FilterCompiler.compile("scores ?> 10")
+    end
+
+    test "?>= emits `<= ANY`" do
+      assert {:ok, {~s[$1 <= ANY("scores")], [10]}} =
+               FilterCompiler.compile("scores ?>= 10")
+    end
+
+    test "?< emits `> ANY` (at least one element less than)" do
+      assert {:ok, {~s[$1 > ANY("scores")], [10]}} =
+               FilterCompiler.compile("scores ?< 10")
+    end
+
+    test "?<= emits `>= ANY`" do
+      assert {:ok, {~s[$1 >= ANY("scores")], [10]}} =
+               FilterCompiler.compile("scores ?<= 10")
+    end
+
+    test "no whitespace around the operator" do
+      assert {:ok, {~s[$1 = ANY("tags")], ["news"]}} =
+               FilterCompiler.compile(~s[tags?='news'])
+    end
+
+    test "with a TEXT[] column the value is coerced to text" do
+      types = %{"tags" => "TEXT[]"}
+
+      assert {:ok, {~s[$1 = ANY("tags")], ["news"]}} =
+               FilterCompiler.compile(~s[tags ?= 'news'], [], types)
+
+      assert {:ok, {~s[$1 = ANY("tags")], ["42"]}} =
+               FilterCompiler.compile("tags ?= 42", [], types)
+    end
+
+    test "a bound param is coerced to the array element text" do
+      assert {:ok, {~s[$1 = ANY("tags")], ["user-123"]}} =
+               FilterCompiler.compile(~s[tags ?= $1], ["user-123"], %{"tags" => "TEXT[]"})
+    end
+
+    test "a known scalar column fails closed" do
+      types = %{"title" => "TEXT"}
+
+      assert {:error, _} = FilterCompiler.compile(~s[title ?= 'x'], [], types)
+      assert {:error, _} = FilterCompiler.compile(~s[title ?~ 'x'], [], types)
+    end
+
+    test "a known JSONB column fails closed" do
+      assert {:error, _} = FilterCompiler.compile(~s[meta ?= 'x'], [], %{"meta" => "JSONB"})
+    end
+
+    test "combines with standard operators and numbers params correctly" do
+      assert {:ok, {sql, params}} =
+               FilterCompiler.compile(
+                 ~s[tags ?= 'news' && title ~ 'hello'],
+                 [],
+                 %{"tags" => "TEXT[]", "title" => "TEXT"}
+               )
+
+      assert sql == ~s[($1 = ANY("tags") AND "title" ILIKE $2::TEXT)]
+      assert params == ["news", "%hello%"]
+    end
+
+    test "logic and parens with ? operators" do
+      assert {:ok, {sql, params}} =
+               FilterCompiler.compile(~s[(tags ?= 'a' || tags ?= 'b') && title = 'x'])
+
+      assert sql =~ "OR"
+      assert sql =~ "AND"
+      assert params == ["a", "b", "x"]
+    end
+
+    test "NOT still applies to a ? clause" do
+      assert {:ok, {sql, params}} = FilterCompiler.compile(~s[!(tags ?= 'news')])
+      assert sql == ~s[NOT $1 = ANY("tags")]
+      assert params == ["news"]
+    end
+  end
+
   describe "compile/1 — complex real-world patterns" do
     test "PocketBase-style auth filter: @request.auth.id != ''" do
       # The Enforcer resolves @request.auth.* tokens before FilterCompiler.

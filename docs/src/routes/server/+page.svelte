@@ -253,6 +253,78 @@ npm run dev          # starts Vite dev server on http://localhost:5173`}
     </ol>
   </section>
 
+  <!-- FILTERS -->
+  <section id="filters" class="scroll-mt-20 mb-10">
+    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
+      Filters
+    </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      Every list endpoint accepts a PocketBase-compatible
+      <code class="doc-inline px-1 py-0.5">?filter=</code> expression (combined with
+      the collection's <code class="doc-inline px-1 py-0.5">listRule</code>). Clauses are
+      <code class="doc-inline px-1 py-0.5">field op value</code>, joined with
+      <code class="doc-inline px-1 py-0.5">&amp;&amp;</code> (AND) and
+      <code class="doc-inline px-1 py-0.5">||</code> (OR); use
+      <code class="doc-inline px-1 py-0.5">!</code> and parentheses to negate / group.
+    </p>
+    <CodeBlock
+      lang="http"
+      code={`GET /api/posts?filter=(title~'hello' && published=true) || author='USER_ID'`}
+    />
+    <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
+      <table class="w-full text-sm">
+        <thead class="bg-base-200 text-left">
+          <tr>
+            <th class="px-3 py-2 font-semibold">Operator</th>
+            <th class="px-3 py-2 font-semibold">Meaning</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-base-300">
+          <tr>
+            <td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">=</code> <code class="doc-inline px-1 py-0.5">!=</code></td>
+            <td class="px-3 py-2">Equal / not equal</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">&gt;</code> <code class="doc-inline px-1 py-0.5">&gt;=</code> <code class="doc-inline px-1 py-0.5">&lt;</code> <code class="doc-inline px-1 py-0.5">&lt;=</code></td>
+            <td class="px-3 py-2">Greater / less than (or equal)</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">~</code> <code class="doc-inline px-1 py-0.5">!~</code></td>
+            <td class="px-3 py-2">Like / not like (case-insensitive, auto-wrapped in <code class="doc-inline px-1 py-0.5">%…%</code>)</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">?=</code> <code class="doc-inline px-1 py-0.5">?!=</code></td>
+            <td class="px-3 py-2">Any element equal / not equal</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">?~</code> <code class="doc-inline px-1 py-0.5">?!~</code></td>
+            <td class="px-3 py-2">Any element like / not like</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"><code class="doc-inline px-1 py-0.5">?&gt;</code> <code class="doc-inline px-1 py-0.5">?&gt;=</code> <code class="doc-inline px-1 py-0.5">?&lt;</code> <code class="doc-inline px-1 py-0.5">?&lt;=</code></td>
+            <td class="px-3 py-2">Any element compares</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      <strong>Array fields</strong> (multi-select, multiple relation, multiple file)
+      apply a <em>match-all</em> constraint by default. Prefix the operator with
+      <code class="doc-inline px-1 py-0.5">?</code> for an
+      <em>any / at-least-one-of</em> match:
+    </p>
+    <CodeBlock
+      lang="http"
+      code={`GET /api/posts?filter=tags ?= 'news'                 # has the 'news' tag
+GET /api/posts?filter=tags ?= 'news' && published=true
+GET /api/posts?filter=tags ?~ 'new'                  # any tag contains 'new'`}
+    />
+    <p class="mt-3 text-sm text-base-content/70">
+      Filters work the same in collection rules and through the typed SDK
+      (<code class="doc-inline px-1 py-0.5">getList(1, 20, &#123; filter: "tags ?= 'news'" &#125;)</code>).
+    </p>
+  </section>
+
   <!-- EXISTING POSTGRES DATABASE -->
   <section id="existing-db" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
