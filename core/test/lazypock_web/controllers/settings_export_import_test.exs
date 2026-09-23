@@ -210,6 +210,44 @@ defmodule LazypockWeb.SettingsExportImportTest do
       assert [%{"title" => "roundtrip"}] = GenericRecord.all(name)
     end
 
+    test "export → import preserves a builder view's spec and regenerated query" do
+      src = random_name("vb_exp_src_")
+      {:ok, _} = DDL.create_collection(src, type: "base", fields: [title_field()])
+      view = random_name("vb_exp_view_")
+
+      {:ok, _} =
+        DDL.create_collection(view,
+          type: "view",
+          options: %{"view_builder" => %{"source" => src, "fields" => [%{"name" => "title"}]}}
+        )
+
+      Registry.reload!()
+
+      export_body =
+        build_conn()
+        |> auth_conn()
+        |> get("/api/export")
+        |> json_response(200)
+
+      view_payload = Enum.find(export_body["collections"], &(&1["name"] == view))
+      assert view_payload["options"]["view_origin"] == "builder"
+      assert view_payload["options"]["view_builder"]["source"] == src
+      assert is_binary(view_payload["options"]["view_query"])
+
+      # Drop and re-import: the spec (not a frozen query) is what survives, so
+      # the query is regenerated against the existing source collection.
+      :ok = DDL.drop_collection(view)
+
+      conn = json_post(auth_conn(build_conn()), "/api/import", %{collections: [view_payload]})
+      assert json_response(conn, 200)["errors"] == []
+
+      Registry.reload!()
+      {:ok, coll} = Registry.get(view)
+      assert coll.options["view_origin"] == "builder"
+      assert coll.options["view_builder"]["source"] == src
+      assert coll.options["view_query"] =~ src
+    end
+
     test "import restores record ids, timestamps and relations (upsert by id)" do
       parent = random_name("imp_rel_parent_")
       child = random_name("imp_rel_child_")

@@ -44,6 +44,18 @@ defmodule LazypockWeb.ViewCollectionsControllerTest do
     put_req_header(conn, "authorization", "Bearer #{auth_token()}")
   end
 
+  defp json_post(conn, path, payload) do
+    conn
+    |> put_req_header("content-type", "application/json")
+    |> post(path, Jason.encode!(payload))
+  end
+
+  defp json_patch(conn, path, payload) do
+    conn
+    |> put_req_header("content-type", "application/json")
+    |> patch(path, Jason.encode!(payload))
+  end
+
   describe "view collections API" do
     test "creates a view collection via the API with viewQuery", %{src: src} do
       name = "view_" <> Integer.to_string(:erlang.unique_integer([:positive]))
@@ -138,6 +150,181 @@ defmodule LazypockWeb.ViewCollectionsControllerTest do
       conn = build_conn()
       conn = post(conn, "/api/collections/meta/dry-run-view", query: "SELECT 1")
       assert json_response(conn, 403)
+    end
+  end
+
+  describe "view builder API" do
+    test "creates a view from a builder spec and reports its origin", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{
+            "source" => src,
+            "fields" => [%{"name" => "title"}],
+            "sort" => "-title"
+          }
+        })
+
+      body = json_response(conn, 201)
+      assert body["type"] == "view"
+      assert body["viewOrigin"] == "builder"
+      assert body["viewBuilder"]["source"] == src
+      assert body["viewQuery"] =~ src
+      assert body["viewQuery"] =~ "ORDER BY"
+      assert Enum.map(body["fields"], & &1["name"]) == ["id", "title"]
+    end
+
+    test "ignores a client viewQuery when a builder spec is present", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewQuery" => "SELECT 1 AS id",
+          "viewBuilder" => %{"source" => src, "fields" => [%{"name" => "title"}]}
+        })
+
+      body = json_response(conn, 201)
+      assert body["viewQuery"] =~ src
+      refute body["viewQuery"] =~ "SELECT 1 AS id"
+    end
+
+    test "regenerates the query and fields when the builder spec changes", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{"source" => src, "fields" => [%{"name" => "title"}]}
+        })
+
+      %{"id" => id} = json_response(conn, 201)
+
+      conn =
+        auth_conn(build_conn())
+        |> json_patch("/api/collections/#{id}", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{
+            "source" => src,
+            "fields" => [%{"name" => "title"}, %{"name" => "count"}]
+          }
+        })
+
+      body = json_response(conn, 200)
+      assert body["viewOrigin"] == "builder"
+      assert Enum.map(body["fields"], & &1["name"]) == ["id", "title", "count"]
+    end
+
+    test "allows updating a builder view's rules without touching the spec", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{"source" => src, "fields" => [%{"name" => "title"}]}
+        })
+
+      %{"id" => id, "viewQuery" => query} = json_response(conn, 201)
+
+      conn =
+        auth_conn(build_conn())
+        |> json_patch("/api/collections/#{id}", %{
+          "name" => name,
+          "type" => "view",
+          "listRule" => ""
+        })
+
+      body = json_response(conn, 200)
+      assert body["viewOrigin"] == "builder"
+      assert body["viewQuery"] == query
+      assert body["viewBuilder"]["source"] == src
+      assert body["rules"]["listRule"] == ""
+    end
+
+    test "rejects a builder payload on a SQL-created view", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewQuery" => "SELECT id, title FROM #{src}"
+        })
+
+      %{"id" => id, "viewOrigin" => "sql"} = json_response(conn, 201)
+
+      conn =
+        auth_conn(build_conn())
+        |> json_patch("/api/collections/#{id}", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{"source" => src, "fields" => [%{"name" => "title"}]}
+        })
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "created with SQL"
+    end
+
+    test "keeps a SQL view's origin and updates its raw query" do
+      src = "src_#{:erlang.unique_integer([:positive])}"
+
+      {:ok, _} =
+        DDL.create_collection(src,
+          type: "base",
+          fields: [%{"name" => "title", "type" => "text", "required" => false}]
+        )
+
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewQuery" => "SELECT id, title FROM #{src}"
+        })
+
+      %{"id" => id, "viewOrigin" => "sql"} = json_response(conn, 201)
+
+      conn =
+        auth_conn(build_conn())
+        |> json_patch("/api/collections/#{id}", %{
+          "name" => name,
+          "type" => "view",
+          "viewQuery" => "SELECT id, title, title AS label FROM #{src}"
+        })
+
+      body = json_response(conn, 200)
+      assert body["viewOrigin"] == "sql"
+      assert body["viewBuilder"] == nil
+      assert Enum.map(body["fields"], & &1["name"]) == ["id", "title", "label"]
+    end
+
+    test "rejects a builder spec that references an unknown field", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{"source" => src, "fields" => [%{"name" => "missing"}]}
+        })
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "missing"
     end
   end
 

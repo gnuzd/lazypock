@@ -137,17 +137,30 @@ defmodule LazypockWeb.CollectionController do
     end
   end
 
-  # Builds the collection options map for create/update. Accepts both the
-  # PB-style top-level `viewQuery` param and an explicit `options` map;
-  # `viewQuery` is stored as `options["view_query"]`. Returns `nil` when
-  # neither is present so callers can skip the options update entirely
+  # Builds the collection options map for create/update. Accepts the PB-style
+  # top-level `viewQuery` param, a `viewBuilder` spec (stored as
+  # `options["view_builder"]`) and/or an explicit `options` map. Returns `nil`
+  # when none are present so callers can skip the options update entirely
   # (preserving existing options on partial updates).
   defp build_options(params) do
-    case {params["options"], params["viewQuery"]} do
-      {nil, nil} -> nil
-      {options, nil} -> options
-      {options, q} when is_binary(q) -> Map.put(options || %{}, "view_query", q)
-      {options, _} -> options
+    case {params["options"], params["viewQuery"], params["viewBuilder"]} do
+      {nil, nil, nil} ->
+        nil
+
+      {options, nil, nil} ->
+        options
+
+      {options, q, nil} when is_binary(q) ->
+        Map.put(options || %{}, "view_query", q)
+
+      {options, nil, b} when is_map(b) ->
+        Map.put(options || %{}, "view_builder", b)
+
+      {options, q, b} when is_binary(q) and is_map(b) ->
+        (options || %{}) |> Map.put("view_query", q) |> Map.put("view_builder", b)
+
+      {options, _q, _b} ->
+        options
     end
   end
 
@@ -320,6 +333,9 @@ defmodule LazypockWeb.CollectionController do
       schema: collection.schema,
       indexes: Map.get(opts, "indexes", []) || [],
       viewQuery: if(collection.type == "view", do: Map.get(opts, "view_query"), else: nil),
+      viewOrigin:
+        if(collection.type == "view", do: Map.get(opts, "view_origin", "sql"), else: nil),
+      viewBuilder: if(collection.type == "view", do: Map.get(opts, "view_builder"), else: nil),
       fields:
         (collection.fields || [])
         |> Enum.sort_by(& &1.sort_order, :asc)
