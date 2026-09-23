@@ -14,6 +14,7 @@ defmodule Lazypock.Schema.DDL do
 
   alias Lazypock.Repo
   alias Lazypock.Schema.TypeMapper
+  alias Lazypock.Schema.ViewBuilder
   alias Lazypock.Schema.Views
   require Logger
   import Ecto.Query
@@ -144,39 +145,32 @@ defmodule Lazypock.Schema.DDL do
   # metadata. Mirrors PocketBase's view-collection save flow.
   defp create_view_collection!(name, opts) do
     options = normalize_view_options(Keyword.get(opts, :options) || %{}, opts)
-    query = Map.get(options, "view_query")
 
-    cond do
-      not is_binary(query) or query == "" ->
-        Repo.rollback("view query is required")
+    with {:ok, options} <- resolve_view_options(options),
+         {:ok, query} <- require_view_query(options),
+         {:ok, fields} <- Views.build_fields(query) do
+      collection =
+        create_collection_metadata!(
+          name,
+          "view",
+          fields,
+          [],
+          opts[:rules],
+          options,
+          opts[:hooks]
+        )
 
-      true ->
-        case Views.build_fields(query) do
-          {:ok, fields} ->
-            collection =
-              create_collection_metadata!(
-                name,
-                "view",
-                fields,
-                [],
-                opts[:rules],
-                options,
-                opts[:hooks]
-              )
+      case Views.create_view(name, query) do
+        {:ok, _columns} ->
+          create_field_metadata!(collection.id, fields)
+          Lazypock.Realtime.Views.reset_view(name)
+          Repo.preload(collection, :fields)
 
-            case Views.create_view(name, query) do
-              {:ok, _columns} ->
-                create_field_metadata!(collection.id, fields)
-                Lazypock.Realtime.Views.reset_view(name)
-                Repo.preload(collection, :fields)
-
-              {:error, reason} ->
-                Repo.rollback(reason)
-            end
-
-          {:error, reason} ->
-            Repo.rollback(reason)
-        end
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    else
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 
@@ -186,6 +180,73 @@ defmodule Lazypock.Schema.DDL do
     case Keyword.get(opts, :view_query) do
       nil -> options
       query -> Map.put(options, "view_query", query)
+    end
+  end
+
+  # Resolves the physical view query from a collection's options. When a
+  # `view_builder` spec is present it is the source of truth and the query is
+  # generated from it (a raw `view_query` is ignored); otherwise the raw query
+  # is used. Also stamps `view_origin` so the Studio can keep hand-written
+  # views in the SQL editor and builder-created views in the builder.
+  defp resolve_view_options(options) do
+    case Map.get(options, "view_builder") do
+      builder when is_map(builder) ->
+        case ViewBuilder.to_query(builder) do
+          {:ok, query} ->
+            {:ok,
+             options
+             |> Map.put("view_query", query)
+             |> Map.put("view_origin", "builder")}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      _ ->
+        {:ok, Map.put_new(options, "view_origin", "sql")}
+    end
+  end
+
+  defp require_view_query(options) do
+    case Map.get(options, "view_query") do
+      query when is_binary(query) and query != "" -> {:ok, query}
+      _ -> {:error, "view query is required"}
+    end
+  end
+
+  # Computes `{options_to_persist, effective_query}` for a view update.
+  # Builder-origin views regenerate the query from their spec (the spec is
+  # kept in options); SQL-origin views use the raw query.
+  defp resolve_view_update(merged_options, old_options, new_options, origin) do
+    if origin == "builder" do
+      builder = Map.get(new_options, "view_builder") || Map.get(old_options, "view_builder")
+
+      if not is_map(builder) do
+        Repo.rollback("view builder spec is required")
+      end
+
+      case ViewBuilder.to_query(builder) do
+        {:ok, query} ->
+          options =
+            merged_options
+            |> Map.put("view_builder", builder)
+            |> Map.put("view_query", query)
+            |> Map.put("view_origin", "builder")
+
+          {options, query}
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    else
+      query = Map.get(new_options, "view_query") || Map.get(old_options, "view_query")
+
+      options =
+        merged_options
+        |> Map.put("view_query", query)
+        |> Map.put("view_origin", "sql")
+
+      {options, query}
     end
   end
 
@@ -212,19 +273,31 @@ defmodule Lazypock.Schema.DDL do
 
         old_options = collection.options || %{}
         new_options = Keyword.get(opts, :options, old_options) || old_options
+        merged_options = Map.merge(old_options, new_options)
+        old_origin = Map.get(old_options, "view_origin", "sql")
+        new_builder = Map.get(new_options, "view_builder")
+
+        # Builder-created views are edited through their spec (the query is
+        # regenerated and any client `view_query` is ignored); hand-written
+        # views stay SQL-only and reject a builder payload.
+        if old_origin == "sql" and is_map(new_builder) do
+          Repo.rollback("This view was created with SQL and can only be edited with SQL")
+        end
+
+        {resolved_options, effective_query} =
+          resolve_view_update(merged_options, old_options, new_options, old_origin)
+
+        if not is_binary(effective_query) or effective_query == "" do
+          Repo.rollback("view query is required")
+        end
+
         old_query = Map.get(old_options, "view_query")
-        new_query = Map.get(new_options, "view_query")
-        effective_query = new_query || old_query
-        query_changed = is_binary(new_query) and new_query != old_query
+        query_changed = effective_query != old_query
         renamed = new_name != old_name
 
         # Rebuild the physical view + fields only when the query changed or
         # on rename (rules/options-only updates leave the view untouched).
         if query_changed or renamed do
-          if not is_binary(effective_query) or effective_query == "" do
-            Repo.rollback("view query is required")
-          end
-
           case Views.build_fields(effective_query) do
             {:ok, fields} ->
               if renamed do
@@ -259,13 +332,13 @@ defmodule Lazypock.Schema.DDL do
           end
         end
 
-        # Save metadata (rules/options/hooks) — mirrors the base path.
-        metadata = [:rules, :options, :hooks]
-
+        # Save metadata (rules/options/hooks) — mirrors the base path. The
+        # resolved options carry the generated `view_query` + `view_origin`.
         metadata_updates =
-          metadata
+          [:rules, :options, :hooks]
           |> Enum.reduce(%{}, fn key, acc ->
             case Keyword.fetch(opts, key) do
+              {:ok, _} when key == :options -> Map.put(acc, :options, resolved_options)
               {:ok, value} -> Map.put(acc, key, value)
               :error -> acc
             end
