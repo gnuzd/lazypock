@@ -165,7 +165,7 @@
 							{#if canSort}
 								<button
 									type="button"
-									class="group inline-flex cursor-pointer items-center gap-1 font-semibold tracking-wider uppercase transition-colors hover:text-base-content"
+									class="group inline-flex cursor-pointer items-center gap-1 font-semibold tracking-wider transition-colors hover:text-base-content"
 									onclick={() => handleSortClick(col)}
 								>
 									<span>{col.label}</span>
