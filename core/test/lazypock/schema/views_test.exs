@@ -339,4 +339,71 @@ defmodule Lazypock.Schema.ViewsTest do
       assert query_rows("SELECT count(*) FROM #{name}") == [[0]]
     end
   end
+
+  describe "ViewBuilder integration" do
+    test "generated SQL introspects, creates a real view, and returns joined + aggregated data" do
+      customers = cname("customers")
+      tags = cname("tags")
+      create_source_collection(customers)
+      create_source_collection(tags)
+
+      orders = cname("orders")
+
+      {:ok, _} =
+        DDL.create_collection(orders,
+          type: "base",
+          fields: [
+            %{"name" => "label", "type" => "text", "required" => false},
+            %{
+              "name" => "customer",
+              "type" => "relation",
+              "options" => %{"collection" => customers, "maxSelect" => 1}
+            },
+            %{
+              "name" => "tags",
+              "type" => "relation",
+              "options" => %{"collection" => tags, "maxSelect" => 5}
+            }
+          ]
+        )
+
+      Lazypock.Collections.Registry.reload!()
+
+      {:ok, customer} = Lazypock.Schemas.GenericRecord.insert(customers, %{"title" => "Alice"})
+      {:ok, tag_a} = Lazypock.Schemas.GenericRecord.insert(tags, %{"title" => "urgent"})
+      {:ok, tag_b} = Lazypock.Schemas.GenericRecord.insert(tags, %{"title" => "new"})
+
+      {:ok, _order} =
+        Lazypock.Schemas.GenericRecord.insert(orders, %{
+          "label" => "o1",
+          "customer" => customer["id"],
+          "tags" => [tag_a["id"], tag_b["id"]]
+        })
+
+      spec = %{
+        "source" => orders,
+        "relations" => [
+          %{"alias" => "t1", "field" => "customer"},
+          %{"alias" => "t2", "field" => "tags"}
+        ],
+        "fields" => [
+          %{"name" => "label"},
+          %{"source" => "t1", "name" => "title"},
+          %{"source" => "t2", "name" => "title", "as" => "tag_titles"}
+        ]
+      }
+
+      assert {:ok, sql} = Lazypock.Schema.ViewBuilder.to_query(spec)
+      assert {:ok, fields} = Views.build_fields(sql)
+      assert Enum.map(fields, & &1["name"]) == ["id", "label", "customer_title", "tag_titles"]
+
+      view = cname("vb_view")
+      assert {:ok, _columns} = Views.create_view(view, sql)
+
+      [row] = query_rows("SELECT label, customer_title, tag_titles FROM #{view}")
+      assert Enum.at(row, 0) == "o1"
+      assert Enum.at(row, 1) == "Alice"
+      assert row |> Enum.at(2) |> Enum.sort() == ["new", "urgent"]
+    end
+  end
 end
