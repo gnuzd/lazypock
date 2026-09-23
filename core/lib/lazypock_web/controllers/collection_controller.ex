@@ -239,11 +239,17 @@ defmodule LazypockWeb.CollectionController do
                   nil
               end
 
+            # View collection fields are derived from the view query server-side,
+            # but the Studio (like PocketBase clients) always echoes the generated
+            # field list back on save. Drop it here so a view update isn't rejected
+            # with "View collection fields are auto-generated from the view query".
+            fields = if view_collection?(coll_name), do: nil, else: params["fields"]
+
             opts =
               []
               |> maybe_put(:name, params["name"])
               |> maybe_put(:type, params["type"])
-              |> maybe_put(:fields, params["fields"])
+              |> maybe_put(:fields, fields)
               |> maybe_put(:rules, rules)
               |> maybe_put(:options, build_options(params))
               |> maybe_put(:hooks, params["hooks"])
@@ -376,6 +382,13 @@ defmodule LazypockWeb.CollectionController do
           nil -> nil
           collection -> collection.name
         end
+    end
+  end
+
+  defp view_collection?(name) do
+    case CollectionRegistry.get(name) do
+      {:ok, collection} -> collection.type == "view"
+      _ -> false
     end
   end
 end

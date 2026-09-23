@@ -64,6 +64,39 @@ defmodule LazypockWeb.ViewCollectionsControllerTest do
                json_response(conn, 201)["fields"]
     end
 
+    test "updates a view collection when the client echoes the auto-generated fields", %{
+      src: src
+    } do
+      name = "view_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> post("/api/collections",
+          name: name,
+          type: "view",
+          viewQuery: "SELECT id, title FROM #{src}"
+        )
+
+      assert %{"id" => id, "fields" => fields} = json_response(conn, 201)
+
+      # The Studio always posts the full field list back on save, even though
+      # view fields are derived from the query server-side.
+      conn =
+        auth_conn(build_conn())
+        |> patch("/api/collections/#{id}",
+          name: name,
+          type: "view",
+          viewQuery: "SELECT id, title, count FROM #{src}",
+          fields: fields
+        )
+
+      assert %{"type" => "view", "viewQuery" => query, "fields" => new_fields} =
+               json_response(conn, 200)
+
+      assert query =~ "count"
+      assert Enum.map(new_fields, & &1["name"]) == ["id", "title", "count"]
+    end
+
     test "rejects a view collection with an invalid query" do
       conn = auth_conn(build_conn())
 
