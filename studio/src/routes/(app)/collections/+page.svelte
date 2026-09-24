@@ -94,10 +94,11 @@
 		const cols: {
 			key: string;
 			label: string;
+			class?: string;
 			sortable?: boolean;
 			render: (r: Record<string, unknown>) => string;
 			thumbs?: (r: Record<string, unknown>) => string[];
-		}[] = [{ key: 'id', label: 'ID', render: (r) => (r.id as string) ?? '' }];
+		}[] = [{ key: 'id', label: 'ID', class: 'w-72', render: (r) => (r.id as string) ?? '' }];
 		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
 			.filter((f) => !f.hidden && f.type !== 'password')
 			// The ID column is always rendered explicitly above. A view collection

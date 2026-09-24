@@ -430,6 +430,7 @@
 		<div class="min-h-0">
 			<DataTable
 				fillHeight
+				fixed={false}
 				{columns}
 				rows={logs}
 				{loading}
