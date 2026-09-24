@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { client } from '$lib/client';
-	import Button from '$lib/components/Button.svelte';
-	import Erd from '$lib/components/Erd.svelte';
-	import Modal from '$lib/components/Modal.svelte';
+	import { slide } from 'svelte/transition';
 	import Select from '$lib/components/Select.svelte';
 	import type { ViewBuilderField, ViewBuilderSpec } from '$lib/viewBuilder';
 
@@ -39,10 +37,16 @@
 	let previewSample = $state<Record<string, unknown>[]>([]);
 	let previewError = $state('');
 	let previewTimer: ReturnType<typeof setTimeout> | undefined;
-	let showErd = $state(false);
 	let sourceValue = $state(spec.source ?? '');
+	let expandedRelations = $state<string[]>([]);
 
-	// Keep the Select in sync when the spec is loaded (or changed by the ERD).
+	function toggleExpanded(field: string) {
+		expandedRelations = expandedRelations.includes(field)
+			? expandedRelations.filter((f) => f !== field)
+			: [...expandedRelations, field];
+	}
+
+	// Keep the Select in sync when the spec is loaded externally.
 	$effect(() => {
 		if (spec.source !== sourceValue) sourceValue = spec.source ?? '';
 	});
@@ -200,11 +204,12 @@
 				previewError = '';
 				previewState = 'ok';
 			} catch (e) {
+				const err = e as { message?: string; status?: number };
 				previewError =
-					((e as { message?: string })?.message ?? '').replace(
-						/^Invalid view builder spec\. Raw error:\s*/,
-						''
-					) || 'Invalid view definition';
+					err.status === 404
+						? 'Preview endpoint not found — the backend is probably an older build. Restart the server and try again.'
+						: (err.message ?? '').replace(/^Invalid view builder spec\. Raw error:\s*/, '') ||
+							'Invalid view definition';
 				previewQuery = '';
 				previewFields = [];
 				previewSample = [];
@@ -217,18 +222,12 @@
 <div class="flex flex-col gap-3">
 	<div class="flex flex-col gap-1">
 		<span class="text-sm font-medium">Source collection</span>
-		<div class="flex items-center gap-2">
-			<Select
-				options={sourceOptions}
-				bind:value={sourceValue}
-				onchange={(v) => applySource(String(v ?? ''))}
-				placeholder="Pick a collection…"
-				class="flex-1"
-			/>
-			<Button class="btn-outline btn-sm shrink-0" onclick={() => (showErd = true)}>
-				Pick from diagram
-			</Button>
-		</div>
+		<Select
+			options={sourceOptions}
+			bind:value={sourceValue}
+			onchange={(v) => applySource(String(v ?? ''))}
+			placeholder="Pick a collection…"
+		/>
 	</div>
 
 	{#if !spec.source}
@@ -277,36 +276,53 @@
 				</p>
 				{#each relationFields as rel (rel.name)}
 					{@const target = relationTarget(rel)}
-					<details class="rounded-field border border-base-300">
-						<summary class="cursor-pointer px-3 py-2 text-sm">
-							{rel.name} → <span class="font-mono text-xs">{target || 'unknown'}</span>
-						</summary>
-						<div class="border-t border-base-300 px-3 py-2">
-							{#each targetFields(rel) as targetField (targetField.name)}
-								{@const alias = relationFor(rel.name)?.alias ?? ''}
-								{@const index = alias ? indexOfField(alias, targetField.name) : -1}
-								<div class="flex items-center gap-2 py-1">
-									<input
-										type="checkbox"
-										class="checkbox checkbox-sm"
-										checked={index >= 0}
-										disabled={!target}
-										onchange={() => toggleRelated(rel.name, targetField.name)}
-									/>
-									<span class="font-mono text-sm">{targetField.name}</span>
-									<span class="text-xs text-base-content/40">{targetField.type}</span>
-									{#if index >= 0}
+					{@const expanded = expandedRelations.includes(rel.name)}
+					<div class="overflow-hidden rounded-field border border-base-300">
+						<button
+							type="button"
+							class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-base-200/60"
+							onclick={() => toggleExpanded(rel.name)}
+						>
+							<svg
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								class="shrink-0 transition-transform duration-150 {expanded ? 'rotate-90' : ''}"
+								><polyline points="9 18 15 12 9 6" /></svg
+							>
+							<span>{rel.name} → <span class="font-mono text-xs">{target || 'unknown'}</span></span>
+						</button>
+						{#if expanded}
+							<div class="border-t border-base-300 px-3 py-2" transition:slide={{ duration: 150 }}>
+								{#each targetFields(rel) as targetField (targetField.name)}
+									{@const alias = relationFor(rel.name)?.alias ?? ''}
+									{@const index = alias ? indexOfField(alias, targetField.name) : -1}
+									<div class="flex items-center gap-2 py-1">
 										<input
-											class="input input-xs ml-auto w-44 font-mono"
-											placeholder={`${rel.name}_${targetField.name}`}
-											value={spec.fields[index]?.as ?? ''}
-											oninput={(e) => setAlias(index, e.currentTarget.value)}
+											type="checkbox"
+											class="checkbox checkbox-sm"
+											checked={index >= 0}
+											disabled={!target}
+											onchange={() => toggleRelated(rel.name, targetField.name)}
 										/>
-									{/if}
-								</div>
-							{/each}
-						</div>
-					</details>
+										<span class="font-mono text-sm">{targetField.name}</span>
+										<span class="text-xs text-base-content/40">{targetField.type}</span>
+										{#if index >= 0}
+											<input
+												class="input input-xs ml-auto w-44 font-mono"
+												placeholder={`${rel.name}_${targetField.name}`}
+												value={spec.fields[index]?.as ?? ''}
+												oninput={(e) => setAlias(index, e.currentTarget.value)}
+											/>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
 				{/each}
 			</div>
 		{/if}
@@ -407,20 +423,3 @@
 		</div>
 	{/if}
 </div>
-
-<Modal bind:show={showErd} title="Pick a source collection">
-	<p class="mb-2 text-xs text-base-content/60">
-		Click a collection in the diagram to use it as the view source.
-	</p>
-	<div class="relative h-[55vh] w-full">
-		<Erd
-			collections={selectableCollections}
-			onselect={(name) => {
-				if (name) {
-					applySource(name);
-					showErd = false;
-				}
-			}}
-		/>
-	</div>
-</Modal>

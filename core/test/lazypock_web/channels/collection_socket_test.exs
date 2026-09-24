@@ -136,6 +136,55 @@ defmodule LazypockWeb.CollectionSocketTest do
       assert {:ok, _reply, _joined} = subscribe_and_join(su_socket, "collection:#{name}", %{})
     end
 
+    test "a view collection with a public listRule is joinable" do
+      src = cname("chan_vsrc")
+      view = cname("chan_view")
+
+      {:ok, _} =
+        DDL.create_collection(src,
+          type: "base",
+          fields: [%{"name" => "title", "type" => "text", "required" => false}]
+        )
+
+      {:ok, _} =
+        DDL.create_collection(view,
+          type: "view",
+          options: %{"view_query" => "SELECT id, title FROM #{src}"},
+          rules: %{"listRule" => ""}
+        )
+
+      Registry.reload!()
+
+      {:ok, socket} = connect(LazypockWeb.CollectionSocket, %{})
+      assert {:ok, _reply, joined} = subscribe_and_join(socket, "collection:#{view}", %{})
+      assert joined.assigns[:collection_name] == view
+    end
+
+    test "a view collection with a nil listRule denies anonymous subscribers" do
+      src = cname("chan_vsrc2")
+      view = cname("chan_view2")
+
+      {:ok, _} =
+        DDL.create_collection(src,
+          type: "base",
+          fields: [%{"name" => "title", "type" => "text", "required" => false}]
+        )
+
+      {:ok, _} =
+        DDL.create_collection(view,
+          type: "view",
+          options: %{"view_query" => "SELECT id, title FROM #{src}"},
+          rules: %{"listRule" => nil}
+        )
+
+      Registry.reload!()
+
+      {:ok, socket} = connect(LazypockWeb.CollectionSocket, %{})
+
+      assert {:error, %{reason: "Access denied"}} =
+               subscribe_and_join(socket, "collection:#{view}", %{})
+    end
+
     test "unknown collection is rejected" do
       {:ok, socket} = connect(LazypockWeb.CollectionSocket, %{"token" => superuser_token()})
 
