@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import Button from '$lib/components/Button.svelte';
+	import AiPromptButton from '$lib/components/AiPromptButton.svelte';
 	import { toast } from 'svelte-sonner';
 
 	let backingUp = $state(false);
@@ -134,7 +135,7 @@
 		>.
 	</p>
 
-	<div class="mb-4 flex items-center gap-2">
+	<div class="mb-4 flex flex-wrap items-center gap-2">
 		<Button class="btn-outline btn-sm" onclick={() => restoreFileInput?.click()}>
 			Choose backup file
 		</Button>
@@ -151,6 +152,11 @@
 			<span class="text-sm text-base-content/70">{restoreFileName}</span>
 		{/if}
 	</div>
+
+	<p class="mb-4 flex flex-wrap items-center gap-2 text-sm text-base-content/70">
+		Or generate a file with an AI assistant:
+		<AiPromptButton />
+	</p>
 
 	{#if parseError}
 		<div class="mb-4 rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
