@@ -5,6 +5,7 @@
 	import { z } from 'zod';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import Switch from '$lib/components/Switch.svelte';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
 
@@ -80,15 +81,7 @@
 	</div>
 
 	<!-- S3 toggle -->
-	<div class="switch-field mb-4">
-		<label class="switch-label" for="storage-enabled">
-			<span class="txt">Use S3 storage</span>
-		</label>
-		<label class="switch">
-			<input id="storage-enabled" type="checkbox" bind:checked={storageForm.form.storageEnabled} />
-			<span class="switch-slider"></span>
-		</label>
-	</div>
+	<Switch class="mb-4" bind:checked={storageForm.form.storageEnabled}>Use S3 storage</Switch>
 
 	{#if storageForm.form.storageEnabled}
 		<div transition:slide={{ duration: 150 }}>

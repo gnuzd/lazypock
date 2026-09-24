@@ -6,6 +6,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Select from '$lib/components/Select.svelte';
+	import Switch from '$lib/components/Switch.svelte';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
 
@@ -114,15 +115,9 @@
 	</div>
 
 	<!-- SMTP toggle -->
-	<div class="switch-field mb-4">
-		<label class="switch-label" for="mail-enabled">
-			<span class="txt">Use SMTP mail server <strong>(recommended)</strong></span>
-		</label>
-		<label class="switch">
-			<input id="mail-enabled" type="checkbox" bind:checked={mailForm.form.mailEnabled} />
-			<span class="switch-slider"></span>
-		</label>
-	</div>
+	<Switch class="mb-4" bind:checked={mailForm.form.mailEnabled}>
+		Use SMTP mail server <strong>(recommended)</strong>
+	</Switch>
 
 	{#if mailForm.form.mailEnabled}
 		<div transition:slide={{ duration: 150 }}>

@@ -6,6 +6,7 @@
 	import Input from '$lib/components/Input.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import Select from '$lib/components/Select.svelte';
+	import Switch from '$lib/components/Switch.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
 	import { Trash2, Play, Pencil } from '@lucide/svelte';
 	import '../settings.css';
@@ -509,15 +510,7 @@
 			{/if}
 		</div>
 
-		<div class="switch-field">
-			<label class="switch-label" for="cron-enabled">
-				<span class="txt">Enabled — schedule this job</span>
-			</label>
-			<label class="switch">
-				<input id="cron-enabled" type="checkbox" bind:checked={form.enabled} />
-				<span class="switch-slider"></span>
-			</label>
-		</div>
+		<Switch bind:checked={form.enabled}>Enabled — schedule this job</Switch>
 
 		<div>
 			<span class="mb-1 block text-xs text-base-content/50">Action</span>
