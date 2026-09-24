@@ -67,6 +67,7 @@ defmodule LazypockWeb.Router do
     get("/collections", CollectionController, :list)
     post("/collections", CollectionController, :create)
     post("/collections/meta/dry-run-view", CollectionController, :dry_run_view)
+    post("/collections/meta/preview-view-builder", CollectionController, :preview_view_builder)
     get("/collections/:id", CollectionController, :show)
     patch("/collections/:id", CollectionController, :update)
     delete("/collections/:id", CollectionController, :delete)
