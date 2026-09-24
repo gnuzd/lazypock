@@ -102,6 +102,43 @@ defmodule LazypockWeb.CollectionController do
     end
   end
 
+  # Preview a no-code view builder spec: generate its SQL and dry-run it, so
+  # the Studio can show the exact query, generated fields and sample rows
+  # before the view is saved. Mirrors `dry_run_view/2` but starts from the
+  # structured spec instead of raw SQL.
+  def preview_view_builder(conn, %{"viewBuilder" => builder}) when is_map(builder) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_preview_view_builder(conn, builder)
+  end
+
+  def preview_view_builder(conn, _params) do
+    conn = require_superuser!(conn)
+
+    if conn.halted do
+      conn
+    else
+      conn
+      |> put_status(400)
+      |> json(%{code: 400, message: "Missing viewBuilder parameter", data: %{}})
+    end
+  end
+
+  defp do_preview_view_builder(conn, builder) do
+    with {:ok, query} <- Lazypock.Schema.ViewBuilder.to_query(builder),
+         {:ok, %{fields: fields, sample: sample}} <- Lazypock.Schema.Views.dry_run(query, 10) do
+      json(conn, %{query: query, fields: fields, sample: sample})
+    else
+      {:error, reason} ->
+        conn
+        |> put_status(400)
+        |> json(%{
+          code: 400,
+          message: "Invalid view builder spec. Raw error: \n#{reason}",
+          data: %{}
+        })
+    end
+  end
+
   # Create a new collection
   def create(conn, %{"name" => name} = params) do
     conn = require_superuser!(conn)

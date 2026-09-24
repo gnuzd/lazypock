@@ -326,6 +326,50 @@ defmodule LazypockWeb.ViewCollectionsControllerTest do
       assert %{"error" => error} = json_response(conn, 400)
       assert error =~ "missing"
     end
+
+    test "previews a builder spec with generated SQL, fields and sample", %{src: src} do
+      {:ok, _} = GenericRecord.insert(src, %{"title" => "hello", "count" => 1})
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections/meta/preview-view-builder", %{
+          "viewBuilder" => %{"source" => src, "fields" => [%{"name" => "title"}]}
+        })
+
+      body = json_response(conn, 200)
+      assert body["query"] =~ src
+      assert Enum.map(body["fields"], & &1["name"]) == ["id", "title"]
+      assert [%{"title" => "hello"}] = body["sample"]
+    end
+
+    test "preview rejects an invalid builder spec", %{src: src} do
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections/meta/preview-view-builder", %{
+          "viewBuilder" => %{"source" => src, "fields" => [%{"name" => "missing"}]}
+        })
+
+      assert %{"message" => message} = json_response(conn, 400)
+      assert message =~ "missing"
+    end
+
+    test "preview requires a viewBuilder param" do
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections/meta/preview-view-builder", %{})
+
+      assert %{"message" => message} = json_response(conn, 400)
+      assert message =~ "Missing viewBuilder"
+    end
+
+    test "requires superuser for the builder preview" do
+      conn =
+        json_post(build_conn(), "/api/collections/meta/preview-view-builder", %{
+          "viewBuilder" => %{}
+        })
+
+      assert json_response(conn, 403)
+    end
   end
 
   describe "read-only enforcement" do
