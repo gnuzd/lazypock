@@ -1,27 +1,28 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
+	import Button from '$lib/components/Button.svelte';
 
-let {
-	show = $bindable(false),
-	title = '',
-	closable = true,
-	onCloseRequest,
-	headerExtra,
-	children
-}: {
-	show: boolean;
-	title?: string;
-	closable?: boolean;
-	/** Called before closing; return false to prevent the close. */
-	onCloseRequest?: () => boolean | void;
-	headerExtra?: import('svelte').Snippet;
-	children?: import('svelte').Snippet;
-} = $props();
+	let {
+		show = $bindable(false),
+		title = '',
+		closable = true,
+		onCloseRequest,
+		headerExtra,
+		children
+	}: {
+		show: boolean;
+		title?: string;
+		closable?: boolean;
+		/** Called before closing; return false to prevent the close. */
+		onCloseRequest?: () => boolean | void;
+		headerExtra?: import('svelte').Snippet;
+		children?: import('svelte').Snippet;
+	} = $props();
 
-function close() {
-	if (onCloseRequest && onCloseRequest() === false) return;
-	show = false;
-}
+	function close() {
+		if (onCloseRequest && onCloseRequest() === false) return;
+		show = false;
+	}
 </script>
 
 <svelte:body
@@ -48,7 +49,9 @@ function close() {
 					<div class="flex items-center gap-1">
 						{@render headerExtra?.()}
 						{#if closable}
-							<button class="btn btn-ghost btn-sm px-2" onclick={close}>✕</button>
+							<Button class="btn-ghost btn-sm px-2" ariaLabel="Close panel" onclick={close}
+								>✕</Button
+							>
 						{/if}
 					</div>
 				</div>

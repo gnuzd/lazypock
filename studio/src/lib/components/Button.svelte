@@ -5,6 +5,8 @@
 		type = 'button' as const,
 		disabled = false,
 		loading = false,
+		title = undefined,
+		ariaLabel = undefined,
 		class: className = ''
 	}: {
 		children?: import('svelte').Snippet;
@@ -12,13 +14,17 @@
 		type?: 'button' | 'submit' | 'reset';
 		disabled?: boolean;
 		loading?: boolean;
+		/** Native tooltip. */
+		title?: string;
+		/** Accessible name — required for icon-only buttons. */
+		ariaLabel?: string;
 		class?: string;
 	} = $props();
 
 	let cls = $derived('btn' + (className ? ' ' + className : ''));
 </script>
 
-<button {type} {disabled} {onclick} class={cls} aria-busy={loading}>
+<button {type} {disabled} {title} aria-label={ariaLabel} {onclick} class={cls} aria-busy={loading}>
 	{#if loading}
 		<span class="btn-spinner"></span>
 	{/if}

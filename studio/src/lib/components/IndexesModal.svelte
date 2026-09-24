@@ -104,7 +104,12 @@
 							{idx}
 						{/if}
 					</code>
-					<button type="button" class="btn btn-ghost btn-xs w-6 px-0" onclick={() => openEdit(i)}>
+					<Button
+						class="btn-ghost btn-xs w-6 px-0"
+						ariaLabel="Edit index"
+						title="Edit index"
+						onclick={() => openEdit(i)}
+					>
 						<svg
 							width="12"
 							height="12"
@@ -116,10 +121,11 @@
 								d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
 							/></svg
 						>
-					</button>
-					<button
-						type="button"
-						class="btn btn-ghost btn-xs w-6 px-0 text-error"
+					</Button>
+					<Button
+						class="btn-ghost btn-xs w-6 px-0 text-error"
+						ariaLabel="Delete index"
+						title="Delete index"
 						onclick={() => {
 							indexes.splice(i, 1);
 							indexes = [...indexes];
@@ -134,7 +140,7 @@
 							stroke-width="2"
 							><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg
 						>
-					</button>
+					</Button>
 				</div>
 			{/each}
 			<Button
