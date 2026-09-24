@@ -108,6 +108,8 @@ defmodule LazypockWeb.Router do
     # Export/Import collections
     get("/export", SettingsController, :export_all)
     post("/import", SettingsController, :import_all)
+    get("/import/status", SettingsController, :import_status)
+    post("/import/rollback", SettingsController, :import_rollback)
 
     # Send test email (superuser)
     post("/settings/test-email", SettingsController, :send_test_email)

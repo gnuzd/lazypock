@@ -620,4 +620,49 @@ defmodule LazypockWeb.SettingsExportImportTest do
                ["assignee", "column", "description", "order", "tag", "tagColor", "title"]
     end
   end
+
+  describe "import status & rollback" do
+    test "status and rollback require superuser" do
+      assert json_response(get(build_conn(), "/api/import/status"), 403)
+      assert json_response(json_post(build_conn(), "/api/import/rollback", %{}), 403)
+    end
+
+    test "POST /api/import/rollback undoes the last import" do
+      name = random_name("imp_undo_")
+
+      conn =
+        json_post(auth_conn(build_conn()), "/api/import", %{
+          collections: [%{"name" => name, "type" => "base", "schema" => [title_field()]}],
+          deleteMissing: false
+        })
+
+      assert json_response(conn, 200)["errors"] == []
+      assert {:ok, _} = Registry.get(name)
+
+      status = json_response(get(auth_conn(build_conn()), "/api/import/status"), 200)
+      assert status["snapshot"]["created_at"]
+
+      body =
+        json_response(json_post(auth_conn(build_conn()), "/api/import/rollback", %{}), 200)
+
+      assert body["rolled_back"] == true
+
+      Registry.reload!()
+      assert Registry.get(name) == {:error, :not_found}
+
+      # The snapshot is consumed, so a second rollback would 404.
+      after_status = json_response(get(auth_conn(build_conn()), "/api/import/status"), 200)
+      assert after_status["snapshot"] == nil
+    end
+
+    test "GET /api/import/status reports no snapshot when there is nothing to undo" do
+      Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _import_snapshots", [])
+
+      body = json_response(get(auth_conn(build_conn()), "/api/import/status"), 200)
+      assert body["snapshot"] == nil
+
+      conn = json_post(auth_conn(build_conn()), "/api/import/rollback", %{})
+      assert json_response(conn, 404)
+    end
+  end
 end

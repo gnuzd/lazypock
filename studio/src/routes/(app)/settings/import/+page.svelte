@@ -5,15 +5,20 @@
 	import { toast } from 'svelte-sonner';
 	import Button from '$lib/components/Button.svelte';
 	import AiPromptButton from '$lib/components/AiPromptButton.svelte';
+	import UndoImportButton from '$lib/components/UndoImportButton.svelte';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
 
 	const importSchema = z.object({
 		schemas: z.string(),
-		deleteMissing: z.boolean()
+		deleteMissing: z.boolean(),
+		atomic: z.boolean()
 	});
 
-	let importForm = $state(createForm(importSchema, { schemas: '', deleteMissing: true }));
+	let importForm = $state(
+		createForm(importSchema, { schemas: '', deleteMissing: true, atomic: true })
+	);
+	let undoToken = $state(0);
 	let importFileInput: HTMLInputElement | undefined = $state();
 	const importPlaceholder = '[{ "id": "...", "name": "...", "type": "base", "fields": [] }]';
 	let importLoadingFile = $state(false);
@@ -134,7 +139,8 @@
 			const collections = Array.isArray(data) ? data : data?.collections;
 			const res = (await client.http.post('/import', {
 				collections,
-				deleteMissing: importForm.form.deleteMissing
+				deleteMissing: importForm.form.deleteMissing,
+				atomic: importForm.form.atomic
 			})) as { imported?: unknown[]; errors?: unknown[] } | null;
 			const importedCount = (res?.imported as unknown[])?.length ?? 0;
 			const errorCount = (res?.errors as unknown[])?.length ?? 0;
@@ -143,6 +149,7 @@
 			} else {
 				toast.success(`Successfully imported ${importedCount} collections`);
 			}
+			undoToken += 1;
 		} catch (e) {
 			toast.error(`Import failed: ${(e as Error).message}`);
 		} finally {
@@ -220,6 +227,21 @@
 			</label>
 		</div>
 
+		<div class="switch-field mb-4">
+			<label class="switch-label" for="atomic-import">
+				<span class="txt">Roll the whole import back if any collection fails</span>
+			</label>
+			<label class="switch">
+				<input
+					id="atomic-import"
+					type="checkbox"
+					bind:checked={importForm.form.atomic}
+					disabled={!isValidImport}
+				/>
+				<span class="switch-slider"></span>
+			</label>
+		</div>
+
 		{#if isValidImport && parsedCollections.length > 0 && !hasChanges}
 			<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
 				Your collections configuration is already up-to-date!
@@ -278,4 +300,6 @@
 			</Button>
 		</div>
 	</div>
+
+	<UndoImportButton class="mt-4" reloadToken={undoToken} />
 {/if}
