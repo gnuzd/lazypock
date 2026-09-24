@@ -15,6 +15,7 @@
 	let restoreFileInput: HTMLInputElement | undefined = $state();
 	let deleteMissing = $state(false);
 	let atomic = $state(true);
+	let password = $state('');
 	let undoToken = $state(0);
 	let restoreResult = $state<{
 		imported: { name: string; records_imported: number }[];
@@ -92,6 +93,7 @@
 		parseError = null;
 		restoreResult = null;
 		deleteMissing = false;
+		password = '';
 		if (restoreFileInput) restoreFileInput.value = '';
 	}
 
@@ -103,7 +105,8 @@
 			const res = (await client.http.post('/import', {
 				collections: restorePayload,
 				deleteMissing,
-				atomic
+				atomic,
+				password
 			})) as { imported?: unknown[]; errors?: unknown[] } | null;
 			const imported = (res?.imported as { name: string; records_imported: number }[]) ?? [];
 			const errors = (res?.errors as { name: string; error: string }[]) ?? [];
@@ -227,10 +230,24 @@
 		</div>
 	{/if}
 
+	<div class="mb-4">
+		<label class="field-label" for="restore-password">Confirm your password</label>
+		<input
+			id="restore-password"
+			type="password"
+			class="field-input"
+			autocomplete="current-password"
+			bind:value={password}
+		/>
+		<p class="mt-1 text-xs text-base-content/50">
+			Restoring rewrites your collections and records — confirm your superuser password.
+		</p>
+	</div>
+
 	<div class="flex items-center gap-3">
 		<Button
 			class="btn-warning"
-			disabled={parsedCollections.length === 0}
+			disabled={parsedCollections.length === 0 || !password}
 			loading={restoring}
 			onclick={doRestore}
 		>

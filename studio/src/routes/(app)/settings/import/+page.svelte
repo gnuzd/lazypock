@@ -13,11 +13,12 @@
 	const importSchema = z.object({
 		schemas: z.string(),
 		deleteMissing: z.boolean(),
-		atomic: z.boolean()
+		atomic: z.boolean(),
+		password: z.string()
 	});
 
 	let importForm = $state(
-		createForm(importSchema, { schemas: '', deleteMissing: true, atomic: true })
+		createForm(importSchema, { schemas: '', deleteMissing: true, atomic: true, password: '' })
 	);
 	let undoToken = $state(0);
 	let importFileInput: HTMLInputElement | undefined = $state();
@@ -141,7 +142,8 @@
 			const res = (await client.http.post('/import', {
 				collections,
 				deleteMissing: importForm.form.deleteMissing,
-				atomic: importForm.form.atomic
+				atomic: importForm.form.atomic,
+				password: importForm.form.password
 			})) as { imported?: unknown[]; errors?: unknown[] } | null;
 			const importedCount = (res?.imported as unknown[])?.length ?? 0;
 			const errorCount = (res?.errors as unknown[])?.length ?? 0;
@@ -257,6 +259,20 @@
 			</div>
 		{/if}
 
+		<div class="field mb-4">
+			<label class="field-label" for="import-password">Confirm your password</label>
+			<input
+				id="import-password"
+				type="password"
+				class="field-input"
+				autocomplete="current-password"
+				bind:value={importForm.form.password}
+			/>
+			<p class="mt-1 text-xs text-base-content/50">
+				Importing rewrites your collections and records — confirm your superuser password.
+			</p>
+		</div>
+
 		<div class="flex items-center justify-between">
 			{#if importForm.form.schemas}
 				<button
@@ -271,7 +287,7 @@
 			{/if}
 			<Button
 				class="btn-warning"
-				disabled={!isValidImport || !hasChanges}
+				disabled={!isValidImport || !hasChanges || !importForm.form.password}
 				loading={importing}
 				onclick={doImport}
 			>

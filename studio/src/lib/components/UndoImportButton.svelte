@@ -20,6 +20,7 @@
 	let loaded = $state(false);
 	let busy = $state(false);
 	let confirmOpen = $state(false);
+	let password = $state('');
 
 	async function load() {
 		try {
@@ -35,13 +36,14 @@
 	}
 
 	async function undo() {
-		if (!snapshot || busy) return;
+		if (!snapshot || busy || !password) return;
 
 		busy = true;
 		try {
-			await client.http.post('/import/rollback', {});
+			await client.http.post('/import/rollback', { password });
 			toast.success('Rolled back the last import');
 			confirmOpen = false;
+			password = '';
 			await load();
 		} catch (e) {
 			toast.error(`Rollback failed: ${(e as Error).message}`);
@@ -86,9 +88,21 @@
 			<li>Changed collections and records are restored to their previous state.</li>
 			<li>System collections are never touched.</li>
 		</ul>
+		<div class="mt-4">
+			<label class="field-label" for="rollback-password">Confirm your password</label>
+			<input
+				id="rollback-password"
+				type="password"
+				class="field-input"
+				autocomplete="current-password"
+				bind:value={password}
+			/>
+		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button class="btn-ghost btn-sm" onclick={() => (confirmOpen = false)}>Cancel</Button>
-			<Button class="btn-warning btn-sm" loading={busy} onclick={undo}>Undo import</Button>
+			<Button class="btn-warning btn-sm" disabled={!password} loading={busy} onclick={undo}
+				>Undo import</Button
+			>
 		</div>
 	</Modal>
 {:else if loaded}
