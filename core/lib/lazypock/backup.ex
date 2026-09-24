@@ -46,8 +46,14 @@ defmodule Lazypock.Backup do
   """
   @spec export() :: %{collections: list(map())}
   def export do
+    # Skip collections whose backing table is gone (stale `_collections` row) —
+    # querying one would error and, inside a transaction, abort the whole
+    # batch (25P02).
+    tables = existing_tables()
+
     collections =
       all_collections()
+      |> Enum.filter(fn coll -> is_nil(tables) or MapSet.member?(tables, coll.name) end)
       |> Enum.map(fn coll ->
         records = GenericRecord.all(coll.name)
 
@@ -64,6 +70,20 @@ defmodule Lazypock.Backup do
       end)
 
     %{collections: collections}
+  end
+
+  # Names of the relations that actually exist (base tables AND views —
+  # `pg_tables` would omit view collections), or nil when the lookup fails (in
+  # which case callers keep the previous, unfiltered behavior).
+  defp existing_tables do
+    case Ecto.Adapters.SQL.query(
+           Repo,
+           "SELECT table_name FROM information_schema.tables WHERE table_schema = ANY (current_schemas(false))",
+           []
+         ) do
+      {:ok, %{rows: rows}} -> rows |> Enum.map(&hd/1) |> MapSet.new()
+      _ -> nil
+    end
   end
 
   # Collections straight from the DB (no dependency on the in-process ETS
@@ -97,23 +117,119 @@ defmodule Lazypock.Backup do
   `delete_missing` additionally drops user collections (and fields) absent
   from the payload — system collections are always protected.
 
-  Returns `%{imported: [...], errors: [...]}`.
-  """
-  @spec restore(map() | list(), boolean()) :: %{imported: list(map()), errors: list(map())}
-  def restore(payload, delete_missing \\ false)
+  ## Options
 
-  def restore(%{"collections" => collections}, delete_missing) when is_list(collections) do
-    restore(collections, delete_missing)
+    * `:atomic` (default `true`) — run the whole import in one transaction and
+      roll everything back if any collection or record fails, so a bad batch
+      never leaves a half-applied schema behind. When it rolls back, the
+      result carries `rolled_back: true` and `imported: []` with the collected
+      `errors`. Set to `false` for the old best-effort behavior (import what
+      can be imported, report the rest).
+    * `:snapshot` (default `true`) — capture the current database (user
+      collections) before mutating so the import can be undone with
+      `rollback/0`.
+
+  Returns `%{imported: [...], errors: [...], rolled_back: boolean()}`.
+  """
+  @spec restore(map() | list(), boolean(), keyword()) :: map()
+  def restore(payload, delete_missing \\ false, opts \\ [])
+
+  def restore(%{"collections" => collections}, delete_missing, opts) when is_list(collections) do
+    restore(collections, delete_missing, opts)
   end
 
   # Atom-keyed envelope (e.g. Backup.export() piped straight into restore).
-  def restore(%{collections: collections}, delete_missing) when is_list(collections) do
-    restore(collections, delete_missing)
+  def restore(%{collections: collections}, delete_missing, opts) when is_list(collections) do
+    restore(collections, delete_missing, opts)
   end
 
-  def restore(collections, delete_missing) when is_list(collections) do
+  def restore(collections, delete_missing, opts) when is_list(collections) do
     delete_missing = delete_missing == true
+    atomic = Keyword.get(opts, :atomic, true)
+    snapshot? = Keyword.get(opts, :snapshot, true)
 
+    if atomic do
+      restore_atomically(collections, delete_missing, snapshot?)
+    else
+      restore_partially(collections, delete_missing, snapshot?)
+    end
+  end
+
+  # All-or-nothing: one transaction around the whole import. A failure in any
+  # collection (or record) rolls back every change made by the batch.
+  defp restore_atomically(collections, delete_missing, snapshot?) do
+    if snapshot?, do: ensure_snapshot_table!()
+
+    try do
+      case Repo.transaction(fn ->
+             # Read the pre-import state inside the transaction, before any
+             # mutation, so the snapshot and the import commit (or roll back)
+             # together.
+             pre = if snapshot?, do: user_snapshot()
+
+             # `atomic: true` stops at the first failing collection: continuing
+             # would run statements on an already-aborted transaction and report
+             # a confusing 25P02 ("current transaction is aborted") instead of
+             # the real error.
+             result = do_restore(collections, delete_missing, true)
+
+             if result.errors == [] do
+               if pre, do: store_snapshot(pre)
+               Map.put(result, :rolled_back, false)
+             else
+               Repo.rollback(result)
+             end
+           end) do
+        {:ok, result} ->
+          result
+
+        {:error, %{errors: _} = result} ->
+          resync_registry()
+          result |> Map.put(:imported, []) |> Map.put(:rolled_back, true)
+
+        {:error, reason} ->
+          resync_registry()
+
+          %{
+            imported: [],
+            errors: [%{name: nil, error: describe_error(reason)}],
+            rolled_back: true
+          }
+      end
+    rescue
+      e ->
+        # A raised DB error (e.g. a bang DDL query) already rolled the
+        # transaction back.
+        resync_registry()
+
+        %{imported: [], errors: [%{name: nil, error: describe_error(e)}], rolled_back: true}
+    end
+  end
+
+  # A rolled-back batch never emits a compensating DDL broadcast, so the
+  # in-memory registry may still cache collections/fields the rollback undid.
+  # Resync it from the database (no-op when the app isn't booted, e.g. the
+  # `lazypock restore` CLI path).
+  defp resync_registry do
+    case Process.whereis(Lazypock.Collections.Registry) do
+      nil -> :ok
+      _pid -> GenServer.call(Lazypock.Collections.Registry, :reload, 30_000)
+    end
+  end
+
+  # Best effort (the previous default): apply what can be applied and report
+  # the rest. Each collection is still individually transactional.
+  defp restore_partially(collections, delete_missing, snapshot?) do
+    if snapshot?, do: ensure_snapshot_table!()
+    pre = if snapshot?, do: user_snapshot()
+
+    result = do_restore(collections, delete_missing, false)
+    if pre, do: store_snapshot(pre)
+
+    Map.put(result, :rolled_back, false)
+  end
+
+  defp do_restore(collections, delete_missing, atomic) do
     collections =
       collections
       |> Enum.map(&stringify_keys/1)
@@ -126,93 +242,14 @@ defmodule Lazypock.Backup do
     incoming_names = Enum.map(collections, & &1["name"]) |> MapSet.new()
 
     {imported_list, errors_list} =
-      Enum.reduce(collections, {[], []}, fn coll_data, {imported_acc, errors_acc} ->
-        name = coll_data["name"]
+      Enum.reduce_while(collections, {[], []}, fn coll_data, {imported_acc, errors_acc} ->
+        case import_collection(coll_data, existing_names, delete_missing) do
+          {:ok, entry} ->
+            {:cont, {[entry | imported_acc], errors_acc}}
 
-        case coll_data["__schema_error__"] do
-          nil ->
-            type = coll_data["type"] || "base"
-            # View fields are derived server-side from options["view_query"] —
-            # the exported schema is ignored to avoid replaying stale field
-            # metadata. Safe to read coll_data["schema"] || [] here: by this
-            # point normalize_import_payload/1 has already resolved either
-            # "schema" or "fields" into "schema" (with system fields already
-            # stripped), or tagged the collection with __schema_error__ above
-            # (so this branch isn't reached).
-            schema = if type == "view", do: [], else: coll_data["schema"] || []
-            records = coll_data["records"] || []
-            rules = coll_data["rules"]
-            options = coll_data["options"]
-            hooks = coll_data["hooks"]
-
-            # Custom indexes live inside options["indexes"] — extract so the DDL
-            # engine can (re)create the actual Postgres indexes, not just the
-            # metadata. Omitted when the payload doesn't carry options so existing
-            # target indexes are left untouched.
-            indexes =
-              case options do
-                %{"indexes" => idx} when is_list(idx) -> idx
-                _ -> nil
-              end
-
-            result =
-              if name in existing_names do
-                # Update existing collection — apply new schema fields plus any
-                # rules/options/hooks carried in the payload.
-                case Lazypock.Schema.DDL.update_collection(
-                       name,
-                       [fields: schema]
-                       |> maybe_put(:rules, rules)
-                       |> maybe_put(:options, options)
-                       |> maybe_put(:hooks, hooks)
-                       |> maybe_put(:indexes, indexes)
-                       |> Keyword.put(:delete_missing_fields, delete_missing)
-                     ) do
-                  {:ok, _} -> {:ok, :updated}
-                  other -> other
-                end
-              else
-                Lazypock.Schema.DDL.create_collection(
-                  name,
-                  [type: type, fields: schema]
-                  |> maybe_put(:rules, rules)
-                  |> maybe_put(:options, options)
-                  |> maybe_put(:hooks, hooks)
-                  |> maybe_put(:indexes, indexes)
-                )
-              end
-
-            case result do
-              {:ok, _} ->
-                # View collections are read-only: rows are regenerated by the view
-                # query, so exported row data is never re-inserted.
-                inserted =
-                  if type == "view" do
-                    {:ok, 0}
-                  else
-                    Enum.reduce_while(records, {:ok, 0}, fn record, {:ok, count} ->
-                      case GenericRecord.restore(name, record) do
-                        {:ok, _} -> {:cont, {:ok, count + 1}}
-                        {:error, reason} -> {:halt, {:error, reason}}
-                      end
-                    end)
-                  end
-
-                insert_count =
-                  case inserted do
-                    {:ok, c} -> c
-                    _ -> 0
-                  end
-
-                {[%{name: name, type: type, records_imported: insert_count} | imported_acc],
-                 errors_acc}
-
-              {:error, reason} ->
-                {imported_acc, [%{name: name, error: reason} | errors_acc]}
-            end
-
-          reason ->
-            {imported_acc, [%{name: name, error: reason} | errors_acc]}
+          {:error, entry} ->
+            next = {imported_acc, [entry | errors_acc]}
+            if atomic, do: {:halt, next}, else: {:cont, next}
         end
       end)
 
@@ -229,6 +266,244 @@ defmodule Lazypock.Backup do
 
     %{imported: Enum.reverse(imported_list), errors: Enum.reverse(errors_list)}
   end
+
+  # Imports one collection: returns {:ok, entry} or {:error, %{name:, error:}}.
+  # A raised DB error (e.g. a bang DDL query) is converted to an error entry so
+  # the caller can report it and (in atomic mode) roll back cleanly.
+  defp import_collection(coll_data, existing_names, delete_missing) do
+    name = coll_data["name"]
+
+    case coll_data["__schema_error__"] do
+      nil ->
+        try do
+          import_collection!(coll_data, existing_names, delete_missing)
+        rescue
+          e -> {:error, %{name: name, error: describe_error(e)}}
+        end
+
+      reason ->
+        {:error, %{name: name, error: describe_error(reason)}}
+    end
+  end
+
+  defp import_collection!(coll_data, existing_names, delete_missing) do
+    name = coll_data["name"]
+    type = coll_data["type"] || "base"
+    # View fields are derived server-side from options["view_query"] — the
+    # exported schema is ignored to avoid replaying stale field metadata.
+    schema = if type == "view", do: [], else: coll_data["schema"] || []
+    records = coll_data["records"] || []
+    rules = coll_data["rules"]
+    options = coll_data["options"]
+    hooks = coll_data["hooks"]
+
+    # Custom indexes live inside options["indexes"] — extract so the DDL engine
+    # can (re)create the actual Postgres indexes, not just the metadata. Omitted
+    # when the payload doesn't carry options so existing target indexes are left
+    # untouched.
+    indexes =
+      case options do
+        %{"indexes" => idx} when is_list(idx) -> idx
+        _ -> nil
+      end
+
+    result =
+      if name in existing_names do
+        # Update existing collection — apply new schema fields plus any
+        # rules/options/hooks carried in the payload.
+        case Lazypock.Schema.DDL.update_collection(
+               name,
+               [fields: schema]
+               |> maybe_put(:rules, rules)
+               |> maybe_put(:options, options)
+               |> maybe_put(:hooks, hooks)
+               |> maybe_put(:indexes, indexes)
+               |> Keyword.put(:delete_missing_fields, delete_missing)
+             ) do
+          {:ok, _} -> {:ok, :updated}
+          other -> other
+        end
+      else
+        Lazypock.Schema.DDL.create_collection(
+          name,
+          [type: type, fields: schema]
+          |> maybe_put(:rules, rules)
+          |> maybe_put(:options, options)
+          |> maybe_put(:hooks, hooks)
+          |> maybe_put(:indexes, indexes)
+        )
+      end
+
+    case result do
+      {:ok, _} ->
+        case restore_records(name, type, records) do
+          {:ok, count} -> {:ok, %{name: name, type: type, records_imported: count}}
+          {:error, reason} -> {:error, %{name: name, error: describe_error(reason)}}
+        end
+
+      {:error, reason} ->
+        {:error, %{name: name, error: describe_error(reason)}}
+    end
+  end
+
+  # View collections are read-only (rows come from the view query), so exported
+  # row data is never re-inserted. Record errors are surfaced (previously they
+  # were swallowed as `records_imported: 0`).
+  defp restore_records(_name, "view", _records), do: {:ok, 0}
+
+  defp restore_records(name, _type, records) do
+    Enum.reduce_while(records, {:ok, 0}, fn record, {:ok, count} ->
+      case GenericRecord.restore(name, record) do
+        {:ok, _} -> {:cont, {:ok, count + 1}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp describe_error(%{error: error}), do: describe_error(error)
+  defp describe_error(reason) when is_binary(reason), do: reason
+  defp describe_error(reason) when is_exception(reason), do: Exception.message(reason)
+  defp describe_error(reason), do: inspect(reason)
+
+  # ── Import snapshots (undo) ───────────────────────────────────────────────
+
+  @snapshot_table "_import_snapshots"
+  # Keep a short history so a repeated import can still be undone.
+  @kept_snapshots 5
+
+  @doc """
+  Metadata for the most recent import snapshot, or `nil` when there is none.
+  Used by the Studio to offer "Undo last import".
+  """
+  @spec last_snapshot() :: %{id: binary(), created_at: DateTime.t()} | nil
+  def last_snapshot do
+    ensure_snapshot_table!()
+
+    case Ecto.Adapters.SQL.query(
+           Repo,
+           "SELECT id::text, created_at FROM #{@snapshot_table} ORDER BY created_at DESC, id DESC LIMIT 1",
+           []
+         ) do
+      {:ok, %{rows: [[id, created_at]]}} -> %{id: id, created_at: created_at}
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Rolls the database back to the state captured before the last import.
+
+  Restores the snapshot (schemas, rules, indexes and records) and additionally
+  deletes records created since it was taken, so the result is a true
+  point-in-time rollback. Only user collections are touched — system
+  collections are never snapshotted or pruned. The snapshot is consumed on
+  success, so a second rollback is a no-op.
+  """
+  @spec rollback() :: {:ok, map()} | {:error, term()}
+  def rollback do
+    ensure_snapshot_table!()
+
+    case Ecto.Adapters.SQL.query(
+           Repo,
+           "SELECT id, payload FROM #{@snapshot_table} ORDER BY created_at DESC, id DESC LIMIT 1",
+           []
+         ) do
+      {:ok, %{rows: [[id, payload]]}} ->
+        payload = decode_payload(payload)
+
+        case Repo.transaction(fn ->
+               result = restore(payload, true, atomic: true, snapshot: false)
+
+               if result.errors == [] do
+                 prune_records_not_in(payload)
+
+                 Ecto.Adapters.SQL.query!(Repo, "DELETE FROM #{@snapshot_table} WHERE id = $1", [
+                   id
+                 ])
+
+                 result
+               else
+                 Repo.rollback(result)
+               end
+             end) do
+          {:ok, result} -> {:ok, result}
+          {:error, %{errors: _} = result} -> {:error, result}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:error, :no_snapshot}
+    end
+  end
+
+  # Postgrex returns `jsonb` columns as a binary by default.
+  defp decode_payload(payload) when is_binary(payload), do: Jason.decode!(payload)
+  defp decode_payload(payload), do: payload
+
+  # Snapshot of the user collections only — system tables (_superusers, _otps,
+  # ...) are excluded so a rollback can never rewrite or prune them.
+  defp user_snapshot do
+    %{collections: collections} = export()
+
+    %{
+      collections: Enum.reject(collections, &Lazypock.Collections.Collection.system?(&1.name))
+    }
+  end
+
+  defp store_snapshot(payload) do
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "INSERT INTO #{@snapshot_table} (payload) VALUES ($1)",
+      [Jason.encode!(payload)]
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "DELETE FROM #{@snapshot_table} WHERE id NOT IN (" <>
+        "SELECT id FROM #{@snapshot_table} ORDER BY created_at DESC, id DESC LIMIT #{@kept_snapshots})",
+      []
+    )
+
+    :ok
+  end
+
+  # Self-healing so the CLI `lazypock restore` also works on an instance whose
+  # migrations are older than this feature.
+  defp ensure_snapshot_table! do
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE TABLE IF NOT EXISTS #{@snapshot_table} (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        payload JSONB NOT NULL
+      )
+      """,
+      []
+    )
+
+    :ok
+  end
+
+  # Deletes records that exist now but were not in the snapshot. Restore/2
+  # upserts the snapshot's records but never removes extra ones, so this closes
+  # the gap for a true rollback.
+  defp prune_records_not_in(%{"collections" => collections}) when is_list(collections) do
+    for coll <- collections, (coll["type"] || "base") != "view" do
+      name = coll["name"]
+
+      if is_binary(name) and not Lazypock.Collections.Collection.system?(name) do
+        keep = MapSet.new(coll["records"] || [], & &1["id"])
+
+        for record <- GenericRecord.all(name), not MapSet.member?(keep, record["id"]) do
+          GenericRecord.delete(name, record["id"])
+        end
+      end
+    end
+
+    :ok
+  end
+
+  defp prune_records_not_in(_), do: :ok
 
   # ── Field-list key resolution (schema vs. fields) ─────────────────────────
 

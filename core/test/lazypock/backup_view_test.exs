@@ -384,7 +384,9 @@ defmodule Lazypock.BackupViewTest do
       ]
     }
 
-    assert %{imported: imported, errors: errors} = Backup.restore(payload)
+    # Opt into the best-effort mode: with the atomic default (see
+    # backup_rollback_test.exs) the whole batch would roll back instead.
+    assert %{imported: imported, errors: errors} = Backup.restore(payload, false, atomic: false)
 
     assert Enum.find(imported, &(&1.name == good))
     assert Enum.find(errors, &(&1.name == bad))

@@ -2,6 +2,7 @@
 	import { client } from '$lib/client';
 	import Button from '$lib/components/Button.svelte';
 	import AiPromptButton from '$lib/components/AiPromptButton.svelte';
+	import UndoImportButton from '$lib/components/UndoImportButton.svelte';
 	import { toast } from 'svelte-sonner';
 
 	let backingUp = $state(false);
@@ -12,6 +13,8 @@
 	let parseError = $state<string | null>(null);
 	let restoreFileInput: HTMLInputElement | undefined = $state();
 	let deleteMissing = $state(false);
+	let atomic = $state(true);
+	let undoToken = $state(0);
 	let restoreResult = $state<{
 		imported: { name: string; records_imported: number }[];
 		errors: { name: string; error: string }[];
@@ -98,7 +101,8 @@
 		try {
 			const res = (await client.http.post('/import', {
 				collections: restorePayload,
-				deleteMissing
+				deleteMissing,
+				atomic
 			})) as { imported?: unknown[]; errors?: unknown[] } | null;
 			const imported = (res?.imported as { name: string; records_imported: number }[]) ?? [];
 			const errors = (res?.errors as { name: string; error: string }[]) ?? [];
@@ -108,6 +112,7 @@
 			} else {
 				toast.success(`Restored ${imported.length} collections successfully`);
 			}
+			undoToken += 1;
 		} catch (e) {
 			toast.error(`Restore failed: ${(e as Error).message}`);
 		} finally {
@@ -196,6 +201,21 @@
 				</p>
 			</div>
 		</div>
+
+		<div class="mb-4 flex items-start gap-2">
+			<label class="switch">
+				<input id="restore-atomic" type="checkbox" bind:checked={atomic} />
+				<span class="switch-slider"></span>
+			</label>
+			<div>
+				<label class="switch-label" for="restore-atomic">
+					<span class="txt">Roll the whole restore back if any collection fails</span>
+				</label>
+				<p class="text-xs text-base-content/50">
+					All-or-nothing (recommended). Turn off to apply what can be applied and report the rest.
+				</p>
+			</div>
+		</div>
 	{/if}
 
 	{#if restoreResult}
@@ -239,3 +259,5 @@
 		{/if}
 	</div>
 </div>
+
+<UndoImportButton class="mt-6" reloadToken={undoToken} />

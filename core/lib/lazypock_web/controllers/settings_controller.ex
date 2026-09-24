@@ -266,10 +266,52 @@ defmodule LazypockWeb.SettingsController do
 
   defp do_import(conn, params) do
     delete_missing = params["deleteMissing"] == true
+    # Atomic by default (all-or-nothing); clients can opt into the old
+    # best-effort behavior with {"atomic": false}.
+    atomic = Map.get(params, "atomic", true) != false
     collections = params["collections"] || []
 
-    result = Lazypock.Backup.restore(collections, delete_missing)
+    result = Lazypock.Backup.restore(collections, delete_missing, atomic: atomic, snapshot: true)
     json(conn, result)
+  end
+
+  # ── Import rollback (undo the last import/restore) ──
+
+  def import_status(conn, _params) do
+    conn = require_superuser!(conn)
+
+    if conn.halted do
+      conn
+    else
+      json(conn, %{snapshot: Lazypock.Backup.last_snapshot()})
+    end
+  end
+
+  def import_rollback(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_import_rollback(conn)
+  end
+
+  defp do_import_rollback(conn) do
+    case Lazypock.Backup.rollback() do
+      {:ok, result} ->
+        json(conn, Map.put(result, :rolled_back, true))
+
+      {:error, :no_snapshot} ->
+        conn
+        |> put_status(404)
+        |> json(%{error: "There is no import snapshot to roll back to"})
+
+      {:error, %{errors: _} = result} ->
+        conn
+        |> put_status(400)
+        |> json(Map.put(result, :rolled_back, true))
+
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: inspect(reason)})
+    end
   end
 
   # ── Send test email ──
