@@ -116,4 +116,92 @@ defmodule Lazypock.Auth.TokenTest do
       assert {:error, _reason} = Token.verify_token(token)
     end
   end
+
+  describe "tampering and forgery" do
+    # Tokens are Phoenix.Token (HMAC over the endpoint's secret_key_base), so
+    # there is no JWT `alg` header to confuse and no `nbf` claim. The relevant
+    # attack classes are: expired, re-signed with another key, and claims that
+    # verify but carry nothing usable.
+
+    test "an expired superuser token is rejected" do
+      expired =
+        sign("superuser", %{"type" => "superuser", "id" => Ecto.UUID.generate()},
+          signed_at: System.system_time(:second) - 8 * 24 * 60 * 60
+        )
+
+      assert {:error, _reason} = Token.verify_token(expired)
+    end
+
+    test "an expired user token is rejected" do
+      expired =
+        sign(
+          "auth_user",
+          %{"type" => "user", "id" => Ecto.UUID.generate(), "collectionName" => "accounts"},
+          signed_at: System.system_time(:second) - 8 * 24 * 60 * 60
+        )
+
+      assert {:error, _reason} = Token.verify_user_token(expired)
+    end
+
+    test "a token signed with the wrong key is rejected" do
+      forged =
+        Phoenix.Token.sign(
+          :crypto.strong_rand_bytes(64),
+          "superuser",
+          %{"type" => "superuser", "id" => Ecto.UUID.generate()}
+        )
+
+      assert {:error, _reason} = Token.verify_token(forged)
+    end
+
+    test "a tampered payload is rejected" do
+      superuser = %SuperUser{id: Ecto.UUID.generate(), email: "admin@test.com"}
+      {:ok, token} = Token.generate_access_token(superuser)
+
+      tampered = tamper(token)
+
+      assert tampered != token
+      assert {:error, _reason} = Token.verify_token(tampered)
+    end
+
+    test "a token with no id claim verifies but carries no identity" do
+      # verify_token/1 intentionally only checks the type claim; callers must
+      # treat a missing id as unauthenticated (Auth.Plug looks the id up and
+      # assigns nil when it is absent).
+      {:ok, claims} = Token.verify_token(sign("superuser", %{"type" => "superuser"}))
+      assert claims["id"] == nil
+
+      {:ok, user_claims} =
+        Token.verify_user_token(
+          sign("auth_user", %{"type" => "user", "collectionName" => "accounts"})
+        )
+
+      assert user_claims["id"] == nil
+    end
+
+    test "a token with the wrong type claim is rejected" do
+      assert {:error, "Invalid token type"} =
+               Token.verify_token(sign("superuser", %{"type" => "user", "id" => "x"}))
+
+      assert {:error, "Invalid token type"} =
+               Token.verify_user_token(sign("auth_user", %{"type" => "superuser", "id" => "x"}))
+    end
+
+    test "a token with no type claim is rejected" do
+      assert {:error, _} = Token.verify_token(sign("superuser", %{"id" => "x"}))
+      assert {:error, _} = Token.verify_user_token(sign("auth_user", %{"id" => "x"}))
+    end
+  end
+
+  defp sign(salt, data, opts \\ []) do
+    Phoenix.Token.sign(LazypockWeb.Endpoint, salt, data, opts)
+  end
+
+  # Flip a character in the payload segment, leaving the token well-formed.
+  defp tamper(token) do
+    [payload | rest] = String.split(token, ".", parts: 3)
+    <<first, tail::binary>> = payload
+    flipped = if first == ?a, do: "b", else: "a"
+    Enum.join([flipped <> tail | rest], ".")
+  end
 end

@@ -109,16 +109,26 @@ defmodule Lazypock.Schemas.GenericRecord do
     sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)} WHERE id = $1"
     id_bin = if Keyword.get(opts, :plain_id, false), do: id, else: maybe_uuid_to_bin(id)
 
-    case Ecto.Adapters.SQL.query(Repo, sql, [id_bin]) do
-      {:ok, %{rows: [row], columns: cols}} ->
-        row_to_map(cols, row)
+    single_row_query(sql, [id_bin])
+  end
 
-      {:ok, _} ->
-        nil
-
-      {:error, _} ->
-        nil
+  # Runs a query for a single-record operation, returning nil when the query
+  # fails *or* when an argument cannot be encoded against its column type.
+  #
+  # A malformed record id from the URL (e.g. "not-a-uuid" against a uuid
+  # column) reaches Postgrex as an un-encodable parameter, which raises
+  # `DBConnection.EncodeError` *outside* the `{:error, _}` tuple path. That
+  # used to surface as a 500; callers expect nil so they can answer 404 -- the
+  # same fail-closed rule the rule enforcer applies to malformed record ids.
+  defp single_row_query(sql, values) do
+    case Ecto.Adapters.SQL.query(Repo, sql, values) do
+      {:ok, %{rows: [row], columns: cols}} -> row_to_map(cols, row)
+      {:ok, _} -> nil
+      {:error, _} -> nil
     end
+  rescue
+    DBConnection.EncodeError -> nil
+    ArgumentError -> nil
   end
 
   @doc """
@@ -158,16 +168,7 @@ defmodule Lazypock.Schemas.GenericRecord do
     id_bin = maybe_uuid_to_bin(id)
     values = Map.values(data) ++ [id_bin, now]
 
-    case Ecto.Adapters.SQL.query(Repo, sql, values) do
-      {:ok, %{rows: [row], columns: cols}} ->
-        row_to_map(cols, row)
-
-      {:ok, _} ->
-        nil
-
-      {:error, _} ->
-        nil
-    end
+    single_row_query(sql, values)
   end
 
   @doc """
@@ -182,6 +183,10 @@ defmodule Lazypock.Schemas.GenericRecord do
       {:ok, _} -> :ok
       {:error, err} -> {:error, Exception.message(err)}
     end
+  rescue
+    # A malformed id cannot match any row, so there is nothing to delete.
+    # Treat it as a no-op instead of crashing with EncodeError.
+    DBConnection.EncodeError -> :ok
   end
 
   @doc """

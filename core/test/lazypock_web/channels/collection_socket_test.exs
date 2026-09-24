@@ -9,6 +9,7 @@ defmodule LazypockWeb.CollectionSocketTest do
   alias Lazypock.Collections.Registry
   alias Lazypock.Auth.Token
   alias Lazypock.Auth.SuperUser
+  alias Lazypock.Rules.Enforcer
   alias Lazypock.Repo
 
   @moduledoc """
@@ -123,17 +124,86 @@ defmodule LazypockWeb.CollectionSocketTest do
       assert {:ok, _reply, _joined} = subscribe_and_join(socket, "collection:#{name}", %{})
     end
 
-    test "filtered listRule allows subscription (list semantics: filters apply to the query)" do
+    test "filtered listRule allows subscription" do
       name = cname("chan_filter")
       create_collection(name, %{"listRule" => "@request.auth.role = 'admin'"})
 
-      # Plain user can subscribe — listRule filters the records they see
+      # Any authenticated user may subscribe: the join gate only checks that
+      # listRule *resolves* for this user. It does not restrict which records
+      # the subscriber subsequently receives (see the parity test below).
       {:ok, user_socket} = connect(LazypockWeb.CollectionSocket, %{"token" => user_token()})
       assert {:ok, _reply, _joined} = subscribe_and_join(user_socket, "collection:#{name}", %{})
 
       # Superuser can subscribe too
       {:ok, su_socket} = connect(LazypockWeb.CollectionSocket, %{"token" => superuser_token()})
       assert {:ok, _reply, _joined} = subscribe_and_join(su_socket, "collection:#{name}", %{})
+    end
+
+    test "broadcasts are gated by the join, not filtered per record (documented parity)" do
+      # PocketBase parity (also recorded in TEST_COVERAGE_AUDIT.md, "Still
+      # open"): a subscription is authorized once, at join time, against
+      # listRule. There is no per-record rule evaluation on delivery, and
+      # filtered subscriptions are not supported upstream either. This pins the
+      # behaviour so it can only change deliberately.
+      name = cname("chan_nofilter")
+      create_collection(name, %{"listRule" => "@request.auth.role = 'admin'"})
+
+      {:ok, socket} = connect(LazypockWeb.CollectionSocket, %{"token" => user_token()})
+      assert {:ok, _reply, _joined} = subscribe_and_join(socket, "collection:#{name}", %{})
+
+      # A record the rule itself would exclude is still delivered.
+      LazypockWeb.Endpoint.broadcast!("collection:#{name}", "record_change", %{
+        "action" => "create",
+        "record" => %{"id" => "rec-hidden"}
+      })
+
+      assert_push("record_change", %{"record" => %{"id" => "rec-hidden"}})
+    end
+
+    test "join authorization agrees with Enforcer.authorize_list for the same rule and user" do
+      # Anti-drift guard: the REST list path and the realtime join gate must
+      # agree on whether a (rule, user) pair is authorized. Both call
+      # Enforcer.authorize_list today; this fails loudly if they ever diverge.
+      cases = [
+        {"", :anonymous},
+        {nil, :anonymous},
+        {"@request.auth.id != ''", :anonymous},
+        {"@request.auth.id != ''", :user},
+        {nil, :user},
+        {"", :user}
+      ]
+
+      for {rule, who} <- cases do
+        name = cname("chan_parity")
+        create_collection(name, %{"listRule" => rule})
+
+        {socket, user} =
+          case who do
+            :anonymous ->
+              {:ok, socket} = connect(LazypockWeb.CollectionSocket, %{})
+              {socket, nil}
+
+            :user ->
+              token = user_token()
+              {:ok, claims} = Token.verify_user_token(token)
+              {:ok, socket} = connect(LazypockWeb.CollectionSocket, %{"token" => token})
+
+              {socket,
+               %{"id" => claims["id"], "email" => claims["email"] || "", "role" => "user"}}
+          end
+
+        context = "rule=#{inspect(rule)} who=#{who}"
+        join = subscribe_and_join(socket, "collection:#{name}", %{})
+
+        case Enforcer.authorize_list(name, user) do
+          {:ok, _} ->
+            assert {:ok, _reply, _joined} = join, "expected join allowed (#{context})"
+
+          {:error, _} ->
+            assert {:error, %{reason: "Access denied"}} = join,
+                   "expected join denied (#{context})"
+        end
+      end
     end
 
     test "a view collection with a public listRule is joinable" do

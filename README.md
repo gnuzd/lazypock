@@ -4,6 +4,7 @@
 [![Elixir](https://img.shields.io/badge/Elixir-1.17%2B-4B275F?logo=elixir)](https://elixir-lang.org)
 [![Phoenix](https://img.shields.io/badge/Phoenix-1.7%2B-FD4F00)](https://www.phoenixframework.org)
 [![Tests](https://img.shields.io/github/actions/workflow/status/gnuzd/lazypock/test.yml?branch=main&label=tests&logo=github)](https://github.com/gnuzd/lazypock/actions/workflows/test.yml)
+[![Rule engine](https://img.shields.io/github/actions/workflow/status/gnuzd/lazypock/rules.yml?branch=main&label=rule%20engine&logo=github)](https://github.com/gnuzd/lazypock/actions/workflows/rules.yml)
 [![Docs](https://img.shields.io/badge/docs-lazypock.gnuzd.dev-4B275F?logo=readme&logoColor=white)](https://lazypock.gnuzd.dev/)
 
 > **Your whole backend. In one lazy pocket.**
@@ -186,17 +187,28 @@ cd core
 mix test                          # Full suite
 mix test test/lazypock/rules/     # Access-control rule engine (enforcer + filter compiler)
 mix test test/lazypock/auth/      # Auth: tokens, plug, rate limiting, OAuth2
+
+mix test --cover                  # Full suite + coverage report
+elixir scripts/check_rule_coverage.exs <report>   # Per-module access-control coverage gate
+PROPERTY_MAX_RUNS=20000 mix test test/lazypock/schemas/filter_compiler_property_test.exs
 ```
 
 #### What the rule-engine tests cover
 
-The `core/test/lazypock/rules/` suite exercises the full rule pipeline end to
-end against Postgres:
+The rule-enforcement path (enforcer, filter compiler, realtime join gate) has
+its own CI workflow ([`rules.yml`](.github/workflows/rules.yml)) with a
+path-filtered trigger and a nightly, higher-iteration fuzz run. It exercises
+the full pipeline end to end against Postgres:
 
 - **Three-state rule logic** — `nil` = superuser-only, `""` = public, filter =
   conditional, plus the superuser bypass and `manageRule` delegation.
+- **Fail-closed guarantees** — a rule the enforcer cannot prove it evaluated
+  denies: whitespace-only and non-string rule values, filters that emit no SQL
+  (e.g. `'a' ~ 'b'`), dangling boolean operators, unknown `@request.auth.*`
+  tokens, and over-long filters. See `enforcer_fail_closed_test.exs`.
 - **`@request.auth.*` token resolution** — user `id`/`email`/`role` are bound
-  as SQL parameters, never interpolated into the query text.
+  as SQL parameters, never interpolated into the query text; unknown tokens are
+  rejected rather than bound to the empty string.
 - **Typed-column casts** — values are bound with explicit Postgres casts
   (`$1::UUID`, `$1::TEXT`, `$1::NUMERIC`) pulled from
   `Lazypock.Schema.TypeMapper`, so uuid/numeric/text comparisons work with
@@ -205,9 +217,23 @@ end against Postgres:
 - **SQL injection / escaping** — rule values containing single quotes or
   backslashes are handled safely (match exactly, never break out of the query),
   including a regression for multi-condition token rules ([#38](https://github.com/gnuzd/lazypock/issues/38)).
+  `~`/`!~` escape LIKE metacharacters (`%`, `_`, `\`) so a value cannot widen
+  the match into a wildcard.
+- **No existence oracle** — a rule-denied record and a missing record return
+  the same 404, and an invalid `?filter=` is rejected with 400 instead of being
+  silently dropped. See `rule_side_channel_test.exs`.
+- **Property-based fuzzing** — arbitrary bytes and generated filters must never
+  crash the parser, emitted placeholders must always match bound params (the
+  #38 class), and user values must always be bound, never interpolated. See
+  `filter_compiler_property_test.exs`.
+
+Coverage for `Lazypock.Rules.Enforcer` and `Lazypock.Schemas.FilterCompiler` is
+gated per module in CI (`scripts/check_rule_coverage.exs`); the floors are a
+ratchet at the measured baseline, not the long-term target.
 
 A module-by-module coverage inventory (what's tested, what's not, and by which
-file) lives in [`TEST_COVERAGE_AUDIT.md`](TEST_COVERAGE_AUDIT.md).
+file) lives in [`TEST_COVERAGE_AUDIT.md`](TEST_COVERAGE_AUDIT.md). Security
+reporting is described in [`SECURITY.md`](SECURITY.md).
 
 ### First-Time Setup
 

@@ -31,13 +31,46 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
 
     test "field ~ string (ILIKE with %% wrapping)" do
-      assert {:ok, {~s["title" ILIKE $1], ["%hello%"]}} =
+      assert {:ok, {~s["title" ILIKE $1 ESCAPE '\\'], ["%hello%"]}} =
                FilterCompiler.compile(~s[title ~ 'hello'])
     end
 
     test "field !~ string (NOT ILIKE with %% wrapping)" do
-      assert {:ok, {~s["title" NOT ILIKE $1], ["%hello%"]}} =
+      assert {:ok, {~s["title" NOT ILIKE $1 ESCAPE '\\'], ["%hello%"]}} =
                FilterCompiler.compile(~s[title !~ 'hello'])
+    end
+
+    test "~ escapes LIKE metacharacters so they match literally (PocketBase parity)" do
+      # `_` is a single-char LIKE wildcard and has no "explicit pattern" form,
+      # so it is always escaped; `%` opts into pattern mode when unescaped.
+      assert {:ok, {_sql, ["%a\\_b%"]}} = FilterCompiler.compile(~s[name ~ 'a_b'])
+      assert {:ok, {_sql, ["%50\\_off%"]}} = FilterCompiler.compile(~s[name ~ '50_off'])
+    end
+
+    test "~ leaves an unescaped %% as an explicit author-supplied pattern" do
+      # `name ~ 'a%b'` is a startsWith/endsWith pattern: it is NOT wrapped or
+      # escaped, which is what makes `name ~ 'prefix%'` work.
+      assert {:ok, {_sql, ["a%b"]}} = FilterCompiler.compile(~s[name ~ 'a%b'])
+      assert {:ok, {_sql, ["%foo"]}} = FilterCompiler.compile(~s[name ~ '%foo'])
+    end
+
+    test "~ preserves pre-existing escape sequences instead of double-escaping" do
+      assert {:ok, {_sql, ["%a\\%b%"]}} = FilterCompiler.compile(~s[name ~ 'a\\%b'])
+      assert {:ok, {_sql, ["%a\\_b%"]}} = FilterCompiler.compile(~s[name ~ 'a\\_b'])
+    end
+
+    test "~ treats an explicit unescaped % as an author-supplied pattern" do
+      # `name ~ 'prefix%'` stays a startsWith search: no extra wrapping.
+      assert {:ok, {_sql, ["prefix%"]}} = FilterCompiler.compile(~s[name ~ 'prefix%'])
+    end
+
+    test "!~ escapes LIKE metacharacters in the value too" do
+      assert {:ok, {_sql, ["%a\\_b%"]}} = FilterCompiler.compile(~s[name !~ 'a_b'])
+    end
+
+    test "~ bound params are escaped the same way as literals" do
+      assert {:ok, {~s["name" ILIKE $1 ESCAPE '\\'], ["%a\\_b%"]}} =
+               FilterCompiler.compile("name ~ $1", ["a_b"])
     end
   end
 
@@ -197,6 +230,11 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
 
     test "whitespace-only string returns ok with empty clause" do
+      # The compiler reports "no clause" for blank input; it cannot know
+      # whether the caller meant the public "" rule or a blank rule field.
+      # The Enforcer's classify_rule/1 treats whitespace-only rule *values* as
+      # invalid and denies -- see the fail-closed tests in
+      # test/lazypock/rules/enforcer_fail_closed_test.exs.
       assert {:ok, {"", []}} = FilterCompiler.compile("   ")
     end
 
@@ -360,6 +398,81 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
   end
 
+  describe "compile/1 — fail-closed guards" do
+    # These guard the class of bug where a non-empty filter failed to produce
+    # SQL and callers treated an empty clause as "no restriction" (= allow).
+
+    test "a dangling && is a parse error, not a silently dropped clause" do
+      assert {:error, _} = FilterCompiler.compile(~s[a = 1 &&])
+      assert {:error, _} = FilterCompiler.compile(~s[a = 1 && &&])
+      assert {:error, _} = FilterCompiler.compile(~s[a = 1 && (])
+    end
+
+    test "a dangling || is a parse error, not a silently dropped clause" do
+      assert {:error, _} = FilterCompiler.compile(~s[a = 1 ||])
+      assert {:error, _} = FilterCompiler.compile(~s[a = 1 || ||])
+    end
+
+    test "comparisons with no field operand error instead of emitting an empty clause" do
+      # These used to compile to {:ok, {"", []}} -- indistinguishable from
+      # the public "" rule to callers that treat an empty clause as allow.
+      assert {:error, _} = FilterCompiler.compile(~s['a' ~ 'b'])
+      assert {:error, _} = FilterCompiler.compile(~s['a' !~ 'b'])
+      assert {:error, _} = FilterCompiler.compile(~s[$1 ~ 'b'])
+      assert {:error, _} = FilterCompiler.compile(~s['a' ?= 'b'])
+    end
+
+    test "a filter longer than 3500 characters is rejected (PocketBase parity)" do
+      short = String.duplicate("a = 1 || ", 400)
+      assert byte_size(short) > 3500
+      assert {:error, msg} = FilterCompiler.compile(short)
+      assert msg =~ "maximum length"
+    end
+
+    test "a filter with more than 200 expressions is rejected (PocketBase parity)" do
+      many = 1..(200 + 5) |> Enum.map(&"f#{&1} = 1") |> Enum.join(" || ")
+      assert {:error, msg} = FilterCompiler.compile(many)
+      assert msg =~ "maximum of 200 expressions"
+    end
+
+    test "exactly 200 expressions still compiles" do
+      at_limit = 1..200 |> Enum.map(&"f#{&1} = 1") |> Enum.join(" || ")
+      assert {:ok, {_sql, _params}} = FilterCompiler.compile(at_limit)
+    end
+
+    test "an operator inside a quoted literal is rejected (documented limitation)" do
+      # The tokenizer splits on operators regardless of quoting, so a literal
+      # containing && / || / = cannot be expressed. Rejecting is fail-closed;
+      # it never silently drops part of the value.
+      assert {:error, _} = FilterCompiler.compile(~s[name = 'a&&b'])
+      assert {:error, _} = FilterCompiler.compile(~s[name = 'a||b'])
+    end
+
+    test "a bare quote never crashes the compiler (fuzz regression)" do
+      # Found by the property test: `classify/1` sees a lone `'` as a quoted
+      # literal (it both starts and ends with a quote), and unescape_literal
+      # then asked for a -1 length slice -> FunctionClauseError -> 500.
+      for input <- ["'", "a = '", "' < 'x'", "a = ''''"] do
+        assert match?({:ok, _}, FilterCompiler.compile(input)) or
+                 match?({:error, _}, FilterCompiler.compile(input)),
+               "compiling #{inspect(input)} did not return ok/error"
+      end
+    end
+
+    test "invalid UTF-8 bytes never crash the compiler (fuzz regression)" do
+      # String.to_charlist/1 raises UnicodeConversionError on invalid UTF-8;
+      # LIKE pattern building must be byte-wise.
+      for input <- [<<0xFF>>, <<0xC3>>, "name ~ '" <> <<0xFF>> <> "'", "a = '" <> <<0xFE>> <> "'"] do
+        assert match?({:ok, _}, FilterCompiler.compile(input)) or
+                 match?({:error, _}, FilterCompiler.compile(input)),
+               "compiling #{inspect(input)} did not return ok/error"
+      end
+
+      assert {:ok, {_sql, [<<37, 255, 37>>]}} =
+               FilterCompiler.compile("name ~ '" <> <<0xFF>> <> "'")
+    end
+  end
+
   describe "apply/3 — integration with SQL queries" do
     test "empty filter leaves query unchanged" do
       {sql, params} = FilterCompiler.apply("SELECT * FROM t", "")
@@ -418,14 +531,19 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
 
     test "?~ wraps the value in % and matches any element via unnest/EXISTS" do
-      assert {:ok, {~s[EXISTS (SELECT 1 FROM unnest("tags") AS x WHERE x ILIKE $1)], ["%news%"]}} =
-               FilterCompiler.compile(~s[tags ?~ 'news'])
+      assert {:ok,
+              {~s[EXISTS (SELECT 1 FROM unnest("tags") AS x WHERE x ILIKE $1 ESCAPE '\\')],
+               ["%news%"]}} = FilterCompiler.compile(~s[tags ?~ 'news'])
     end
 
     test "?!~ wraps the value in % and matches any non-matching element" do
       assert {:ok,
-              {~s[EXISTS (SELECT 1 FROM unnest("tags") AS x WHERE x NOT ILIKE $1)],
+              {~s[EXISTS (SELECT 1 FROM unnest("tags") AS x WHERE x NOT ILIKE $1 ESCAPE '\\')],
                ["%news%"]}} = FilterCompiler.compile(~s[tags ?!~ 'news'])
+    end
+
+    test "?~ escapes LIKE metacharacters in the value" do
+      assert {:ok, {_sql, ["%a\\_b%"]}} = FilterCompiler.compile(~s[tags ?~ 'a_b'])
     end
 
     test "?> emits `< ANY` (at least one element greater than)" do
@@ -487,7 +605,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
                  %{"tags" => "TEXT[]", "title" => "TEXT"}
                )
 
-      assert sql == ~s[($1 = ANY("tags") AND "title" ILIKE $2::TEXT)]
+      assert sql == ~s[($1 = ANY("tags") AND "title" ILIKE $2::TEXT ESCAPE '\\')]
       assert params == ["news", "%hello%"]
     end
 

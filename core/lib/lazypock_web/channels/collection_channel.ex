@@ -23,6 +23,15 @@ defmodule LazypockWeb.CollectionChannel do
         # Check listRule for this user
         user = socket.assigns[:current_user]
 
+        # Authorization is evaluated ONCE, here, at join time. The listRule
+        # clause returned by authorize_list is deliberately discarded: there is
+        # no per-record rule evaluation on delivery, so a subscriber authorized
+        # at join time receives every record change for the collection.
+        #
+        # This matches PocketBase, where a subscription is gated by
+        # listRule/viewRule and filtered per-record subscriptions are not a
+        # supported feature. Pinned by the "broadcasts are gated by the join"
+        # test in test/lazypock_web/channels/collection_socket_test.exs.
         case Lazypock.Rules.Enforcer.authorize_list(collection_name, user) do
           {:ok, _} ->
             # Fire onRealtimeSubscribeRequest (PocketBase parity) —

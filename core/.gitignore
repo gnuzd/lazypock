@@ -38,3 +38,6 @@ npm-debug.log
 
 # Burrito build output
 /burrito_out/
+
+# Coverage report captured by CI for scripts/check_rule_coverage.exs
+/cover.txt
