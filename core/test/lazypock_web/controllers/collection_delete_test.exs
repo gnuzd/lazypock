@@ -7,6 +7,8 @@ defmodule LazypockWeb.CollectionDeleteTest do
   alias Lazypock.Auth.Token
   alias Lazypock.Collections.Registry
 
+  import Ecto.Query
+
   defp auth_conn(conn) do
     superuser = %SuperUser{
       id: Ecto.UUID.generate(),
@@ -67,5 +69,23 @@ defmodule LazypockWeb.CollectionDeleteTest do
   test "refuses to delete a system collection" do
     conn = delete(auth_conn(build_conn()), "/api/collections/_superusers")
     assert json_response(conn, 400)["error"] =~ "system collection"
+  end
+
+  test "deletes an unmanaged collection (metadata only, no 400)" do
+    name = unique_name("delunmanaged")
+    {:ok, _coll} = DDL.create_collection(name, type: "base", fields: [])
+
+    Repo.update_all(
+      from(c in Lazypock.Collections.Collection, where: c.name == ^name),
+      set: [managed: false]
+    )
+
+    Registry.reload!()
+
+    conn = delete(auth_conn(build_conn()), "/api/collections/#{name}")
+    assert response(conn, 204)
+
+    Registry.reload!()
+    assert Registry.get(name) == {:error, :not_found}
   end
 end
