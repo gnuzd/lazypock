@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.12.0](https://github.com/gnuzd/lazypock/compare/v0.11.0...v0.12.0) (2026-09-24)
+
+
+### Features
+
+* **collections:** preview endpoint for the view builder ([15e60c8](https://github.com/gnuzd/lazypock/commit/15e60c8a4661dd8a38f9af3a58c026b0579a345a))
+* **schema:** no-code view builder query generator ([93e7f66](https://github.com/gnuzd/lazypock/commit/93e7f66f13d7f02fdf1ad27a6c26dd5ede5dbbac))
+* **schema:** no-code view builder query generator ([7753252](https://github.com/gnuzd/lazypock/commit/7753252e874519fc914ac22693176a265b5f6f3d))
+* **schema:** wire the view builder into DDL and the collections API ([bbfa76c](https://github.com/gnuzd/lazypock/commit/bbfa76c5da4f7a8bca49191d37073eae44e925ba))
+* **studio:** no-code view builder UI ([251dbaa](https://github.com/gnuzd/lazypock/commit/251dbaae56ceca4702251ab869f77298280e8fed))
+
+
+### Bug Fixes
+
+* **collections:** allow updating a view collection from the Studio ([a0029d4](https://github.com/gnuzd/lazypock/commit/a0029d4fb3d8ee247ac67bd2748b185f9e5c69fc))
+* **collections:** allow updating a view collection from the Studio ([e6f931b](https://github.com/gnuzd/lazypock/commit/e6f931b4b4020d0a07b0972151aefdef573f013c))
+* **studio:** show table column names verbatim ([d818cb7](https://github.com/gnuzd/lazypock/commit/d818cb793fc0e49388b0db51520c964a6a34c8f7))
+* **studio:** show table column names verbatim ([9c95db0](https://github.com/gnuzd/lazypock/commit/9c95db0df1994ce099552a383ea0fbbf607e5e61))
+* **studio:** view builder feedback + view realtime test coverage ([125a3f5](https://github.com/gnuzd/lazypock/commit/125a3f57e7e584cad7ecd08b3c63327f10d02e33))
+* **studio:** view builder feedback + view realtime test coverage ([4b31e31](https://github.com/gnuzd/lazypock/commit/4b31e315cdd52f9e6e6471561dcc0fb6426ad30e))
+
 ## [0.11.0](https://github.com/gnuzd/lazypock/compare/v0.10.2...v0.11.0) (2026-09-22)
 
 
