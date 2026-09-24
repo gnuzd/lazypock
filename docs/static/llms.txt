@@ -1,0 +1,27 @@
+# Lazypock
+
+> Self-hosted, PocketBase-compatible backend on PostgreSQL. Single binary + an admin Studio (collections, records, rules, indexes, auth, realtime, files). Write real Postgres, query it from any PocketBase SDK.
+
+This file is for AI assistants and crawlers. The most useful page for generating a file that can be
+imported into a Lazypock server (Studio → Settings → Import / Backups, or `POST /api/import`) is the
+backup format reference below.
+
+## Import / backup JSON format
+
+- [Backup & import JSON format](https://lazypock.gnuzd.dev/backup): envelope, collections, fields, types, rules, indexes, records, examples, and PocketBase 23+ compatibility.
+- [JSON Schema (backup.schema.json)](https://lazypock.gnuzd.dev/backup.schema.json): machine-readable contract for the canonical `{ "collections": [...] }` payload.
+
+Endpoints: `GET /api/export` (download), `POST /api/import` (restore, superuser only). CLI:
+`lazypock backup [file]` / `lazypock restore <file>`.
+
+## Docs
+
+- [What is Lazypock](https://lazypock.gnuzd.dev/): overview and feature list.
+- [Architecture](https://lazypock.gnuzd.dev/architecture): system layers, request lifecycle, realtime.
+- [Server guide](https://lazypock.gnuzd.dev/server): Docker, binary, first-time setup, filters, production, env vars.
+- [TypeScript SDK](https://lazypock.gnuzd.dev/sdk/typescript): install, codegen, queries, realtime, files, auth.
+- [All SDKs](https://lazypock.gnuzd.dev/sdk): TypeScript (Swift, Android, Godot marked coming soon).
+
+## Source
+
+- GitHub: https://github.com/gnuzd/lazypock

@@ -69,6 +69,10 @@ export const nav: NavSection[] = [
 		],
 	},
 	{
+		title: "Reference",
+		items: [{ href: "/backup", label: "Backup & import JSON" }],
+	},
+	{
 		title: "More",
 		items: [{ href: "/#license", label: "License" }],
 	},
