@@ -3,6 +3,8 @@
 
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { ArrowDown, ArrowUp, Search, Settings, Plus, Trash, X } from '@lucide/svelte';
 	import { getThumbUrl } from 'lazypock';
 	import type { FilterString, ListOptions, SortString } from 'lazypock';
@@ -250,6 +252,12 @@
 	$effect(() => {
 		const name = page.url.searchParams.get('collection') ?? $activeName;
 		if (!name) return;
+
+		// A deleted collection can linger in the URL/activeName until the
+		// navigation below lands. The store has already been refreshed, so skip
+		// it instead of re-rendering a table for a collection that is gone.
+		const list = $collections;
+		if (list.length > 0 && !list.some((c) => c.name === name)) return;
 
 		if (name !== $activeName) {
 			$activeName = name;
@@ -604,6 +612,41 @@
 		onClose={() => {
 			showCollectionPane = false;
 			reload();
+		}}
+		onDeleted={async () => {
+			showCollectionPane = false;
+
+			// The deleted collection is already gone from the store. Move to the
+			// first remaining user collection so the table stops showing the one
+			// that was just removed.
+			const next = ($collections.find((c) => !c.system)?.name as string) ?? '';
+
+			if (next) {
+				// eslint-disable-next-line svelte/no-navigation-without-resolve
+				await goto(base + '/collections?collection=' + encodeURIComponent(next), {
+					replaceState: true,
+					keepFocus: true,
+					noScroll: true
+				});
+				return;
+			}
+
+			// Nothing left — clear the stale table and drop the URL param.
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			await goto(base + '/collections', {
+				replaceState: true,
+				keepFocus: true,
+				noScroll: true
+			});
+			$activeName = '';
+			collection = null;
+			rows = [];
+			totalItems = 0;
+			totalPages = 1;
+			if (unsubRecordEvents) {
+				unsubRecordEvents();
+				unsubRecordEvents = null;
+			}
 		}}
 	/>
 </SidePane>
