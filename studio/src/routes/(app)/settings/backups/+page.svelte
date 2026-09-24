@@ -3,6 +3,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import AiPromptButton from '$lib/components/AiPromptButton.svelte';
 	import UndoImportButton from '$lib/components/UndoImportButton.svelte';
+	import Switch from '$lib/components/Switch.svelte';
 	import { toast } from 'svelte-sonner';
 
 	let backingUp = $state(false);
@@ -186,36 +187,23 @@
 			</ul>
 		</div>
 
-		<div class="mb-4 flex items-start gap-2">
-			<label class="switch">
-				<input id="restore-delete-missing" type="checkbox" bind:checked={deleteMissing} />
-				<span class="switch-slider"></span>
-			</label>
-			<div>
-				<label class="switch-label" for="restore-delete-missing">
-					<span class="txt">Delete collections not present in the backup</span>
-				</label>
-				<p class="text-xs text-base-content/50">
-					Makes the database match the backup exactly. System collections are always kept. Leave off
-					for a safe merge.
-				</p>
-			</div>
-		</div>
+		<Switch
+			variant="inline"
+			class="mb-4"
+			bind:checked={deleteMissing}
+			description="Makes the database match the backup exactly. System collections are always kept. Leave off for a safe merge."
+		>
+			Delete collections not present in the backup
+		</Switch>
 
-		<div class="mb-4 flex items-start gap-2">
-			<label class="switch">
-				<input id="restore-atomic" type="checkbox" bind:checked={atomic} />
-				<span class="switch-slider"></span>
-			</label>
-			<div>
-				<label class="switch-label" for="restore-atomic">
-					<span class="txt">Roll the whole restore back if any collection fails</span>
-				</label>
-				<p class="text-xs text-base-content/50">
-					All-or-nothing (recommended). Turn off to apply what can be applied and report the rest.
-				</p>
-			</div>
-		</div>
+		<Switch
+			variant="inline"
+			class="mb-4"
+			bind:checked={atomic}
+			description="All-or-nothing (recommended). Turn off to apply what can be applied and report the rest."
+		>
+			Roll the whole restore back if any collection fails
+		</Switch>
 	{/if}
 
 	{#if restoreResult}

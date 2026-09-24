@@ -6,6 +6,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import AiPromptButton from '$lib/components/AiPromptButton.svelte';
 	import UndoImportButton from '$lib/components/UndoImportButton.svelte';
+	import Switch from '$lib/components/Switch.svelte';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
 
@@ -212,35 +213,13 @@
 			{/if}
 		</div>
 
-		<div class="switch-field mb-4">
-			<label class="switch-label" for="delete-missing">
-				<span class="txt">Delete missing collections and schema fields</span>
-			</label>
-			<label class="switch">
-				<input
-					id="delete-missing"
-					type="checkbox"
-					bind:checked={importForm.form.deleteMissing}
-					disabled={!isValidImport}
-				/>
-				<span class="switch-slider"></span>
-			</label>
-		</div>
+		<Switch class="mb-4" bind:checked={importForm.form.deleteMissing} disabled={!isValidImport}>
+			Delete missing collections and schema fields
+		</Switch>
 
-		<div class="switch-field mb-4">
-			<label class="switch-label" for="atomic-import">
-				<span class="txt">Roll the whole import back if any collection fails</span>
-			</label>
-			<label class="switch">
-				<input
-					id="atomic-import"
-					type="checkbox"
-					bind:checked={importForm.form.atomic}
-					disabled={!isValidImport}
-				/>
-				<span class="switch-slider"></span>
-			</label>
-		</div>
+		<Switch class="mb-4" bind:checked={importForm.form.atomic} disabled={!isValidImport}>
+			Roll the whole import back if any collection fails
+		</Switch>
 
 		{#if isValidImport && parsedCollections.length > 0 && !hasChanges}
 			<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
