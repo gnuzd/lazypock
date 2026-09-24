@@ -20,14 +20,32 @@ minimums = %{
 
 case System.argv() do
   [path] ->
-    report = File.read!(path)
+    report =
+      case File.read(path) do
+        {:ok, contents} ->
+          contents
 
-    # Rows look like: "|     89.19% | Lazypock.Rules.Enforcer             |"
+        {:error, reason} ->
+          IO.puts(
+            :stderr,
+            "Could not read coverage report #{path}: #{:file.format_error(reason)}"
+          )
+
+          System.halt(1)
+      end
+
+    # Rows look like either of:
+    #
+    #   |     89.19% | Lazypock.Rules.Enforcer             |   (Elixir >= 1.18)
+    #       89.19% | Lazypock.Rules.Enforcer                  (Elixir 1.17)
+    #
+    # so the outer pipes are optional in the pattern. The percentage column and
+    # the separator are always present.
     measured =
       report
       |> String.split("\n")
       |> Enum.flat_map(fn line ->
-        case Regex.run(~r/^\|\s*([\d.]+)%\s*\|\s*([A-Za-z0-9_.]+)\s*\|\s*$/, line) do
+        case Regex.run(~r/^\s*\|?\s*([\d.]+)%\s*\|\s*([A-Za-z0-9_.]+)\s*\|?\s*$/, line) do
           [_, pct, module] ->
             case Float.parse(pct) do
               {value, _} -> [{module, value}]
@@ -42,6 +60,13 @@ case System.argv() do
 
     if measured == %{} do
       IO.puts(:stderr, "No coverage rows parsed from #{path} — did `mix test --cover` run?")
+      IO.puts(:stderr, "Last lines of the report:")
+
+      report
+      |> String.split("\n")
+      |> Enum.take(-15)
+      |> Enum.each(&IO.puts(:stderr, "  #{&1}"))
+
       System.halt(1)
     end
 
