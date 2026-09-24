@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.12.1](https://github.com/gnuzd/lazypock/compare/v0.12.0...v0.12.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **ci:** parse the coverage table in both Elixir 1.17 and 1.18+ formats ([2952119](https://github.com/gnuzd/lazypock/commit/2952119ba2a179cde69e1eaa5898a677bc8cf2ff))
+* **rules:** fail closed on rules the enforcer cannot evaluate ([5edd370](https://github.com/gnuzd/lazypock/commit/5edd370b375b1678ab7a6685c2221adbc568650c))
+* **rules:** fail closed on rules the enforcer cannot evaluate ([87e1ef2](https://github.com/gnuzd/lazypock/commit/87e1ef2e7f57bf58d572fe670fb4cb09724fb148))
+
 ## [0.12.0](https://github.com/gnuzd/lazypock/compare/v0.11.0...v0.12.0) (2026-09-24)
 
 
