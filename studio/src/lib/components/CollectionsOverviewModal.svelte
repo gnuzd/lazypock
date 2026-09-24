@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Erd from '$lib/components/Erd.svelte';
+	import Button from '$lib/components/Button.svelte';
 	import { collections } from '$lib/collectionsStore';
 	import { fade } from 'svelte/transition';
 	import { quintInOut } from 'svelte/easing';
@@ -91,9 +92,7 @@
 						<input type="checkbox" class="checkbox checkbox-sm" bind:checked={showSystem} />
 						System collections
 					</label>
-					<button type="button" class="btn btn-ghost btn-sm" onclick={() => (show = false)}>
-						Close
-					</button>
+					<Button class="btn-ghost btn-sm" onclick={() => (show = false)}>Close</Button>
 				</div>
 			</header>
 

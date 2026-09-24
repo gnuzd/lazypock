@@ -135,9 +135,9 @@
 	</p>
 
 	<div class="mb-4 flex items-center gap-2">
-		<button type="button" class="btn btn-outline btn-sm" onclick={() => restoreFileInput?.click()}>
+		<Button class="btn-outline btn-sm" onclick={() => restoreFileInput?.click()}>
 			Choose backup file
-		</button>
+		</Button>
 		<input
 			bind:this={restoreFileInput}
 			type="file"
