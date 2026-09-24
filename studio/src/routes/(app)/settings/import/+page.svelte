@@ -4,6 +4,7 @@
 	import { z } from 'zod';
 	import { toast } from 'svelte-sonner';
 	import Button from '$lib/components/Button.svelte';
+	import AiPromptButton from '$lib/components/AiPromptButton.svelte';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
 
@@ -169,6 +170,11 @@
 				>
 					Load from JSON file
 				</button>
+			</p>
+			<p class="mt-2 flex flex-wrap items-center gap-2">
+				New to the format? Copy a ready-made prompt and describe what you want to an AI assistant,
+				then paste its JSON output below:
+				<AiPromptButton />
 			</p>
 			<input
 				bind:this={importFileInput}
