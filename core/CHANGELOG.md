@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.13.0](https://github.com/gnuzd/lazypock/compare/v0.12.1...v0.13.0) (2026-09-24)
+
+
+### Features
+
+* **import:** atomic restore + one-click rollback ([cbd18d7](https://github.com/gnuzd/lazypock/commit/cbd18d776fbaf09979e216d0a23bebbad29e4d18))
+* **import:** atomic restore + one-click rollback ([3a1d3b6](https://github.com/gnuzd/lazypock/commit/3a1d3b6fe356f48769ded6081f12557351c9cd80))
+* **security:** restrict + audit + re-auth import/export/rollback ([82068e9](https://github.com/gnuzd/lazypock/commit/82068e97d3fcae1d8e10d87c4a7d4c19a7e9893d))
+* **security:** superuser-only import/export — guard tests, audit, re-auth ([1a76b92](https://github.com/gnuzd/lazypock/commit/1a76b923aebb6918b191737d6d6d2db11572a1c4))
+* **studio:** add a "Copy AI prompt" button to Import and Backups ([e54a22a](https://github.com/gnuzd/lazypock/commit/e54a22a5aaeefb07cc45e69fe4124813b9bf7057))
+* **studio:** confirm password for import / restore / rollback ([eb2b997](https://github.com/gnuzd/lazypock/commit/eb2b997337094d83bc141b20b969d42ff2d73af8))
+* **studio:** Copy AI prompt for import/restore ([e4bfa8e](https://github.com/gnuzd/lazypock/commit/e4bfa8e50308bd864a5c4c839d6280896935f08c))
+
+
+### Bug Fixes
+
+* collection deletion (unmanaged 400 + SDK fire-and-forget race) ([79dd06c](https://github.com/gnuzd/lazypock/commit/79dd06ce550c58888d491caba8ab27733cf6e47c))
+* **core:** allow deleting unmanaged collections (they were undeletable) ([9ef031f](https://github.com/gnuzd/lazypock/commit/9ef031f23a3c4abc3c0d1d06fccd1c4eefc7e5ef))
+* **core:** make the auth-collection email field unique by default ([9af5c76](https://github.com/gnuzd/lazypock/commit/9af5c76a877fd741b28f08d0cd4fa5fa358e5d59))
+* **core:** make the auth-collection email field unique by default ([6137640](https://github.com/gnuzd/lazypock/commit/61376408105b4f9112b1e3fc826cde8f4d4eb125))
+* **import:** report the real error instead of a 25P02 cascade ([b3a70b1](https://github.com/gnuzd/lazypock/commit/b3a70b1088857186bcc04c199c628e6d24703fdd))
+* **studio:** animate only .loading-spinner, not the .loading state hook ([5148846](https://github.com/gnuzd/lazypock/commit/5148846e55501ece01889d8bc89016cd59f7cb7c))
+* **studio:** await collection delete instead of racing the refresh ([b33ddbd](https://github.com/gnuzd/lazypock/commit/b33ddbd28e850d60ec4d447a0bb29f1741c51263))
+* **studio:** clear deleted collection's table + modal for rollback ([4eb7097](https://github.com/gnuzd/lazypock/commit/4eb70974c95be436981251870a7e33d944e9cc50))
+* **studio:** clear the deleted collection's table + modal for rollback ([1280008](https://github.com/gnuzd/lazypock/commit/1280008ea773da2a4bba9dfdf6d2867864293787))
+* **studio:** give icon buttons a real extra-small size ([766cf5e](https://github.com/gnuzd/lazypock/commit/766cf5e4f5c87084e2def20a8000a1cec21fc434))
+* **studio:** keep the button label from spinning with the loader ([8179036](https://github.com/gnuzd/lazypock/commit/817903650c1259658bb60033ef69e3ae8b1f9f1e))
+* **studio:** unblock index creation and stabilize the record table ([7afad21](https://github.com/gnuzd/lazypock/commit/7afad217903cd89ea0a337cc60a9927b1797d100))
+* **studio:** unblock index creation and stabilize the record table ([9862aa3](https://github.com/gnuzd/lazypock/commit/9862aa3a087cf9ae6220590bc3eaf3753a3e87ff))
+
 ## [0.12.1](https://github.com/gnuzd/lazypock/compare/v0.12.0...v0.12.1) (2026-09-24)
 
 
