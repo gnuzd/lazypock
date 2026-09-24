@@ -60,3 +60,39 @@ input:autofill:focus {
 .no-scrollbar::-webkit-scrollbar {
 	display: none; /* Chrome/Safari/Edge */
 }
+
+@layer components {
+	/*
+	 * Spinner. The markup follows the DaisyUI convention
+	 * (`loading-spinner loading-{xs,sm,lg}`). The bare `loading` class is left
+	 * intentionally unstyled: buttons (the Button component and several raw
+	 * ones) use it as an inert loading-state hook, so it must never animate the
+	 * element itself. Sized by the `loading-*` modifier, colored by
+	 * `currentColor` so it inherits the surrounding text.
+	 */
+	.loading-spinner {
+		@apply inline-block aspect-square shrink-0 rounded-full border-2 border-current border-t-transparent align-middle;
+		width: 1.25rem;
+		animation: loading-spin 0.6s linear infinite;
+	}
+
+	.loading-xs {
+		width: 0.75rem;
+		border-width: 1.5px;
+	}
+
+	.loading-sm {
+		width: 1rem;
+	}
+
+	.loading-lg {
+		width: 1.75rem;
+		border-width: 3px;
+	}
+
+	@keyframes loading-spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+}

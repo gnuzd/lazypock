@@ -85,7 +85,13 @@
 
 {#if sqlResults}
 	<div class="mt-3">
-		<DataTable columns={tableColumns} rows={tableRows} zebra emptyLabel="No rows returned.">
+		<DataTable
+			columns={tableColumns}
+			rows={tableRows}
+			zebra
+			fixed={false}
+			emptyLabel="No rows returned."
+		>
 			{#snippet cell(row, col)}
 				{#if row[col.key] == null}
 					<span class="opacity-50">NULL</span>

@@ -28,6 +28,7 @@
 		zebra = false,
 		selectable = false,
 		fillHeight = false,
+		fixed = true,
 		sortable = false,
 		sortKey = null,
 		sortDir = 'asc',
@@ -49,6 +50,12 @@
 		selectable?: boolean;
 		/** Fill the parent's height (flex-1 container) with an internal scroll area. */
 		fillHeight?: boolean;
+		/**
+		 * Fixed table layout: column widths come from the header row and stay put
+		 * when rows are filtered/sorted or a loading row replaces the body. Set to
+		 * false for tables with arbitrary result columns (e.g. SQL results).
+		 */
+		fixed?: boolean;
 		/** Render sortable column headers (click cycles asc → desc → none). */
 		sortable?: boolean;
 		/** Column key currently sorted by, or null when unsorted. */
@@ -132,10 +139,29 @@
 <div
 	class={fillHeight
 		? 'flex h-full flex-col overflow-hidden rounded-box border border-base-300 bg-base-100'
-		: 'no-scrollbar overflow-auto rounded-box border border-base-300 bg-base-100'}
+		: 'no-scrollbar [scrollbar-gutter:stable] overflow-auto rounded-box border border-base-300 bg-base-100'}
 >
-	<div class={fillHeight ? 'no-scrollbar min-h-0 flex-1 overflow-auto' : ''}>
-		<table class="w-full border-collapse text-sm">
+	<div
+		class={fillHeight ? 'no-scrollbar min-h-0 flex-1 [scrollbar-gutter:stable] overflow-auto' : ''}
+	>
+		{#if loading && rows.length > 0}
+			<!--
+				Zero-height sticky pill. Keeping the existing rows mounted while a
+				reload runs keeps the column widths and the scroll height stable, so
+				the sort/filter header no longer jumps; the pill makes the in-flight
+				load visible without collapsing the body.
+			-->
+			<div class="pointer-events-none sticky top-10 z-20 flex h-0 items-start justify-center">
+				<span
+					class="flex items-center gap-2 rounded-full border border-base-300 bg-base-100/95 px-3 py-1 text-xs text-base-content/70 shadow-sm"
+					aria-live="polite"
+				>
+					<span class="loading loading-spinner loading-xs"></span>
+					Loading…
+				</span>
+			</div>
+		{/if}
+		<table class="w-full border-collapse text-sm" class:table-fixed={fixed}>
 			<thead>
 				<tr class="bg-base-200 text-xs font-semibold tracking-wider text-base-content/60">
 					{#if selectable}
@@ -188,19 +214,22 @@
 					{/each}
 				</tr>
 			</thead>
-			<tbody>
-				{#if loading}
+			<tbody class="transition-opacity" class:opacity-40={loading && rows.length > 0}>
+				{#if rows.length === 0}
 					<tr>
-						<td {colspan} class="py-8 text-center opacity-50">Loading...</td>
-					</tr>
-				{:else if rows.length === 0}
-					<tr>
-						<td {colspan} class="py-8 text-center opacity-50">
-							{#if emptyLabel}
-								<span class="mb-2 block text-sm">{emptyLabel}</span>
-							{/if}
-							{#if emptyActionLabel && onemptyaction}
-								<Button class="btn-primary" onclick={onemptyaction}>{emptyActionLabel}</Button>
+						<td {colspan} class="py-8 text-center">
+							{#if loading}
+								<span class="inline-flex items-center gap-2 text-sm text-base-content/60">
+									<span class="loading loading-spinner loading-sm"></span>
+									Loading…
+								</span>
+							{:else}
+								{#if emptyLabel}
+									<span class="mb-2 block text-sm opacity-60">{emptyLabel}</span>
+								{/if}
+								{#if emptyActionLabel && onemptyaction}
+									<Button class="btn-primary" onclick={onemptyaction}>{emptyActionLabel}</Button>
+								{/if}
 							{/if}
 						</td>
 					</tr>
@@ -244,7 +273,8 @@
 									{:else if cell}
 										{@render cell(row, col)}
 									{:else}
-										{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
+										{@const text = col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
+										<span title={String(text)}>{text}</span>
 									{/if}
 								</td>
 							{/each}

@@ -18,7 +18,7 @@
 	let cls = $derived('btn' + (className ? ' ' + className : ''));
 </script>
 
-<button {type} {disabled} {onclick} class={cls} class:loading>
+<button {type} {disabled} {onclick} class={cls} aria-busy={loading}>
 	{#if loading}
 		<span class="btn-spinner"></span>
 	{/if}
