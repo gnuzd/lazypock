@@ -67,6 +67,52 @@ defmodule Lazypock.BackupRollbackTest do
     end
   end
 
+  describe "record errors are isolated (no 25P02 cascade)" do
+    # A record with a column the table doesn't have makes Postgres abort the
+    # current transaction. Without per-collection savepoints every following
+    # collection then failed with "current transaction is aborted" (25P02)
+    # instead of its own result.
+    defp failing_payload(bad, good) do
+      %{
+        "collections" => [
+          %{
+            "name" => bad,
+            "type" => "base",
+            "schema" => [],
+            "records" => [%{"id" => Ecto.UUID.generate(), "no_such_column" => "x"}]
+          },
+          %{"name" => good, "type" => "base", "schema" => []}
+        ]
+      }
+    end
+
+    test "best-effort reports the real error and still imports the next collection" do
+      bad = cname("badrec")
+      good = cname("goodrec")
+
+      assert %{imported: imported, errors: errors} =
+               Backup.restore(failing_payload(bad, good), false, atomic: false)
+
+      assert Enum.any?(errors, &(&1.name == bad))
+      refute Enum.any?(errors, &(&1.error =~ "25P02"))
+      assert Enum.any?(imported, &(&1.name == good))
+      assert Repo.get_by(Lazypock.Collections.Collection, name: good)
+    end
+
+    test "atomic rolls everything back and reports the real error" do
+      bad = cname("badrec")
+      good = cname("goodrec")
+
+      assert %{imported: [], errors: errors, rolled_back: true} =
+               Backup.restore(failing_payload(bad, good))
+
+      assert Enum.any?(errors, &(&1.name == bad))
+      refute Enum.any?(errors, &(&1.error =~ "25P02"))
+      assert Repo.get_by(Lazypock.Collections.Collection, name: bad) == nil
+      assert Repo.get_by(Lazypock.Collections.Collection, name: good) == nil
+    end
+  end
+
   describe "rollback/0" do
     test "reverts changed records and prunes records added since the snapshot" do
       name = cname("items")
