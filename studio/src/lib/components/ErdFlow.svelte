@@ -16,12 +16,17 @@
 	 * (see Erd.svelte) so `useStore` can drive the flow's store — nodes and
 	 * edges are synced through store assignments (no `bind:`, which would loop
 	 * with the reactive graph build). Selection highlights connected edges.
+	 *
+	 * `onselect` (optional) reports the selected collection name upward — used
+	 * by the view builder's "pick a source collection" dialog.
 	 */
-	let {
-		collections = []
-	}: {
+	type ErdFlowProps = {
 		collections?: Record<string, unknown>[];
-	} = $props();
+		/** Optional: called with the selected collection name (null when cleared). */
+		onselect?: (name: string | null) => void;
+	};
+
+	let { collections = [], onselect }: ErdFlowProps = $props();
 
 	const { fitView } = useSvelteFlow();
 	// Re-read the store reactively — SvelteFlow replaces the provider's
@@ -146,6 +151,7 @@
 	function onSelectionChange(sel: { nodes: { id: string }[] }) {
 		selectedIds = new Set((sel.nodes ?? []).map((n) => n.id));
 		hasSelection = selectedIds.size > 0;
+		if (onselect) onselect(selectedIds.values().next().value ?? null);
 	}
 </script>
 

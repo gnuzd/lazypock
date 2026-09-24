@@ -11,11 +11,13 @@
 	 * drag via the Svelte Flow controls; clicking a collection highlights its
 	 * relations and dims the rest.
 	 */
-	let {
-		collections = []
-	}: {
+	type ErdProps = {
 		collections?: Record<string, unknown>[];
-	} = $props();
+		/** Optional: called with the selected collection name (null when cleared). */
+		onselect?: (name: string | null) => void;
+	};
+
+	let { collections = [], onselect }: ErdProps = $props();
 </script>
 
 <div class="absolute inset-0 overflow-hidden rounded-field border border-base-300">
@@ -25,7 +27,7 @@
 		</div>
 	{:else}
 		<SvelteFlowProvider>
-			<ErdFlow {collections} />
+			<ErdFlow {collections} {onselect} />
 		</SvelteFlowProvider>
 	{/if}
 </div>

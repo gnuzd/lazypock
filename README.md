@@ -70,6 +70,7 @@ Full SDK docs (install, codegen, type safety, queries, realtime, files, auth): *
 | Feature | Backend (core) | Studio (admin UI) | SDK (lazypock-ts) |
 | --- | --- | --- | --- |
 | 🗄️ **Dynamic Collections** | DDL create/drop/add field — real Postgres tables, real columns ✅ | Collection CRUD in side pane, field editor (add/remove/reorder) ✅ | — |
+| 🧩 **View Collections** | Read-only collections backed by a single `SELECT` over other collections; fields auto-derived from the query, realtime events on source changes ✅ | **No-code view builder** (pick source + fields, incl. related collections, with live SQL + sample preview) or raw SQL ✅ | — |
 | 🌐 **REST API** | `GET/POST/PATCH/DELETE /api/:collection`, filter/sort/paginate ✅ | Record browser: searchable/sortable DataTable with live record count + dynamic RecordForm ✅ | `collection(name).getList/getFullList/getOne/create/update/delete` ✅ |
 | 🔐 **Auth** | Superuser JWT + auth collection JWT (`auth-with-password`/`auth-refresh`/`auth-methods`) + OAuth2 (Google/GitHub/generic via Assent) ✅ | Login page, auth guard, token persistence, auto-redirect ✅ | `login/me/logout`, `AuthStore` with pluggable storage (localStorage-backed by default) ✅ |
 | 🛡️ **Rules** | Three-state rules (nil = superuser, `""` = public, filter expr), enforced on all CRUD + `manageRule` ✅ | Rule editor with lock/unlock per field ✅ | — |
@@ -530,6 +531,43 @@ curl -X POST http://localhost:4000/api/posts \
   -H "Content-Type: application/json" \
   -d '{"title": "Hello World", "body": "My first post"}'
 ```
+
+#### View collections (no-code builder or raw SQL)
+
+A **view** collection is read-only and populated from a single `SELECT` over
+other collections. Its fields are derived from the query result columns, and
+record mutations on the source collections are diffed and broadcast to view
+subscribers.
+
+Studio → **Collections → New → View collection** offers two editors:
+
+- **Builder** (no SQL): pick a source collection and tick the columns you
+  want — including fields reached through relation fields. Single relations
+  become `LEFT JOIN`s; multi-relations are aggregated into JSON arrays so the
+  view's `id` stays unique. The generated SQL and a live sample are shown
+  before saving.
+- **SQL**: the raw PocketBase-style query editor. A view keeps the editor it
+  was created with.
+
+Create/update via the API with either `viewQuery` (raw SQL) or a `viewBuilder`
+spec:
+
+```jsonc
+// POST /api/collections
+{
+  "name": "active_orders",
+  "type": "view",
+  "viewBuilder": {
+    "source": "orders",
+    "fields": [{"name": "id"}, {"name": "is_active"}],
+    "sort": "-created_at"
+  }
+}
+```
+
+`POST /api/collections/meta/preview-view-builder` takes the same spec and
+returns `{query, fields, sample}` without saving — this powers the Studio's
+live preview.
 
 #### System fields & `autodate`
 
