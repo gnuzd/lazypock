@@ -16,6 +16,8 @@
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { collections, loadCollections } from '$lib/collectionsStore';
+	import ViewBuilder from '$lib/components/ViewBuilder.svelte';
+	import { emptyViewBuilderSpec, type ViewBuilderSpec } from '$lib/viewBuilder';
 	import { Check } from '@lucide/svelte';
 
 	/**
@@ -48,7 +50,12 @@
 	let typeOpen = $state(false);
 	let newFields = $state<FieldDefinition[]>([]);
 	let newIndexes = $state<string[]>([]);
-	// ── View collections: query + live dry-run state (PocketBase parity) ──
+	// ── View collections: builder vs raw SQL + live dry-run state ──
+	// New views default to the no-code builder; existing views stay in the
+	// editor they were created with (`view_origin`).
+	let viewMode = $state<'builder' | 'sql'>('builder');
+	let viewOrigin = $state<'builder' | 'sql'>('builder');
+	let viewBuilder = $state<ViewBuilderSpec>(emptyViewBuilderSpec());
 	let viewQuery = $state('');
 	let dryRunState = $state<'idle' | 'testing' | 'ok' | 'error'>('idle');
 	let dryRunSample = $state<Record<string, unknown>[]>([]);
@@ -104,6 +111,10 @@
 				) as unknown as FieldDefinition[];
 			newIndexes = ((coll.indexes as string[]) ?? []).filter(Boolean);
 			viewQuery = (coll.viewQuery as string) ?? '';
+			viewOrigin = (coll.viewOrigin as string) === 'builder' ? 'builder' : 'sql';
+			viewBuilder = ((coll.viewBuilder as ViewBuilderSpec | undefined) ??
+				emptyViewBuilderSpec()) as ViewBuilderSpec;
+			if (newType === 'view') viewMode = viewOrigin;
 			const rules = (coll.rules as Record<string, unknown>) ?? {};
 			listRule = (rules['listRule'] as string | null) ?? null;
 			viewRule = (rules['viewRule'] as string | null) ?? null;
@@ -152,7 +163,9 @@
 		return JSON.stringify({
 			name: newName,
 			type: newType,
-			viewQuery: newType === 'view' ? viewQuery : '',
+			viewMode: newType === 'view' ? viewMode : '',
+			viewQuery: newType === 'view' && viewMode === 'sql' ? viewQuery : '',
+			viewBuilder: newType === 'view' && viewMode === 'builder' ? viewBuilder : null,
 			fields: newFields
 				.filter((f) => !f['@toDelete'])
 				.map((f) => {
@@ -301,8 +314,10 @@
 				dryRunState = 'ok';
 			} catch (e) {
 				dryRunError =
-					((e as { message?: string })?.message ?? '').replace(/^Invalid view query\. Raw error: \s*/, '') ||
-					'Invalid query';
+					((e as { message?: string })?.message ?? '').replace(
+						/^Invalid view query\. Raw error: \s*/,
+						''
+					) || 'Invalid query';
 				dryRunSample = [];
 				dryRunFields = [];
 				dryRunState = 'error';
@@ -317,7 +332,8 @@
 		const payload: Record<string, unknown> = {
 			name: newName.trim(),
 			type: newType,
-			...(newType === 'view' ? { viewQuery: viewQuery.trim() } : {}),
+			...(newType === 'view' && viewMode === 'sql' ? { viewQuery: viewQuery.trim() } : {}),
+			...(newType === 'view' && viewMode === 'builder' ? { viewBuilder } : {}),
 			indexes: newIndexes,
 			fields: newFields
 				.filter((f) => !f['@toDelete'])
@@ -344,10 +360,15 @@
 			return;
 		}
 
-		// View collections must have a query (server-side introspection will
-		// surface any SQL errors with a clear message).
-		if (newType === 'view' && !viewQuery.trim()) {
+		// View collections need either a SELECT query (SQL mode) or a source
+		// collection (builder mode); the server validates the specifics.
+		if (newType === 'view' && viewMode === 'sql' && !viewQuery.trim()) {
 			error = 'View collections require a SELECT query';
+			return;
+		}
+
+		if (newType === 'view' && viewMode === 'builder' && !viewBuilder.source) {
+			error = 'Pick a source collection for the view';
 			return;
 		}
 
@@ -457,82 +478,121 @@
 	<!-- Tab content -->
 	<div class="flex-1 overflow-y-auto p-4">
 		{#if activeTab === 'Fields' && newType === 'view'}
-			<!-- View collections: query-driven schema (PocketBase parity) -->
 			<div class="flex flex-col gap-3">
-				<div class="rounded-field border border-base-300 bg-base-200/40 p-3 text-xs text-base-content/70">
-					<p class="mb-1 font-medium text-base-content">Query caveats</p>
-					<ul class="list-disc pl-4">
-						<li>Wildcard columns (<code>*</code>) are not supported.</li>
-						<li>
-							The query must have a unique <code>id</code> column. If your query doesn't have a
-							suitable one, use
-							<code>(ROW_NUMBER() OVER()) as id</code>.
-						</li>
-						<li>Expressions must be aliased, e.g. <code>MAX(balance) as maxBalance</code>.</li>
-						<li>Only a single SELECT statement is allowed.</li>
-					</ul>
+				<!-- Builder <-> SQL. Existing views are locked to how they were created. -->
+				<div class="flex flex-wrap items-center gap-2">
+					<div class="inline-flex rounded-field border border-base-300 p-0.5 text-xs">
+						<button
+							type="button"
+							class="rounded-field px-2.5 py-1 {viewMode === 'builder'
+								? 'bg-primary text-primary-content'
+								: 'text-base-content/60'}"
+							disabled={!!editingCollectionId && viewOrigin === 'sql'}
+							onclick={() => (viewMode = 'builder')}>Builder</button
+						>
+						<button
+							type="button"
+							class="rounded-field px-2.5 py-1 {viewMode === 'sql'
+								? 'bg-primary text-primary-content'
+								: 'text-base-content/60'}"
+							disabled={!!editingCollectionId && viewOrigin === 'builder'}
+							onclick={() => (viewMode = 'sql')}>SQL</button
+						>
+					</div>
+					{#if editingCollectionId}
+						<span class="text-xs text-base-content/50">
+							Created with {viewOrigin === 'builder' ? 'the builder' : 'SQL'} — stays in that editor.
+						</span>
+					{/if}
 				</div>
 
-				<div class="flex flex-col gap-1">
-					<label for="coll-view-query" class="flex items-center gap-2 text-sm font-medium">
-						<span>Select query</span>
-						{#if dryRunState === 'testing'}
-							<span class="text-xs text-base-content/50">Testing…</span>
-						{:else if dryRunState === 'ok'}
-							<span class="text-xs text-success">✓ Valid query</span>
-						{:else if dryRunState === 'error'}
-							<span class="text-xs text-error">✗ Invalid query</span>
-						{/if}
-					</label>
-					<textarea
-						id="coll-view-query"
-						class="input input-sm h-40 w-full resize-y font-mono text-xs"
-						spellcheck={false}
-						placeholder="SELECT posts.id, posts.title, count(comments.id) as totalComments FROM posts LEFT JOIN comments ON comments.postId = posts.id GROUP BY posts.id"
-						bind:value={viewQuery}
-					></textarea>
-				</div>
+				{#if viewMode === 'builder'}
+					<ViewBuilder bind:spec={viewBuilder} collections={$collections} excludeName={newName} />
+				{:else}
+					<div class="flex flex-col gap-3">
+						<div
+							class="rounded-field border border-base-300 bg-base-200/40 p-3 text-xs text-base-content/70"
+						>
+							<p class="mb-1 font-medium text-base-content">Query caveats</p>
+							<ul class="list-disc pl-4">
+								<li>Wildcard columns (<code>*</code>) are not supported.</li>
+								<li>
+									The query must have a unique <code>id</code> column. If your query doesn't have a
+									suitable one, use
+									<code>(ROW_NUMBER() OVER()) as id</code>.
+								</li>
+								<li>Expressions must be aliased, e.g. <code>MAX(balance) as maxBalance</code>.</li>
+								<li>Only a single SELECT statement is allowed.</li>
+							</ul>
+						</div>
 
-				{#if dryRunError}
-					<div class="rounded-field border border-error/30 bg-error/10 p-3 font-mono text-xs text-error">
-						{dryRunError}
-					</div>
-				{/if}
+						<div class="flex flex-col gap-1">
+							<label for="coll-view-query" class="flex items-center gap-2 text-sm font-medium">
+								<span>Select query</span>
+								{#if dryRunState === 'testing'}
+									<span class="text-xs text-base-content/50">Testing…</span>
+								{:else if dryRunState === 'ok'}
+									<span class="text-xs text-success">✓ Valid query</span>
+								{:else if dryRunState === 'error'}
+									<span class="text-xs text-error">✗ Invalid query</span>
+								{/if}
+							</label>
+							<textarea
+								id="coll-view-query"
+								class="input input-sm h-40 w-full resize-y font-mono text-xs"
+								spellcheck={false}
+								placeholder="SELECT posts.id, posts.title, count(comments.id) as totalComments FROM posts LEFT JOIN comments ON comments.postId = posts.id GROUP BY posts.id"
+								bind:value={viewQuery}></textarea>
+						</div>
 
-				{#if dryRunState === 'ok' || newFields.length > 0}
-					<div class="flex flex-col gap-1">
-						<p class="text-sm font-medium">Generated fields</p>
-						{#if dryRunState === 'ok'}
-							<div class="flex flex-wrap gap-1">
-								{#each dryRunFields as f (f.name)}
-									<span class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-xs">{f.name}</span>
-									<span class="text-xs text-base-content/50">{f.type}</span>
-								{/each}
-							</div>
-						{:else}
-							<div class="flex flex-wrap gap-1">
-								{#each newFields as f (f.name)}
-									<span class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-xs">{f.name}</span>
-									<span class="text-xs text-base-content/50">{f.type}</span>
-								{/each}
-							</div>
-						{/if}
-						<p class="text-xs text-base-content/50">
-							Fields are auto-generated from the query on save — they can't be edited directly.
-						</p>
-					</div>
-				{/if}
-
-				{#if dryRunState === 'ok'}
-					<div class="flex flex-col gap-1">
-						<p class="text-sm font-medium">Sample output ({dryRunSample.length})</p>
-						{#if dryRunSample.length > 0}
-							<pre
-								class="max-h-56 overflow-auto rounded-field border border-base-300 bg-base-200/60 p-3 font-mono text-xs"
-							><code>{JSON.stringify(dryRunSample.slice(0, 3), null, 2)}</code></pre
+						{#if dryRunError}
+							<div
+								class="rounded-field border border-error/30 bg-error/10 p-3 font-mono text-xs text-error"
 							>
-						{:else}
-							<p class="text-xs text-base-content/50">No records match the query.</p>
+								{dryRunError}
+							</div>
+						{/if}
+
+						{#if dryRunState === 'ok' || newFields.length > 0}
+							<div class="flex flex-col gap-1">
+								<p class="text-sm font-medium">Generated fields</p>
+								{#if dryRunState === 'ok'}
+									<div class="flex flex-wrap gap-1">
+										{#each dryRunFields as f (f.name)}
+											<span class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-xs"
+												>{f.name}</span
+											>
+											<span class="text-xs text-base-content/50">{f.type}</span>
+										{/each}
+									</div>
+								{:else}
+									<div class="flex flex-wrap gap-1">
+										{#each newFields as f (f.name)}
+											<span class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-xs"
+												>{f.name}</span
+											>
+											<span class="text-xs text-base-content/50">{f.type}</span>
+										{/each}
+									</div>
+								{/if}
+								<p class="text-xs text-base-content/50">
+									Fields are auto-generated from the query on save — they can't be edited directly.
+								</p>
+							</div>
+						{/if}
+
+						{#if dryRunState === 'ok'}
+							<div class="flex flex-col gap-1">
+								<p class="text-sm font-medium">Sample output ({dryRunSample.length})</p>
+								{#if dryRunSample.length > 0}
+									<pre
+										class="max-h-56 overflow-auto rounded-field border border-base-300 bg-base-200/60 p-3 font-mono text-xs"><code
+											>{JSON.stringify(dryRunSample.slice(0, 3), null, 2)}</code
+										></pre>
+								{:else}
+									<p class="text-xs text-base-content/50">No records match the query.</p>
+								{/if}
+							</div>
 						{/if}
 					</div>
 				{/if}
@@ -678,7 +738,9 @@
 				type="button"
 				class="btn btn-primary expanded-lg"
 				class:loading={saving}
-				disabled={!newName.trim() || saving}
+				disabled={!newName.trim() ||
+					saving ||
+					(newType === 'view' && viewMode === 'builder' && !viewBuilder.source)}
 				onclick={handleSave}
 			>
 				{editingCollectionId ? 'Save' : 'Create'}

@@ -37,6 +37,16 @@ const collectionFieldSchema = z.object({
 	options: z.record(z.string(), z.unknown()).optional()
 });
 
+const viewBuilderSpecSchema = z.object({
+	source: z.string(),
+	relations: z.array(z.object({ alias: z.string(), field: z.string() })).optional(),
+	fields: z.array(
+		z.object({ source: z.string().optional(), name: z.string(), as: z.string().optional() })
+	),
+	sort: z.string().optional(),
+	limit: z.number().int().positive().optional()
+});
+
 export const collectionSchema = z.object({
 	name: z
 		.string()
@@ -44,6 +54,7 @@ export const collectionSchema = z.object({
 		.regex(/^[a-z0-9_]+$/, 'Only lowercase letters, numbers, and underscores'),
 	type: z.enum(['base', 'view', 'auth']),
 	viewQuery: z.string().optional(),
+	viewBuilder: viewBuilderSpecSchema.optional(),
 	indexes: z.array(z.string()).optional(),
 	fields: z.array(collectionFieldSchema),
 	listRule: z.string().nullable().optional(),
