@@ -715,7 +715,7 @@
 
 	<!-- Footer -->
 	<div class="flex shrink-0 items-center gap-2 border-t border-base-300 px-4 py-3">
-		<button type="button" class="btn btn-ghost" onclick={requestClose}>Close</button>
+		<Button class="btn-ghost" onclick={requestClose}>Close</Button>
 		<div class="ml-auto flex items-center gap-2">
 			{#if error}
 				<svg
@@ -734,17 +734,16 @@
 					/></svg
 				>
 			{/if}
-			<button
-				type="button"
-				class="btn btn-primary expanded-lg"
-				class:loading={saving}
+			<Button
+				class="btn-primary"
+				loading={saving}
 				disabled={!newName.trim() ||
 					saving ||
 					(newType === 'view' && viewMode === 'builder' && !viewBuilder.source)}
 				onclick={handleSave}
 			>
 				{editingCollectionId ? 'Save' : 'Create'}
-			</button>
+			</Button>
 		</div>
 	</div>
 </div>
