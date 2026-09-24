@@ -28,7 +28,8 @@
 		editingCollectionId = null as string | null,
 		existingName = '',
 		showDeleteConfirm = $bindable(false),
-		onClose
+		onClose,
+		onDeleted
 	}: {
 		/** The collection id when editing an existing collection, null when creating. */
 		editingCollectionId?: string | null;
@@ -42,6 +43,12 @@
 		 * editor keeps its current navigate-on-save behavior.
 		 */
 		onClose?: () => void;
+		/**
+		 * Called after a successful delete when set — lets the host pick a new
+		 * active collection instead of re-rendering the one that was just removed.
+		 * Falls back to `onClose` when unset.
+		 */
+		onDeleted?: () => void;
 	} = $props();
 
 	// ── Form state ──
@@ -212,7 +219,8 @@
 			await client.http.delete(`/collections/${encodeURIComponent(editingCollectionId)}`);
 			await loadCollections();
 			showDeleteConfirm = false;
-			if (onClose) onClose();
+			if (onDeleted) onDeleted();
+			else if (onClose) onClose();
 			else _goto('/collections');
 		} catch (e) {
 			error = (e as Error).message || 'Failed to delete collection';
