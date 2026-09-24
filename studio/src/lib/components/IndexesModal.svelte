@@ -104,7 +104,7 @@
 							{idx}
 						{/if}
 					</code>
-					<button type="button" class="btn btn-ghost btn-xs px-1" onclick={() => openEdit(i)}>
+					<button type="button" class="btn btn-ghost btn-xs w-6 px-0" onclick={() => openEdit(i)}>
 						<svg
 							width="12"
 							height="12"
@@ -119,7 +119,7 @@
 					</button>
 					<button
 						type="button"
-						class="btn btn-ghost btn-xs px-1 text-error"
+						class="btn btn-ghost btn-xs w-6 px-0 text-error"
 						onclick={() => {
 							indexes.splice(i, 1);
 							indexes = [...indexes];

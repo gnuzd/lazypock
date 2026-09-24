@@ -130,6 +130,9 @@
 	}
 
 	/* ── Sizes ── */
+	.btn-xs {
+		@apply min-h-6 px-1.5 text-xs;
+	}
 	.btn-sm {
 		@apply min-h-7 px-3 text-sm;
 	}
