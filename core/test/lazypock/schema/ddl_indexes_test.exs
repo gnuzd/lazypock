@@ -188,4 +188,64 @@ defmodule Lazypock.Schema.DDLIndexesTest do
       assert Map.get(reloaded.options || %{}, "indexes") == []
     end
   end
+
+  describe "auth email uniqueness" do
+    test "create_collection forces a unique email index on auth collections" do
+      {:ok, _} =
+        DDL.create_collection(@collection,
+          type: "auth",
+          fields: [%{"name" => "email", "type" => "email"}]
+        )
+
+      assert "idx_test_items_email_unq" in indexes_for(@collection)
+
+      Ecto.Adapters.SQL.query!(Repo, "INSERT INTO idx_test_items (email) VALUES ('a@b.com')", [])
+
+      assert_raise Postgrex.Error, fn ->
+        Ecto.Adapters.SQL.query!(
+          Repo,
+          "INSERT INTO idx_test_items (email) VALUES ('a@b.com')",
+          []
+        )
+      end
+    end
+
+    test "update_collection cannot clear the unique flag on an auth email" do
+      {:ok, _} =
+        DDL.create_collection(@collection,
+          type: "auth",
+          fields: [%{"name" => "email", "type" => "email"}]
+        )
+
+      # A save from the collection editor sends unique: false (the metadata
+      # never recorded the flag) — the DDL must re-assert it.
+      {:ok, _} =
+        DDL.update_collection(@collection,
+          fields: [%{"name" => "email", "type" => "email", "unique" => false}]
+        )
+
+      assert "idx_test_items_email_unq" in indexes_for(@collection)
+
+      field =
+        Repo.one(
+          from f in Lazypock.Collections.Field,
+            join: c in Lazypock.Collections.Collection,
+            on: c.id == f.collection_id,
+            where: c.name == ^@collection and f.name == "email",
+            select: f
+        )
+
+      assert field.unique
+    end
+
+    test "base collections are not forced to have a unique email" do
+      {:ok, _} =
+        DDL.create_collection(@collection,
+          type: "base",
+          fields: [%{"name" => "email", "type" => "email"}]
+        )
+
+      refute "idx_test_items_email_unq" in indexes_for(@collection)
+    end
+  end
 end

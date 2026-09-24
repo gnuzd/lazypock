@@ -102,6 +102,7 @@ defmodule Lazypock.Schema.DDL do
             create_view_collection!(name, opts)
           else
             fields = ensure_system_timestamp_fields(fields)
+            fields = normalize_auth_email_unique(type, fields)
 
             with :ok <- validate_fields(fields) do
               collection =
@@ -628,6 +629,8 @@ defmodule Lazypock.Schema.DDL do
             # the controller sends the full field list on schema edits, and
             # anything else is a partial update that should leave columns alone.
             if not is_nil(new_fields) do
+              new_fields = normalize_auth_email_unique(type || collection.type, new_fields)
+
               existing_fields =
                 Repo.all(
                   from(f in Lazypock.Collections.Field, where: f.collection_id == ^collection.id)
@@ -972,15 +975,58 @@ defmodule Lazypock.Schema.DDL do
   end
 
   defp create_unique_index(table, column) do
-    column = column_name(column)
-    index_name = "#{table}_#{column}_unq"
+    # The built-in users table gets its uniqueness from an inline
+    # `email TEXT UNIQUE` constraint, whose index is named `users_email_key`
+    # rather than the `_unq` convention — creating another index would be
+    # redundant, so skip when any single-column unique index already covers it.
+    if unique_index_exists?(table, column) do
+      :ok
+    else
+      column = column_name(column)
+      index_name = "#{table}_#{column}_unq"
 
-    Ecto.Adapters.SQL.query!(
-      Repo,
-      "CREATE UNIQUE INDEX IF NOT EXISTS #{TypeMapper.quote_ident(index_name)} ON #{TypeMapper.quote_ident(table)} (#{TypeMapper.quote_ident(column)})",
-      []
-    )
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "CREATE UNIQUE INDEX IF NOT EXISTS #{TypeMapper.quote_ident(index_name)} ON #{TypeMapper.quote_ident(table)} (#{TypeMapper.quote_ident(column)})",
+        []
+      )
+    end
   end
+
+  # True when a plain, single-column unique index already covers `column`.
+  defp unique_index_exists?(table, column) do
+    %{rows: rows} =
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        SELECT 1
+        FROM pg_index i
+        JOIN pg_class tc ON tc.oid = i.indrelid
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
+        WHERE tc.relname = $1
+          AND i.indisunique
+          AND i.indnkeyatts = 1
+          AND i.indpred IS NULL
+          AND a.attname = $2
+        LIMIT 1
+        """,
+        [table, column_name(column)]
+      )
+
+    rows != []
+  end
+
+  # Auth collections authenticate by a unique email (PocketBase parity), so
+  # the unique flag is forced on for their `email` field: the collection editor
+  # cannot turn it off and every auth collection gets the DB unique index.
+  defp normalize_auth_email_unique("auth", fields) when is_list(fields) do
+    Enum.map(fields, fn
+      %{"name" => "email"} = field -> Map.put(field, "unique", true)
+      field -> field
+    end)
+  end
+
+  defp normalize_auth_email_unique(_type, fields), do: fields
 
   defp drop_index_if_exists(table, column) do
     for suffix <- ["_idx", "_unq"] do

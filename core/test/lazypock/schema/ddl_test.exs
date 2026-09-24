@@ -657,4 +657,14 @@ defmodule Lazypock.Schema.DDLTest do
       assert {:error, :not_found} = DDL.drop_collection("does_not_exist_xyz")
     end
   end
+
+  describe "auth email uniqueness" do
+    test "built-in users email field is marked unique" do
+      users = Repo.get_by(Lazypock.Collections.Collection, name: "users")
+
+      email = Repo.get_by(Lazypock.Collections.Field, collection_id: users.id, name: "email")
+
+      assert email.unique
+    end
+  end
 end
