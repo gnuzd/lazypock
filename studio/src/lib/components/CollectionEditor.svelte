@@ -205,7 +205,11 @@
 		deleting = true;
 		error = '';
 		try {
-			await client.collections.delete(editingCollectionId);
+			// `client.collections.delete()` is fire-and-forget in the SDK (it
+			// doesn't await the request), so the sidebar refresh raced the delete
+			// and any server error was swallowed. Call the HTTP client directly so
+			// the delete is awaited and failures surface.
+			await client.http.delete(`/collections/${encodeURIComponent(editingCollectionId)}`);
 			await loadCollections();
 			showDeleteConfirm = false;
 			if (onClose) onClose();
