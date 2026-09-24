@@ -747,7 +747,8 @@ defmodule Lazypock.Schema.DDL do
   # ── Drop collection ────────────────────────────────
 
   @doc """
-  Drops a collection table completely (only if `managed` is true).
+  Drops a collection: its metadata, and its table when LazyPock manages it.
+  System collections are protected.
   """
   @spec drop_collection(String.t()) :: :ok | {:error, term()}
   def drop_collection(name) do
@@ -767,28 +768,14 @@ defmodule Lazypock.Schema.DDL do
           collection.system ->
             {:error, "Cannot delete system collection '#{collection.name}'"}
 
-          collection.managed ->
-            if collection.type == "view" do
-              Ecto.Adapters.SQL.query!(
-                Repo,
-                "DROP VIEW IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
-                []
-              )
-
-              Lazypock.Realtime.Views.reset_view(collection.name)
-            else
-              Ecto.Adapters.SQL.query!(
-                Repo,
-                "DROP TABLE IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
-                []
-              )
-            end
+          true ->
+            # A managed collection owns its table, so drop it. An unmanaged one
+            # points at an externally-managed table (nothing in LazyPock creates
+            # these) — unregister it but leave the table alone.
+            if collection.managed, do: drop_managed_relation(collection)
 
             Repo.delete!(collection)
             :ok
-
-          true ->
-            {:error, :not_managed}
         end
       end)
 
@@ -1110,6 +1097,24 @@ defmodule Lazypock.Schema.DDL do
     end
 
     apply_custom_indexes!(table, new_indexes)
+  end
+
+  defp drop_managed_relation(%{type: "view"} = collection) do
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "DROP VIEW IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
+      []
+    )
+
+    Lazypock.Realtime.Views.reset_view(collection.name)
+  end
+
+  defp drop_managed_relation(collection) do
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "DROP TABLE IF EXISTS #{TypeMapper.quote_ident(collection.name)} CASCADE",
+      []
+    )
   end
 
   defp create_collection_metadata!(name, type, fields, indexes, rules, options, hooks) do

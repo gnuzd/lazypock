@@ -634,6 +634,26 @@ defmodule Lazypock.Schema.DDLTest do
       assert Repo.get_by(Lazypock.Collections.Collection, name: name) == nil
     end
 
+    test "unmanaged collections are unregistered but their table is kept" do
+      name = cname("unmanaged")
+      {:ok, _} = DDL.create_collection(name, type: "base", fields: [])
+
+      # Nothing in LazyPock creates unmanaged collections; simulate a legacy
+      # row so the collection is registered but its table is "external".
+      Repo.update_all(
+        from(c in Lazypock.Collections.Collection, where: c.name == ^name),
+        set: [managed: false]
+      )
+
+      assert :ok = DDL.drop_collection(name)
+      assert Repo.get_by(Lazypock.Collections.Collection, name: name) == nil
+
+      %{rows: [[exists]]} =
+        Ecto.Adapters.SQL.query!(Repo, "SELECT to_regclass($1) IS NOT NULL", [name])
+
+      assert exists
+    end
+
     test "system collections are protected" do
       assert {:error, msg} = DDL.drop_collection("_superusers")
       assert msg =~ "Cannot delete system collection"
