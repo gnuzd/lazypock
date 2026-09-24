@@ -15,6 +15,13 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   @comparison_ops @standard_ops ++ @array_ops
 
+  # PocketBase parity (tools/search/provider.go): filters longer than
+  # MaxFilterLength (3500) or with more than DefaultFilterExprLimit (200)
+  # expressions are rejected, bounding parser work for user-supplied
+  # `?filter=` values as well as superuser-authored rules.
+  @max_filter_length 3500
+  @max_filter_expressions 200
+
   @doc """
   Compiles a PocketBase filter string into a SQL WHERE clause with parameters.
 
@@ -36,30 +43,68 @@ defmodule Lazypock.Schemas.FilterCompiler do
       when is_binary(filter_str) and is_list(token_values) and is_map(types) do
     filter_str = String.trim(filter_str)
 
-    if filter_str == "" do
-      {:ok, {"", []}}
-    else
-      {:ok, tokens} = tokenize(filter_str)
+    cond do
+      filter_str == "" ->
+        {:ok, {"", []}}
 
-      case parse_or(tokens) do
-        {:ok, ast, []} ->
-          case coerce_ast(ast, types, token_values) do
-            {:ok, coerced_ast} ->
-              {sql, params} = emit(coerced_ast, 1, {types, token_values})
-              {:ok, {sql, params}}
+      byte_size(filter_str) > @max_filter_length ->
+        {:error, "Filter exceeds the maximum length of #{@max_filter_length} characters"}
 
-            :error ->
-              {:error, "Rule value cannot be represented as its column type"}
-          end
+      true ->
+        {:ok, tokens} = tokenize(filter_str)
 
-        {:ok, _ast, leftover} ->
-          {:error, "Unexpected tokens after expression: #{inspect(leftover)}"}
+        case parse_or(tokens) do
+          {:ok, ast, []} ->
+            if count_expressions(ast) > @max_filter_expressions do
+              {:error, "Filter exceeds the maximum of #{@max_filter_expressions} expressions"}
+            else
+              build_expr(ast, types, token_values)
+            end
 
-        :error ->
-          {:error, "Failed to parse filter expression"}
-      end
+          {:ok, _ast, leftover} ->
+            {:error, "Unexpected tokens after expression: #{inspect(leftover)}"}
+
+          :error ->
+            {:error, "Failed to parse filter expression"}
+        end
     end
   end
+
+  defp build_expr(ast, types, token_values) do
+    case coerce_ast(ast, types, token_values) do
+      {:ok, coerced_ast} ->
+        {sql, params} = emit(coerced_ast, 1, {types, token_values})
+
+        # A non-empty filter that compiles to an empty clause means the AST was
+        # never turned into SQL -- e.g. a comparison with no field operand such
+        # as `'a' ~ 'b'` or `$1 ?= 'b'`, which the code generator's catch-all
+        # swallows. Callers treat an empty clause as "no restriction" (the
+        # public-`""` fast path), so returning `{:ok, {"", []}}` here would
+        # grant unconditional access. Fail closed instead.
+        if sql == "" do
+          {:error, "Filter does not reference a field and cannot be evaluated"}
+        else
+          {:ok, {sql, params}}
+        end
+
+      :error ->
+        {:error, "Rule value cannot be represented as its column type"}
+    end
+  end
+
+  # Counts comparison nodes. PocketBase applies its expression limit per parsed
+  # filter expression; mirror that so deeply-nested input cannot force
+  # unbounded code generation.
+  defp count_expressions({:or, left, right}),
+    do: count_expressions(left) + count_expressions(right)
+
+  defp count_expressions({:and, left, right}),
+    do: count_expressions(left) + count_expressions(right)
+
+  defp count_expressions({:not, expr}), do: count_expressions(expr)
+
+  defp count_expressions({op, _left, _right}) when op in @comparison_ops, do: 1
+  defp count_expressions(_other), do: 1
 
   @doc """
   Applies a compiled filter to a base SQL query string, adding WHERE clause.
@@ -122,6 +167,63 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   defp escape_quote(str), do: String.replace(str, "'", "''")
 
+  # ── LIKE pattern building (PocketBase wrapLikeParams parity) ──
+
+  # Wraps a value in `%...%` for contains semantics, escaping the LIKE
+  # metacharacters so they match literally. A value containing an explicit
+  # unescaped `%` is an author-supplied pattern and is returned untouched.
+  defp like_pattern(nil), do: nil
+
+  defp like_pattern(val) when is_binary(val) do
+    if contains_unescaped_percent?(val) do
+      val
+    else
+      "%" <> escape_like_chars(val) <> "%"
+    end
+  end
+
+  defp like_pattern(val), do: like_pattern(to_string(val))
+
+  # Escapes `%`, `_` and `\` when they are not already escaping something.
+  # Mirrors PocketBase's `escapeUnescapedChars(v, '\\', '%', '_')`: existing
+  # escape sequences are preserved instead of double-escaped.
+  #
+  # Byte-wise on purpose: `String.to_charlist/1` raises
+  # `UnicodeConversionError` on invalid UTF-8, so a filter value containing
+  # arbitrary bytes would have crashed the compiler (a 500 on `?filter=`). The
+  # metacharacters are single ASCII bytes, so multi-byte UTF-8 sequences are
+  # unaffected.
+  defp escape_like_chars(str) do
+    str
+    |> :binary.bin_to_list()
+    |> escape_like_chars([])
+    |> :erlang.list_to_binary()
+  end
+
+  defp escape_like_chars([], acc), do: Enum.reverse(acc)
+
+  defp escape_like_chars([?\\, next | rest], acc) do
+    escape_like_chars(rest, [next, ?\\ | acc])
+  end
+
+  defp escape_like_chars([c | rest], acc) when c in [?%, ?_] do
+    escape_like_chars(rest, [c, ?\\ | acc])
+  end
+
+  defp escape_like_chars([c | rest], acc), do: escape_like_chars(rest, [c | acc])
+
+  # Mirrors PocketBase's `containsUnescapedChar(str, '%')`, including the
+  # `\\`-resets-the-escape-state rule. Byte-wise for the same reason as
+  # `escape_like_chars/1`.
+  defp contains_unescaped_percent?(str) do
+    contains_unescaped_percent?(:binary.bin_to_list(str), nil)
+  end
+
+  defp contains_unescaped_percent?([], _prev), do: false
+  defp contains_unescaped_percent?([?% | _rest], prev) when prev != ?\\, do: true
+  defp contains_unescaped_percent?([?\\ | rest], ?\\), do: contains_unescaped_percent?(rest, nil)
+  defp contains_unescaped_percent?([c | rest], _prev), do: contains_unescaped_percent?(rest, c)
+
   # ── Tokenizer ────────────────────────────────────────
 
   defp tokenize(str) do
@@ -146,8 +248,14 @@ defmodule Lazypock.Schemas.FilterCompiler do
     case parse_and(tokens) do
       {:ok, left, ["||" | rest]} ->
         case parse_or(rest) do
-          {:ok, right, remaining} -> {:ok, {:or, left, right}, remaining}
-          _ -> {:ok, left, rest}
+          {:ok, right, remaining} ->
+            {:ok, {:or, left, right}, remaining}
+
+          # A dangling `||` with no parsable right operand must be an error.
+          # The previous `{:ok, left, rest}` fallback silently dropped the
+          # operator, so `a = 1 ||` compiled as if it were `a = 1`.
+          _ ->
+            :error
         end
 
       {:ok, ast, rest} ->
@@ -162,8 +270,12 @@ defmodule Lazypock.Schemas.FilterCompiler do
     case parse_not(tokens) do
       {:ok, left, ["&&" | rest]} ->
         case parse_and(rest) do
-          {:ok, right, remaining} -> {:ok, {:and, left, right}, remaining}
-          _ -> {:ok, left, rest}
+          {:ok, right, remaining} ->
+            {:ok, {:and, left, right}, remaining}
+
+          # Same as `||` above: a dangling `&&` must not silently vanish.
+          _ ->
+            :error
         end
 
       {:ok, ast, rest} ->
@@ -287,9 +399,20 @@ defmodule Lazypock.Schemas.FilterCompiler do
   # so the bound parameter must carry the unescaped value to match a column
   # (or another literal) the same way the inline literal would.
   defp unescape_literal(token) do
-    token
-    |> String.slice(1, String.length(token) - 2)
-    |> String.replace("''", "'")
+    inner_length = String.length(token) - 2
+
+    # `classify/1` treats any token that both starts and ends with `'` as a
+    # quoted literal -- including a lone `'`, whose computed inner length is
+    # -1. `String.slice/3` raises FunctionClauseError on a negative length, so
+    # a filter containing a bare quote used to crash the compiler (a 500 on
+    # `?filter=`).
+    if inner_length > 0 do
+      token
+      |> String.slice(1, inner_length)
+      |> String.replace("''", "'")
+    else
+      ""
+    end
   end
 
   # ── Type coercion pre-pass ───────────────────────────
@@ -439,23 +562,29 @@ defmodule Lazypock.Schemas.FilterCompiler do
   end
 
   # Field ILIKE 'pattern'
+  #
+  # The pattern goes through `like_pattern/1` (PocketBase `wrapLikeParams`):
+  # `%`, `_` and `\` in the value are escaped so they match literally, the
+  # value is wrapped in `%...%` for contains semantics, and `ESCAPE '\'`
+  # declares the escape character. A value containing an explicit unescaped
+  # `%` is treated as an author-supplied pattern and left untouched.
   defp emit_simple({"~", {:field, f}, {:literal, val}}, ctx) do
-    {~s["#{column_name(f)}" ILIKE $1#{cast_for(f, ctx)}], ["%" <> val <> "%"]}
+    {like_clause(f, ctx, "ILIKE"), [like_pattern(val)]}
   end
 
   # Field ILIKE <bound param>
   defp emit_simple({"~", {:field, f}, {:param, n}}, ctx) do
-    {~s["#{column_name(f)}" ILIKE $1#{cast_for(f, ctx)}], ["%" <> token_value(ctx, n) <> "%"]}
+    {like_clause(f, ctx, "ILIKE"), [like_pattern(token_value(ctx, n))]}
   end
 
   # Field NOT ILIKE 'pattern'
   defp emit_simple({"!~", {:field, f}, {:literal, val}}, ctx) do
-    {~s["#{column_name(f)}" NOT ILIKE $1#{cast_for(f, ctx)}], ["%" <> val <> "%"]}
+    {like_clause(f, ctx, "NOT ILIKE"), [like_pattern(val)]}
   end
 
   # Field NOT ILIKE <bound param>
   defp emit_simple({"!~", {:field, f}, {:param, n}}, ctx) do
-    {~s["#{column_name(f)}" NOT ILIKE $1#{cast_for(f, ctx)}], ["%" <> token_value(ctx, n) <> "%"]}
+    {like_clause(f, ctx, "NOT ILIKE"), [like_pattern(token_value(ctx, n))]}
   end
 
   # Field OP Literal
@@ -502,11 +631,12 @@ defmodule Lazypock.Schemas.FilterCompiler do
       # the right, so `$1 ILIKE ANY(col)` would reverse them. `unnest` + EXISTS
       # keeps the element/pattern order correct.
       "?~" ->
-        {~s[EXISTS (SELECT 1 FROM unnest("#{col}") AS x WHERE x ILIKE $1)], ["%#{val}%"]}
+        {~s[EXISTS (SELECT 1 FROM unnest("#{col}") AS x WHERE x ILIKE $1 ESCAPE '\\')],
+         [like_pattern(val)]}
 
       "?!~" ->
-        {~s[EXISTS (SELECT 1 FROM unnest("#{col}") AS x WHERE x NOT ILIKE $1)],
-         ["%#{val}%"]}
+        {~s[EXISTS (SELECT 1 FROM unnest("#{col}") AS x WHERE x NOT ILIKE $1 ESCAPE '\\')],
+         [like_pattern(val)]}
 
       _ ->
         {cmp, negate} = array_op(op)
@@ -564,6 +694,11 @@ defmodule Lazypock.Schemas.FilterCompiler do
   # requires M" (HTTP 500 on create/view/update).
   defp renumber(sql, n) do
     shift_placeholders(sql, n - 1)
+  end
+
+  # `<col> [NOT] ILIKE $1<cast> ESCAPE '\'`
+  defp like_clause(field_name, ctx, op) do
+    ~s["#{column_name(field_name)}" #{op} $1#{cast_for(field_name, ctx)} ESCAPE '\\']
   end
 
   # Explicit Postgres cast for a field's placeholder, e.g. "::TEXT". Empty when

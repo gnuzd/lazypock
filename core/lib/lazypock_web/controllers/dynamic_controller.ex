@@ -39,13 +39,13 @@ defmodule LazypockWeb.DynamicController do
     user = resolve_user(conn)
 
     with {:ok, collection} <- Registry.get(name),
-         {:ok, {rule_where, rule_params}} <- Enforcer.authorize_list(name, user) do
+         {:ok, {rule_where, rule_params}} <- Enforcer.authorize_list(name, user),
+         {:ok, {filter_where, filter_params}} <- build_filter(params["filter"]) do
       page = max(1, String.to_integer(params["page"] || "1"))
       per_page = max(1, min(200, String.to_integer(params["perPage"] || "30")))
       offset = (page - 1) * per_page
 
-      # Build filtered query — merge rule WHERE with user filter WHERE
-      {filter_where, filter_params} = build_filter(params["filter"])
+      # Merge rule WHERE with user filter WHERE
       order_clause = build_sort(params["sort"], collection)
 
       # Combine WHERE clauses: user_filter AND rule
@@ -100,6 +100,11 @@ defmodule LazypockWeb.DynamicController do
         |> put_status(404)
         |> json(error_response(404, "Collection not found"))
 
+      {:error, {:invalid_filter, message}} ->
+        conn
+        |> put_status(400)
+        |> json(error_response(400, message))
+
       {:error, reason} ->
         conn
         |> put_status(403)
@@ -138,10 +143,14 @@ defmodule LazypockWeb.DynamicController do
         |> put_status(404)
         |> json(error_response(404, "Collection not found"))
 
-      {:error, reason} ->
+      # A rule denial must be indistinguishable from a missing record:
+      # otherwise `GET /:collection/:id` doubles as an existence oracle, and a
+      # 403-vs-404 split leaks which ids exist in a collection the caller
+      # cannot read. PocketBase likewise filters by rule and reports 404.
+      {:error, _reason} ->
         conn
-        |> put_status(403)
-        |> json(error_response(403, reason))
+        |> put_status(404)
+        |> json(error_response(404, "The requested resource wasn't found."))
     end
   end
 
@@ -345,7 +354,7 @@ defmodule LazypockWeb.DynamicController do
 
   defp ensure_mutable(_collection), do: :ok
 
-  defp build_filter(nil), do: {"", []}
+  defp build_filter(nil), do: {:ok, {"", []}}
 
   defp build_filter(filter_str) when is_binary(filter_str) do
     case FilterCompiler.compile(filter_str) do
@@ -354,10 +363,17 @@ defmodule LazypockWeb.DynamicController do
         # compiler has no schema knowledge, so uuid-column comparisons (e.g.
         # ?filter=id='abc') crash Postgrex's encoder. Inlined literals let PG
         # resolve types natively.
-        {FilterCompiler.inline_params(sql_clause, params), []}
+        {:ok, {FilterCompiler.inline_params(sql_clause, params), []}}
 
-      {:error, _} ->
-        {"", []}
+      {:error, _reason} ->
+        # An invalid `?filter=` is rejected rather than silently dropped:
+        # ignoring it returns everything the rule allows, so a caller whose
+        # filter has a typo silently receives a broader result set than it
+        # asked for. PocketBase also answers 400 here.
+        #
+        # The message is deliberately generic so a parse failure cannot leak
+        # compiler internals or other collections' schema details.
+        {:error, {:invalid_filter, "Invalid filter expression."}}
     end
   end
 

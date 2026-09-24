@@ -54,23 +54,19 @@ defmodule Lazypock.Rules.Enforcer do
       {:ok, {"", []}}
     else
       # 2. Check manageRule — admin-like access for non-superusers
-      manage_rule = get_rule(collection_name, "manageRule")
-
-      if manage_rule != nil and passes_rule?(manage_rule, user, nil, collection_name) do
+      if manage_rule_matches?(collection_name, user, nil) do
         {:ok, {"", []}}
       else
-        # 3. Check listRule — three-state:
-        #    nil = superuser only, "" = public, filter = evaluate
-        rule = get_rule(collection_name, "listRule")
-
-        cond do
-          rule == nil ->
-            {:error, "Access denied by listRule"}
-
-          rule == "" ->
+        # 3. Check listRule — three-state plus a fail-closed bucket:
+        #    nil = superuser only, "" = public, filter = evaluate,
+        #    anything else (blank/invalid) = deny.
+        case classify_rule(get_rule(collection_name, "listRule")) do
+          :public ->
             {:ok, {"", []}}
 
-          true ->
+          :filter ->
+            rule = get_rule(collection_name, "listRule")
+
             case compile_rule(rule, user, collection_name) do
               {:ok, {sql, params}} ->
                 # Rule values are bound as parameters with explicit casts
@@ -81,6 +77,9 @@ defmodule Lazypock.Rules.Enforcer do
               {:error, _} ->
                 {:error, "Access denied by listRule"}
             end
+
+          _ ->
+            {:error, "Access denied by listRule"}
         end
       end
     end
@@ -139,41 +138,78 @@ defmodule Lazypock.Rules.Enforcer do
       :ok
     else
       # 2. Check manageRule — admin-like access for non-superusers
-      manage_rule = get_rule(collection_name, "manageRule")
+      if manage_rule_matches?(collection_name, user, record_or_attrs) do
+        :ok
+      else
+        # 3. Check the specific action rule (viewRule, createRule, etc.)
+        #    nil = superuser only, "" = public, filter = evaluate,
+        #    anything else (blank/invalid) = deny.
+        rule = get_rule(collection_name, rule_key)
 
-      cond do
-        manage_rule != nil and passes_rule?(manage_rule, user, record_or_attrs, collection_name) ->
-          :ok
+        case classify_rule(rule) do
+          :public ->
+            :ok
 
-        true ->
-          # 3. Check the specific action rule (viewRule, createRule, etc.)
-          #    nil = superuser only, "" = public, filter = evaluate
-          rule = get_rule(collection_name, rule_key)
-
-          cond do
-            rule == nil ->
-              {:error, "Access denied by #{rule_key}"}
-
-            rule == "" ->
+          :filter ->
+            if passes_rule?(rule, user, record_or_attrs, collection_name) do
               :ok
-
-            passes_rule?(rule, user, record_or_attrs, collection_name) ->
-              :ok
-
-            true ->
+            else
               {:error, "Access denied by #{rule_key}"}
-          end
+            end
+
+          _ ->
+            {:error, "Access denied by #{rule_key}"}
+        end
       end
     end
   end
 
   # ── Private ──────────────────────────────────────────
 
-  # A superuser is an Ecto struct (from SuperUser schema).
-  # An auth collection user is a plain map (from GenericRecord.get).
-  # Only structs get the superuser bypass.
-  defp superuser?(%{__struct__: _}), do: true
+  # Only a real superuser gets the bypass. Superusers arrive as
+  # `%Lazypock.Auth.SuperUser{}` (see `Lazypock.Auth.Plug`), while
+  # auth-collection users are plain maps from `GenericRecord.get/3`.
+  #
+  # This deliberately matches the concrete struct rather than any struct: the
+  # previous `%{__struct__: _}` clause granted the bypass to *every* struct, so
+  # any code path that passed an auth-collection user as an Ecto struct would
+  # have silently escalated it to superuser.
+  defp superuser?(%Lazypock.Auth.SuperUser{}), do: true
   defp superuser?(_), do: false
+
+  # Three-state rule classification plus a fail-closed bucket:
+  #
+  #   * `:superuser_only` — `nil` / absent
+  #   * `:public`         — exactly `""`
+  #   * `:filter`         — a non-blank filter expression
+  #   * `:invalid`        — whitespace-only, or a non-string value -> deny
+  #
+  # Whitespace-only rules must NOT be treated as `""` (public):
+  # `FilterCompiler` trims its input, so `"   "` compiles to an empty clause,
+  # and an empty clause means "no restriction" to the callers below. That
+  # combination silently published a collection whose rule field only
+  # contained spaces.
+  defp classify_rule(nil), do: :superuser_only
+  defp classify_rule(""), do: :public
+
+  defp classify_rule(rule) when is_binary(rule) do
+    if String.trim(rule) == "", do: :invalid, else: :filter
+  end
+
+  defp classify_rule(_other), do: :invalid
+
+  # manageRule grants admin-like access when the user matches it.
+  # `nil` = no delegation (superusers only); `""` = intentionally public
+  # manage rule; blank/invalid never matches.
+  defp manage_rule_matches?(collection_name, user, context) do
+    rule = get_rule(collection_name, "manageRule")
+
+    case classify_rule(rule) do
+      :public -> true
+      :filter -> passes_rule?(rule, user, context, collection_name)
+      _ -> false
+    end
+  end
 
   defp get_rule(collection_name, rule_key) do
     {:ok, collection} = Registry.get(collection_name)
@@ -182,14 +218,13 @@ defmodule Lazypock.Rules.Enforcer do
 
   defp passes_rule?(rule, user, context, collection_name) do
     case compile_rule(rule, user, collection_name) do
-      {:ok, {sql, params}} ->
-        if sql == "" do
-          true
-        else
-          eval_against_context(sql, params, context, collection_name)
-        end
+      # An empty clause never means "allow" here. Only the explicit `""`
+      # (public) rule short-circuits to allow, and `classify_rule/1` handles
+      # that before this function is reached.
+      {:ok, {sql, params}} when sql != "" ->
+        eval_against_context(sql, params, context, collection_name)
 
-      {:error, _} ->
+      _ ->
         false
     end
   end
@@ -197,8 +232,13 @@ defmodule Lazypock.Rules.Enforcer do
   # Resolves @request.auth.* tokens, compiles the rule with schema-aware casts
   # and returns the bound SQL clause + params.
   defp compile_rule(rule, user, collection_name) do
-    {resolved, token_values} = resolve_user_tokens(rule, user)
-    FilterCompiler.compile(resolved, token_values, field_types(collection_name))
+    case resolve_user_tokens(rule, user) do
+      {:ok, resolved, token_values} ->
+        FilterCompiler.compile(resolved, token_values, field_types(collection_name))
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   # Column name (verbatim field name, matching FilterCompiler's emitted
@@ -227,17 +267,21 @@ defmodule Lazypock.Rules.Enforcer do
   end
 
   # @request.auth.* tokens become `$N` placeholders whose values are bound as
-  # parameters (in `token_values`, indexed 1..4). The returned pair feeds
+  # parameters (in `token_values`, indexed 1..3). The returned triple feeds
   # FilterCompiler.compile/3.
+  #
+  # Only `id`, `email` and `role` are supported; any other `@request.auth.*`
+  # token is rejected (`{:error, _}` -> deny). Unknown tokens used to be
+  # substituted with an empty string, so a rule like `@request.auth.typo = ''`
+  # evaluated to `'' = ''` (true) and granted access.
   defp resolve_user_tokens(rule, nil) do
-    values = [nil, nil, nil, nil]
+    values = [nil, nil, nil]
 
     {sql, values} = apply_token(rule, ~r/@request\.auth\.id/, "", 1, values)
     {sql, values} = apply_token(sql, ~r/@request\.auth\.email/, "", 2, values)
     {sql, values} = apply_token(sql, ~r/@request\.auth\.role/, "", 3, values)
-    {sql, values} = apply_token(sql, ~r/@request\.auth\.\w+/, "", 4, values)
 
-    {sql, values}
+    reject_unknown_tokens(sql, values)
   end
 
   defp resolve_user_tokens(rule, user) do
@@ -245,14 +289,21 @@ defmodule Lazypock.Rules.Enforcer do
     email = to_string(Map.get(user, "email") || Map.get(user, :email) || "")
     role = to_string(Map.get(user, "role") || Map.get(user, :role) || "user")
 
-    values = [nil, nil, nil, nil]
+    values = [nil, nil, nil]
 
     {sql, values} = apply_token(rule, ~r/@request\.auth\.id/, id, 1, values)
     {sql, values} = apply_token(sql, ~r/@request\.auth\.email/, email, 2, values)
     {sql, values} = apply_token(sql, ~r/@request\.auth\.role/, role, 3, values)
-    {sql, values} = apply_token(sql, ~r/@request\.auth\.\w+/, "", 4, values)
 
-    {sql, values}
+    reject_unknown_tokens(sql, values)
+  end
+
+  defp reject_unknown_tokens(sql, values) do
+    if String.contains?(sql, "@request.auth.") do
+      {:error, "Unsupported @request.auth token in rule"}
+    else
+      {:ok, sql, values}
+    end
   end
 
   # Replaces one token kind with a `$N` placeholder (bound param).

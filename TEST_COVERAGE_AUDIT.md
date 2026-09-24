@@ -142,8 +142,74 @@ subscription via `Enforcer.authorize_list`. Untested:
 
 - Email controller flows (verification / password reset) — needs mail mocking.
 - S3 adapter tests — need minio or stubbing.
-- Per-record realtime event filtering (channel broadcasts are not filtered by
-  viewRule per record — subscription is listRule-gated only). Design decision
-  to revisit.
 - Per-record rule enforcement on file uploads (the `/files` endpoint has no
   record context; uploads are authenticated-but-not-rule-gated).
+- `Lazypock.Rules.Enforcer` / `Lazypock.Schemas.FilterCompiler` coverage floors
+  are ratcheted at the measured baseline (~88-89%), not the 95% target — raise
+  them as coverage improves (see `core/scripts/check_rule_coverage.exs`).
+
+### 4.1 Decided: realtime is subscription-gated, not per-record filtered
+
+Per-record realtime filtering was previously listed here as "design decision to
+revisit". It is now a **decided, documented parity behaviour**: a subscription
+is authorized once at join time against `listRule`, and every subsequent record
+change for the collection is delivered. PocketBase behaves the same way
+(a subscription is gated by `listRule`/`viewRule`; filtered per-record
+subscriptions are not a supported feature upstream). Pinned by
+`test/lazypock_web/channels/collection_socket_test.exs`
+("broadcasts are gated by the join, not filtered per record") and noted in
+`SECURITY.md`.
+
+View collections are **Model A** (= PocketBase): a view's own List/View rules
+are authoritative and independent of the source collections' rules, so a view
+can expose rows its source tables deny. Pinned by
+`view_collections_controller_test.exs`.
+
+## 5. Access-control hardening pass (2026-09-24)
+
+A focused pass over the rule-enforcement path. New tests:
+
+| File | Focus |
+| --- | --- |
+| `test/lazypock/rules/enforcer_fail_closed_test.exs` | A rule the enforcer cannot prove it evaluated must deny |
+| `test/lazypock/schemas/filter_compiler_property_test.exs` | Property/fuzz coverage (arbitrary bytes, generated filters, placeholder/param parity) |
+| `test/lazypock_web/controllers/rule_side_channel_test.exs` | No existence oracle; invalid filter rejected; no schema leakage |
+
+Extras: per-module coverage gate (`core/scripts/check_rule_coverage.exs`) + a
+path-filtered, nightly-fuzz CI workflow (`rules.yml`); token tampering/expiry
+tests in `auth/token_test.exs`; view-builder adversarial-input tests;
+`live`-free realtime join-parity guard.
+
+### 5.1 Bugs found and fixed in this pass
+
+1. **Whitespace-only rule granted public access** — `"   "` compiled to an empty
+   clause, which the enforcer read as "no restriction". Now classified as
+   invalid and denied.
+2. **Filters that emit no SQL granted unconditional access** — e.g.
+   `listRule = "'a' ~ 'b'"` (a comparison with no field operand) hit the code
+   generator's catch-all and produced an empty clause, i.e. allow. `compile/3`
+   now rejects a non-empty filter that emits no SQL.
+3. **Dangling boolean operators were silently dropped** — `a = 1 &&` compiled as
+   `a = 1` instead of erroring.
+4. **Unknown `@request.auth.*` tokens bound to empty string** — so
+   `@request.auth.typo = ''` evaluated `'' = ''` (true) and allowed. Now rejected
+   (deny).
+5. **Any struct got the superuser bypass** — `superuser?(%{__struct__: _})`
+   matched every struct; now matches only `%Lazypock.Auth.SuperUser{}`.
+6. **`~`/`!~` did not escape LIKE metacharacters** — `name ~ '%'` matched every
+   row. Now escapes `%`, `_` and `\` (PocketBase `wrapLikeParams` parity) with
+   `ESCAPE '\'`, leaving an explicit unescaped `%` as an author pattern.
+7. **`?filter=` was silently ignored when invalid** — a typo'd filter returned
+   everything the rule allowed. Now a 400.
+8. **Rule-denied record was distinguishable from a missing one** — `GET /:id`
+   answered 403 vs 404, an existence oracle. Both now answer 404.
+9. **Malformed record id raised a 500** — `GET /api/:collection/not-a-uuid`
+   crashed with `DBConnection.EncodeError` before the enforcer ran; now a clean
+   404 (`GenericRecord.get/3`/`update`/`delete`).
+10. **A bare `'` in a filter crashed the compiler** — `unescape_literal/1`
+    sliced with a `-1` length (`FunctionClauseError`); found by fuzzing.
+11. **Invalid UTF-8 in a filter value crashed the LIKE builder** —
+    `String.to_charlist/1` raises `UnicodeConversionError`; the LIKE helpers are
+    now byte-wise. Also found by fuzzing.
+12. **Filter length / expression limits** — added PocketBase's 3500-character
+    and 200-expression caps.

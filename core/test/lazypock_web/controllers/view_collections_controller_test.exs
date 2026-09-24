@@ -487,7 +487,179 @@ defmodule LazypockWeb.ViewCollectionsControllerTest do
 
       conn = build_conn()
       conn = get(conn, "/api/#{name}/#{other["id"]}")
-      assert %{"message" => "Access denied by viewRule"} = json_response(conn, 403)
+
+      # A denied record is reported exactly like a missing one (no existence
+      # oracle) -- see rule_side_channel_test.exs.
+      assert %{"message" => "The requested resource wasn't found."} =
+               json_response(conn, 404)
+    end
+  end
+
+  describe "view builder adversarial input" do
+    # The builder generates SQL from a *structured* spec (source/relations/
+    # fields/sort/limit), so raw SQL cannot be injected through it. These pin
+    # the validation that keeps it that way.
+
+    test "rejects an output alias containing SQL metacharacters", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{
+            "source" => src,
+            "fields" => [%{"name" => "title", "as" => "t\"; DROP TABLE users; --"}]
+          }
+        })
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "output column name"
+    end
+
+    test "rejects a relation alias containing SQL metacharacters", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{
+            "source" => src,
+            "relations" => [%{"field" => "title", "alias" => "a\" FROM x; --"}],
+            "fields" => [%{"name" => "title"}]
+          }
+        })
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "relation alias"
+    end
+
+    test "rejects a relation alias that collides with the source collection", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{
+            "source" => src,
+            "relations" => [%{"field" => "title", "alias" => src}],
+            "fields" => [%{"name" => "title"}]
+          }
+        })
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "conflicts with the source collection name"
+    end
+
+    test "rejects a relation whose field is not a relation", %{src: src} do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{
+            "source" => src,
+            "relations" => [%{"field" => "title", "alias" => "t"}],
+            "fields" => [%{"name" => "title"}]
+          }
+        })
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "is not a relation"
+    end
+
+    test "rejects a builder spec whose source collection does not exist" do
+      name = "vb_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> json_post("/api/collections", %{
+          "name" => name,
+          "type" => "view",
+          "viewBuilder" => %{
+            "source" => "no_such_source_xyz",
+            "fields" => [%{"name" => "title"}]
+          }
+        })
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "does not exist"
+    end
+
+    test "rejects a raw viewQuery that selects a wildcard", %{src: src} do
+      name = "vw_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> post("/api/collections",
+          name: name,
+          type: "view",
+          viewQuery: "SELECT * FROM #{src}"
+        )
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "wildcard"
+    end
+
+    test "rejects a raw viewQuery with a qualified wildcard", %{src: src} do
+      name = "vw_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      conn =
+        auth_conn(build_conn())
+        |> post("/api/collections",
+          name: name,
+          type: "view",
+          viewQuery: "SELECT t.* FROM #{src} AS t"
+        )
+
+      assert %{"error" => error} = json_response(conn, 400)
+      assert error =~ "wildcard"
+    end
+
+    test "a view's own rules are authoritative over the source collection's rules", %{
+      src: src
+    } do
+      # Model A (= PocketBase): a view's List/View rules are independent from
+      # the rules of the collection(s) its query derives from. A view can
+      # therefore expose rows whose source table denies anonymous reads, so the
+      # superuser building the view is trusted not to do that by accident.
+      {:ok, source_record} =
+        GenericRecord.insert(src, %{"title" => "exposed", "count" => 1})
+
+      view = "vw_" <> Integer.to_string(:erlang.unique_integer([:positive]))
+
+      {:ok, _} =
+        DDL.create_collection(view,
+          type: "view",
+          options: %{"view_query" => "SELECT id, title FROM #{src}"},
+          rules: %{"listRule" => ""}
+        )
+
+      # Make the SOURCE collection's rows unreadable to anonymous callers (a
+      # non-nil rule, since form-encoding drops nil params).
+      conn =
+        auth_conn(build_conn())
+        |> patch("/api/collections/#{src}", %{
+          "rules" => %{"viewRule" => "@request.auth.id != ''"}
+        })
+
+      assert %{"rules" => %{"viewRule" => _}} = json_response(conn, 200)
+      Registry.reload!()
+
+      # The source record is denied to anonymous callers...
+      assert json_response(get(build_conn(), "/api/#{src}/#{source_record["id"]}"), 404)
+
+      # ...yet the public view still exposes it.
+      body = json_response(get(build_conn(), "/api/#{view}"), 200)
+      assert body["totalItems"] == 1
+      assert hd(body["items"])["title"] == "exposed"
     end
   end
 end

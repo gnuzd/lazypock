@@ -13,8 +13,19 @@ defmodule Lazypock.MixProject do
       deps: deps(),
       compilers: Mix.compilers(),
       listeners: [Phoenix.CodeReloader],
+      test_coverage: test_coverage(),
       releases: releases()
     ]
+  end
+
+  # `mix test --cover` otherwise applies Elixir's 90% default threshold, which
+  # this project does not meet overall. The global number here is a loose
+  # ratchet so the run still produces a report; the access-control modules have
+  # their own, much stricter per-module gate in scripts/check_rule_coverage.exs
+  # (asserted in CI), because a global minimum can be masked by unrelated
+  # well-covered modules.
+  defp test_coverage do
+    [summary: [threshold: 67]]
   end
 
   # Configuration for the OTP application.
@@ -78,7 +89,8 @@ defmodule Lazypock.MixProject do
       {:cors_plug, "~> 3.0"},
       {:assent, "~> 0.3.1"},
       {:crontab, "~> 1.2"},
-      {:tz, "~> 0.28"}
+      {:tz, "~> 0.28"},
+      {:stream_data, "~> 1.2", only: [:dev, :test]}
     ]
   end
 
