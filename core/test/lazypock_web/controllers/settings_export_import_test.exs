@@ -7,6 +7,12 @@ defmodule LazypockWeb.SettingsExportImportTest do
   alias Lazypock.Auth.Token
   alias Lazypock.Schemas.GenericRecord
   alias Lazypock.Collections.Registry
+  alias Lazypock.Settings
+
+  import ExUnit.CaptureLog
+
+  # Password used by every superuser created in this file.
+  @password "password"
 
   defp random_name(prefix) do
     suffix = :crypto.strong_rand_bytes(4) |> Base.encode16() |> String.downcase()
@@ -28,9 +34,33 @@ defmodule LazypockWeb.SettingsExportImportTest do
   end
 
   defp json_post(conn, path, payload) do
+    # Import/restore and rollback require the acting superuser's password
+    # (re-authentication). Inject the test superuser's password so the
+    # behaviour tests stay focused — the gate itself is covered by the
+    # "re-authentication" tests, which use raw_json_post/3.
+    payload =
+      if String.starts_with?(path, "/api/import"),
+        do: Map.put_new(payload, "password", @password),
+        else: payload
+
+    raw_json_post(conn, path, payload)
+  end
+
+  defp raw_json_post(conn, path, payload) do
     conn
     |> put_req_header("content-type", "application/json")
     |> post(path, Jason.encode!(payload))
+  end
+
+  defp bearer_conn(token) do
+    put_req_header(build_conn(), "authorization", "Bearer #{token}")
+  end
+
+  defp user_token do
+    email = "user_#{:erlang.unique_integer([:positive])}@test.com"
+    {:ok, user} = GenericRecord.insert("users", %{"email" => email})
+    {:ok, token} = Token.generate_user_token(user, "users")
+    token
   end
 
   defp title_field do
@@ -663,6 +693,132 @@ defmodule LazypockWeb.SettingsExportImportTest do
 
       conn = json_post(auth_conn(build_conn()), "/api/import/rollback", %{})
       assert json_response(conn, 404)
+    end
+  end
+
+  describe "superuser-only guard" do
+    test "auth-collection user tokens are rejected" do
+      token = user_token()
+
+      assert json_response(get(bearer_conn(token), "/api/export"), 403)
+      assert json_response(get(bearer_conn(token), "/api/import/status"), 403)
+
+      conn =
+        raw_json_post(bearer_conn(token), "/api/import", %{
+          "collections" => [],
+          "password" => @password
+        })
+
+      assert json_response(conn, 403)
+
+      conn =
+        raw_json_post(bearer_conn(token), "/api/import/rollback", %{"password" => @password})
+
+      assert json_response(conn, 403)
+    end
+
+    test "API keys are rejected" do
+      {key, _meta} = Settings.create_api_key()
+
+      assert json_response(get(bearer_conn(key), "/api/export"), 403)
+      assert json_response(get(bearer_conn(key), "/api/import/status"), 403)
+
+      conn =
+        raw_json_post(bearer_conn(key), "/api/import", %{
+          "collections" => [],
+          "password" => @password
+        })
+
+      assert json_response(conn, 403)
+
+      conn = raw_json_post(bearer_conn(key), "/api/import/rollback", %{"password" => @password})
+      assert json_response(conn, 403)
+    end
+  end
+
+  describe "re-authentication for destructive operations" do
+    test "POST /api/import requires the superuser password" do
+      conn = raw_json_post(auth_conn(build_conn()), "/api/import", %{"collections" => []})
+      assert %{"message" => message} = json_response(conn, 401)
+      assert message =~ "required"
+    end
+
+    test "POST /api/import rejects a wrong password" do
+      conn =
+        raw_json_post(auth_conn(build_conn()), "/api/import", %{
+          "collections" => [],
+          "password" => "not-the-password"
+        })
+
+      assert %{"message" => message} = json_response(conn, 401)
+      assert message =~ "Invalid"
+    end
+
+    test "POST /api/import succeeds with the right password" do
+      name = random_name("reauth_ok_")
+
+      conn =
+        raw_json_post(auth_conn(build_conn()), "/api/import", %{
+          "collections" => [%{"name" => name, "type" => "base", "schema" => []}],
+          "password" => @password
+        })
+
+      assert json_response(conn, 200)["errors"] == []
+    end
+
+    test "POST /api/import/rollback requires the superuser password" do
+      conn = raw_json_post(auth_conn(build_conn()), "/api/import/rollback", %{})
+      assert %{"message" => message} = json_response(conn, 401)
+      assert message =~ "required"
+    end
+
+    test "POST /api/import/rollback rejects a wrong password" do
+      conn =
+        raw_json_post(auth_conn(build_conn()), "/api/import/rollback", %{
+          "password" => "not-the-password"
+        })
+
+      assert %{"message" => message} = json_response(conn, 401)
+      assert message =~ "Invalid"
+    end
+  end
+
+  describe "audit log" do
+    test "export, import and rollback emit an audit line" do
+      # The test env runs at :warning; audit lines are :info.
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
+      export_log =
+        capture_log(fn ->
+          assert json_response(get(auth_conn(build_conn()), "/api/export"), 200)
+        end)
+
+      assert export_log =~ "[audit] action=export actor=admin_"
+
+      name = random_name("audit_")
+
+      import_log =
+        capture_log(fn ->
+          conn =
+            json_post(auth_conn(build_conn()), "/api/import", %{
+              "collections" => [%{"name" => name, "type" => "base", "schema" => []}]
+            })
+
+          assert json_response(conn, 200)["errors"] == []
+        end)
+
+      assert import_log =~ "[audit] action=import actor=admin_"
+      assert import_log =~ "imported=1"
+
+      rollback_log =
+        capture_log(fn ->
+          conn = json_post(auth_conn(build_conn()), "/api/import/rollback", %{})
+          assert json_response(conn, 200)["rolled_back"] == true
+        end)
+
+      assert rollback_log =~ "[audit] action=import.rollback actor=admin_"
     end
   end
 end

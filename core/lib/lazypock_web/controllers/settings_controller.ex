@@ -254,13 +254,24 @@ defmodule LazypockWeb.SettingsController do
 
   def export_all(conn, _params) do
     conn = require_superuser!(conn)
-    if conn.halted, do: conn, else: json(conn, Lazypock.Backup.export())
+    if conn.halted, do: conn, else: do_export(conn)
+  end
+
+  defp do_export(conn) do
+    payload = Lazypock.Backup.export()
+    collections = length(payload.collections)
+    records = payload.collections |> Enum.map(&length(&1.records)) |> Enum.sum()
+
+    Lazypock.Audit.record("export", actor(conn), collections: collections, records: records)
+
+    json(conn, payload)
   end
 
   # ── Import collections ──
 
   def import_all(conn, params) do
     conn = require_superuser!(conn)
+    conn = if conn.halted, do: conn, else: require_password!(conn, params)
     if conn.halted, do: conn, else: do_import(conn, params)
   end
 
@@ -272,6 +283,14 @@ defmodule LazypockWeb.SettingsController do
     collections = params["collections"] || []
 
     result = Lazypock.Backup.restore(collections, delete_missing, atomic: atomic, snapshot: true)
+
+    Lazypock.Audit.record("import", actor(conn),
+      imported: length(result.imported),
+      errors: length(result.errors),
+      deleteMissing: delete_missing,
+      rolled_back: Map.get(result, :rolled_back, false)
+    )
+
     json(conn, result)
   end
 
@@ -287,14 +306,52 @@ defmodule LazypockWeb.SettingsController do
     end
   end
 
-  def import_rollback(conn, _params) do
+  def import_rollback(conn, params) do
     conn = require_superuser!(conn)
+    conn = if conn.halted, do: conn, else: require_password!(conn, params)
     if conn.halted, do: conn, else: do_import_rollback(conn)
+  end
+
+  # Re-authentication for destructive operations: a valid bearer token is not
+  # enough — the acting superuser must confirm the request with their password.
+  defp require_password!(conn, params) do
+    user = conn.assigns[:current_superuser]
+    password = params["password"]
+
+    cond do
+      not is_binary(password) or password == "" ->
+        reject_password(conn, "Password confirmation is required")
+
+      Bcrypt.verify_pass(password, user.password_hash) ->
+        conn
+
+      true ->
+        reject_password(conn, "Invalid password")
+    end
+  end
+
+  defp reject_password(conn, message) do
+    conn
+    |> put_status(401)
+    |> json(%{code: 401, message: message, data: %{}})
+    |> halt()
+  end
+
+  defp actor(conn) do
+    case conn.assigns[:current_superuser] do
+      %{email: email} -> email
+      _ -> nil
+    end
   end
 
   defp do_import_rollback(conn) do
     case Lazypock.Backup.rollback() do
       {:ok, result} ->
+        Lazypock.Audit.record("import.rollback", actor(conn),
+          collections: length(result.imported),
+          errors: length(result.errors)
+        )
+
         json(conn, Map.put(result, :rolled_back, true))
 
       {:error, :no_snapshot} ->
