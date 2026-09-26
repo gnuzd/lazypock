@@ -71,6 +71,83 @@ export function parseCollections(text: string): {
 	}
 }
 
+/** The subset of `manifest.json` a preview needs. */
+export type ArchiveManifest = {
+	format?: string;
+	format_version?: number;
+	lazypock_version?: string;
+	created_at?: string;
+	collections?: { name: string; type?: string; records?: number }[];
+	files?: { total?: number; bytes?: number; missing?: number };
+	totals?: { collections?: number; records?: number; files?: number };
+};
+
+/**
+ * Reads `manifest.json` out of an NDJSON archive **without uploading it**.
+ *
+ * The exporter always writes that entry first and records its real size in the
+ * local file header (no data descriptor, no ZIP64), so only a few KB are read —
+ * `File.slice` never loads the archive into memory. Uploading a multi-GB archive
+ * twice (once to preview, once to import) would be worse than not previewing it,
+ * which is why this is done in the browser rather than by a server endpoint.
+ *
+ * Returns null when the file is not a LazyPock archive or its zip layout cannot
+ * be parsed cheaply; callers then simply import without a preview.
+ */
+export async function readArchiveManifest(file: File): Promise<ArchiveManifest | null> {
+	try {
+		if (file.size < 30) return null;
+
+		const header = new DataView(await file.slice(0, 30).arrayBuffer());
+		if (header.getUint32(0, true) !== 0x04034b50) return null;
+
+		const flags = header.getUint16(6, true);
+		const method = header.getUint16(8, true);
+		const compressedSize = header.getUint32(18, true);
+		const nameLength = header.getUint16(26, true);
+		const extraLength = header.getUint16(28, true);
+
+		// Bit 3: sizes live in a trailing data descriptor. 0xffffffff: ZIP64.
+		// Either way the sizes cannot be trusted here, so give up quietly.
+		if (flags & 0x08 || compressedSize === 0xffffffff) return null;
+
+		const name = new TextDecoder().decode(
+			new Uint8Array(await file.slice(30, 30 + nameLength).arrayBuffer())
+		);
+		if (name !== 'manifest.json') return null;
+
+		const start = 30 + nameLength + extraLength;
+		const raw = await file.slice(start, start + compressedSize).arrayBuffer();
+		const json = method === 0 ? new TextDecoder().decode(raw) : await inflateRaw(raw);
+
+		const manifest = JSON.parse(json) as ArchiveManifest;
+		return manifest.format === 'lazypock-archive' ? manifest : null;
+	} catch {
+		return null;
+	}
+}
+
+async function inflateRaw(buffer: ArrayBuffer): Promise<string> {
+	if (typeof DecompressionStream === 'undefined') {
+		throw new Error('DecompressionStream is unavailable in this browser');
+	}
+
+	const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+
+	return new Response(stream).text();
+}
+
+/** Flattens a manifest into the `{name, type, recordCount}` rows the UIs render. */
+export function manifestCollections(
+	manifest: ArchiveManifest | null
+): { name: string; type: string; recordCount: number }[] {
+	return (manifest?.collections ?? []).map((c) => ({
+		name: c.name,
+		type: c.type || 'base',
+		recordCount: c.records ?? 0
+	}));
+}
+
 function authHeader(): Record<string, string> {
 	const token = client.authStore.token;
 	return token ? { Authorization: 'Bearer ' + token } : {};

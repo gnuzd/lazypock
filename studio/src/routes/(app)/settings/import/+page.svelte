@@ -15,9 +15,12 @@
 		describeError,
 		importJson,
 		isArchive,
+		manifestCollections,
 		parseCollections,
+		readArchiveManifest,
 		summarize,
-		uploadArchive
+		uploadArchive,
+		type ArchiveManifest
 	} from '$lib/importRestore';
 	import '../settings.css';
 
@@ -45,6 +48,10 @@
 	let importResult = $state<string | null>(null);
 	// An NDJSON archive is uploaded as a file instead of being pasted as JSON.
 	let archiveFile = $state<File | null>(null);
+	// Read out of the archive's manifest in the browser, so an archive can be
+	// previewed WITHOUT uploading it first (`null` until read / if unreadable).
+	let archiveManifest = $state<ArchiveManifest | null>(null);
+	let archivePreview = $derived(manifestCollections(archiveManifest));
 	// Upload progress percentage (null when not uploading).
 	let progress = $state<number | null>(null);
 	// Set when the server refuses a large import pending explicit confirmation.
@@ -71,15 +78,23 @@
 		// Archives are not pasted as JSON — hand the file straight to the upload.
 		if (isArchive(file)) {
 			archiveFile = file;
+			archiveManifest = null;
 			importForm.form.schemas = '';
 			parsedCollections = [];
 			importResult = null;
 			importLoadingFile = false;
 			if (importFileInput) importFileInput.value = '';
+
+			void readArchiveManifest(file).then((manifest) => {
+				// Ignore a stale read if the user picked another file meanwhile.
+				if (archiveFile === file) archiveManifest = manifest;
+			});
+
 			return;
 		}
 
 		archiveFile = null;
+		archiveManifest = null;
 		const reader = new FileReader();
 		reader.onload = async (event) => {
 			importLoadingFile = false;
@@ -122,6 +137,7 @@
 		parsedCollections = [];
 		importResult = null;
 		archiveFile = null;
+		archiveManifest = null;
 		progress = null;
 		if (importFileInput) importFileInput.value = '';
 	}
@@ -193,6 +209,7 @@
 
 			if (ok && archiveFile) {
 				archiveFile = null;
+				archiveManifest = null;
 				if (importFileInput) importFileInput.value = '';
 			}
 		} catch (e) {
@@ -255,10 +272,32 @@
 		{#if archiveFile}
 			<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
 				Uploading <span class="font-mono">{archiveFile.name}</span>
-				<span class="text-info/70">({(archiveFile.size / 1_048_576).toFixed(1)} MB)</span> — the archive
-				is streamed to the server, so the whole database is never held in the browser. Per-collection
-				record counts appear in the result.
+				<span class="text-info/70">({(archiveFile.size / 1_048_576).toFixed(1)} MB)</span> — the
+				archive is streamed to the server, so the whole database is never held in the browser.
+				{#if archiveManifest?.files?.total}
+					It also contains {archiveManifest.files.total} uploaded
+					{archiveManifest.files.total === 1 ? 'file' : 'files'}.
+				{/if}
 			</div>
+
+			{#if archiveManifest}
+				<div class="mb-4 rounded-box border border-base-300 bg-base-200/40 p-3">
+					<div class="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">
+						{archivePreview.length} collections in archive ·
+						{archiveManifest.totals?.records ?? 0} records
+					</div>
+					<ul class="max-h-40 space-y-1 overflow-y-auto">
+						{#each archivePreview as c (c.name)}
+							<li class="flex items-center justify-between text-sm">
+								<span class="font-mono text-xs">{c.name}</span>
+								<span class="text-xs text-base-content/50">
+									{c.type}{c.recordCount > 0 ? ` · ${c.recordCount} records` : ''}
+								</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 		{/if}
 
 		<div class="field mb-4">

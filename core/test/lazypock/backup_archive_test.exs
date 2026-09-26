@@ -31,16 +31,18 @@ defmodule Lazypock.BackupArchiveTest do
   defp entries(path) do
     {:ok, list} = :zip.list_dir(String.to_charlist(path))
 
-    Enum.map(list, fn
-      {:zip_file, name, _, _, _, _} -> List.to_string(name)
-      other -> other
-    end)
+    # Only file entries — list_dir also returns a `{:zip_comment, ...}` element.
+    for {:zip_file, name, _, _, _, _} <- list, do: List.to_string(name)
   end
 
   defp make_collection(name, fields) do
     {:ok, _} = DDL.create_collection(name, fields: fields)
     Registry.reload!()
     name
+  end
+
+  defp write_json!(dir, name, data) do
+    File.write!(Path.join(dir, name), Jason.encode!(data, pretty: true))
   end
 
   setup do
@@ -391,6 +393,182 @@ defmodule Lazypock.BackupArchiveTest do
 
       titles = GenericRecord.all(name) |> Enum.map(& &1["title"])
       assert titles == ["keep-me"]
+    end
+  end
+
+  describe "uploaded files" do
+    setup do
+      # Point the Local adapter at a scratch dir so blobs never touch _build/priv.
+      dir = Path.join(System.tmp_dir!(), "lz-uploads-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      Application.put_env(:lazypock, :file_storage, path: dir)
+
+      on_exit(fn ->
+        Application.delete_env(:lazypock, :file_storage)
+        File.rm_rf(dir)
+      end)
+
+      {:ok, upload_dir: dir}
+    end
+
+    test "includes _files rows and blobs, and restores both", %{upload_dir: dir} do
+      {:ok, file} = Lazypock.Files.Store.store("hello blob", "note.txt", [])
+
+      path = tmp_path("zip")
+      assert {:ok, %{files: 1}} = Backup.export_stream(dest: path)
+
+      extracted = unzip(path)
+      assert File.exists?(Path.join(extracted, "files.ndjson"))
+
+      assert File.read!(Path.join([extracted, "files", file["storage_path"]])) == "hello blob"
+
+      files = entries(path)
+      assert "files.ndjson" in files
+      assert "files/#{file["storage_path"]}" in files
+
+      manifest = Jason.decode!(File.read!(Path.join(extracted, "manifest.json")))
+      assert manifest["files"]["total"] == 1
+      assert manifest["files"]["missing"] == 0
+
+      # Wipe both the metadata row and the blob, then restore from the archive.
+      Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1::text::uuid", [
+        file["id"]
+      ])
+
+      File.rm!(Path.join(dir, file["storage_path"]))
+      assert {:error, _} = Lazypock.Files.Store.read(file)
+
+      assert Backup.restore_archive(path, false, snapshot: false).errors == []
+
+      {:ok, restored} = Lazypock.Files.Store.get(file["id"])
+      assert restored["storage_path"] == file["storage_path"]
+      assert {:ok, "hello blob"} = Lazypock.Files.Store.read(restored)
+      assert File.read!(Path.join(dir, file["storage_path"])) == "hello blob"
+
+      File.rm(path)
+      File.rm_rf(extracted)
+    end
+
+    test "a missing blob is recorded in the manifest, not fatal" do
+      {:ok, file} = Lazypock.Files.Store.store("gone", "gone.txt", [])
+
+      # Delete the underlying blob but keep the metadata row (an orphaned upload).
+      base = Application.get_env(:lazypock, :file_storage)[:path]
+      File.rm!(Path.join(base, file["storage_path"]))
+
+      path = tmp_path("zip")
+      assert {:ok, %{files: 1}} = Backup.export_stream(dest: path)
+
+      extracted = unzip(path)
+      manifest = Jason.decode!(File.read!(Path.join(extracted, "manifest.json")))
+      assert manifest["files"]["total"] == 1
+      assert manifest["files"]["missing"] == 1
+
+      File.rm(path)
+      File.rm_rf(extracted)
+    end
+
+    test "include_files: false omits uploads entirely" do
+      {:ok, _file} = Lazypock.Files.Store.store("skip me", "skip.txt", [])
+
+      path = tmp_path("zip")
+      assert {:ok, %{files: 0}} = Backup.export_stream(dest: path, include_files: false)
+
+      files = entries(path)
+      refute "files.ndjson" in files
+      refute Enum.any?(files, &String.starts_with?(&1, "files/"))
+
+      File.rm(path)
+    end
+
+    test "rejects an unsafe storage path instead of writing outside the store" do
+      scratch = Path.join(System.tmp_dir!(), "lz-evil-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(scratch, "data"))
+
+      write_json!(scratch, "manifest.json", %{
+        "format" => "lazypock-archive",
+        "format_version" => 1,
+        "collections" => [],
+        "files" => %{"total" => 1}
+      })
+
+      write_json!(scratch, "schema.json", %{"collections" => []})
+
+      File.write!(
+        Path.join(scratch, "files.ndjson"),
+        Jason.encode!(%{
+          "id" => Ecto.UUID.generate(),
+          "storage_path" => "../../evil.txt",
+          "storage_backend" => "local"
+        }) <> "\n"
+      )
+
+      zip = tmp_path("zip")
+
+      {:ok, _} =
+        :zip.create(
+          String.to_charlist(zip),
+          [~c"manifest.json", ~c"schema.json", ~c"files.ndjson"],
+          [{:cwd, String.to_charlist(scratch)}]
+        )
+
+      result = Backup.restore_archive(zip, false, snapshot: false)
+      assert result.errors != []
+      assert Enum.any?(result.errors, &(&1.error =~ "unsafe file storage path"))
+
+      # Nothing escaped the upload root.
+      refute File.exists?(Path.join(System.tmp_dir!(), "evil.txt"))
+
+      File.rm(zip)
+      File.rm_rf(scratch)
+    end
+  end
+
+  describe "inspect_archive/1" do
+    test "manifest.json is the first entry, with sizes in its local header" do
+      # The Studio previews an archive by reading this entry straight out of the
+      # browser with `File.slice`, using only the first few KB. That requires the
+      # entry to be first, to carry no data descriptor (flag bit 3), and to not use
+      # ZIP64 sizes. If a future change breaks this, fail loudly here rather than
+      # silently losing the preview.
+      path = tmp_path("zip")
+      assert {:ok, _} = Backup.export_stream(dest: path)
+
+      <<0x04034B50::little-32, _ver::little-16, flags::little-16, _method::little-16,
+        _time::little-16, _date::little-16, _crc::little-32, csize::little-32, _usize::little-32,
+        nlen::little-16, _elen::little-16, rest::binary>> = File.read!(path)
+
+      assert Bitwise.band(flags, 0x08) == 0
+      refute csize == 0xFFFFFFFF
+      assert binary_part(rest, 0, nlen) == "manifest.json"
+
+      File.rm(path)
+    end
+
+    test "returns the manifest without extracting the data" do
+      name = make_collection(cname("insp"), [%{"name" => "title", "type" => "text"}])
+      {:ok, _} = GenericRecord.insert(name, %{"title" => "x"})
+
+      path = tmp_path("zip")
+      assert {:ok, _} = Backup.export_stream(dest: path)
+
+      assert {:ok, manifest} = Backup.inspect_archive(path)
+      assert manifest["format"] == "lazypock-archive"
+      assert manifest["format_version"] == 1
+      assert Enum.any?(manifest["collections"], &(&1["name"] == name))
+      assert manifest["totals"]["records"] >= 1
+      assert Map.has_key?(manifest, "files")
+
+      File.rm(path)
+    end
+
+    test "rejects a file that is not a LazyPock archive" do
+      assert {:error, message} =
+               Backup.inspect_archive(
+                 "/tmp/lz-not-here-#{System.unique_integer([:positive])}.zip"
+               )
+
+      assert is_binary(message)
     end
   end
 

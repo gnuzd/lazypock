@@ -58,6 +58,26 @@ defmodule Lazypock.Files.Adapters.Local do
     end
   end
 
+  # Backup support: expose the on-disk path so an export can `File.cp/2` a large
+  # upload instead of reading it into memory.
+  @impl true
+  def local_path(file_record) do
+    {:ok, Path.join(base_path(), file_record["storage_path"])}
+  end
+
+  # Backup support: write at an EXPLICIT storage path. `store/3` generates its own
+  # path, which would orphan every `_files.storage_path` reference on restore.
+  @impl true
+  def put_at(storage_path, source, _opts) do
+    full_path = Path.join(base_path(), storage_path)
+    File.mkdir_p!(Path.dirname(full_path))
+
+    case source do
+      {:file, src} -> File.cp(src, full_path)
+      binary when is_binary(binary) -> File.write(full_path, binary)
+    end
+  end
+
   @impl true
   def delete(file_record) do
     full_path = Path.join(base_path(), file_record["storage_path"])

@@ -34,6 +34,10 @@ defmodule Lazypock.Application do
         restore_cli(args)
         System.halt(0)
 
+      ["inspect" | args] ->
+        inspect_cli(args)
+        System.halt(0)
+
       _ ->
         start_app()
     end
@@ -159,6 +163,60 @@ defmodule Lazypock.Application do
         IO.puts(:stderr, "All changes were rolled back.")
       end
     end)
+  end
+
+  # Reads an archive's manifest WITHOUT a database or a full extraction, so
+  # `lazypock inspect backup.zip` works even where no DB is reachable.
+  defp inspect_cli(args) do
+    case Enum.find(args, &(not String.starts_with?(&1, "--"))) do
+      nil ->
+        IO.puts(:stderr, "Usage: lazypock inspect <backup.zip>")
+        System.halt(1)
+
+      path ->
+        case Lazypock.Backup.inspect_archive(path) do
+          {:ok, manifest} ->
+            print_manifest(path, manifest)
+
+          {:error, reason} ->
+            IO.puts(:stderr, "Cannot read #{path}: #{reason}")
+            System.halt(1)
+        end
+    end
+  end
+
+  defp print_manifest(path, manifest) do
+    totals = manifest["totals"] || %{}
+    files = manifest["files"] || %{}
+    collections = manifest["collections"] || []
+
+    IO.puts(path)
+
+    IO.puts(
+      "  format:      #{manifest["format"]} v#{manifest["format_version"]} " <>
+        "(LazyPock #{manifest["lazypock_version"] || "?"})"
+    )
+
+    IO.puts("  created:     #{manifest["created_at"] || "?"}")
+
+    IO.puts(
+      "  contains:    #{totals["collections"] || length(collections)} collections, " <>
+        "#{totals["records"] || 0} records, #{files["total"] || 0} files"
+    )
+
+    if (files["missing"] || 0) > 0 do
+      IO.puts(
+        "  WARNING:     #{files["missing"]} file(s) were already missing when this was taken"
+      )
+    end
+
+    IO.puts("")
+
+    for coll <- collections do
+      IO.puts("  #{coll["type"] || "base"}\t#{coll["name"]}\t#{coll["records"] || 0} records")
+    end
+
+    :ok
   end
 
   defp read_json!(path) do

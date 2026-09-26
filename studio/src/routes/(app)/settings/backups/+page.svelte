@@ -13,7 +13,9 @@
 		downloadArchive,
 		importJson,
 		isArchive,
+		manifestCollections,
 		parseCollections,
+		readArchiveManifest,
 		summarize,
 		uploadArchive
 	} from '$lib/importRestore';
@@ -90,7 +92,22 @@
 		// as-is and the server reports what it imported.
 		if (isArchive(file)) {
 			archiveFile = file;
+			parsedCollections = [];
 			if (restoreFileInput) restoreFileInput.value = '';
+
+			// Read manifest.json out of the archive locally — nothing is uploaded
+			// until Restore is pressed.
+			void readArchiveManifest(file).then((manifest) => {
+				if (archiveFile !== file) return;
+
+				parsedCollections = manifestCollections(manifest);
+
+				if (manifest === null) {
+					parseError =
+						"Could not read this archive's manifest — it will still import, but it cannot be previewed.";
+				}
+			});
+
 			return;
 		}
 
@@ -269,8 +286,8 @@
 	{#if archiveFile}
 		<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
 			Archive selected: <span class="font-mono">{archiveFile.name}</span>
-			<span class="text-info/70">({(archiveFile.size / 1_048_576).toFixed(1)} MB)</span> — the server
-			streams it, so per-collection counts are shown in the results below.
+			<span class="text-info/70">({(archiveFile.size / 1_048_576).toFixed(1)} MB)</span> — its manifest
+			was read in the browser, so nothing has been uploaded yet.
 		</div>
 	{/if}
 

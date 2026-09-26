@@ -34,6 +34,19 @@ defmodule Lazypock.Files.Adapter do
   @callback scale(map(), String.t()) ::
               {:ok, binary(), String.t()} | {:error, term()}
 
+  # Optional: absolute on-disk path of a stored object, when the backend has one.
+  # Lets a backup copy bytes with `File.cp/2` instead of loading them into memory.
+  # Return `:error` when there is no local file (e.g. a remote object store); the
+  # backup then falls back to `get/1`.
+  @callback local_path(map()) :: {:ok, String.t()} | :error
+
+  # Write bytes at an EXPLICIT storage path. `store/3` generates its own path,
+  # which is wrong when restoring a backup (the path is referenced by
+  # `_files.storage_path` and must be preserved). `source` is either a binary or
+  # `{:file, path}` so a local backend can copy without buffering.
+  @callback put_at(String.t(), binary() | {:file, String.t()}, keyword()) ::
+              :ok | {:error, term()}
+
   @optional_callbacks thumbs: 3, scale: 2
 
   @doc """

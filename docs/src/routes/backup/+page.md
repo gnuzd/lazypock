@@ -26,9 +26,11 @@ instead:
 
 ```text
 backup-<timestamp>.zip
-├── manifest.json          # format + version + per-collection row counts
+├── manifest.json          # format + version + per-collection row counts + file totals
 ├── schema.json            # { "collections": [...] } — collection definitions, no records
-└── data/<collection>.ndjson
+├── data/<collection>.ndjson
+├── files.ndjson           # one _files row per line (upload metadata)
+└── files/<storage_path>   # the uploaded blobs themselves
 ```
 
 Each `data/*.ndjson` file holds **one JSON object per line, one line per record**, so:
@@ -37,6 +39,19 @@ Each `data/*.ndjson` file holds **one JSON object per line, one line per record*
   is just one long line;
 - it is easy to preview or grep a collection without loading the rest (`grep` a collection file,
   `tail` the last records, count rows with `wc -l`).
+
+**Uploaded files are included.** `files.ndjson` carries the `_files` metadata rows (so the record →
+file links survive) and `files/` carries the blobs at their original `storage_path`. Blobs are copied
+through the configured storage adapter: a local backend is copied on disk rather than buffered into
+memory, and the restore writes each blob back to the exact path its `_files` row references. A
+metadata row whose blob was already missing when the backup was taken is counted in
+`manifest.files.missing` rather than aborting the backup. Pass `--no-files` on the CLI (or
+`include_files: false` in `Backup.export_stream/1`) for a schema+records-only backup.
+
+> Uploaded-file support currently means the **local** storage adapter. `Files.Adapters.S3` is still a
+> stub (`LazyPock` cannot store uploads in S3 yet), so an S3-backed deployment has no S3 blobs to back
+> up in the first place. The archive writes and restores through the adapter interface, so blob backup
+> starts working for S3 as soon as that adapter is implemented.
 
 ### Exporting it
 
@@ -47,12 +62,19 @@ curl -H "Authorization: Bearer <token>" -o backup.zip https://your-host/api/expo
 # CLI: writes an archive by default (pass a .json path for the legacy format)
 lazypock backup backup.zip
 lazypock backup legacy.json
+
+# See what an archive contains without restoring it (no database needed)
+lazypock inspect backup.zip
 ```
 
 In the Studio, **Settings → Backups → Download Backup (.zip)** uses this path and shows real download
 progress. The **Download JSON** button next to it keeps producing the single-document format above.
 
 ### Importing it
+
+In the Studio, selecting an archive on **Settings → Import** or **Settings → Backups** lists what it
+contains *before* anything is uploaded: both read `manifest.json` out of the archive in the browser
+(only the first few KB of the file are read), so previewing a multi-GB archive costs nothing.
 
 `POST /api/import` accepts the archive as a `multipart/form-data` upload (field name `file`). The
 request body limit for this route alone is raised (`LAZYPOCK_IMPORT_MAX_MB`, default 10240 MB), so a

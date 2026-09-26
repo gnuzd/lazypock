@@ -88,6 +88,8 @@ defmodule Lazypock.Backup do
   manifest.json          # format + version + per-collection row counts
   schema.json            # { "collections": [ ... ] } — no records
   data/<name>.ndjson     # one JSON object per line, one line per record
+  files.ndjson           # one _files row per line (upload metadata)
+  files/<storage_path>   # the uploaded blobs themselves
   ```
 
   Every collection is read from **one `REPEATABLE READ` snapshot** (so a write
@@ -95,14 +97,20 @@ defmodule Lazypock.Backup do
   Each row is encoded and appended on its own, which is what makes a single
   >100 MB column value tractable: no buffer holds more than one row.
 
+  Uploaded files are included for every adapter that can read them back. The
+  blobs are copied through the storage adapter (`local_path/1` when available, so
+  a local backend is copied on disk rather than buffered; otherwise `get/1`).
+  Pass `include_files: false` for a schema+records-only backup.
+
   ## Options
 
     * `:dest` — output path; defaults to `<backup_dir>/lazypock-<kind>-<ts>.zip`
     * `:kind` — `"backup"` (default) or `"checkpoint"`, for the default name/manifest
     * `:exclude_system` — skip system collections (undo checkpoints do this)
+    * `:include_files` — include `_files` rows + blobs (default `true`)
     * `:max_rows` — cursor batch size (default #{@default_cursor_rows})
 
-  Returns `{:ok, %{path:, bytes:, collections:, records:, collection_counts:}}`
+  Returns `{:ok, %{path:, bytes:, collections:, records:, files:, collection_counts:}}`
   or `{:error, reason}`. `GET /api/export`'s JSON shape is untouched by this.
   """
   @spec export_stream(keyword()) :: {:ok, map()} | {:error, term()}
@@ -113,9 +121,10 @@ defmodule Lazypock.Backup do
 
     try do
       File.mkdir_p!(Path.join(scratch, "data"))
+      File.mkdir_p!(Path.join(scratch, "files"))
       File.mkdir_p!(Path.dirname(dest))
 
-      {schema_collections, counts} = write_archive_data(scratch, opts)
+      {schema_collections, counts, files} = write_archive_data(scratch, opts)
       totals = Enum.reduce(counts, 0, fn c, acc -> acc + c["records"] end)
 
       write_json!(Path.join(scratch, "schema.json"), %{"collections" => schema_collections})
@@ -127,7 +136,12 @@ defmodule Lazypock.Backup do
         "kind" => kind,
         "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
         "collections" => counts,
-        "totals" => %{"collections" => length(counts), "records" => totals}
+        "files" => files,
+        "totals" => %{
+          "collections" => length(counts),
+          "records" => totals,
+          "files" => files["total"]
+        }
       })
 
       zip_scratch(scratch, dest)
@@ -138,6 +152,7 @@ defmodule Lazypock.Backup do
          bytes: File.stat!(dest).size,
          collections: length(counts),
          records: totals,
+         files: files["total"],
          collection_counts: counts
        }}
     rescue
@@ -147,8 +162,9 @@ defmodule Lazypock.Backup do
     end
   end
 
-  # Reads every collection inside ONE snapshot and writes each collection's
-  # NDJSON file. Returns {schema_collections, counts}.
+  # Reads every collection AND the `_files` table inside ONE snapshot, writing
+  # each collection's NDJSON file plus the upload blobs.
+  # Returns {schema_collections, counts, files}.
   defp write_archive_data(scratch, opts) do
     max_rows = Keyword.get(opts, :max_rows, @default_cursor_rows)
     exclude_system = Keyword.get(opts, :exclude_system, false)
@@ -161,10 +177,6 @@ defmodule Lazypock.Backup do
         exclude_system and Lazypock.Collections.Collection.system?(coll.name)
       end)
 
-    # `REPEATABLE READ` is snapshot isolation: it does not block writers, so a
-    # long export does not stall the live app. It does hold dead tuples back
-    # from autovacuum until the transaction ends (temporary bloat) — documented
-    # tradeoff for a consistent backup.
     # `SET TRANSACTION ISOLATION LEVEL` is only legal before any other statement
     # in the transaction, and issuing it in an already-active transaction both
     # fails AND aborts that transaction. So it is only issued when this export
@@ -179,22 +191,104 @@ defmodule Lazypock.Backup do
     # guarantee is unavailable, not silently broken.
     fresh_transaction? = not Repo.in_transaction?() and not sandbox_pool?()
 
-    counts =
+    {counts, files} =
       case Repo.transaction(fn ->
              if fresh_transaction? do
                Ecto.Adapters.SQL.query!(Repo, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
              end
 
-             Enum.map(collections, fn coll ->
-               count = write_collection_ndjson(scratch, coll, max_rows)
-               %{"name" => coll.name, "type" => coll.type, "records" => count}
-             end)
+             counts =
+               Enum.map(collections, fn coll ->
+                 count = write_collection_ndjson(scratch, coll, max_rows)
+                 %{"name" => coll.name, "type" => coll.type, "records" => count}
+               end)
+
+             {counts, write_files(scratch, opts)}
            end) do
-        {:ok, counts} -> counts
+        {:ok, {counts, files}} -> {counts, files}
         {:error, reason} -> raise "export failed: #{inspect(reason)}"
       end
 
-    {Enum.map(collections, &collection_def/1), counts}
+    {Enum.map(collections, &collection_def/1), counts, files}
+  end
+
+  # Uploaded files: the `_files` metadata rows (so record↔file links survive)
+  # plus the blobs themselves, copied through the storage adapter.
+  defp write_files(scratch, opts) do
+    if Keyword.get(opts, :include_files, true) and files_table?() do
+      ndjson = Path.join(scratch, "files.ndjson")
+
+      {total, bytes, missing} =
+        File.open!(ndjson, [:write, :raw, :binary], fn io ->
+          "_files"
+          |> GenericRecord.stream_all(max_rows: @default_cursor_rows)
+          |> Enum.reduce({0, 0, 0}, fn row, {total, bytes, missing} ->
+            IO.binwrite(io, [Jason.encode!(row), "\n"])
+
+            case copy_blob(scratch, row) do
+              {:ok, size} -> {total + 1, bytes + size, missing}
+              :missing -> {total + 1, bytes, missing + 1}
+            end
+          end)
+        end)
+
+      %{"total" => total, "bytes" => bytes, "missing" => missing}
+    else
+      %{"total" => 0, "bytes" => 0, "missing" => 0}
+    end
+  end
+
+  # Prefer copying on disk (`local_path/1`); only fall back to `get/1` — which
+  # buffers the whole object — for a backend with no local representation.
+  defp copy_blob(scratch, row) do
+    root = Path.join(scratch, "files")
+
+    case safe_blob_path(root, row["storage_path"]) do
+      {:ok, dest} ->
+        File.mkdir_p!(Path.dirname(dest))
+        mod = Lazypock.Files.Adapter.for_backend(row["storage_backend"])
+
+        case mod.local_path(row) do
+          {:ok, src} ->
+            if File.exists?(src) do
+              File.cp!(src, dest)
+              {:ok, File.stat!(dest).size}
+            else
+              :missing
+            end
+
+          :error ->
+            case mod.get(row) do
+              {:ok, binary} ->
+                File.write!(dest, binary)
+                {:ok, byte_size(binary)}
+
+              {:error, _} ->
+                :missing
+            end
+        end
+
+      :error ->
+        :missing
+    end
+  end
+
+  # Guards against a `storage_path` that escapes the archive root (`../`, an
+  # absolute path). Relevant on restore, where the archive is caller-supplied.
+  defp safe_blob_path(_root, path) when not is_binary(path) or path == "", do: :error
+
+  defp safe_blob_path(root, path) do
+    case Path.safe_relative(path) do
+      {:ok, rel} -> {:ok, Path.join(root, rel)}
+      :error -> :error
+    end
+  end
+
+  defp files_table? do
+    case existing_tables() do
+      nil -> false
+      tables -> MapSet.member?(tables, "_files")
+    end
   end
 
   defp sandbox_pool? do
@@ -242,7 +336,9 @@ defmodule Lazypock.Backup do
 
     entries =
       ["manifest.json", "schema.json"] ++
-        Enum.map(File.ls!(data_dir) |> Enum.sort(), &"data/#{&1}")
+        maybe_entry(Path.join(scratch, "files.ndjson"), "files.ndjson") ++
+        Enum.map(File.ls!(data_dir) |> Enum.sort(), &"data/#{&1}") ++
+        blob_entries(Path.join(scratch, "files"))
 
     case :zip.create(
            String.to_charlist(dest),
@@ -251,6 +347,22 @@ defmodule Lazypock.Backup do
          ) do
       {:ok, _} -> :ok
       {:error, reason} -> raise "could not create archive: #{inspect(reason)}"
+    end
+  end
+
+  defp maybe_entry(path, name), do: if(File.exists?(path), do: [name], else: [])
+
+  defp blob_entries(root) do
+    if File.dir?(root) do
+      root
+      |> Path.join("**")
+      |> Path.wildcard(match_dot: false)
+      |> Enum.filter(&File.regular?/1)
+      |> Enum.map(&Path.relative_to(&1, root))
+      |> Enum.sort()
+      |> Enum.map(&"files/#{&1}")
+    else
+      []
     end
   end
 
@@ -666,6 +778,7 @@ defmodule Lazypock.Backup do
 
         if delete_missing, do: drop_missing_each(normalized, existing_names)
         if prune?, do: prune_records_not_in(keep_streams(normalized, records_source))
+        maybe_restore_files(records_source)
 
         finalize_checkpoint(
           %{imported: Enum.reverse(imported), errors: Enum.reverse(errors), rolled_back: false},
@@ -717,6 +830,7 @@ defmodule Lazypock.Backup do
     end
 
     if prune?, do: prune_records_not_in(keep_streams(collections, records_source))
+    maybe_restore_files(records_source)
 
     %{imported: Enum.reverse(imported_list), errors: Enum.reverse(errors_list)}
   end
@@ -876,7 +990,53 @@ defmodule Lazypock.Backup do
 
   defp read_archive!(scratch) do
     manifest = scratch |> Path.join("manifest.json") |> read_json!()
+    validate_manifest!(manifest)
 
+    schema = scratch |> Path.join("schema.json") |> read_json!()
+    {schema["collections"] || [], scratch}
+  end
+
+  @doc """
+  Reads ONLY `manifest.json` from an archive, without extracting the data.
+
+  Lets a caller show what a backup contains before importing it, and is cheap
+  regardless of archive size — the zip's central directory locates the entry, so
+  nothing else is decompressed.
+
+  Returns `{:ok, manifest}` or `{:error, reason}`; the manifest carries
+  `collections` (name/type/records per collection) and `files`.
+  """
+  @spec inspect_archive(String.t()) :: {:ok, map()} | {:error, term()}
+  def inspect_archive(path) do
+    scratch = scratch_dir("inspect")
+
+    try do
+      File.mkdir_p!(scratch)
+
+      case :zip.extract(String.to_charlist(path), [
+             {:cwd, String.to_charlist(scratch)},
+             {:file_list, [~c"manifest.json"]}
+           ]) do
+        {:ok, _} ->
+          if File.exists?(Path.join(scratch, "manifest.json")) do
+            manifest = scratch |> Path.join("manifest.json") |> read_json!()
+            validate_manifest!(manifest)
+            {:ok, manifest}
+          else
+            {:error, "#{path} has no manifest.json — not a LazyPock archive"}
+          end
+
+        {:error, reason} ->
+          {:error, "could not read archive #{path}: #{inspect(reason)}"}
+      end
+    rescue
+      e -> {:error, Exception.message(e)}
+    after
+      File.rm_rf(scratch)
+    end
+  end
+
+  defp validate_manifest!(manifest) do
     case manifest["format"] do
       @archive_format -> :ok
       other -> raise "not a LazyPock archive (format=#{inspect(other)})"
@@ -887,8 +1047,7 @@ defmodule Lazypock.Backup do
               "LazyPock supports (#{@archive_format_version})"
     end
 
-    schema = scratch |> Path.join("schema.json") |> read_json!()
-    {schema["collections"] || [], scratch}
+    :ok
   end
 
   defp read_json!(path) do
@@ -900,33 +1059,70 @@ defmodule Lazypock.Backup do
 
   # One JSON object per line, decoded and handed on one at a time — a single
   # >100 MB record costs one line's worth of memory, not the whole file's.
-  defp ndjson_record_stream(root, name) do
-    case ndjson_path(root, name) do
-      path ->
-        if File.exists?(path) do
-          path
-          |> File.stream!(:line, [])
-          |> Stream.map(&String.trim_trailing(&1, "\n"))
-          |> Stream.reject(&(&1 == ""))
-          |> Stream.map(&Jason.decode!/1)
-        else
-          []
-        end
-    end
-  end
-
-  defp ndjson_id_stream(root, name) do
-    path = ndjson_path(root, name)
-
+  defp ndjson_lines(path) do
     if File.exists?(path) do
       path
       |> File.stream!(:line, [])
       |> Stream.map(&String.trim_trailing(&1, "\n"))
       |> Stream.reject(&(&1 == ""))
-      |> Stream.map(fn line -> line |> Jason.decode!() |> Map.get("id") end)
-      |> Stream.reject(&is_nil/1)
+      |> Stream.map(&Jason.decode!/1)
     else
       []
+    end
+  end
+
+  defp ndjson_record_stream(root, name), do: ndjson_lines(ndjson_path(root, name))
+
+  defp ndjson_id_stream(root, name) do
+    root
+    |> ndjson_record_stream(name)
+    |> Stream.map(& &1["id"])
+    |> Stream.reject(&is_nil/1)
+  end
+
+  # ── Uploaded files on restore ────────────────────────────────────────────
+
+  # `_files` rows and their blobs. Runs inside whatever transaction the caller
+  # established (see apply_all/restore_per_collection), so a failed import does
+  # not leave orphaned file rows behind. Blob writes are filesystem side effects
+  # and are therefore not undone by a rollback — the rows are, so a rolled-back
+  # import never *references* them.
+  defp maybe_restore_files({:ndjson, root}), do: restore_files(root)
+  defp maybe_restore_files(_inline), do: :ok
+
+  defp restore_files(root) do
+    metadata = Path.join(root, "files.ndjson")
+
+    if File.exists?(metadata) do
+      # Write every blob at the `storage_path` its row references, through that
+      # row's own adapter, BEFORE inserting the rows that point at them.
+      Enum.each(ndjson_lines(metadata), &restore_blob(Path.join(root, "files"), &1))
+
+      case GenericRecord.restore_many("_files", ndjson_lines(metadata), batch_size: 500) do
+        {:ok, _} -> :ok
+        {:error, reason} -> raise "could not restore file metadata: #{reason}"
+      end
+    end
+
+    :ok
+  end
+
+  defp restore_blob(root, row) do
+    case safe_blob_path(root, row["storage_path"]) do
+      {:ok, src} ->
+        # A metadata row whose blob never made it into the archive (the exporter
+        # records those as `missing`) is left alone rather than failing the import.
+        if File.exists?(src) do
+          mod = Lazypock.Files.Adapter.for_backend(row["storage_backend"])
+
+          case mod.put_at(row["storage_path"], {:file, src}, []) do
+            :ok -> :ok
+            {:error, reason} -> raise "could not restore file: #{inspect(reason)}"
+          end
+        end
+
+      :error ->
+        raise "archive contains an unsafe file storage path: #{inspect(row["storage_path"])}"
     end
   end
 
