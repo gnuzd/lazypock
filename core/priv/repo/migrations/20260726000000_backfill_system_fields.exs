@@ -9,7 +9,12 @@ defmodule Lazypock.Repo.Migrations.BackfillSystemFields do
       %{name: "provider_id", type: "text", required: true, sort_order: 2},
       %{name: "user_id", type: "relation", required: true, sort_order: 3},
       %{name: "created_at", type: "autodate", options: %{onCreate: true}, sort_order: 4},
-      %{name: "updated_at", type: "autodate", options: %{onCreate: true, onUpdate: true}, sort_order: 5}
+      %{
+        name: "updated_at",
+        type: "autodate",
+        options: %{onCreate: true, onUpdate: true},
+        sort_order: 5
+      }
     ])
 
     # ── _mfas fields ──
@@ -18,7 +23,12 @@ defmodule Lazypock.Repo.Migrations.BackfillSystemFields do
       %{name: "record_ref", type: "text", required: true, sort_order: 1},
       %{name: "method", type: "text", required: true, sort_order: 2},
       %{name: "created_at", type: "autodate", options: %{onCreate: true}, sort_order: 3},
-      %{name: "updated_at", type: "autodate", options: %{onCreate: true, onUpdate: true}, sort_order: 4}
+      %{
+        name: "updated_at",
+        type: "autodate",
+        options: %{onCreate: true, onUpdate: true},
+        sort_order: 4
+      }
     ])
 
     # ── _otps fields ──
@@ -28,7 +38,12 @@ defmodule Lazypock.Repo.Migrations.BackfillSystemFields do
       %{name: "password_hash", type: "password", required: true, sort_order: 2},
       %{name: "sent_to", type: "text", sort_order: 3},
       %{name: "created_at", type: "autodate", options: %{onCreate: true}, sort_order: 4},
-      %{name: "updated_at", type: "autodate", options: %{onCreate: true, onUpdate: true}, sort_order: 5}
+      %{
+        name: "updated_at",
+        type: "autodate",
+        options: %{onCreate: true, onUpdate: true},
+        sort_order: 5
+      }
     ])
 
     # ── _auth_origins fields ──
@@ -37,7 +52,12 @@ defmodule Lazypock.Repo.Migrations.BackfillSystemFields do
       %{name: "record_ref", type: "text", required: true, sort_order: 1},
       %{name: "fingerprint", type: "text", required: true, sort_order: 2},
       %{name: "created_at", type: "autodate", options: %{onCreate: true}, sort_order: 3},
-      %{name: "updated_at", type: "autodate", options: %{onCreate: true, onUpdate: true}, sort_order: 4}
+      %{
+        name: "updated_at",
+        type: "autodate",
+        options: %{onCreate: true, onUpdate: true},
+        sort_order: 4
+      }
     ])
 
     # ── users: add missing columns and fields ──
@@ -48,9 +68,30 @@ defmodule Lazypock.Repo.Migrations.BackfillSystemFields do
       %{name: "email", type: "email", required: true, system: true, sort_order: 0},
       %{name: "password_hash", type: "password", required: true, system: true, sort_order: 1},
       %{name: "name", type: "text", system: false, sort_order: 2},
-      %{name: "avatar", type: "file", system: false, sort_order: 3, options: %{maxSelect: 1, mimeTypes: ["image/jpeg", "image/png", "image/svg+xml", "image/gif", "image/webp"]}},
-      %{name: "created_at", type: "autodate", system: true, options: %{onCreate: true}, sort_order: 4},
-      %{name: "updated_at", type: "autodate", system: true, options: %{onCreate: true, onUpdate: true}, sort_order: 5}
+      %{
+        name: "avatar",
+        type: "file",
+        system: false,
+        sort_order: 3,
+        options: %{
+          maxSelect: 1,
+          mimeTypes: ["image/jpeg", "image/png", "image/svg+xml", "image/gif", "image/webp"]
+        }
+      },
+      %{
+        name: "created_at",
+        type: "autodate",
+        system: true,
+        options: %{onCreate: true},
+        sort_order: 4
+      },
+      %{
+        name: "updated_at",
+        type: "autodate",
+        system: true,
+        options: %{onCreate: true, onUpdate: true},
+        sort_order: 5
+      }
     ])
   end
 
@@ -89,6 +130,7 @@ defmodule Lazypock.Repo.Migrations.BackfillSystemFields do
           {"updated_at", "TIMESTAMPTZ", "now()"}
         ] do
       default_clause = if default, do: " DEFAULT #{default}", else: ""
+
       execute """
       DO $$
       BEGIN

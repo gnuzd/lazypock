@@ -24,7 +24,7 @@ defmodule LazypockWeb.Plugs.CustomRoutes do
     # Requests arrive under /api/... but routes are registered PB-style at the
     # app root (e.g. "/hello/{name}"), so strip the leading /api prefix.
     path =
-      "/" <> Enum.join(conn.path_info, "/")
+      ("/" <> Enum.join(conn.path_info, "/"))
       |> String.replace_prefix("/api", "")
       |> then(&if(&1 == "", do: "/", else: &1))
 

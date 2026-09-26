@@ -22,6 +22,7 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _external_auths (collection, provider, provider_id)"
 
     # _mfas
@@ -33,6 +34,7 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE INDEX IF NOT EXISTS idx_mfas_collection_ref_record_ref ON _mfas (collection_ref, record_ref)"
 
     # _otps
@@ -45,6 +47,7 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE INDEX IF NOT EXISTS idx_otps_collection_ref_record_ref ON _otps (collection_ref, record_ref)"
 
     # _auth_origins
@@ -56,6 +59,7 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_origins_unique_pairs ON _auth_origins (collection_ref, record_ref, fingerprint)"
 
     # ── Register system collections in _collections ──
@@ -78,18 +82,21 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
       FROM _collections c WHERE c.name = '_superusers'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'email')
     """
+
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
-				SELECT c.id, 'password_hash', 'password', true, true, 1, '{}'::jsonb, now(), now()
+    SELECT c.id, 'password_hash', 'password', true, true, 1, '{}'::jsonb, now(), now()
       FROM _collections c WHERE c.name = '_superusers'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'password_hash')
     """
+
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
       SELECT c.id, 'created_at', 'autodate', true, true, 2, '{\"onCreate\": true}'::jsonb, now(), now()
       FROM _collections c WHERE c.name = '_superusers'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'created_at')
     """
+
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
       SELECT c.id, 'updated_at', 'autodate', true, true, 3, '{\"onCreate\": true, \"onUpdate\": true}'::jsonb, now(), now()
@@ -122,13 +129,13 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
       FROM _collections c WHERE c.name = 'users'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'email')
     """
+
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
-				SELECT c.id, 'password_hash', 'password', true, true, 1, '{}'::jsonb, now(), now()
+    SELECT c.id, 'password_hash', 'password', true, true, 1, '{}'::jsonb, now(), now()
       FROM _collections c WHERE c.name = 'users'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'password_hash')
     """
-
 
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
@@ -136,18 +143,21 @@ defmodule Lazypock.Repo.Migrations.SetupSystemCollectionsProper do
       FROM _collections c WHERE c.name = 'users'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'created_at')
     """
+
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
       SELECT c.id, 'updated_at', 'autodate', true, true, 3, '{\"onCreate\": true, \"onUpdate\": true}'::jsonb, now(), now()
       FROM _collections c WHERE c.name = 'users'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'updated_at')
     """
+
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
       SELECT c.id, 'name', 'text', false, false, 4, '{\"max\": 255}'::jsonb, now(), now()
       FROM _collections c WHERE c.name = 'users'
       AND NOT EXISTS (SELECT 1 FROM _fields f WHERE f.collection_id = c.id AND f.name = 'name')
     """
+
     execute """
       INSERT INTO _fields (collection_id, name, type, required, system, sort_order, options, created_at, updated_at)
       SELECT c.id, 'avatar', 'file', false, false, 5, '{\"maxSelect\": 1, \"mimeTypes\": [\"image/jpeg\",\"image/png\",\"image/svg+xml\",\"image/gif\",\"image/webp\"]}'::jsonb, now(), now()

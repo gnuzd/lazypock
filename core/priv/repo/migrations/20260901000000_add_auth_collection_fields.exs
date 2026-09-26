@@ -9,8 +9,14 @@ defmodule Lazypock.Repo.Migrations.AddAuthCollectionFields do
     add_system_fields("users", [
       %{name: "verified", type: "bool", required: true, system: true, sort_order: 6},
       %{name: "verificationToken", type: "text", system: true, sort_order: 7},
-      %{name: "emailVisibility", type: "bool", required: true, system: true, sort_order: 8,
-       options: %{defaultValue: true}}
+      %{
+        name: "emailVisibility",
+        type: "bool",
+        required: true,
+        system: true,
+        sort_order: 8,
+        options: %{defaultValue: true}
+      }
     ])
   end
 

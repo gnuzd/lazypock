@@ -19,6 +19,7 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _externalAuths (collection, provider, provider_id)"
 
     execute """
@@ -37,6 +38,7 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE INDEX IF NOT EXISTS idx_mfas_collection_ref_record_ref ON _mfas (collection_ref, record_ref)"
 
     execute """
@@ -56,6 +58,7 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE INDEX IF NOT EXISTS idx_otps_collection_ref_record_ref ON _otps (collection_ref, record_ref)"
 
     execute """
@@ -74,6 +77,7 @@ defmodule Lazypock.Repo.Migrations.AddSystemToCollections do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_origins_unique_pairs ON _authOrigins (collection_ref, record_ref, fingerprint)"
 
     execute """

@@ -21,9 +21,11 @@ defmodule Lazypock.Schemas.FilterCompilerPropertyTest do
   @ops ~w(= != ~ !~ > >= < <=)
 
   defp comparison_gen do
-    gen all field <- member_of(@fields),
-            op <- member_of(@ops),
-            value <- one_of([member_of(@words), integer()]) do
+    gen all(
+          field <- member_of(@fields),
+          op <- member_of(@ops),
+          value <- one_of([member_of(@words), integer()])
+        ) do
       "#{field} #{op} '#{value}'"
     end
   end
@@ -31,10 +33,10 @@ defmodule Lazypock.Schemas.FilterCompilerPropertyTest do
   defp filter_gen do
     tree(comparison_gen(), fn child ->
       one_of([
-        gen all left <- child, right <- child, op <- member_of(["&&", "||"]) do
+        gen all(left <- child, right <- child, op <- member_of(["&&", "||"])) do
           "(#{left} #{op} #{right})"
         end,
-        gen all inner <- child do
+        gen all(inner <- child) do
           "!#{inner}"
         end
       ])
@@ -61,7 +63,7 @@ defmodule Lazypock.Schemas.FilterCompilerPropertyTest do
   end
 
   property "arbitrary bytes never crash the parser" do
-    check all input <- binary(), max_runs: property_max_runs() do
+    check all(input <- binary(), max_runs: property_max_runs()) do
       outcome = compile_outcome(input)
 
       assert match?({:ok, _}, outcome) or match?({:error, _}, outcome),
@@ -70,7 +72,7 @@ defmodule Lazypock.Schemas.FilterCompilerPropertyTest do
   end
 
   property "generated well-formed filters never crash the compiler" do
-    check all filter <- filter_gen(), max_runs: property_max_runs() do
+    check all(filter <- filter_gen(), max_runs: property_max_runs()) do
       outcome = compile_outcome(filter)
 
       assert match?({:ok, _}, outcome) or match?({:error, _}, outcome),
@@ -79,7 +81,7 @@ defmodule Lazypock.Schemas.FilterCompilerPropertyTest do
   end
 
   property "placeholders and bound params always line up" do
-    check all filter <- filter_gen(), max_runs: property_max_runs() do
+    check all(filter <- filter_gen(), max_runs: property_max_runs()) do
       case FilterCompiler.compile(filter) do
         {:ok, {sql, params}} ->
           numbers =
@@ -103,24 +105,27 @@ defmodule Lazypock.Schemas.FilterCompilerPropertyTest do
   end
 
   property "an empty or blank filter yields the documented empty clause" do
-    check all blanks <- list_of(member_of([" ", "\t", "\n"]), min_length: 0, max_length: 8),
-              max_runs: property_max_runs() do
+    check all(
+            blanks <- list_of(member_of([" ", "\t", "\n"]), min_length: 0, max_length: 8),
+            max_runs: property_max_runs()
+          ) do
       assert {:ok, {"", []}} = FilterCompiler.compile(Enum.join(blanks))
     end
   end
 
   property "user values are bound as parameters, never interpolated" do
-    check all value <- member_of(@words), max_runs: property_max_runs() do
+    check all(value <- member_of(@words), max_runs: property_max_runs()) do
       {:ok, {sql, params}} = FilterCompiler.compile("title = '#{value}'")
 
       assert params == [value]
+
       refute String.contains?(sql, value),
              "value #{inspect(value)} leaked into the SQL text: #{sql}"
     end
   end
 
   property "LIKE values are escaped so metacharacters cannot widen the match" do
-    check all value <- member_of(@words), max_runs: property_max_runs() do
+    check all(value <- member_of(@words), max_runs: property_max_runs()) do
       {:ok, {_sql, [pattern]}} = FilterCompiler.compile("title ~ '#{value}'")
 
       # An unescaped `%` anywhere but the auto-added wrapping would let the

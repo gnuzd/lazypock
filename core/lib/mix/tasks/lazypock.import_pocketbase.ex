@@ -67,7 +67,9 @@ defmodule Mix.Tasks.Lazypock.ImportPocketbase do
     end
 
     case summary[:warnings] do
-      [] -> :ok
+      [] ->
+        :ok
+
       warnings ->
         IO.puts("\n── Warnings ───────────────────────────────")
         Enum.each(warnings, &IO.puts("  ! #{&1}"))
