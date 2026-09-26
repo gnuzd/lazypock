@@ -267,6 +267,42 @@ defmodule LazypockWeb.SettingsController do
     json(conn, payload)
   end
 
+  # Streaming NDJSON archive. A NEW route on purpose: `GET /api/export`'s JSON
+  # shape is a published contract (docs/static/backup.schema.json), so the
+  # archive format is additive rather than a change to that response.
+  def export_archive(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: do_export_archive(conn)
+  end
+
+  defp do_export_archive(conn) do
+    path = Lazypock.Backup.temp_archive_path()
+
+    case Lazypock.Backup.export_stream(dest: path) do
+      {:ok, %{path: path, bytes: bytes, collections: collections, records: records}} ->
+        Lazypock.Audit.record("export.archive", actor(conn),
+          collections: collections,
+          records: records,
+          bytes: bytes
+        )
+
+        conn
+        |> put_resp_content_type("application/zip")
+        |> put_resp_header(
+          "content-disposition",
+          ~s(attachment; filename="#{Path.basename(path)}")
+        )
+        # send_file (not send_chunked) so the response carries Content-Length,
+        # which is what gives the Studio a real download progress bar.
+        |> send_file(200, path)
+
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: "export failed: #{inspect(reason)}"})
+    end
+  end
+
   # ── Import collections ──
 
   def import_all(conn, params) do
@@ -275,23 +311,87 @@ defmodule LazypockWeb.SettingsController do
     if conn.halted, do: conn, else: do_import(conn, params)
   end
 
+  # Lets the Studio warn BEFORE uploading a multi-GB archive: it answers whether
+  # an automatic undo checkpoint is still possible and whether this looks like a
+  # Neon host (informational only).
+  def import_preflight(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: json(conn, Lazypock.Backup.preflight())
+  end
+
   defp do_import(conn, params) do
-    delete_missing = params["deleteMissing"] == true
-    # Atomic by default (all-or-nothing); clients can opt into the old
-    # best-effort behavior with {"atomic": false}.
-    atomic = Map.get(params, "atomic", true) != false
-    collections = params["collections"] || []
+    delete_missing = truthy?(params["deleteMissing"])
+    atomic = parse_atomic(params["atomic"])
+    preflight = Lazypock.Backup.preflight()
 
-    result = Lazypock.Backup.restore(collections, delete_missing, atomic: atomic, snapshot: true)
+    # Above the size threshold there is no automatic undo checkpoint, so the
+    # operator has to opt in explicitly instead of silently losing rollback.
+    if not preflight.undo_available and not truthy?(params["confirm"]) do
+      conn
+      |> put_status(409)
+      |> json(%{
+        requires_confirmation: true,
+        reason: "large_import",
+        message: large_import_warning(preflight),
+        preflight: preflight
+      })
+    else
+      result = run_import(params, delete_missing, atomic)
 
-    Lazypock.Audit.record("import", actor(conn),
-      imported: length(result.imported),
-      errors: length(result.errors),
-      deleteMissing: delete_missing,
-      rolled_back: Map.get(result, :rolled_back, false)
-    )
+      Lazypock.Audit.record("import", actor(conn),
+        imported: length(result.imported),
+        errors: length(result.errors),
+        deleteMissing: delete_missing,
+        atomic: atomic,
+        source: import_source(params),
+        rolled_back: Map.get(result, :rolled_back, false)
+      )
 
-    json(conn, result)
+      json(conn, result)
+    end
+  end
+
+  # `POST /api/import` accepts either the classic JSON body
+  # ({"collections": [...], ...}) or a multipart upload of an NDJSON archive.
+  # The multipart form is what removes the 8 MB/whole-file-in-JS-string wall.
+  defp run_import(params, delete_missing, atomic) do
+    case params["file"] do
+      %Plug.Upload{path: path} ->
+        Lazypock.Backup.restore_archive(path, delete_missing, atomic: atomic, snapshot: true)
+
+      _ ->
+        Lazypock.Backup.restore(params["collections"] || [], delete_missing,
+          atomic: atomic,
+          snapshot: true
+        )
+    end
+  end
+
+  defp import_source(%{"file" => %Plug.Upload{}}), do: "archive"
+  defp import_source(_), do: "json"
+
+  defp truthy?(value), do: value in [true, "true", "1", 1]
+
+  defp parse_atomic("per_collection"), do: :per_collection
+  defp parse_atomic("batch"), do: :batch
+  defp parse_atomic("false"), do: false
+  defp parse_atomic(false), do: false
+  defp parse_atomic(_other), do: :batch
+
+  defp large_import_warning(preflight) do
+    base =
+      "This import is large: the database is #{preflight.db_size_mb} MB, above the " <>
+        "#{preflight.threshold_mb} MB automatic-undo threshold. No undo checkpoint will " <>
+        "be taken, so there is no one-click rollback if the import goes wrong."
+
+    if preflight.neon_hosted do
+      base <>
+        " This looks like a Neon-hosted database — you can create a branch or use Neon's " <>
+        "point-in-time restore as an alternative safety net: " <>
+        "https://neon.tech/docs/introduction/branching"
+    else
+      base
+    end
   end
 
   # ── Import rollback (undo the last import/restore) ──
@@ -302,7 +402,10 @@ defmodule LazypockWeb.SettingsController do
     if conn.halted do
       conn
     else
-      json(conn, %{snapshot: Lazypock.Backup.last_snapshot()})
+      json(conn, %{
+        snapshot: Lazypock.Backup.last_snapshot(),
+        preflight: Lazypock.Backup.preflight()
+      })
     end
   end
 
@@ -359,16 +462,22 @@ defmodule LazypockWeb.SettingsController do
         |> put_status(404)
         |> json(%{error: "There is no import snapshot to roll back to"})
 
-      {:error, %{errors: _} = result} ->
-        conn
-        |> put_status(400)
-        |> json(Map.put(result, :rolled_back, true))
-
       {:error, reason} ->
-        conn
-        |> put_status(500)
-        |> json(%{error: inspect(reason)})
+        rollback_error(conn, reason)
     end
+  end
+
+  # Split so both rollback error shapes stay handled and reachable.
+  defp rollback_error(conn, %{errors: _} = result) do
+    conn
+    |> put_status(400)
+    |> json(Map.put(result, :rolled_back, true))
+  end
+
+  defp rollback_error(conn, reason) do
+    conn
+    |> put_status(500)
+    |> json(%{error: inspect(reason)})
   end
 
   # ── Send test email ──

@@ -107,8 +107,12 @@ defmodule LazypockWeb.Router do
 
     # Export/Import collections
     get("/export", SettingsController, :export_all)
+    # NDJSON archive export — additive; `/export`'s JSON shape is a published contract.
+    get("/export/archive", SettingsController, :export_archive)
     post("/import", SettingsController, :import_all)
     get("/import/status", SettingsController, :import_status)
+    # Whether an automatic undo checkpoint is still possible (pre-upload warning).
+    get("/import/preflight", SettingsController, :import_preflight)
     post("/import/rollback", SettingsController, :import_rollback)
 
     # Send test email (superuser)
