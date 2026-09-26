@@ -36,11 +36,9 @@ defmodule LazypockWeb.Endpoint do
   plug(Plug.RequestId)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
-  plug(Plug.Parsers,
-    parsers: [:urlencoded, :multipart, :json],
-    pass: ["*/*"],
-    json_decoder: Phoenix.json_library()
-  )
+  # Path-aware: raises the request-body cap for the archive import route only
+  # (see LazypockWeb.BodyParser).
+  plug(LazypockWeb.BodyParser)
 
   plug(Plug.MethodOverride)
   plug(Plug.Head)

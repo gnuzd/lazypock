@@ -28,6 +28,10 @@ config :lazypock, LazypockWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# Keep test backups/checkpoints out of priv/ (they would otherwise accumulate in
+# the source tree across runs).
+config :lazypock, backup_dir: Path.join(System.tmp_dir!(), "lazypock-test-backups")
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

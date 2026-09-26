@@ -29,6 +29,19 @@ defmodule Lazypock.Files.Adapters.S3 do
     {:error, "S3 adapter not yet implemented"}
   end
 
+  # Backup support. A remote object has no local file, so an export falls back to
+  # `get/1` (which buffers the object) instead of copying on disk.
+  @impl true
+  def local_path(_file_record), do: :error
+
+  # Backup support: write at an explicit storage key. Implement this alongside
+  # `store/3` — restoring a backup must preserve `_files.storage_path`, and
+  # `store/3` generates a fresh path.
+  @impl true
+  def put_at(_storage_path, _source, _opts) do
+    {:error, "S3 adapter not yet implemented — cannot restore files to S3"}
+  end
+
   @impl true
   def delete(_file_record) do
     {:error, "S3 adapter not yet implemented"}

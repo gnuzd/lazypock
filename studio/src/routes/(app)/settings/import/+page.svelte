@@ -7,7 +7,21 @@
 	import AiPromptButton from '$lib/components/AiPromptButton.svelte';
 	import UndoImportButton from '$lib/components/UndoImportButton.svelte';
 	import Switch from '$lib/components/Switch.svelte';
+	import Modal from '$lib/components/Modal.svelte';
 	import { createForm } from '$lib/createForm.svelte';
+	import {
+		ACCEPTED_FILES,
+		confirmationRequired,
+		describeError,
+		importJson,
+		isArchive,
+		manifestCollections,
+		parseCollections,
+		readArchiveManifest,
+		summarize,
+		uploadArchive,
+		type ArchiveManifest
+	} from '$lib/importRestore';
 	import '../settings.css';
 
 	const importSchema = z.object({
@@ -18,17 +32,31 @@
 	});
 
 	let importForm = $state(
-		createForm(importSchema, { schemas: '', deleteMissing: true, atomic: true, password: '' })
+		// deleteMissing defaults to FALSE: it is destructive (it drops every user
+		// collection absent from the payload), and the published format docs say to
+		// leave it off when importing a partial file.
+		createForm(importSchema, { schemas: '', deleteMissing: false, atomic: true, password: '' })
 	);
 	let undoToken = $state(0);
 	let importFileInput: HTMLInputElement | undefined = $state();
 	const importPlaceholder = '[{ "id": "...", "name": "...", "type": "base", "fields": [] }]';
 	let importLoadingFile = $state(false);
-	let parsedCollections: { id: string; name: string; type: string }[] = $state([]);
+	let parsedCollections: { id?: string; name: string; type: string }[] = $state([]);
 	let oldCollections: { id: string; name: string; type: string }[] = [];
 	let loadingOldCollections = $state(false);
 	let importing = $state(false);
 	let importResult = $state<string | null>(null);
+	// An NDJSON archive is uploaded as a file instead of being pasted as JSON.
+	let archiveFile = $state<File | null>(null);
+	// Read out of the archive's manifest in the browser, so an archive can be
+	// previewed WITHOUT uploading it first (`null` until read / if unreadable).
+	let archiveManifest = $state<ArchiveManifest | null>(null);
+	let archivePreview = $derived(manifestCollections(archiveManifest));
+	// Upload progress percentage (null when not uploading).
+	let progress = $state<number | null>(null);
+	// Set when the server refuses a large import pending explicit confirmation.
+	let confirmMessage = $state<string | null>(null);
+	let confirmOpen = $state(false);
 
 	onMount(async () => {
 		loadingOldCollections = true;
@@ -46,6 +74,27 @@
 
 	function loadFile(file: File) {
 		importLoadingFile = true;
+
+		// Archives are not pasted as JSON — hand the file straight to the upload.
+		if (isArchive(file)) {
+			archiveFile = file;
+			archiveManifest = null;
+			importForm.form.schemas = '';
+			parsedCollections = [];
+			importResult = null;
+			importLoadingFile = false;
+			if (importFileInput) importFileInput.value = '';
+
+			void readArchiveManifest(file).then((manifest) => {
+				// Ignore a stale read if the user picked another file meanwhile.
+				if (archiveFile === file) archiveManifest = manifest;
+			});
+
+			return;
+		}
+
+		archiveFile = null;
+		archiveManifest = null;
 		const reader = new FileReader();
 		reader.onload = async (event) => {
 			importLoadingFile = false;
@@ -64,28 +113,22 @@
 	function parseImport() {
 		parsedCollections = [];
 		importResult = null;
-		try {
-			const data = JSON.parse(importForm.form.schemas);
-			// Accept both a bare array of collections and the backup envelope
-			// ({ "collections": [...] }) produced by Settings → Backups.
-			const collections = Array.isArray(data) ? data : data?.collections;
-			if (!Array.isArray(collections)) {
-				importResult =
-					'Invalid format. Expected an array of collections or { "collections": [...] }.';
-				return;
+
+		const { collections, error } = parseCollections(importForm.form.schemas);
+		if (error || !collections) {
+			importResult = error;
+			return;
+		}
+
+		// Deduplicate by id, falling back to name (backups from older
+		// versions don't carry a per-collection id).
+		const seenIds: Record<string, true> = {};
+		for (const c of collections as { id?: string; name?: string; type?: string }[]) {
+			const key = c.id || c.name;
+			if (key && c.name && !seenIds[key]) {
+				seenIds[key] = true;
+				parsedCollections.push({ id: c.id, name: c.name, type: c.type || 'base' });
 			}
-			// Deduplicate by id, falling back to name (backups from older
-			// versions don't carry a per-collection id).
-			const seenIds: Record<string, true> = {};
-			for (const c of collections) {
-				const key = c.id || c.name;
-				if (key && c.name && !seenIds[key]) {
-					seenIds[key] = true;
-					parsedCollections.push({ id: c.id, name: c.name, type: c.type || 'base' });
-				}
-			}
-		} catch {
-			importResult = 'Invalid JSON format.';
 		}
 	}
 
@@ -93,6 +136,9 @@
 		importForm.reset();
 		parsedCollections = [];
 		importResult = null;
+		archiveFile = null;
+		archiveManifest = null;
+		progress = null;
 		if (importFileInput) importFileInput.value = '';
 	}
 
@@ -116,7 +162,7 @@
 		}
 
 		for (const c of parsedCollections) {
-			const old = oldMap.get(c.id);
+			const old = c.id ? oldMap.get(c.id) : undefined;
 			if (!old) {
 				added.push(c.name);
 			} else if (old.name !== c.name || old.type !== c.type) {
@@ -132,32 +178,58 @@
 			importChanges.changed.length > 0
 	);
 
-	async function doImport() {
-		if (!isValidImport) return;
+	// An archive carries no parsed diff, so it is importable as soon as it is selected.
+	let canImport = $derived(archiveFile ? true : isValidImport && hasChanges);
+
+	async function doImport(confirm = false) {
+		if (!canImport || !importForm.form.password) return;
 		importing = true;
 		importResult = null;
+		progress = null;
+
+		const options = {
+			deleteMissing: importForm.form.deleteMissing,
+			atomic: importForm.form.atomic ? ('batch' as const) : (false as const),
+			password: importForm.form.password,
+			confirm
+		};
+
 		try {
-			const data = JSON.parse(importForm.form.schemas);
-			const collections = Array.isArray(data) ? data : data?.collections;
-			const res = (await client.http.post('/import', {
-				collections,
-				deleteMissing: importForm.form.deleteMissing,
-				atomic: importForm.form.atomic,
-				password: importForm.form.password
-			})) as { imported?: unknown[]; errors?: unknown[] } | null;
-			const importedCount = (res?.imported as unknown[])?.length ?? 0;
-			const errorCount = (res?.errors as unknown[])?.length ?? 0;
-			if (errorCount > 0) {
-				toast.error(`Imported ${importedCount} collections with ${errorCount} errors`);
-			} else {
-				toast.success(`Successfully imported ${importedCount} collections`);
-			}
+			const outcome = archiveFile
+				? await uploadArchive(archiveFile, options, (p) => (progress = p))
+				: await importJson({
+						...options,
+						collections: parseCollections(importForm.form.schemas).collections ?? []
+					});
+
+			const { ok, message } = summarize(outcome);
+			if (ok) toast.success(message);
+			else toast.error(message);
 			undoToken += 1;
+
+			if (ok && archiveFile) {
+				archiveFile = null;
+				archiveManifest = null;
+				if (importFileInput) importFileInput.value = '';
+			}
 		} catch (e) {
-			toast.error(`Import failed: ${(e as Error).message}`);
+			const gate = confirmationRequired(e);
+			if (gate) {
+				confirmMessage = gate.message;
+				confirmOpen = true;
+			} else {
+				toast.error(`Import failed: ${describeError(e)}`);
+			}
 		} finally {
 			importing = false;
+			progress = null;
 		}
+	}
+
+	function confirmAndImport() {
+		confirmOpen = false;
+		confirmMessage = null;
+		void doImport(true);
 	}
 </script>
 
@@ -178,7 +250,7 @@
 					class:btn-loading={importLoadingFile}
 					onclick={() => importFileInput?.click()}
 				>
-					Load from JSON file
+					Load from JSON or archive
 				</button>
 			</p>
 			<p class="mt-2 flex flex-wrap items-center gap-2">
@@ -189,13 +261,44 @@
 			<input
 				bind:this={importFileInput}
 				type="file"
-				accept=".json"
+				accept={ACCEPTED_FILES}
 				class="hidden"
 				onchange={() => {
 					if (importFileInput?.files?.length) loadFile(importFileInput.files[0]);
 				}}
 			/>
 		</div>
+
+		{#if archiveFile}
+			<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
+				Uploading <span class="font-mono">{archiveFile.name}</span>
+				<span class="text-info/70">({(archiveFile.size / 1_048_576).toFixed(1)} MB)</span> — the
+				archive is streamed to the server, so the whole database is never held in the browser.
+				{#if archiveManifest?.files?.total}
+					It also contains {archiveManifest.files.total} uploaded
+					{archiveManifest.files.total === 1 ? 'file' : 'files'}.
+				{/if}
+			</div>
+
+			{#if archiveManifest}
+				<div class="mb-4 rounded-box border border-base-300 bg-base-200/40 p-3">
+					<div class="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">
+						{archivePreview.length} collections in archive ·
+						{archiveManifest.totals?.records ?? 0} records
+					</div>
+					<ul class="max-h-40 space-y-1 overflow-y-auto">
+						{#each archivePreview as c (c.name)}
+							<li class="flex items-center justify-between text-sm">
+								<span class="font-mono text-xs">{c.name}</span>
+								<span class="text-xs text-base-content/50">
+									{c.type}{c.recordCount > 0 ? ` · ${c.recordCount} records` : ''}
+								</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+		{/if}
 
 		<div class="field mb-4">
 			<label for="import-schemas" class="field-label">Collections</label>
@@ -215,11 +318,19 @@
 			{/if}
 		</div>
 
-		<Switch class="mb-4" bind:checked={importForm.form.deleteMissing} disabled={!isValidImport}>
+		<Switch
+			class="mb-4"
+			bind:checked={importForm.form.deleteMissing}
+			disabled={!archiveFile && !isValidImport}
+		>
 			Delete missing collections and schema fields
 		</Switch>
 
-		<Switch class="mb-4" bind:checked={importForm.form.atomic} disabled={!isValidImport}>
+		<Switch
+			class="mb-4"
+			bind:checked={importForm.form.atomic}
+			disabled={!archiveFile && !isValidImport}
+		>
 			Roll the whole import back if any collection fails
 		</Switch>
 
@@ -273,8 +384,18 @@
 			</p>
 		</div>
 
+		{#if progress !== null}
+			<div class="mb-4">
+				<div class="mb-1 flex justify-between text-xs text-base-content/60">
+					<span>Uploading archive…</span>
+					<span>{progress}%</span>
+				</div>
+				<progress class="progress progress-primary w-full" value={progress} max="100"></progress>
+			</div>
+		{/if}
+
 		<div class="flex items-center justify-between">
-			{#if importForm.form.schemas}
+			{#if importForm.form.schemas || archiveFile}
 				<button
 					type="button"
 					class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
@@ -287,9 +408,9 @@
 			{/if}
 			<Button
 				class="btn-warning"
-				disabled={!isValidImport || !hasChanges || !importForm.form.password}
+				disabled={!canImport || !importForm.form.password}
 				loading={importing}
-				onclick={doImport}
+				onclick={() => doImport()}
 			>
 				Import
 			</Button>
@@ -298,3 +419,21 @@
 
 	<UndoImportButton class="mt-4" reloadToken={undoToken} />
 {/if}
+
+<Modal bind:show={confirmOpen} title="This import is large">
+	<p class="text-sm">{confirmMessage}</p>
+	<div class="mt-5 flex justify-end gap-2">
+		<Button
+			class="btn-ghost"
+			onclick={() => {
+				confirmOpen = false;
+				confirmMessage = null;
+			}}
+		>
+			Cancel
+		</Button>
+		<Button class="btn-warning" loading={importing} onclick={confirmAndImport}>
+			Proceed without automatic undo
+		</Button>
+	</div>
+</Modal>

@@ -16,6 +16,13 @@ defmodule Lazypock.Schemas.GenericRecord do
   alias Lazypock.Repo
   alias Lazypock.Schema.TypeMapper
 
+  # Postgres binds an Int16 parameter count, so a single statement can carry at
+  # most 65 535 parameters. Batches are capped by `rows x columns + rows(id)`.
+  @max_params 65_535
+  @default_batch_size 500
+  # A row bigger than this is inserted alone instead of being batched with others.
+  @big_row_bytes 5_000_000
+
   @doc """
   Inserts a record into a dynamic collection table.
 
@@ -237,24 +244,8 @@ defmodule Lazypock.Schemas.GenericRecord do
   """
   @spec restore(String.t(), map()) :: {:ok, map()} | {:error, String.t()}
   def restore(collection_name, record) when is_binary(collection_name) and is_map(record) do
-    now = DateTime.utc_now()
+    %{id: id_bin, columns: columns, values: values} = prepare_record(collection_name, record)
 
-    data =
-      record
-      |> Enum.map(fn {k, v} -> {to_string(k), v} end)
-      |> Map.new()
-      |> coerce_values_for_db()
-      |> restore_ensure_id(now)
-      |> restore_ensure_timestamps(now)
-      |> restore_default_arrays(collection_name)
-
-    # `id` needs Postgrex's 16-byte binary encoding for the UUID column.
-    id_bin = maybe_uuid_to_bin(Map.fetch!(data, "id"))
-
-    # Build columns + values from ONE pass so their order always aligns.
-    entries = Enum.reject(data, fn {k, _} -> k == "id" end)
-    columns = Enum.map(entries, &elem(&1, 0))
-    values = Enum.map(entries, &elem(&1, 1))
     quoted = Enum.map(columns, &TypeMapper.quote_ident/1)
 
     set_clauses =
@@ -264,18 +255,16 @@ defmodule Lazypock.Schemas.GenericRecord do
       |> Enum.join(", ")
 
     placeholders =
-      quoted
-      |> Enum.with_index(2)
-      |> Enum.map(fn {_col, idx} -> "$#{idx}" end)
-      |> Enum.join(", ")
+      case quoted do
+        [] ->
+          "($1)"
 
-    sql = """
-    INSERT INTO #{TypeMapper.quote_ident(collection_name)} ("id", #{Enum.join(quoted, ", ")})
-    VALUES ($1, #{placeholders})
-    ON CONFLICT (id) DO UPDATE SET
-      #{set_clauses}
-    RETURNING *
-    """
+        _ ->
+          "($1, " <> Enum.map_join(2..(length(quoted) + 1), ", ", &"$#{&1}") <> ")"
+      end
+
+    sql =
+      insert_sql(collection_name, quoted, placeholders, set_clauses) <> " RETURNING *"
 
     case Ecto.Adapters.SQL.query(Repo, sql, [id_bin | values]) do
       {:ok, %{rows: [row], columns: cols}} ->
@@ -284,6 +273,186 @@ defmodule Lazypock.Schemas.GenericRecord do
       {:error, err} ->
         {:error, Exception.message(err)}
     end
+  end
+
+  @doc """
+  Restores a stream/list of records with batched upserts (one statement per batch).
+
+  Rows are grouped into batches that share the same column set (so a record that
+  omits a column never nulls it out, matching `restore/2`), and a batch is capped
+  by both row count (`:batch_size`, default 500) and the Postgres bind-parameter
+  limit of 65 535 (`:max_params`). A single row larger than `:big_row_bytes`
+  (default 5 MB) is flushed alone so one huge value cannot be dragged along with
+  hundreds of small ones in the same oversized statement.
+
+  Returns `{:ok, count}` or `{:error, reason}`; the first failing batch aborts.
+  Accepts any enumerable (including a lazy `File.stream!/1`), so it never
+  materializes the whole record set.
+  """
+  @spec restore_many(String.t(), Enumerable.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, String.t()}
+  def restore_many(collection_name, records, opts \\ []) when is_binary(collection_name) do
+    max_params = Keyword.get(opts, :max_params, @max_params)
+    max_rows = Keyword.get(opts, :batch_size, @default_batch_size)
+    big_row_bytes = Keyword.get(opts, :big_row_bytes, @big_row_bytes)
+
+    try do
+      {count, state} =
+        Enum.reduce(records, {0, nil}, fn record, {count, state} ->
+          rec = prepare_record(collection_name, record, big_row_bytes)
+
+          case state do
+            nil ->
+              {count, %{sig: rec.sig, batch: [rec], bytes: rec.size}}
+
+            %{sig: sig, batch: batch, bytes: bytes} ->
+              limit = div(max_params, max(length(rec.columns) + 1, 1))
+
+              if sig == rec.sig and length(batch) < min(max_rows, limit) and
+                   bytes + rec.size <= big_row_bytes do
+                {count, %{sig: sig, batch: [rec | batch], bytes: bytes + rec.size}}
+              else
+                insert_batch!(collection_name, batch)
+                {count + length(batch), %{sig: rec.sig, batch: [rec], bytes: rec.size}}
+              end
+          end
+        end)
+
+      if state, do: insert_batch!(collection_name, state.batch)
+
+      {:ok, count + if(state, do: length(state.batch), else: 0)}
+    rescue
+      e -> {:error, Exception.message(e)}
+    end
+  end
+
+  # One statement for a whole batch. `columns` come from the first row; every
+  # row in the batch shares that column set by construction.
+  defp insert_batch!(_collection_name, []), do: :ok
+
+  defp insert_batch!(collection_name, batch) do
+    columns = hd(batch).columns
+    quoted = Enum.map(columns, &TypeMapper.quote_ident/1)
+    width = length(columns) + 1
+
+    params = Enum.flat_map(batch, fn rec -> [rec.id | rec.values] end)
+
+    placeholders =
+      batch
+      |> Enum.with_index()
+      |> Enum.map_join(", ", fn {_rec, row} ->
+        base = row * width
+
+        "(" <>
+          Enum.map_join(1..width, ", ", fn i -> "$#{base + i}" end) <> ")"
+      end)
+
+    set_clauses =
+      case quoted do
+        [] -> nil
+        _ -> Enum.map_join(quoted, ", ", fn col -> "#{col} = EXCLUDED.#{col}" end)
+      end
+
+    sql = insert_sql(collection_name, quoted, placeholders, set_clauses)
+
+    Ecto.Adapters.SQL.query!(Repo, sql, params)
+    :ok
+  end
+
+  defp insert_sql(collection_name, [], placeholders, _set) do
+    # Record carrying only an id — nothing to update on conflict.
+    "INSERT INTO #{TypeMapper.quote_ident(collection_name)} (\"id\") VALUES #{placeholders} ON CONFLICT (id) DO NOTHING"
+  end
+
+  defp insert_sql(collection_name, quoted, placeholders, set_clauses) do
+    """
+    INSERT INTO #{TypeMapper.quote_ident(collection_name)} ("id", #{Enum.join(quoted, ", ")})
+    VALUES #{placeholders}
+    ON CONFLICT (id) DO UPDATE SET
+      #{set_clauses}
+    """
+  end
+
+  @doc """
+  Streams every record of a collection as coerced maps, using a server-side
+  cursor (`Ecto.Adapters.SQL.stream/4` + Postgrex `DECLARE`/`FETCH`), so no more
+  than `:max_rows` rows (default 500) are ever in memory.
+
+  **Must be consumed inside a `Repo.transaction/2`** (Ecto requires it), and the
+  transaction's isolation level applies to the snapshot it reads.
+  """
+  @spec stream_all(String.t(), keyword()) :: Enumerable.t()
+  def stream_all(collection_name, opts \\ []) when is_binary(collection_name) do
+    max_rows = Keyword.get(opts, :max_rows, @default_batch_size)
+    sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)}"
+
+    Ecto.Adapters.SQL.stream(Repo, sql, [], max_rows: max_rows)
+    |> Stream.flat_map(fn %{rows: rows, columns: cols} ->
+      Enum.map(rows, &row_to_map(cols, &1))
+    end)
+  end
+
+  @doc """
+  Streams only the `id` of every record in a collection — useful when a caller
+  needs ids without materializing full rows. Same transaction requirement as
+  `stream_all/2`.
+  """
+  @spec stream_ids(String.t(), keyword()) :: Enumerable.t()
+  def stream_ids(collection_name, opts \\ []) when is_binary(collection_name) do
+    max_rows = Keyword.get(opts, :max_rows, @default_batch_size)
+    sql = "SELECT id FROM #{TypeMapper.quote_ident(collection_name)}"
+
+    Ecto.Adapters.SQL.stream(Repo, sql, [], max_rows: max_rows)
+    |> Stream.flat_map(fn %{rows: rows} ->
+      Enum.map(rows, fn [id] -> coerce_value("id", id) end)
+    end)
+  end
+
+  # Normalizes one record into the exact shape the DB write needs.
+  defp prepare_record(collection_name, record, big_row_bytes \\ @big_row_bytes) do
+    data = normalize_record(collection_name, record)
+
+    # `id` needs Postgrex's 16-byte binary encoding for the UUID column.
+    id_bin = maybe_uuid_to_bin(Map.fetch!(data, "id"))
+
+    # Build columns + values from ONE pass so their order always aligns.
+    entries = Enum.reject(data, fn {k, _} -> k == "id" end)
+    columns = Enum.map(entries, &elem(&1, 0))
+    values = Enum.map(entries, &elem(&1, 1))
+
+    %{
+      id: id_bin,
+      columns: columns,
+      values: values,
+      sig: columns,
+      size: approximate_size(values, big_row_bytes)
+    }
+  end
+
+  # Cheap size estimate used to decide whether a row must be inserted alone.
+  # Deliberately does NOT re-encode the record: `Jason.encode!/1` on a 100 MB
+  # value is exactly the cost this guard exists to avoid paying twice.
+  defp approximate_size(values, cap) do
+    Enum.reduce_while(values, 0, fn
+      v, acc when is_binary(v) ->
+        total = acc + byte_size(v)
+        if total > cap, do: {:halt, total}, else: {:cont, total}
+
+      _v, acc ->
+        {:cont, acc + 8}
+    end)
+  end
+
+  defp normalize_record(collection_name, record) do
+    now = DateTime.utc_now()
+
+    record
+    |> Enum.map(fn {k, v} -> {to_string(k), v} end)
+    |> Map.new()
+    |> coerce_values_for_db()
+    |> restore_ensure_id(now)
+    |> restore_ensure_timestamps(now)
+    |> restore_default_arrays(collection_name)
   end
 
   # ── Restore helpers ────────────────────────────────

@@ -26,16 +26,16 @@ defmodule Lazypock.Application do
         Lazypock.Migrations.seed(force: true)
         System.halt(0)
 
-      ["backup"] ->
-        backup(default_backup_path())
+      ["backup" | args] ->
+        backup_cli(args)
         System.halt(0)
 
-      ["backup", path] ->
-        backup(path)
+      ["restore" | args] ->
+        restore_cli(args)
         System.halt(0)
 
-      ["restore", path] ->
-        restore(path)
+      ["inspect" | args] ->
+        inspect_cli(args)
         System.halt(0)
 
       _ ->
@@ -43,33 +43,111 @@ defmodule Lazypock.Application do
     end
   end
 
+  # ── CLI: backup / restore ────────────────────────────────────────────────
+
+  defp backup_cli(args) do
+    {opts, argv} = parse_flags(args, %{json: false})
+    format = if opts.json, do: :json, else: :archive
+    backup(List.first(argv) || default_backup_path(format))
+  end
+
+  defp restore_cli(args) do
+    {opts, argv} = parse_flags(args, %{confirmed: false, delete_missing: true})
+
+    case List.first(argv) do
+      nil ->
+        IO.puts(:stderr, "Usage: lazypock restore <file> [--no-undo-checkpoint] [--keep-missing]")
+        System.halt(1)
+
+      path ->
+        restore(path, opts)
+    end
+  end
+
+  defp parse_flags(args, defaults) do
+    {opts, argv} =
+      Enum.reduce(args, {defaults, []}, fn
+        "--json", {opts, acc} -> {Map.put(opts, :json, true), acc}
+        "--no-undo-checkpoint", {opts, acc} -> {Map.put(opts, :confirmed, true), acc}
+        "--keep-missing", {opts, acc} -> {Map.put(opts, :delete_missing, false), acc}
+        arg, {opts, acc} -> {opts, [arg | acc]}
+      end)
+
+    {opts, Enum.reverse(argv)}
+  end
+
+  # Archives are the default; a `.json` path keeps the legacy single-document
+  # behavior for small databases and existing scripts.
   defp backup(path) do
     Ecto.Migrator.with_repo(Lazypock.Repo, fn _repo ->
-      payload = Lazypock.Backup.export()
-      File.mkdir_p!(Path.dirname(path))
-      File.write!(path, Jason.encode!(payload, pretty: true))
-      IO.puts("Backup written to #{path}")
+      if String.ends_with?(path, ".json") do
+        payload = Lazypock.Backup.export()
+        File.mkdir_p!(Path.dirname(path))
+        File.write!(path, Jason.encode!(payload, pretty: true))
+
+        IO.puts(
+          "Backup written to #{path} (legacy JSON — the whole database is held in " <>
+            "memory, prefer an .zip archive for large databases)"
+        )
+      else
+        File.mkdir_p!(Path.dirname(Path.expand(path)))
+
+        case Lazypock.Backup.export_stream(dest: path) do
+          {:ok, %{bytes: bytes, collections: collections, records: records}} ->
+            IO.puts(
+              "Backup written to #{path} (#{collections} collections, " <>
+                "#{records} records, #{format_bytes(bytes)})"
+            )
+
+          {:error, reason} ->
+            IO.puts(:stderr, "Backup failed: #{inspect(reason)}")
+            System.halt(1)
+        end
+      end
     end)
   end
 
-  defp restore(path) do
+  defp restore(path, opts) do
     if not File.exists?(path) do
-      IO.puts("Backup file not found: #{path}")
+      IO.puts(:stderr, "Backup file not found: #{path}")
       System.halt(1)
     end
 
-    payload =
-      case File.read(path) do
-        {:ok, contents} ->
-          Jason.decode!(contents)
-
-        {:error, reason} ->
-          IO.puts("Failed to read #{path}: #{inspect(reason)}")
-          System.halt(1)
-      end
+    delete_missing = Map.get(opts, :delete_missing, true)
 
     Ecto.Migrator.with_repo(Lazypock.Repo, fn _repo ->
-      result = Lazypock.Backup.restore(payload, true)
+      preflight = Lazypock.Backup.preflight()
+
+      # Above the threshold there is no automatic undo checkpoint, so require an
+      # explicit opt-in rather than silently losing rollback.
+      if not preflight.undo_available and not Map.get(opts, :confirmed, false) do
+        IO.puts(:stderr, """
+
+        WARNING: this database is #{preflight.db_size_mb} MB, above the \
+        #{preflight.threshold_mb} MB automatic-undo threshold.
+        No undo checkpoint will be taken, so there is no rollback if this import goes wrong.
+        #{neon_note(preflight)}Re-run with --no-undo-checkpoint to proceed anyway.
+        """)
+
+        System.halt(2)
+      end
+
+      if delete_missing do
+        IO.puts(
+          "Note: collections absent from #{path} will be dropped " <>
+            "(pass --keep-missing to keep them)."
+        )
+      end
+
+      result =
+        if archive?(path) do
+          Lazypock.Backup.restore_archive(path, delete_missing, atomic: :batch, snapshot: true)
+        else
+          Lazypock.Backup.restore(read_json!(path), delete_missing,
+            atomic: :batch,
+            snapshot: true
+          )
+        end
 
       Enum.each(result.imported, fn %{name: name, records_imported: count} ->
         IO.puts("  ✓ #{name} (#{count} records)")
@@ -80,12 +158,108 @@ defmodule Lazypock.Application do
       end)
 
       IO.puts("Restored #{length(result.imported)} collections, #{length(result.errors)} errors")
+
+      if Map.get(result, :rolled_back, false) do
+        IO.puts(:stderr, "All changes were rolled back.")
+      end
     end)
   end
 
-  defp default_backup_path do
+  # Reads an archive's manifest WITHOUT a database or a full extraction, so
+  # `lazypock inspect backup.zip` works even where no DB is reachable.
+  defp inspect_cli(args) do
+    case Enum.find(args, &(not String.starts_with?(&1, "--"))) do
+      nil ->
+        IO.puts(:stderr, "Usage: lazypock inspect <backup.zip>")
+        System.halt(1)
+
+      path ->
+        case Lazypock.Backup.inspect_archive(path) do
+          {:ok, manifest} ->
+            print_manifest(path, manifest)
+
+          {:error, reason} ->
+            IO.puts(:stderr, "Cannot read #{path}: #{reason}")
+            System.halt(1)
+        end
+    end
+  end
+
+  defp print_manifest(path, manifest) do
+    totals = manifest["totals"] || %{}
+    files = manifest["files"] || %{}
+    collections = manifest["collections"] || []
+
+    IO.puts(path)
+
+    IO.puts(
+      "  format:      #{manifest["format"]} v#{manifest["format_version"]} " <>
+        "(LazyPock #{manifest["lazypock_version"] || "?"})"
+    )
+
+    IO.puts("  created:     #{manifest["created_at"] || "?"}")
+
+    IO.puts(
+      "  contains:    #{totals["collections"] || length(collections)} collections, " <>
+        "#{totals["records"] || 0} records, #{files["total"] || 0} files"
+    )
+
+    if (files["missing"] || 0) > 0 do
+      IO.puts(
+        "  WARNING:     #{files["missing"]} file(s) were already missing when this was taken"
+      )
+    end
+
+    IO.puts("")
+
+    for coll <- collections do
+      IO.puts("  #{coll["type"] || "base"}\t#{coll["name"]}\t#{coll["records"] || 0} records")
+    end
+
+    :ok
+  end
+
+  defp read_json!(path) do
+    case File.read(path) do
+      {:ok, contents} ->
+        Jason.decode!(contents)
+
+      {:error, reason} ->
+        IO.puts(:stderr, "Failed to read #{path}: #{inspect(reason)}")
+        System.halt(1)
+    end
+  end
+
+  # Zip magic rather than the extension, so a renamed archive still works.
+  defp archive?(path) do
+    case File.open(path, [:read, :binary], fn io -> IO.binread(io, 2) end) do
+      {:ok, "PK"} -> true
+      _ -> String.ends_with?(path, ".zip")
+    end
+  end
+
+  defp neon_note(%{neon_hosted: true}) do
+    "This looks like a Neon-hosted database — a branch or Neon's point-in-time restore can " <>
+      "serve as an alternative safety net (https://neon.tech/docs/introduction/branching).\n"
+  end
+
+  defp neon_note(_), do: ""
+
+  defp format_bytes(bytes) when bytes >= 1_073_741_824 do
+    "#{Float.round(bytes / 1_073_741_824, 1)} GB"
+  end
+
+  defp format_bytes(bytes) when bytes >= 1_048_576 do
+    "#{Float.round(bytes / 1_048_576, 1)} MB"
+  end
+
+  defp format_bytes(bytes) when bytes >= 1_024, do: "#{Float.round(bytes / 1_024, 1)} KB"
+  defp format_bytes(bytes), do: "#{bytes} B"
+
+  defp default_backup_path(format) do
     date = DateTime.utc_now() |> Calendar.strftime("%Y-%m-%d")
-    "lazypock-backup-#{date}.json"
+    ext = if format == :json, do: "json", else: "zip"
+    "lazypock-backup-#{date}.#{ext}"
   end
 
   defp start_app do

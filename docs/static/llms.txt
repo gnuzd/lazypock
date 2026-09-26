@@ -8,11 +8,16 @@ backup format reference below.
 
 ## Import / backup JSON format
 
-- [Backup & import JSON format](https://lazypock.gnuzd.dev/backup): envelope, collections, fields, types, rules, indexes, records, examples, and PocketBase 23+ compatibility.
+- [Backup & import JSON format](https://lazypock.gnuzd.dev/backup): envelope, collections, fields, types, rules, indexes, records, examples, PocketBase 23+ compatibility, and the NDJSON zip archive used for large databases.
 - [JSON Schema (backup.schema.json)](https://lazypock.gnuzd.dev/backup.schema.json): machine-readable contract for the canonical `{ "collections": [...] }` payload.
 
-Endpoints: `GET /api/export` (download), `POST /api/import` (restore, superuser only). CLI:
-`lazypock backup [file]` / `lazypock restore <file>`.
+Endpoints: `GET /api/export` (download JSON, unchanged), `GET /api/export/archive` (download a streamed NDJSON zip for large databases), `POST /api/import` (restore JSON or a multipart archive, superuser only), `GET /api/import/preflight` (whether automatic undo is available). CLI:
+`lazypock backup [file]` / `lazypock restore <file>` / `lazypock inspect <file>` — archives by default,
+add a `.json` path for the legacy single-document format.
+
+An archive contains `manifest.json`, `schema.json`, `data/<collection>.ndjson`, `files.ndjson` and
+`files/<storage_path>` (the uploaded blobs). The Studio previews an archive by reading only
+`manifest.json` from the browser before uploading it.
 
 ## Docs
 
