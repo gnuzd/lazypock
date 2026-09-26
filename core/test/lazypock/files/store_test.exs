@@ -11,7 +11,12 @@ defmodule Lazypock.Files.StoreTest do
 
   describe "Store.store/3" do
     test "stores a binary and persists metadata" do
-      {:ok, file} = Store.store(sample_binary(), "notes.txt", collection_name: "posts", record_id: "rec-1", field_name: "attachment")
+      {:ok, file} =
+        Store.store(sample_binary(), "notes.txt",
+          collection_name: "posts",
+          record_id: "rec-1",
+          field_name: "attachment"
+        )
 
       assert file["filename"] == "notes.txt"
       assert file["extension"] == ".txt"
@@ -31,7 +36,9 @@ defmodule Lazypock.Files.StoreTest do
     end
 
     test "stores from a Plug.Upload struct" do
-      path = Path.join(System.tmp_dir!(), "lazypock-upload-#{System.unique_integer([:positive])}.txt")
+      path =
+        Path.join(System.tmp_dir!(), "lazypock-upload-#{System.unique_integer([:positive])}.txt")
+
       File.write!(path, sample_binary())
 
       upload = %Plug.Upload{path: path, filename: "upload.txt", content_type: "text/plain"}
@@ -97,9 +104,15 @@ defmodule Lazypock.Files.StoreTest do
 
   describe "Store.list/1" do
     setup do
-      {:ok, f1} = Store.store(sample_binary(), "a.txt", collection_name: "posts", field_name: "body")
-      {:ok, f2} = Store.store(sample_binary(), "b.png", collection_name: "posts", field_name: "image")
-      {:ok, f3} = Store.store(sample_binary(), "c.txt", collection_name: "other", field_name: "body")
+      {:ok, f1} =
+        Store.store(sample_binary(), "a.txt", collection_name: "posts", field_name: "body")
+
+      {:ok, f2} =
+        Store.store(sample_binary(), "b.png", collection_name: "posts", field_name: "image")
+
+      {:ok, f3} =
+        Store.store(sample_binary(), "c.txt", collection_name: "other", field_name: "body")
+
       %{f1: f1, f2: f2, f3: f3}
     end
 
@@ -132,16 +145,23 @@ defmodule Lazypock.Files.StoreTest do
 
   describe "Store.delete/1 and delete_by_record/2" do
     test "delete removes metadata and physical file" do
-      {:ok, file} = Store.store(sample_binary(), "del.txt", collection_name: "posts", record_id: "r1")
+      {:ok, file} =
+        Store.store(sample_binary(), "del.txt", collection_name: "posts", record_id: "r1")
+
       assert {:ok, _} = Store.read(file)
       assert :ok = Store.delete(file["id"])
       assert {:error, :not_found} = Store.get(file["id"])
     end
 
     test "delete_by_record removes all files for a record" do
-      {:ok, f1} = Store.store(sample_binary(), "x.txt", collection_name: "posts", record_id: "rec-9")
-      {:ok, f2} = Store.store(sample_binary(), "y.txt", collection_name: "posts", record_id: "rec-9")
-      {:ok, f3} = Store.store(sample_binary(), "z.txt", collection_name: "posts", record_id: "rec-10")
+      {:ok, f1} =
+        Store.store(sample_binary(), "x.txt", collection_name: "posts", record_id: "rec-9")
+
+      {:ok, f2} =
+        Store.store(sample_binary(), "y.txt", collection_name: "posts", record_id: "rec-9")
+
+      {:ok, f3} =
+        Store.store(sample_binary(), "z.txt", collection_name: "posts", record_id: "rec-10")
 
       assert :ok = Store.delete_by_record("posts", "rec-9")
       assert {:error, :not_found} = Store.get(f1["id"])

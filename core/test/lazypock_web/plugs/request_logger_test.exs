@@ -160,9 +160,11 @@ defmodule LazypockWeb.Plugs.RequestLoggerTest do
     # All buckets are present and ordered; every metric is an integer/float
     totals = Enum.map(body["series"], fn h -> h["total"] end)
     assert Enum.all?(totals, &is_integer/1)
+
     assert Enum.all?(body["series"], fn h ->
              is_integer(h["errors"]) and is_number(h["avg_duration"])
            end)
+
     assert length(Enum.uniq(totals)) >= 1
   end
 end

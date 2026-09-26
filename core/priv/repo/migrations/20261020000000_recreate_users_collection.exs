@@ -38,28 +38,69 @@ defmodule Lazypock.Repo.Migrations.RecreateUsersCollection do
     """
 
     users_fields = [
-      %{name: "email", type: "email", required: true, system: true, sort: 0,
-        options: "{}"},
+      %{name: "email", type: "email", required: true, system: true, sort: 0, options: "{}"},
       # Write-only: hidden (never returned/shown) and not required (accounts
       # may exist without a password) — matching PocketBase. The API key for
       # it is `password` (aliased to this column by DynamicController).
-      %{name: "password_hash", type: "password", required: false, system: true, sort: 1,
-        hidden: true, options: "{}"},
-      %{name: "created_at", type: "autodate", required: true, system: true, sort: 2,
-        options: ~s({"onCreate": true})},
-      %{name: "updated_at", type: "autodate", required: true, system: true, sort: 3,
-        options: ~s({"onCreate": true, "onUpdate": true})},
-      %{name: "name", type: "text", required: false, system: false, sort: 4,
-        options: ~s({"max": 255})},
-      %{name: "avatar", type: "file", required: false, system: false, sort: 5,
+      %{
+        name: "password_hash",
+        type: "password",
+        required: false,
+        system: true,
+        sort: 1,
+        hidden: true,
+        options: "{}"
+      },
+      %{
+        name: "created_at",
+        type: "autodate",
+        required: true,
+        system: true,
+        sort: 2,
+        options: ~s({"onCreate": true})
+      },
+      %{
+        name: "updated_at",
+        type: "autodate",
+        required: true,
+        system: true,
+        sort: 3,
+        options: ~s({"onCreate": true, "onUpdate": true})
+      },
+      %{
+        name: "name",
+        type: "text",
+        required: false,
+        system: false,
+        sort: 4,
+        options: ~s({"max": 255})
+      },
+      %{
+        name: "avatar",
+        type: "file",
+        required: false,
+        system: false,
+        sort: 5,
         options:
-          ~s({"maxSelect": 1, "mimeTypes": ["image/jpeg","image/png","image/svg+xml","image/gif","image/webp"]})},
-      %{name: "verified", type: "bool", required: true, system: true, sort: 6,
-        options: "{}"},
-      %{name: "verificationToken", type: "text", required: false, system: true, sort: 7,
-        options: "{}"},
-      %{name: "emailVisibility", type: "bool", required: true, system: true, sort: 8,
-        options: ~s({"defaultValue": true})}
+          ~s({"maxSelect": 1, "mimeTypes": ["image/jpeg","image/png","image/svg+xml","image/gif","image/webp"]})
+      },
+      %{name: "verified", type: "bool", required: true, system: true, sort: 6, options: "{}"},
+      %{
+        name: "verificationToken",
+        type: "text",
+        required: false,
+        system: true,
+        sort: 7,
+        options: "{}"
+      },
+      %{
+        name: "emailVisibility",
+        type: "bool",
+        required: true,
+        system: true,
+        sort: 8,
+        options: ~s({"defaultValue": true})
+      }
     ]
 
     for f <- users_fields do

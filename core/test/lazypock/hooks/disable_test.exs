@@ -20,7 +20,9 @@ defmodule Lazypock.Hooks.DisableTest do
         System.delete_env("LAZYPOCK_DISABLE_HOOKS")
         refute User.disabled?()
       after
-        if old, do: System.put_env("LAZYPOCK_DISABLE_HOOKS", old), else: System.delete_env("LAZYPOCK_DISABLE_HOOKS")
+        if old,
+          do: System.put_env("LAZYPOCK_DISABLE_HOOKS", old),
+          else: System.delete_env("LAZYPOCK_DISABLE_HOOKS")
       end
     end
 
@@ -34,7 +36,10 @@ defmodule Lazypock.Hooks.DisableTest do
         assert :ok = User.load!()
         assert Registry.all() == []
       after
-        if old, do: System.put_env("LAZYPOCK_DISABLE_HOOKS", old), else: System.delete_env("LAZYPOCK_DISABLE_HOOKS")
+        if old,
+          do: System.put_env("LAZYPOCK_DISABLE_HOOKS", old),
+          else: System.delete_env("LAZYPOCK_DISABLE_HOOKS")
+
         Registry.clear()
       end
     end

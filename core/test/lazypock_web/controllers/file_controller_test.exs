@@ -24,7 +24,12 @@ defmodule LazypockWeb.FileControllerTest do
   defp auth_conn(conn), do: put_req_header(conn, "authorization", "Bearer #{superuser_token()}")
 
   defp upload_body(binary, filename) do
-    path = Path.join(System.tmp_dir!(), "lazypock-fc-#{System.unique_integer([:positive])}#{Path.extname(filename)}")
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "lazypock-fc-#{System.unique_integer([:positive])}#{Path.extname(filename)}"
+      )
+
     File.write!(path, binary)
 
     %Plug.Upload{
@@ -69,7 +74,13 @@ defmodule LazypockWeb.FileControllerTest do
         )
 
       Lazypock.Collections.Registry.reload!()
-      {:ok, user} = Lazypock.Schemas.GenericRecord.insert(name, %{"email" => "app@test.com", "password_hash" => "x"})
+
+      {:ok, user} =
+        Lazypock.Schemas.GenericRecord.insert(name, %{
+          "email" => "app@test.com",
+          "password_hash" => "x"
+        })
+
       {:ok, token} = Token.generate_user_token(user, name)
 
       conn =

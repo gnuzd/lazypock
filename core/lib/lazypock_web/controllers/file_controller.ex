@@ -46,18 +46,19 @@ defmodule LazypockWeb.FileController do
   end
 
   defp parse_int(nil, default), do: default
+
   defp parse_int(s, default) when is_binary(s) do
     case Integer.parse(s) do
       {n, _} -> n
       :error -> default
     end
   end
+
   defp parse_int(_, default), do: default
 
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(s) when is_binary(s) and s == "", do: nil
   defp blank_to_nil(s), do: s
-
 
   @doc """
   POST /api/files
@@ -418,4 +419,3 @@ defmodule LazypockWeb.FileController do
 
   defp normalize_thumbs(_, _), do: %{}
 end
-

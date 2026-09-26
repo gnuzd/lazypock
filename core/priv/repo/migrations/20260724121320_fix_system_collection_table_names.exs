@@ -15,6 +15,7 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _externalAuths (collection, provider, provider_id)"
 
     execute "CREATE TABLE IF NOT EXISTS _authOrigins (
@@ -25,6 +26,7 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_origins_unique_pairs ON _authOrigins (collection_ref, record_ref, fingerprint)"
 
     # Ensure system collections are registered
@@ -33,16 +35,19 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
       SELECT '_externalAuths', 'base', true, false, '[]', '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_externalAuths')
     """
+
     execute """
       INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_mfas', 'base', true, false, '[]', '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_mfas')
     """
+
     execute """
       INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_otps', 'base', true, false, '[]', '{}', '{}', '{}', now(), now()
       WHERE NOT EXISTS (SELECT 1 FROM _collections WHERE name = '_otps')
     """
+
     execute """
       INSERT INTO _collections (name, type, system, managed, schema, rules, options, hooks, created_at, updated_at)
       SELECT '_authOrigins', 'base', true, false, '[]', '{}', '{}', '{}', now(), now()
@@ -51,6 +56,7 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
 
     # Mark _superusers and _collections as system if not already
     execute "UPDATE _collections SET system = true, managed = false WHERE name = '_superusers' AND (system IS NULL OR system = false)"
+
     execute "UPDATE _collections SET system = true, managed = false WHERE name = '_collections' AND (system IS NULL OR system = false)"
   end
 
@@ -66,7 +72,9 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_external_auths_collection_provider ON _external_auths (collection, provider, provider_id)"
+
     execute "CREATE TABLE IF NOT EXISTS _auth_origins (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       collection_ref TEXT NOT NULL,
@@ -75,6 +83,7 @@ defmodule Lazypock.Repo.Migrations.FixSystemCollectionTableNames do
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )"
+
     execute "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_origins_unique_pairs ON _auth_origins (collection_ref, record_ref, fingerprint)"
   end
 end

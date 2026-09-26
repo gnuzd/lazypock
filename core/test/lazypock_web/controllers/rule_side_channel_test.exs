@@ -64,7 +64,9 @@ defmodule LazypockWeb.RuleSideChannelTest do
 
       conn = get(build_conn(), "/api/#{name}/not-a-uuid")
       assert conn.status == 404
-      assert json_response(conn, 404) == json_response(get(build_conn(), "/api/#{name}/#{Ecto.UUID.generate()}"), 404)
+
+      assert json_response(conn, 404) ==
+               json_response(get(build_conn(), "/api/#{name}/#{Ecto.UUID.generate()}"), 404)
     end
   end
 

@@ -104,7 +104,9 @@ defmodule Lazypock.Hooks.Record do
     case Registry.dispatch(
            :on_record_enrich,
            %{record: record, request_info: request_info},
-           collection_name, collect_only: true) do
+           collection_name,
+           collect_only: true
+         ) do
       {:ok, %Event{} = ev} -> {:ok, Event.get(ev, :record) || record}
       {:error, _} -> {:ok, record}
     end

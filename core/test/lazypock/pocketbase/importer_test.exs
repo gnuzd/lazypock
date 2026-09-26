@@ -6,7 +6,6 @@ defmodule Lazypock.PocketBase.ImporterTest do
   alias Lazypock.Collections.Registry
   alias Lazypock.Schemas.GenericRecord
 
-
   @moduledoc """
   End-to-end import from a synthetic PocketBase SQLite database (built with the
   sqlite3 CLI) into LazyPock: collections, records, relations, auth users,
@@ -23,7 +22,11 @@ defmodule Lazypock.PocketBase.ImporterTest do
     File.mkdir_p!(Path.join([dir, "storage", "pb_users", "rec_xyz789"]))
 
     db = Path.join(dir, "data.db")
-    File.write!(Path.join([dir, "storage", "pb_articles", "rec_abc123", "cover.png"]), "PNG-BYTES")
+
+    File.write!(
+      Path.join([dir, "storage", "pb_articles", "rec_abc123", "cover.png"]),
+      "PNG-BYTES"
+    )
 
     # PocketBase-style schema: _collections + collection tables
     sql = """
@@ -92,7 +95,8 @@ defmodule Lazypock.PocketBase.ImporterTest do
 
   describe "import_all/1" do
     test "dry run reports without importing", %{db: db, dir: dir} do
-      summary = Importer.import_all(pb_db: db, storage_dir: Path.join(dir, "storage"), dry_run: true)
+      summary =
+        Importer.import_all(pb_db: db, storage_dir: Path.join(dir, "storage"), dry_run: true)
 
       assert summary.dry_run == true
       assert summary.collections == 2

@@ -20,7 +20,10 @@ defmodule Lazypock.Repo.Migrations.CreateSystemTables do
 
     create table(:_fields, primary_key: false) do
       add :id, :uuid, primary_key: true, default: fragment("gen_random_uuid()")
-      add :collection_id, references(:_collections, type: :uuid, on_delete: :delete_all), null: false
+
+      add :collection_id, references(:_collections, type: :uuid, on_delete: :delete_all),
+        null: false
+
       add :name, :text, null: false
       add :type, :text, null: false
       add :required, :boolean, default: false

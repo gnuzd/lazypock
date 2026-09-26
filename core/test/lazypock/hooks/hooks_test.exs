@@ -152,7 +152,9 @@ defmodule Lazypock.Hooks.RegistryTest do
        fn e ->
          send(self(), :posts_only)
          Event.next(e)
-       end}, collections: ["posts"])
+       end},
+      collections: ["posts"]
+    )
 
     Registry.register(
       :on_record_create,
@@ -175,7 +177,9 @@ defmodule Lazypock.Hooks.RegistryTest do
        fn e ->
          send(self(), :posts_only)
          Event.next(e)
-       end}, collections: ["posts"])
+       end},
+      collections: ["posts"]
+    )
 
     {:ok, _} = Registry.dispatch(:on_record_create, %{}, "articles")
     refute_received :posts_only
