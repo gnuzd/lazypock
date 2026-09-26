@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.0](https://github.com/gnuzd/lazypock/compare/v0.13.0...v0.14.0) (2026-09-26)
+
+
+### Features
+
+* **api:** accept backup archives over HTTP with a scoped body limit ([b4f5475](https://github.com/gnuzd/lazypock/commit/b4f5475560ccbfe08ef386577c8dec084f4b760c))
+* **backup:** include uploaded files in the archive, and preview archives ([78d34f7](https://github.com/gnuzd/lazypock/commit/78d34f7a419a0a6bee45ff95da19bea1aa3b47ea))
+* **backup:** stream large databases as an NDJSON archive ([b048682](https://github.com/gnuzd/lazypock/commit/b048682403ef814ec0aeda5c351243c9c15a2417))
+* **backup:** stream large databases as an NDJSON archive ([1b3dc52](https://github.com/gnuzd/lazypock/commit/1b3dc528d71d1c6da7c2587780fd4c7863757244))
+* **studio:** archive backup/restore with progress and a large-import gate ([8da4b71](https://github.com/gnuzd/lazypock/commit/8da4b715dfe9c183cb4687d764a550522da3c2ad))
+
 ## [0.13.0](https://github.com/gnuzd/lazypock/compare/v0.12.1...v0.13.0) (2026-09-24)
 
 
