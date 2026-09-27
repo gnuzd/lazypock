@@ -148,17 +148,9 @@ defmodule Lazypock.Schemas.FilterCompiler do
   defp resolve_relations(other, _opts), do: {:ok, other}
 
   defp resolve_dotted(name, opts) do
-    segments = String.split(name, ".")
-
-    cond do
-      Enum.any?(segments, &(&1 == "")) ->
-        {:error, "Invalid relation field path: #{name}"}
-
-      Map.get(opts, :source) == nil ->
-        {:error, "Relation field path requires a source collection: #{name}"}
-
-      true ->
-        resolve_segments(segments, opts.source, [], opts)
+    case Map.get(opts, :source) do
+      nil -> {:error, "Relation field path requires a source collection: #{name}"}
+      source -> resolve_segments(String.split(name, "."), source, [], opts)
     end
   end
 
@@ -182,9 +174,6 @@ defmodule Lazypock.Schemas.FilterCompiler do
     end
   end
 
-  defp resolve_segments([], _collection, _hops, _opts),
-    do: {:error, "Invalid relation field path"}
-
   defp fetch_schema(collection, opts) do
     resolver = Map.get(opts, :resolver) || (&default_schema/1)
     resolver.(collection)
@@ -204,30 +193,18 @@ defmodule Lazypock.Schemas.FilterCompiler do
         fields = collection.fields || []
 
         types =
-          Map.new(fields, fn field -> {field.name, TypeMapper.column_pg_type(field)} end)
-
-        types =
-          if Map.has_key?(types, "id") do
-            types
-          else
-            Map.put(types, "id", TypeMapper.collection_id_pg_type(collection))
-          end
+          fields
+          |> Map.new(fn field -> {field.name, TypeMapper.column_pg_type(field)} end)
+          |> Map.put_new("id", TypeMapper.collection_id_pg_type(collection))
 
         relations =
-          fields
-          |> Enum.filter(&(&1.type == "relation"))
-          |> Enum.reduce(%{}, fn field, acc ->
-            case field.options["collection"] do
-              target when is_binary(target) ->
-                Map.put(acc, field.name, %{
-                  target: target,
-                  multi: (field.options["maxSelect"] || 1) > 1
-                })
-
-              _ ->
-                acc
-            end
-          end)
+          for field <- fields,
+              field.type == "relation",
+              target = field.options["collection"],
+              is_binary(target),
+              into: %{} do
+            {field.name, %{target: target, multi: (field.options["maxSelect"] || 1) > 1}}
+          end
 
         {:ok, %{types: types, relations: relations}}
 
@@ -680,9 +657,6 @@ defmodule Lazypock.Schemas.FilterCompiler do
       case coerce_ast({op, {:field, leaf}, value}, rel_types, token_values) do
         {:ok, {op2, {:field, ^leaf}, coerced}} ->
           {:ok, {:rel, hops, leaf, leaf_type, op2, coerced}}
-
-        {:ok, other} ->
-          {:ok, other}
 
         :error ->
           :error

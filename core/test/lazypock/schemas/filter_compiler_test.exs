@@ -350,6 +350,16 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
       assert {:ok, {sql, []}} = FilterCompiler.compile("deleted_at = null", [], types)
       assert sql == ~s["deleted_at" IS NULL]
     end
+
+    test "bound param null emits IS NULL (no column type knowledge)" do
+      assert {:ok, {sql, []}} = FilterCompiler.compile("deleted_at = $1", [nil])
+      assert sql == ~s["deleted_at" IS NULL]
+    end
+
+    test "bound param value emits the comparison" do
+      assert {:ok, {~s["deleted_at" = $1], ["x"]}} =
+               FilterCompiler.compile("deleted_at = $1", ["x"])
+    end
   end
 
   describe "compile/1 — standalone expressions" do
@@ -702,7 +712,7 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
       "users" ->
         {:ok,
          %{
-           types: %{"id" => "UUID", "email" => "TEXT", "name" => "TEXT"},
+           types: %{"id" => "UUID", "email" => "TEXT", "name" => "TEXT", "labels" => "TEXT[]"},
            relations: %{"manager" => %{target: "users", multi: false}}
          }}
 
@@ -762,6 +772,53 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     test "dot-path LIKE on a text leaf" do
       assert {:ok, {sql, ["%ada%"]}} = compile_dots(~s[author.email ~ 'ada'], %{})
       assert sql =~ ~s["lp_r0"."email" ILIKE $1::TEXT]
+    end
+
+    test "dot-path NOT LIKE" do
+      assert {:ok, {sql, ["%ada%"]}} = compile_dots(~s[author.email !~ 'ada'], %{})
+      assert sql =~ ~s["lp_r0"."email" NOT ILIKE $1::TEXT]
+    end
+
+    test "dot-path OR / NOT compose" do
+      assert {:ok, {or_sql, _}} = compile_dots(~s[author.email = 'a' || title = 'b'], %{})
+      assert or_sql =~ "OR"
+
+      assert {:ok, {not_sql, _}} = compile_dots(~s[!(author.email = 'a')], %{})
+      assert not_sql =~ "NOT"
+    end
+
+    test "an invalid dot-path inside OR / NOT is an error" do
+      assert {:error, _} = compile_dots(~s[author.email = 'a' || nope.email = 'b'], %{})
+      assert {:error, _} = compile_dots(~s[!(nope.email = 'a')], %{})
+    end
+
+    test "array-typed leaf supports the ? operators" do
+      assert {:ok, {sql, ["x"]}} = compile_dots(~s[author.labels ?= 'x'], %{})
+      assert sql =~ ~s[$1 = ANY("lp_r0"."labels")]
+
+      assert {:ok, {sql, ["x"]}} = compile_dots(~s[author.labels ?!= 'x'], %{})
+      assert sql =~ ~s[NOT ($1 = ALL("lp_r0"."labels"))]
+
+      assert {:ok, {sql, ["%x%"]}} = compile_dots(~s[author.labels ?~ 'x'], %{})
+      assert sql =~ "unnest"
+
+      assert {:ok, {sql, ["%x%"]}} = compile_dots(~s[author.labels ?!~ 'x'], %{})
+      assert sql =~ "NOT ILIKE"
+    end
+
+    test "an unknown leaf compiles without a cast" do
+      assert {:ok, {sql, ["x"]}} = compile_dots(~s[author.mystery = 'x'], %{})
+      assert sql =~ ~s["lp_r0"."mystery" = $1]
+    end
+
+    test "an unrepresentable leaf value is a compile error" do
+      assert {:error, _} = compile_dots(~s[author.id = 'not-a-uuid'], %{})
+      assert {:error, _} = compile_dots(~s[!(author.id = 'not-a-uuid')], %{})
+    end
+
+    test "unknown source collection is an error (default resolver)" do
+      assert {:error, _} =
+               FilterCompiler.compile("nope.email = 'x'", [], %{}, %{source: "definitely_missing"})
     end
 
     test "UUID leaf is coerced + cast for the bound (enforcer) path" do
