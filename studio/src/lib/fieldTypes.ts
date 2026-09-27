@@ -52,13 +52,31 @@ export function getUniqueFieldName(fields: FieldDefinition[], type: string): str
 	return result;
 }
 
-/** Slugify a field name */
+/** Slugify a field name (lowercase). Used for collection names, which the
+ * server restricts to `^[a-z][a-z0-9_]*$`. */
 export function slugify(val: string): string {
 	return (val || '')
 		.toLowerCase()
 		.replace(/[^a-z0-9_]+/g, '_')
-		.replace(/^_|_$/g, '')
+		.replace(/^_+|_+$/g, '')
 		.replace(/_+/g, '_');
+}
+
+/**
+ * Normalize a *field* name for the server's `^[A-Za-z][A-Za-z0-9_]*$` rule.
+ *
+ * Unlike {@link slugify} it preserves the author's casing, so `firstName`
+ * stays `firstName` — the server keeps field names verbatim (and maps them
+ * to same-case physical columns). Invalid characters (spaces, dashes, …) are
+ * collapsed to `_` and a leading non-letter is dropped, so the result always
+ * satisfies the server rule.
+ */
+export function normalizeFieldName(val: string): string {
+	return (val || '')
+		.replace(/[^A-Za-z0-9_]+/g, '_')
+		.replace(/^[^A-Za-z]+/, '')
+		.replace(/_+/g, '_')
+		.replace(/_+$/, '');
 }
 
 /** Create a new field scaffold */
