@@ -50,6 +50,20 @@ defmodule LazypockWeb.DynamicControllerTest do
   defp list_path, do: "/api/#{@collection}"
   defp item_path(id), do: "/api/#{@collection}/#{id}"
 
+  defp create_owner(token, name) do
+    build_conn()
+    |> put_req_header("authorization", "Bearer #{token}")
+    |> post("/api/test_owners", %{data: %{name: name}})
+    |> json_response(201)
+  end
+
+  defp create_owned(token, title, owner_id) do
+    build_conn()
+    |> put_req_header("authorization", "Bearer #{token}")
+    |> post("/api/test_owned", %{data: %{title: title, owner: owner_id}})
+    |> json_response(201)
+  end
+
   # ── List ─────────────────────────────────────────────────
 
   describe "GET /api/:collection — list" do
@@ -472,6 +486,62 @@ defmodule LazypockWeb.DynamicControllerTest do
       assert Enum.all?(coll.fields, fn f ->
                f.name not in ["created_at", "updated_at"] or f.system
              end)
+    end
+  end
+
+  describe "GET /api/:collection — relation dot-path filters" do
+    setup do
+      {:ok, _} =
+        DDL.create_collection("test_owners",
+          type: "base",
+          fields: [%{"name" => "name", "type" => "text"}]
+        )
+
+      {:ok, _} =
+        DDL.create_collection("test_owned",
+          type: "base",
+          fields: [
+            %{"name" => "title", "type" => "text"},
+            %{
+              "name" => "owner",
+              "type" => "relation",
+              "options" => %{"collection" => "test_owners"}
+            }
+          ]
+        )
+
+      Registry.reload!()
+      :ok
+    end
+
+    test "filters on a related record's field with a dot-path" do
+      token = auth_token()
+      ada = create_owner(token, "Ada")
+      bob = create_owner(token, "Bob")
+      create_owned(token, "ada item", ada["id"])
+      create_owned(token, "bob item", bob["id"])
+
+      assert json_response(
+               get(build_conn(), "/api/test_owned", %{filter: "owner.name = 'Ada'"}),
+               200
+             )[
+               "totalItems"
+             ] == 1
+
+      body =
+        json_response(get(build_conn(), "/api/test_owned", %{filter: "owner.name = 'Bob'"}), 200)
+
+      assert body["totalItems"] == 1
+      assert hd(body["items"])["title"] == "bob item"
+    end
+
+    test "an unknown relation segment is rejected with 400" do
+      assert json_response(
+               get(build_conn(), "/api/test_owned", %{filter: "nope.name = 'Ada'"}),
+               400
+             )[
+               "message"
+             ] == "Invalid filter expression."
     end
   end
 end

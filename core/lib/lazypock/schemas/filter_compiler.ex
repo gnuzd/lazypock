@@ -39,8 +39,10 @@ defmodule Lazypock.Schemas.FilterCompiler do
   @spec compile(String.t()) :: {:ok, {String.t(), [term()]}} | {:error, String.t()}
   @spec compile(String.t(), [term()], map()) ::
           {:ok, {String.t(), [term()]}} | {:error, String.t()}
-  def compile(filter_str, token_values \\ [], types \\ %{})
-      when is_binary(filter_str) and is_list(token_values) and is_map(types) do
+  @spec compile(String.t(), [term()], map(), map()) ::
+          {:ok, {String.t(), [term()]}} | {:error, String.t()}
+  def compile(filter_str, token_values \\ [], types \\ %{}, opts \\ %{})
+      when is_binary(filter_str) and is_list(token_values) and is_map(types) and is_map(opts) do
     filter_str = String.trim(filter_str)
 
     cond do
@@ -55,10 +57,16 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
         case parse_or(tokens) do
           {:ok, ast, []} ->
-            if count_expressions(ast) > @max_filter_expressions do
-              {:error, "Filter exceeds the maximum of #{@max_filter_expressions} expressions"}
-            else
-              build_expr(ast, types, token_values)
+            case resolve_relations(ast, opts) do
+              {:ok, ast} ->
+                if count_expressions(ast) > @max_filter_expressions do
+                  {:error, "Filter exceeds the maximum of #{@max_filter_expressions} expressions"}
+                else
+                  build_expr(ast, types, token_values, opts)
+                end
+
+              {:error, reason} ->
+                {:error, reason}
             end
 
           {:ok, _ast, leftover} ->
@@ -70,25 +78,161 @@ defmodule Lazypock.Schemas.FilterCompiler do
     end
   end
 
-  defp build_expr(ast, types, token_values) do
-    case coerce_ast(ast, types, token_values) do
-      {:ok, coerced_ast} ->
-        {sql, params} = emit(coerced_ast, 1, {types, token_values})
+  defp build_expr(ast, types, token_values, opts) do
+    with {:ok, coerced_ast} <- coerce_ast(ast, types, token_values),
+         {:ok, coerced_ast} <- coerce_rels(coerced_ast, token_values, opts) do
+      ctx = %{types: types, token_values: token_values, opts: opts}
+      {sql, params} = emit(coerced_ast, 1, ctx)
 
-        # A non-empty filter that compiles to an empty clause means the AST was
-        # never turned into SQL -- e.g. a comparison with no field operand such
-        # as `'a' ~ 'b'` or `$1 ?= 'b'`, which the code generator's catch-all
-        # swallows. Callers treat an empty clause as "no restriction" (the
-        # public-`""` fast path), so returning `{:ok, {"", []}}` here would
-        # grant unconditional access. Fail closed instead.
-        if sql == "" do
-          {:error, "Filter does not reference a field and cannot be evaluated"}
-        else
-          {:ok, {sql, params}}
-        end
+      # A non-empty filter that compiles to an empty clause means the AST was
+      # never turned into SQL -- e.g. a comparison with no field operand such
+      # as `'a' ~ 'b'` or `$1 ?= 'b'`, which the code generator's catch-all
+      # swallows. Callers treat an empty clause as "no restriction" (the
+      # public-`""` fast path), so returning `{:ok, {"", []}}` here would
+      # grant unconditional access. Fail closed instead.
+      if sql == "" do
+        {:error, "Filter does not reference a field and cannot be evaluated"}
+      else
+        {:ok, {sql, params}}
+      end
+    else
+      :error -> {:error, "Rule value cannot be represented as its column type"}
+    end
+  end
 
-      :error ->
-        {:error, "Rule value cannot be represented as its column type"}
+  # ── Relation dot-paths ────────────────────────────────
+  #
+  # PocketBase allows filtering on a related record's field with a dot-path
+  # (`author.email = 'x'`). The compiler can't extend the caller's FROM clause,
+  # so each hop is emitted as a correlated `EXISTS (SELECT 1 FROM target ...)`
+  # subquery, which composes safely with the existing WHERE clause and bound
+  # parameters. Resolution needs the source collection (for the outer
+  # correlation) and schema metadata; both arrive via `opts`:
+  #
+  #     %{source: "posts", resolver: fn coll -> {:ok, %{types: .., relations: ..}} end}
+  #
+  # `resolver` defaults to the live collection Registry. Tests can inject a
+  # pure resolver so dot-path compilation is covered without a database.
+
+  defp resolve_relations({:or, left, right}, opts) do
+    with {:ok, left} <- resolve_relations(left, opts),
+         {:ok, right} <- resolve_relations(right, opts) do
+      {:ok, {:or, left, right}}
+    end
+  end
+
+  defp resolve_relations({:and, left, right}, opts) do
+    with {:ok, left} <- resolve_relations(left, opts),
+         {:ok, right} <- resolve_relations(right, opts) do
+      {:ok, {:and, left, right}}
+    end
+  end
+
+  defp resolve_relations({:not, expr}, opts) do
+    case resolve_relations(expr, opts) do
+      {:ok, expr} -> {:ok, {:not, expr}}
+      error -> error
+    end
+  end
+
+  defp resolve_relations({op, {:field, name}, value}, opts) when is_binary(name) do
+    if String.contains?(name, ".") do
+      with {:ok, hops, leaf, leaf_type} <- resolve_dotted(name, opts) do
+        {:ok, {:rel, hops, leaf, leaf_type, op, value}}
+      end
+    else
+      {:ok, {op, {:field, name}, value}}
+    end
+  end
+
+  defp resolve_relations(other, _opts), do: {:ok, other}
+
+  defp resolve_dotted(name, opts) do
+    segments = String.split(name, ".")
+
+    cond do
+      Enum.any?(segments, &(&1 == "")) ->
+        {:error, "Invalid relation field path: #{name}"}
+
+      Map.get(opts, :source) == nil ->
+        {:error, "Relation field path requires a source collection: #{name}"}
+
+      true ->
+        resolve_segments(segments, opts.source, [], opts)
+    end
+  end
+
+  # Final segment — a leaf field on the current (target) collection.
+  defp resolve_segments([leaf], collection, hops, opts) do
+    case fetch_schema(collection, opts) do
+      {:ok, schema} ->
+        {:ok, Enum.reverse(hops), leaf, Map.get(schema.types, leaf)}
+
+      error ->
+        error
+    end
+  end
+
+  # A relation hop — follow it into the target collection.
+  defp resolve_segments([field | rest], collection, hops, opts) do
+    with {:ok, schema} <- fetch_schema(collection, opts),
+         {:ok, rel} <- fetch_relation(schema, field) do
+      hop = %{field: field, target: rel.target, multi: rel.multi}
+      resolve_segments(rest, rel.target, [hop | hops], opts)
+    end
+  end
+
+  defp resolve_segments([], _collection, _hops, _opts),
+    do: {:error, "Invalid relation field path"}
+
+  defp fetch_schema(collection, opts) do
+    resolver = Map.get(opts, :resolver) || (&default_schema/1)
+    resolver.(collection)
+  end
+
+  defp fetch_relation(schema, field) do
+    case Map.get(schema.relations, field) do
+      %{target: target} = rel when is_binary(target) -> {:ok, rel}
+      _ -> {:error, "Unknown relation field on path: #{field}"}
+    end
+  end
+
+  # Live schema lookup (collection name → types + relation targets).
+  defp default_schema(collection_name) do
+    case Lazypock.Collections.Registry.get(collection_name) do
+      {:ok, collection} ->
+        fields = collection.fields || []
+
+        types =
+          Map.new(fields, fn field -> {field.name, TypeMapper.column_pg_type(field)} end)
+
+        types =
+          if Map.has_key?(types, "id") do
+            types
+          else
+            Map.put(types, "id", TypeMapper.collection_id_pg_type(collection))
+          end
+
+        relations =
+          fields
+          |> Enum.filter(&(&1.type == "relation"))
+          |> Enum.reduce(%{}, fn field, acc ->
+            case field.options["collection"] do
+              target when is_binary(target) ->
+                Map.put(acc, field.name, %{
+                  target: target,
+                  multi: (field.options["maxSelect"] || 1) > 1
+                })
+
+              _ ->
+                acc
+            end
+          end)
+
+        {:ok, %{types: types, relations: relations}}
+
+      {:error, _} ->
+        {:error, "Unknown collection: #{collection_name}"}
     end
   end
 
@@ -361,7 +505,7 @@ defmodule Lazypock.Schemas.FilterCompiler do
       String.match?(token, ~r/^\$(\d+)$/) ->
         {:param, String.to_integer(String.trim_leading(token, "$"))}
 
-      String.match?(token, ~r/^[a-zA-Z_][a-zA-Z0-9_@]*$/) ->
+      String.match?(token, ~r/^[a-zA-Z_][a-zA-Z0-9_@]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/) ->
         {:field, token}
 
       true ->
@@ -501,6 +645,53 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   defp coerce_ast(other, _types, _token_values), do: {:ok, other}
 
+  # Relation dot-path leaves are coerced in a separate pass (after the plain
+  # fields) so the `inline` option can skip it: the API `?filter=` path inlines
+  # parameters as SQL literals, where a coerced 16-byte UUID binary would be
+  # inlined as a broken byte string. Leaving the original string lets the
+  # emitted `::UUID` cast resolve it (`'…uuid…'::UUID`).
+  defp coerce_rels({:or, left, right}, token_values, opts) do
+    with {:ok, left} <- coerce_rels(left, token_values, opts),
+         {:ok, right} <- coerce_rels(right, token_values, opts) do
+      {:ok, {:or, left, right}}
+    end
+  end
+
+  defp coerce_rels({:and, left, right}, token_values, opts) do
+    with {:ok, left} <- coerce_rels(left, token_values, opts),
+         {:ok, right} <- coerce_rels(right, token_values, opts) do
+      {:ok, {:and, left, right}}
+    end
+  end
+
+  defp coerce_rels({:not, expr}, token_values, opts) do
+    case coerce_rels(expr, token_values, opts) do
+      {:ok, expr} -> {:ok, {:not, expr}}
+      error -> error
+    end
+  end
+
+  defp coerce_rels({:rel, hops, leaf, leaf_type, op, value}, token_values, opts) do
+    if Map.get(opts, :inline, false) do
+      {:ok, {:rel, hops, leaf, leaf_type, op, value}}
+    else
+      rel_types = if leaf_type, do: %{leaf => leaf_type}, else: %{}
+
+      case coerce_ast({op, {:field, leaf}, value}, rel_types, token_values) do
+        {:ok, {op2, {:field, ^leaf}, coerced}} ->
+          {:ok, {:rel, hops, leaf, leaf_type, op2, coerced}}
+
+        {:ok, other} ->
+          {:ok, other}
+
+        :error ->
+          :error
+      end
+    end
+  end
+
+  defp coerce_rels(other, _token_values, _opts), do: {:ok, other}
+
   defp coerce_compare(ast, pg_type, value) do
     case TypeMapper.coerce_value(pg_type, value) do
       {:ok, coerced} -> {:ok, replace_compare_value(ast, coerced)}
@@ -532,7 +723,7 @@ defmodule Lazypock.Schemas.FilterCompiler do
   # Bound token value for a `{:param, n}` node. Accepts both the plain
   # `token_values` list (coercion pre-pass) and the `{types, token_values}`
   # emit context.
-  defp token_value({_types, token_values}, n), do: Enum.at(token_values, n - 1, "")
+  defp token_value(%{token_values: token_values}, n), do: Enum.at(token_values, n - 1, "")
 
   defp token_value(token_values, n) when is_list(token_values),
     do: Enum.at(token_values, n - 1, "")
@@ -585,6 +776,23 @@ defmodule Lazypock.Schemas.FilterCompiler do
   # Field NOT ILIKE <bound param>
   defp emit_simple({"!~", {:field, f}, {:param, n}}, ctx) do
     {like_clause(f, ctx, "NOT ILIKE"), [like_pattern(token_value(ctx, n))]}
+  end
+
+  # Field = null / != null → IS NULL / IS NOT NULL.
+  #
+  # A SQL `col = NULL` comparison evaluates to UNKNOWN (never true), so it can
+  # never match — the opposite of the PocketBase-compatible intent, where
+  # `deleted_at = null` selects rows with no value. Emit the IS [NOT] NULL form
+  # (no bound parameter) for both the literal and bound-param shapes.
+  defp emit_simple({op, {:field, f}, {:literal, nil}}, _ctx) when op in ~w(= !=) do
+    {nil_clause(f, op), []}
+  end
+
+  defp emit_simple({op, {:field, f}, {:param, n}}, ctx) when op in ~w(= !=) do
+    case token_value(ctx, n) do
+      nil -> {nil_clause(f, op), []}
+      value -> {~s["#{column_name(f)}" #{op} $1#{cast_for(f, ctx)}], [value]}
+    end
   end
 
   # Field OP Literal
@@ -649,6 +857,15 @@ defmodule Lazypock.Schemas.FilterCompiler do
     end
   end
 
+  # Relation dot-path — a correlated EXISTS per hop. The leaf predicate is
+  # built against the innermost alias, then wrapped outward so each hop joins
+  # its target's `id` to the previous relation column (ANY(...) for multi).
+  defp emit_simple({:rel, hops, leaf, leaf_type, op, value}, ctx) do
+    col = "#{rel_alias(length(hops) - 1)}.#{TypeMapper.quote_ident(leaf)}"
+    {predicate, params} = rel_predicate(op, col, leaf_type, value, ctx)
+    {build_rel_exists(hops, predicate, ctx.opts[:source]), params}
+  end
+
   # Standalone field
   defp emit_simple({:field, name}, _ctx) do
     {~s["#{column_name(name)}"], []}
@@ -696,6 +913,85 @@ defmodule Lazypock.Schemas.FilterCompiler do
     shift_placeholders(sql, n - 1)
   end
 
+  # `<col> IS [NOT] NULL`
+  defp nil_clause(field_name, "="), do: ~s["#{column_name(field_name)}" IS NULL]
+  defp nil_clause(field_name, "!="), do: ~s["#{column_name(field_name)}" IS NOT NULL]
+
+  # ── Relation dot-path SQL ────────────────────────────
+
+  defp rel_alias(index), do: TypeMapper.quote_ident("lp_r#{index}")
+
+  # Leaf predicate against the innermost EXISTS alias. Mirrors the plain field
+  # emitters, but qualifies the column with the alias.
+  defp rel_predicate(op, col, _leaf_type, value, ctx) when op in ~w(~ !~) do
+    sql_op = if op == "~", do: "ILIKE", else: "NOT ILIKE"
+    {~s[#{col} #{sql_op} $1::TEXT ESCAPE '\\'], [like_pattern(rel_value(value, ctx))]}
+  end
+
+  defp rel_predicate(op, col, _leaf_type, value, ctx) when op in @array_ops do
+    val = rel_value(value, ctx)
+
+    case op do
+      "?~" ->
+        {~s[EXISTS (SELECT 1 FROM unnest(#{col}) AS x WHERE x ILIKE $1 ESCAPE '\\')],
+         [like_pattern(val)]}
+
+      "?!~" ->
+        {~s[EXISTS (SELECT 1 FROM unnest(#{col}) AS x WHERE x NOT ILIKE $1 ESCAPE '\\')],
+         [like_pattern(val)]}
+
+      _ ->
+        {cmp, negate} = array_op(op)
+
+        if negate do
+          {~s[NOT ($1 #{cmp} ALL(#{col}))], [val]}
+        else
+          {~s[$1 #{cmp} ANY(#{col})], [val]}
+        end
+    end
+  end
+
+  defp rel_predicate(op, col, leaf_type, value, ctx) when op in ~w(= != > >= < <=) do
+    val = rel_value(value, ctx)
+
+    if val == nil and op in ~w(= !=) do
+      {"#{col} #{if op == "=", do: "IS NULL", else: "IS NOT NULL"}", []}
+    else
+      {~s[#{col} #{op} $1#{rel_cast(leaf_type)}], [val]}
+    end
+  end
+
+  defp rel_value({:literal, value}, _ctx), do: value
+  defp rel_value({:param, n}, ctx), do: token_value(ctx, n)
+
+  defp rel_cast(nil), do: ""
+  defp rel_cast(pg_type), do: "::#{pg_type}"
+
+  # Wrap the leaf predicate in one correlated EXISTS per hop, innermost first.
+  defp build_rel_exists(hops, predicate, source) do
+    hops
+    |> Enum.with_index()
+    |> Enum.reverse()
+    |> Enum.reduce(predicate, fn {hop, index}, acc ->
+      alias_i = rel_alias(index)
+
+      lhs =
+        if index == 0 do
+          ref = "#{TypeMapper.quote_ident(source)}.#{TypeMapper.quote_ident(hop.field)}"
+          if hop.multi, do: "ANY(#{ref})", else: ref
+        else
+          ref = "#{rel_alias(index - 1)}.#{TypeMapper.quote_ident(hop.field)}"
+          if hop.multi, do: "ANY(#{ref})", else: ref
+        end
+
+      table = TypeMapper.quote_ident(hop.target)
+
+      # Relation columns are TEXT (or TEXT[] for multi), while the target id is
+      # UUID (TEXT for views). Compare as text on both sides.
+      "EXISTS (SELECT 1 FROM #{table} AS #{alias_i} WHERE #{alias_i}.\"id\"::TEXT = #{lhs} AND #{acc})"
+    end)
+  end
+
   # `<col> [NOT] ILIKE $1<cast> ESCAPE '\'`
   defp like_clause(field_name, ctx, op) do
     ~s["#{column_name(field_name)}" #{op} $1#{cast_for(field_name, ctx)} ESCAPE '\\']
@@ -703,7 +999,7 @@ defmodule Lazypock.Schemas.FilterCompiler do
 
   # Explicit Postgres cast for a field's placeholder, e.g. "::TEXT". Empty when
   # the column type is unknown (no schema knowledge).
-  defp cast_for(field_name, {types, _token_values}) do
+  defp cast_for(field_name, %{types: types}) do
     case types[column_name(field_name)] do
       nil -> ""
       pg_type -> "::#{pg_type}"
