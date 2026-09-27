@@ -40,7 +40,7 @@ defmodule LazypockWeb.DynamicController do
 
     with {:ok, collection} <- Registry.get(name),
          {:ok, {rule_where, rule_params}} <- Enforcer.authorize_list(name, user),
-         {:ok, {filter_where, filter_params}} <- build_filter(params["filter"]) do
+         {:ok, {filter_where, filter_params}} <- build_filter(params["filter"], name) do
       page = max(1, String.to_integer(params["page"] || "1"))
       per_page = max(1, min(200, String.to_integer(params["perPage"] || "30")))
       offset = (page - 1) * per_page
@@ -354,10 +354,10 @@ defmodule LazypockWeb.DynamicController do
 
   defp ensure_mutable(_collection), do: :ok
 
-  defp build_filter(nil), do: {:ok, {"", []}}
+  defp build_filter(nil, _collection_name), do: {:ok, {"", []}}
 
-  defp build_filter(filter_str) when is_binary(filter_str) do
-    case FilterCompiler.compile(filter_str) do
+  defp build_filter(filter_str, collection_name) when is_binary(filter_str) do
+    case FilterCompiler.compile(filter_str, [], %{}, %{source: collection_name, inline: true}) do
       {:ok, {sql_clause, params}} ->
         # Inline user filter params for the same reason as rule params: the
         # compiler has no schema knowledge, so uuid-column comparisons (e.g.

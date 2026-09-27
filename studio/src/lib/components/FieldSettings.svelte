@@ -17,7 +17,7 @@
 		Settings,
 		GripVertical
 	} from '@lucide/svelte';
-	import { slugify } from '$lib/fieldTypes';
+	import { normalizeFieldName } from '$lib/fieldTypes';
 	import OptionRow from './OptionRow.svelte';
 	import Button from './Button.svelte';
 	import Select from './Select.svelte';
@@ -97,7 +97,7 @@
 					value={(field.name as string) || ''}
 					disabled={!!field.system}
 					oninput={(e) => {
-						field.name = slugify((e.target as HTMLInputElement).value);
+						field.name = normalizeFieldName((e.target as HTMLInputElement).value);
 					}}
 					spellcheck="false"
 					required

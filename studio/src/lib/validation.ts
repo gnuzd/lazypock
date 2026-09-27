@@ -26,7 +26,13 @@ export type SetupData = z.infer<typeof setupSchema>;
 // ── Collection Form ─────────────────────────────────────
 
 const collectionFieldSchema = z.object({
-	name: z.string().min(1, 'Field name is required'),
+	name: z
+		.string()
+		.min(1, 'Field name is required')
+		.regex(
+			/^[A-Za-z][A-Za-z0-9_]*$/,
+			'Must start with a letter and contain only letters, numbers, and underscores'
+		),
 	type: z.string().min(1, 'Field type is required'),
 	system: z.boolean().optional(),
 	hidden: z.boolean().optional(),

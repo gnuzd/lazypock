@@ -234,7 +234,12 @@ defmodule Lazypock.Rules.Enforcer do
   defp compile_rule(rule, user, collection_name) do
     case resolve_user_tokens(rule, user) do
       {:ok, resolved, token_values} ->
-        FilterCompiler.compile(resolved, token_values, field_types(collection_name))
+        FilterCompiler.compile(
+          resolved,
+          token_values,
+          field_types(collection_name),
+          %{source: collection_name}
+        )
 
       {:error, _reason} = error ->
         error
@@ -379,44 +384,52 @@ defmodule Lazypock.Rules.Enforcer do
   end
 
   defp eval_without_db(sql, params, record) do
-    if String.contains?(sql, ~s(")) do
-      # Rule references record fields — resolve them against the input attrs
-      resolved =
-        Enum.reduce(record, sql, fn {key, val}, acc ->
-          key_str = if is_atom(key), do: Atom.to_string(key), else: key
+    cond do
+      # A relation dot-path compiles to a correlated subquery, which cannot be
+      # evaluated against the input attrs alone (the referenced rows aren't
+      # loaded). Fail closed rather than guessing.
+      String.contains?(sql, "EXISTS (SELECT") ->
+        false
 
-          val_str =
-            cond do
-              is_nil(val) -> "null"
-              is_boolean(val) -> String.downcase(to_string(val))
-              is_binary(val) -> ~s('#{escape_quote(val)}')
-              true -> to_string(val)
-            end
+      String.contains?(sql, ~s(")) ->
+        # Rule references record fields — resolve them against the input attrs
+        resolved =
+          Enum.reduce(record, sql, fn {key, val}, acc ->
+            key_str = if is_atom(key), do: Atom.to_string(key), else: key
 
-          String.replace(acc, ~s("#{key_str}"), val_str)
-        end)
+            val_str =
+              cond do
+                is_nil(val) -> "null"
+                is_boolean(val) -> String.downcase(to_string(val))
+                is_binary(val) -> ~s('#{escape_quote(val)}')
+                true -> to_string(val)
+              end
 
-      # Resolve remaining $1, $2 etc. parameter placeholders with actual values
-      # (params may already be coerced to their column representation, e.g. a
-      # 16-byte uuid binary or a Decimal)
-      resolved =
-        params
-        |> Enum.with_index(1)
-        |> Enum.reduce(resolved, fn {val, idx}, acc ->
-          String.replace(acc, "$#{idx}", inline_sql_value(val))
-        end)
+            String.replace(acc, ~s("#{key_str}"), val_str)
+          end)
 
-      # Now run SELECT 1 WHERE with fully resolved values
-      case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{resolved}", []) do
-        {:ok, %{rows: rows}} when rows != [] -> true
-        _ -> false
-      end
-    else
+        # Resolve remaining $1, $2 etc. parameter placeholders with actual values
+        # (params may already be coerced to their column representation, e.g. a
+        # 16-byte uuid binary or a Decimal)
+        resolved =
+          params
+          |> Enum.with_index(1)
+          |> Enum.reduce(resolved, fn {val, idx}, acc ->
+            String.replace(acc, "$#{idx}", inline_sql_value(val))
+          end)
+
+        # Now run SELECT 1 WHERE with fully resolved values
+        case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{resolved}", []) do
+          {:ok, %{rows: rows}} when rows != [] -> true
+          _ -> false
+        end
+
       # Pure auth check — run a SELECT 1 to evaluate
-      case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{sql}", params) do
-        {:ok, %{rows: rows}} when rows != [] -> true
-        _ -> false
-      end
+      true ->
+        case Ecto.Adapters.SQL.query(Repo, "SELECT 1 WHERE #{sql}", params) do
+          {:ok, %{rows: rows}} when rows != [] -> true
+          _ -> false
+        end
     end
   end
 

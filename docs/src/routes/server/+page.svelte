@@ -319,6 +319,20 @@ npm run dev          # starts Vite dev server on http://localhost:5173`}
 GET /api/posts?filter=tags ?= 'news' && published=true
 GET /api/posts?filter=tags ?~ 'new'                  # any tag contains 'new'`}
     />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      <strong>Relation fields</strong> can be filtered through a dot-path —
+      <code class="doc-inline px-1 py-0.5">author.email = 'ada@example.com'</code>
+      — including multi-level paths and multi-relations.
+      <strong>Null checks</strong> use
+      <code class="doc-inline px-1 py-0.5">field = null</code> /
+      <code class="doc-inline px-1 py-0.5">field != null</code>.
+    </p>
+    <CodeBlock
+      lang="http"
+      code={`GET /api/posts?filter=author.email = 'ada@example.com'
+GET /api/posts?filter=author.manager.name ~ 'Ada'
+GET /api/posts?filter=deleted_at = null`}
+    />
     <p class="mt-3 text-sm text-base-content/70">
       Filters work the same in collection rules and through the typed SDK
       (<code class="doc-inline px-1 py-0.5">getList(1, 20, &#123; filter: "tags ?= 'news'" &#125;)</code>).

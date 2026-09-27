@@ -168,7 +168,8 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
 
     test "null literal" do
-      assert {:ok, {_sql, [nil]}} = FilterCompiler.compile("deleted_at = null")
+      assert {:ok, {sql, []}} = FilterCompiler.compile("deleted_at = null")
+      assert sql == ~s["deleted_at" IS NULL]
     end
 
     test "boolean case variants — True" do
@@ -184,11 +185,13 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
 
     test "null case variants — Null" do
-      assert {:ok, {_sql, [nil]}} = FilterCompiler.compile("val = Null")
+      assert {:ok, {sql, []}} = FilterCompiler.compile("val = Null")
+      assert sql == ~s["val" IS NULL]
     end
 
     test "null case variants — NULL" do
-      assert {:ok, {_sql, [nil]}} = FilterCompiler.compile("val = NULL")
+      assert {:ok, {sql, []}} = FilterCompiler.compile("val = NULL")
+      assert sql == ~s["val" IS NULL]
     end
   end
 
@@ -333,14 +336,29 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
     end
 
     test "field = null" do
-      assert {:ok, {sql, [nil]}} = FilterCompiler.compile("deleted_at = null")
-      assert sql =~ "$1"
+      assert {:ok, {sql, []}} = FilterCompiler.compile("deleted_at = null")
+      assert sql == ~s["deleted_at" IS NULL]
     end
 
     test "field != null" do
-      assert {:ok, {sql, [nil]}} = FilterCompiler.compile("deleted_at != null")
-      assert sql =~ "!="
-      assert sql =~ "$1"
+      assert {:ok, {sql, []}} = FilterCompiler.compile("deleted_at != null")
+      assert sql == ~s["deleted_at" IS NOT NULL]
+    end
+
+    test "field = null with a typed column does not bind a parameter" do
+      types = %{"deleted_at" => "TIMESTAMPTZ"}
+      assert {:ok, {sql, []}} = FilterCompiler.compile("deleted_at = null", [], types)
+      assert sql == ~s["deleted_at" IS NULL]
+    end
+
+    test "bound param null emits IS NULL (no column type knowledge)" do
+      assert {:ok, {sql, []}} = FilterCompiler.compile("deleted_at = $1", [nil])
+      assert sql == ~s["deleted_at" IS NULL]
+    end
+
+    test "bound param value emits the comparison" do
+      assert {:ok, {~s["deleted_at" = $1], ["x"]}} =
+               FilterCompiler.compile("deleted_at = $1", ["x"])
     end
   end
 
@@ -674,6 +692,155 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
 
       assert sql =~ "NOT"
       assert sql =~ "AND"
+    end
+  end
+
+  # Pure schema resolver so relation dot-path compilation is covered without a
+  # database (production uses the collection Registry via the default resolver).
+  defp dot_resolver do
+    fn
+      "posts" ->
+        {:ok,
+         %{
+           types: %{"id" => "UUID", "title" => "TEXT", "author" => "UUID", "tags" => "TEXT[]"},
+           relations: %{
+             "author" => %{target: "users", multi: false},
+             "tags" => %{target: "tags", multi: true}
+           }
+         }}
+
+      "users" ->
+        {:ok,
+         %{
+           types: %{"id" => "UUID", "email" => "TEXT", "name" => "TEXT", "labels" => "TEXT[]"},
+           relations: %{"manager" => %{target: "users", multi: false}}
+         }}
+
+      "tags" ->
+        {:ok, %{types: %{"id" => "UUID", "label" => "TEXT"}, relations: %{}}}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp compile_dots(filter, opts, token_values \\ []) do
+    FilterCompiler.compile(
+      filter,
+      token_values,
+      %{},
+      Map.merge(%{source: "posts", resolver: dot_resolver()}, opts)
+    )
+  end
+
+  describe "compile/4 — relation dot-paths" do
+    test "single hop compiles to a correlated EXISTS" do
+      assert {:ok, {sql, ["ada@example.com"]}} =
+               compile_dots(~s[author.email = 'ada@example.com'], %{})
+
+      assert sql ==
+               ~s[EXISTS (SELECT 1 FROM "users" AS "lp_r0" WHERE "lp_r0"."id"::TEXT = "posts"."author" AND "lp_r0"."email" = $1::TEXT)]
+    end
+
+    test "dot-path composes with plain comparisons" do
+      assert {:ok, {sql, ["Ada", "ada@example.com"]}} =
+               compile_dots(~s[title = 'Ada' && author.email = 'ada@example.com'], %{})
+
+      assert sql =~ ~s["title" = $1]
+      assert sql =~ ~s["lp_r0"."email" = $2::TEXT]
+    end
+
+    test "multi-relation hop uses ANY(...)" do
+      assert {:ok, {sql, ["c1"]}} = compile_dots(~s[tags.label = 'c1'], %{})
+      assert sql =~ ~s["lp_r0"."id"::TEXT = ANY("posts"."tags")]
+    end
+
+    test "nested hop nests the EXISTS subqueries" do
+      assert {:ok, {sql, ["Ada"]}} = compile_dots(~s[author.manager.name = 'Ada'], %{})
+      assert sql =~ ~s[FROM "users" AS "lp_r0"]
+      assert sql =~ ~s["lp_r0"."id"::TEXT = "posts"."author"]
+      assert sql =~ ~s[FROM "users" AS "lp_r1"]
+      assert sql =~ ~s["lp_r1"."id"::TEXT = "lp_r0"."manager"]
+      assert sql =~ ~s["lp_r1"."name" = $1::TEXT]
+    end
+
+    test "dot-path null comparison emits IS NULL inside the subquery" do
+      assert {:ok, {sql, []}} = compile_dots("author.email = null", %{})
+      assert sql =~ ~s["lp_r0"."email" IS NULL]
+    end
+
+    test "dot-path LIKE on a text leaf" do
+      assert {:ok, {sql, ["%ada%"]}} = compile_dots(~s[author.email ~ 'ada'], %{})
+      assert sql =~ ~s["lp_r0"."email" ILIKE $1::TEXT]
+    end
+
+    test "dot-path NOT LIKE" do
+      assert {:ok, {sql, ["%ada%"]}} = compile_dots(~s[author.email !~ 'ada'], %{})
+      assert sql =~ ~s["lp_r0"."email" NOT ILIKE $1::TEXT]
+    end
+
+    test "dot-path OR / NOT compose" do
+      assert {:ok, {or_sql, _}} = compile_dots(~s[author.email = 'a' || title = 'b'], %{})
+      assert or_sql =~ "OR"
+
+      assert {:ok, {not_sql, _}} = compile_dots(~s[!(author.email = 'a')], %{})
+      assert not_sql =~ "NOT"
+    end
+
+    test "an invalid dot-path inside OR / NOT is an error" do
+      assert {:error, _} = compile_dots(~s[author.email = 'a' || nope.email = 'b'], %{})
+      assert {:error, _} = compile_dots(~s[!(nope.email = 'a')], %{})
+    end
+
+    test "array-typed leaf supports the ? operators" do
+      assert {:ok, {sql, ["x"]}} = compile_dots(~s[author.labels ?= 'x'], %{})
+      assert sql =~ ~s[$1 = ANY("lp_r0"."labels")]
+
+      assert {:ok, {sql, ["x"]}} = compile_dots(~s[author.labels ?!= 'x'], %{})
+      assert sql =~ ~s[NOT ($1 = ALL("lp_r0"."labels"))]
+
+      assert {:ok, {sql, ["%x%"]}} = compile_dots(~s[author.labels ?~ 'x'], %{})
+      assert sql =~ "unnest"
+
+      assert {:ok, {sql, ["%x%"]}} = compile_dots(~s[author.labels ?!~ 'x'], %{})
+      assert sql =~ "NOT ILIKE"
+    end
+
+    test "an unknown leaf compiles without a cast" do
+      assert {:ok, {sql, ["x"]}} = compile_dots(~s[author.mystery = 'x'], %{})
+      assert sql =~ ~s["lp_r0"."mystery" = $1]
+    end
+
+    test "an unrepresentable leaf value is a compile error" do
+      assert {:error, _} = compile_dots(~s[author.id = 'not-a-uuid'], %{})
+      assert {:error, _} = compile_dots(~s[!(author.id = 'not-a-uuid')], %{})
+    end
+
+    test "unknown source collection is an error (default resolver)" do
+      assert {:error, _} =
+               FilterCompiler.compile("nope.email = 'x'", [], %{}, %{source: "definitely_missing"})
+    end
+
+    test "UUID leaf is coerced + cast for the bound (enforcer) path" do
+      uuid = "11111111-2222-3333-4444-555555555555"
+      assert {:ok, {sql, [bound]}} = compile_dots("author.id = $1", %{}, [uuid])
+      assert sql =~ ~s["lp_r0"."id" = $1::UUID]
+      assert bound == Ecto.UUID.dump!(uuid)
+    end
+
+    test "inline mode keeps the raw value for SQL-literal inlining" do
+      uuid = "11111111-2222-3333-4444-555555555555"
+      assert {:ok, {sql, [value]}} = compile_dots("author.id = $1", %{inline: true}, [uuid])
+      assert sql =~ ~s["lp_r0"."id" = $1::UUID]
+      assert value == uuid
+    end
+
+    test "unknown first segment is an error" do
+      assert {:error, _} = compile_dots(~s[nope.email = 'x'], %{})
+    end
+
+    test "dot-path without a source collection is an error" do
+      assert {:error, _} = FilterCompiler.compile(~s[author.email = 'x'])
     end
   end
 end
