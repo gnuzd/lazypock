@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.14.1](https://github.com/gnuzd/lazypock/compare/v0.14.0...v0.14.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **filter:** relation dot-paths + IS [NOT] NULL comparisons ([f448e42](https://github.com/gnuzd/lazypock/commit/f448e42e02e7e2ea9f41eab59cda3e5c007bcbfb))
+* **filter:** relation dot-paths + IS [NOT] NULL comparisons; fix(studio): camelCase field names ([4b7ee30](https://github.com/gnuzd/lazypock/commit/4b7ee30d3ee5f3499458c5b462445644baeb4ea0))
+* **studio:** allow camelCase field names ([ebb072c](https://github.com/gnuzd/lazypock/commit/ebb072c4c54ec47dbb4ac0a6a33955f292511432))
+
 ## [0.14.0](https://github.com/gnuzd/lazypock/compare/v0.13.0...v0.14.0) (2026-09-26)
 
 
