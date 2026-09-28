@@ -143,6 +143,82 @@ defmodule Lazypock.Emails do
     end
   end
 
+  @doc """
+  Sends an email-change confirmation email to a new address for an
+  authenticated auth-collection user.
+
+  Creates an OTP record whose `sent_to` carries the new address, then
+  dispatches the email (with hook interception).
+  """
+  def request_email_change(collection_name, user, new_email) do
+    with {:ok, collection} <- Registry.get(collection_name),
+         :ok <- ensure_auth_collection!(collection),
+         {:ok, otp} <- create_otp(collection_name, user, new_email, :email_change) do
+      token = otp.raw_token
+
+      email_data = %{
+        template: :email_change,
+        to_name: user["name"] || new_email,
+        to_address: new_email,
+        assigns: [token: token, new_email: new_email]
+      }
+
+      case Dispatcher.dispatch_email(:email_change, email_data, %{
+             collection: collection,
+             user: user
+           }) do
+        {:ok, modified} ->
+          Mailer.deliver(
+            modified.template,
+            modified.to_name,
+            modified.to_address,
+            modified.assigns
+          )
+
+        {:error, reason} ->
+          {:error, reason}
+
+        :skip ->
+          :ok
+      end
+    end
+  end
+
+  @doc """
+  Confirms an email-change token (after verifying the user's current password)
+  and updates the auth record's email field to the new address.
+
+  The new address is read from the OTP record's `sent_to` column, so callers
+  cannot supply an arbitrary destination — it must match what was emailed.
+  """
+  def confirm_email_change(collection_name, user, token, password) do
+    with {:ok, collection} <- Registry.get(collection_name),
+         :ok <- ensure_auth_collection!(collection),
+         {:ok, otp_record, _otp_user} <- verify_otp(collection_name, token),
+         :ok <- ensure_otp_belongs_to_user!(otp_record, user),
+         :ok <- verify_current_password!(collection, user, password) do
+      new_email = otp_record["sent_to"]
+      user_id = maybe_uuid_to_bin(user["id"])
+      email_field = find_email_field(collection)
+      now = DateTime.utc_now()
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "UPDATE #{quote_table(collection_name)} SET #{quote_ident(email_field)} = $1, updated_at = $2 WHERE id = $3",
+        [new_email, now, user_id]
+      )
+
+      # Delete used OTP
+      delete_otp(otp_record)
+
+      updated_user = Map.put(user, email_field, new_email)
+      password_field = find_password_field(collection)
+      safe_user = Map.drop(updated_user, [password_field])
+
+      {:ok, safe_user}
+    end
+  end
+
   # ── OTP management ──
 
   defp create_otp(collection_name, user, email, _purpose) do
@@ -185,7 +261,7 @@ defmodule Lazypock.Emails do
 
         # Try each OTP (find the one matching this token)
         result =
-          Enum.reduce_while(nil, otps, fn otp, _acc ->
+          Enum.reduce_while(otps, nil, fn otp, _acc ->
             if Bcrypt.verify_pass(raw_token, otp["password_hash"]) do
               {:halt, {:ok, otp}}
             else
@@ -201,7 +277,7 @@ defmodule Lazypock.Emails do
 
             if created && DateTime.diff(now, created) < 86_400 do
               # Fetch the user record
-              user_id = otp["record_ref"]
+              user_id = maybe_uuid_to_bin(otp["record_ref"])
 
               case Ecto.Adapters.SQL.query(
                      Repo,
@@ -234,6 +310,25 @@ defmodule Lazypock.Emails do
 
   defp delete_otp(otp) do
     Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _otps WHERE id = $1", [otp["id"]])
+  end
+
+  defp ensure_otp_belongs_to_user!(otp_record, user) do
+    if otp_record["record_ref"] == user["id"] do
+      :ok
+    else
+      {:error, "Invalid token"}
+    end
+  end
+
+  defp verify_current_password!(collection, user, password) do
+    password_field = find_password_field(collection)
+    password_hash = user[password_field]
+
+    cond do
+      is_nil(password_hash) -> {:error, "Invalid password"}
+      Bcrypt.verify_pass(password, password_hash) -> :ok
+      true -> {:error, "Invalid password"}
+    end
   end
 
   # ── Helpers ──
@@ -286,6 +381,25 @@ defmodule Lazypock.Emails do
 
   defp quote_table(name), do: "\"#{name}\""
   defp quote_ident(name), do: "\"#{name}\""
+
+  # Convert a UUID string to Postgrex-compatible binary for UUID columns.
+  # Mirrors GenericRecord.maybe_uuid_to_bin/1 — integer ids (bigint/serial
+  # tables) are passed through as integers; anything else passes through.
+  defp maybe_uuid_to_bin(id) when is_binary(id) do
+    case Ecto.UUID.dump(id) do
+      {:ok, bin} -> bin
+      :error -> maybe_integer_id(id)
+    end
+  end
+
+  defp maybe_uuid_to_bin(id), do: id
+
+  defp maybe_integer_id(id) do
+    case Integer.parse(id) do
+      {int, ""} -> int
+      _ -> id
+    end
+  end
 
   defp rows_to_maps(columns, rows) do
     Enum.map(rows, fn row ->

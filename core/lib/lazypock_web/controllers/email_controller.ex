@@ -110,6 +110,72 @@ defmodule LazypockWeb.EmailController do
     end
   end
 
+  # ── Request email change ──
+
+  def request_email_change(conn, %{"collection" => collection_name} = params) do
+    user = conn.assigns[:current_user]
+    new_email = params["newEmail"]
+
+    cond do
+      is_nil(user) ->
+        conn
+        |> put_status(401)
+        |> json(%{"code" => 401, "message" => "Not authenticated", "data" => %{}})
+
+      is_nil(new_email) or new_email == "" ->
+        conn
+        |> put_status(400)
+        |> json(%{"code" => 400, "message" => "Missing required field: newEmail", "data" => %{}})
+
+      true ->
+        case Emails.request_email_change(collection_name, user, new_email) do
+          :ok ->
+            resp(conn, 204, "")
+
+          {:error, reason} ->
+            conn
+            |> put_status(400)
+            |> json(%{"code" => 400, "message" => to_string(reason), "data" => %{}})
+        end
+    end
+  end
+
+  # ── Confirm email change ──
+
+  def confirm_email_change(conn, %{"collection" => collection_name} = params) do
+    user = conn.assigns[:current_user]
+    token = params["token"]
+    password = params["password"]
+
+    cond do
+      is_nil(user) ->
+        conn
+        |> put_status(401)
+        |> json(%{"code" => 401, "message" => "Not authenticated", "data" => %{}})
+
+      is_nil(token) or token == "" ->
+        conn
+        |> put_status(400)
+        |> json(%{"code" => 400, "message" => "Missing required field: token", "data" => %{}})
+
+      is_nil(password) or password == "" ->
+        conn
+        |> put_status(400)
+        |> json(%{"code" => 400, "message" => "Missing required field: password", "data" => %{}})
+
+      true ->
+        case Emails.confirm_email_change(collection_name, user, token, password) do
+          {:ok, safe_user} ->
+            json(conn, %{"record" => safe_user})
+
+          {:error, reason} ->
+            conn
+            |> put_status(400)
+            |> json(%{"code" => 400, "message" => to_string(reason), "data" => %{}})
+        end
+    end
+  end
+
   # ── Helpers ──
 
   defp ensure_auth_collection!(%{type: "auth"}), do: :ok
