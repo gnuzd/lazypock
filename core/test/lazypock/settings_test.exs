@@ -136,6 +136,37 @@ defmodule Lazypock.SettingsTest do
     refute Settings.secure_compare("secret", "wrong")
   end
 
+  test "verify_api_key tolerates malformed key metadata without crashing" do
+    {key, meta} = Settings.create_api_key()
+
+    # Corrupt the persisted list with entries missing a usable hash. The
+    # constant-time fold must skip these and still verify the valid key.
+    Settings.put(%{
+      "api_keys" => [
+        %{"id" => "a", "revoked" => false, "expires_at" => nil},
+        %{"id" => "b", "hash" => nil, "revoked" => false, "expires_at" => nil},
+        %{
+          "id" => meta["id"],
+          "hash" => Settings.hash_key(key),
+          "created_at" => meta["created_at"],
+          "expires_at" => nil,
+          "revoked" => false
+        }
+      ]
+    })
+
+    assert Settings.verify_api_key(key)
+    refute Settings.verify_api_key("lazypock_not_the_key")
+  end
+
+  test "verify_api_key matches a valid key regardless of list position" do
+    {_key1, _} = Settings.create_api_key()
+    {key2, _} = Settings.create_api_key()
+    {_key3, _} = Settings.create_api_key()
+
+    assert Settings.verify_api_key(key2)
+  end
+
   test "get/put persist a full settings map" do
     Settings.put(%{"app_name" => "My App"})
     assert Settings.get("app_name") == "My App"

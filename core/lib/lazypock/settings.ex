@@ -132,7 +132,9 @@ defmodule Lazypock.Settings do
 
   @doc """
   Verify a presented API key: hash must match an active (non-revoked,
-  non-expired) stored key. Constant-time. Returns false otherwise.
+  non-expired) stored key. Comparisons use `secure_compare/2` and evaluate
+  every stored key without early exit, so verification is constant-time with
+  respect to which key matched. Returns false otherwise.
   """
   @spec verify_api_key(String.t() | nil) :: boolean()
   def verify_api_key(nil), do: false
@@ -141,10 +143,24 @@ defmodule Lazypock.Settings do
     now = DateTime.utc_now()
     presented = hash_key(key)
 
+    # Compare against every stored key with a constant-time equality check.
+    # The fold deliberately evaluates all entries (no early `Enum.any?` exit)
+    # so a matching key cannot be distinguished from a non-matching one by
+    # response timing. `is_binary/1` guards malformed persisted metadata
+    # (e.g. a `nil` hash) so it denies instead of crashing.
+    active_match =
+      Enum.reduce(persisted_keys(), false, fn meta, acc ->
+        hash = meta["hash"]
+
+        hit =
+          is_binary(hash) and secure_compare(hash, presented) and
+            meta["revoked"] != true and not expired?(meta, now)
+
+        acc or hit
+      end)
+
     # Legacy single-key check for back-compat.
-    Enum.any?(persisted_keys(), fn meta ->
-      not meta["revoked"] and meta["hash"] == presented and not expired?(meta, now)
-    end) ||
+    active_match ||
       case legacy_api_key_hash() do
         hash when is_binary(hash) -> secure_compare(presented, hash)
         _ -> false
