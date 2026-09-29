@@ -620,6 +620,30 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
             <td class="px-3 py-2 font-mono text-xs">/data/lazypock/seeds.exs</td
             >
           </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_AUTH_TOKEN_TTL</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >Access-token lifetime in seconds (optional, defaults to <code
+                class="doc-inline px-1 py-0.5">604800</code
+              > = 7 days)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">3600</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_AUTH_TOKEN_SECRET</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >Dedicated signing secret for auth tokens (optional; defaults to
+              <code class="doc-inline px-1 py-0.5">SECRET_KEY_BASE</code>)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">openssl rand -base64 48</td>
+          </tr>
         </tbody>
       </table>
     </div>

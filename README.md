@@ -73,10 +73,10 @@ Full SDK docs (install, codegen, type safety, queries, realtime, files, auth): *
 | 🗄️ **Dynamic Collections** | DDL create/drop/add field — real Postgres tables, real columns ✅ | Collection CRUD in side pane, field editor (add/remove/reorder) ✅ | — |
 | 🧩 **View Collections** | Read-only collections backed by a single `SELECT` over other collections; fields auto-derived from the query, realtime events on source changes ✅ | **No-code view builder** (pick source + fields, incl. related collections, with live SQL + sample preview) or raw SQL ✅ | — |
 | 🌐 **REST API** | `GET/POST/PATCH/DELETE /api/:collection`, filter/sort/paginate ✅ | Record browser: searchable/sortable DataTable with live record count + dynamic RecordForm ✅ | `collection(name).getList/getFullList/getOne/create/update/delete` ✅ |
-| 🔐 **Auth** | Superuser JWT + auth collection JWT (`auth-with-password`/`auth-refresh`/`auth-methods`) + OAuth2 (Google/GitHub/generic via Assent) ✅ | Login page, auth guard, token persistence, auto-redirect ✅ | `login/me/logout`, `AuthStore` with pluggable storage (localStorage-backed by default) ✅ |
+| 🔐 **Auth** | Superuser + auth collection signed tokens (HMAC `Phoenix.Token`, **not JWT**) (`auth-with-password`/`auth-refresh`/`auth-methods`) + OAuth2 (Google/GitHub/generic via Assent) ✅ | Login page, auth guard, token persistence, auto-redirect ✅ | `login/me/logout`, `AuthStore` with pluggable storage (localStorage-backed by default) ✅ |
 | 🛡️ **Rules** | Three-state rules (nil = superuser, `""` = public, filter expr), enforced on all CRUD + `manageRule` ✅ | Rule editor with lock/unlock per field ✅ | — |
 | ⚡ **Realtime** | Phoenix Channels, rule-enforced join, anonymous allowed on public/rule-based collections ✅ | Live record updates via `client.realtime.subscribe()` ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`, auto-connects without a token for public reads ✅ |
-| 📁 **File Storage** | Upload/serve/delete, local + S3 adapters, thumbnails + on-demand scaling ✅ | Upload in record form, image picker, thumbnails in list/form ✅ | `files.upload/list/delete`, `getFileUrl`, `getThumbUrl`, `getScaleUrl` ✅ |
+| 📁 **File Storage** | Upload/serve/delete, thumbnails + on-demand scaling, local adapter ✅ (S3 adapter is a registered stub — not yet implemented) | Upload in record form, image picker, thumbnails in list/form ✅ | `files.upload/list/delete`, `getFileUrl`, `getThumbUrl`, `getScaleUrl` ✅ |
 | 🪝 **Hooks** | PocketBase-style event hooks (`use Lazypock.Hooks.Hook`, `e.next()` chain, ~80 hook points), custom API routes via `Router.add` ✅ | — | — |
 | ⏰ **Cron Jobs** | Persisted `_crons` scheduler: 5/6-field expressions, per-job IANA timezone, SQL / HTTP-webhook / Elixir-hook actions, run-now, pg advisory-lock guarded execution ✅ | Settings → Cron dashboard: CRUD, enable/disable, run-now, next-run preview, last-run status ✅ | — |
 | 🎨 **Admin Dashboard** | Serves the Studio SPA at `/_/*`, dev proxy support ✅ | Collections sidebar, record CRUD, field editor, rules, indexes, API keys, import/export, backups ✅ | — |
@@ -135,7 +135,7 @@ LazyPock/
 
 ### Prerequisites
 
-- **Elixir 1.17+** + **Erlang/OTP 26+**
+- **Elixir 1.17+** + **Erlang/OTP 27+**
 - **PostgreSQL 15+** (no Postgres handy? the repo's `docker-compose.yml` starts one — see [Development](#development))
 - **Node.js 20+** (for Studio admin UI)
 - **ImageMagick 7+** (`magick`/`convert`) — required for image thumbnails and on-demand scaling (see [File Storage & Thumbnails](#file-storage--thumbnails)); uploads work without it but no resizing is available
@@ -674,6 +674,14 @@ curl -X POST http://localhost:4000/api/users/auth-with-password \
 # GET  /api/users/auth-methods  → available auth methods
 ```
 
+**Token lifetime & revocation.** Access tokens are stateless, HMAC-signed
+`Phoenix.Token` values (**not JWTs**) and expire after 7 days. Set
+`LAZYPOCK_AUTH_TOKEN_TTL` (seconds) to change the lifetime, and set
+`LAZYPOCK_AUTH_TOKEN_SECRET` to sign with a dedicated secret that is
+independent of `SECRET_KEY_BASE` (recommended in production). Because tokens
+are stateless, they cannot be revoked before they expire — rotate the signing
+secret (or shorten the TTL) to invalidate every outstanding token.
+
 The `password` key is aliased to the actual backing column (`password_hash`)
 on write — sending either name works, so the TypeScript SDK below and any
 PocketBase SDK behave identically.
@@ -798,9 +806,9 @@ See **[PLAN.md](./PLAN.md)** for the full architecture and development plan.
 | Layer | Library |
 | --- | --- |
 | Language | Elixir 1.17+ |
-| Framework | Phoenix 1.7+ |
+| Framework | Phoenix 1.8+ |
 | Database | Ecto + Postgrex + PostgreSQL 15+ |
-| Auth | Joken + bcrypt_elixir |
+| Auth | `Phoenix.Token` (HMAC, stateless) + bcrypt_elixir |
 | Admin UI | **SvelteKit SPA** (`studio/`) — built to `core/priv/static/studio/` |
 | Image Processing | ImageMagick CLI (`magick`/`convert`) — thumbnails + on-demand scaling |
 | JS SDK | TypeScript — separate repo: [gnuzd/lazypock-ts](https://github.com/gnuzd/lazypock-ts) |
