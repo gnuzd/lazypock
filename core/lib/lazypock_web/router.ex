@@ -151,6 +151,10 @@ defmodule LazypockWeb.Router do
 
     # Auth required (token refresh)
     post("/:collection/auth-refresh", AuthController, :auth_refresh)
+
+    # Email change (authenticated user)
+    post("/:collection/request-email-change", EmailController, :request_email_change)
+    post("/:collection/confirm-email-change", EmailController, :confirm_email_change)
   end
 
   # Dynamic collection routes — must be LAST

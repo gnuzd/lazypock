@@ -206,12 +206,16 @@ defmodule Lazypock.Hooks.Dispatcher do
       data: email_data
     }
 
-    meta = %{token: Keyword.get(email_data.assigns || [], :token)}
+    meta = %{
+      token: Keyword.get(email_data.assigns || [], :token),
+      newEmail: Keyword.get(email_data.assigns || [], :new_email)
+    }
 
     event =
       case template do
         :verification -> :on_mailer_record_verification_send
         :password_reset -> :on_mailer_record_password_reset_send
+        :email_change -> :on_mailer_record_email_change_send
         _ -> :on_mailer_send
       end
 
@@ -220,8 +224,14 @@ defmodule Lazypock.Hooks.Dispatcher do
         :on_mailer_send ->
           MailerHooks.trigger_send(message, nil)
 
-        _ ->
+        :on_mailer_record_verification_send ->
           MailerHooks.trigger_record_verification_send(message, record, meta, collection_name)
+
+        :on_mailer_record_password_reset_send ->
+          MailerHooks.trigger_record_password_reset_send(message, record, meta, collection_name)
+
+        :on_mailer_record_email_change_send ->
+          MailerHooks.trigger_record_email_change_send(message, record, meta, collection_name)
       end
 
     case result do
