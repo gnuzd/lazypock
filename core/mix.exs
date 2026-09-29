@@ -90,7 +90,8 @@ defmodule Lazypock.MixProject do
       {:assent, "~> 0.3.1"},
       {:crontab, "~> 1.2"},
       {:tz, "~> 0.28"},
-      {:stream_data, "~> 1.2", only: [:dev, :test]}
+      {:stream_data, "~> 1.2", only: [:dev, :test]},
+      {:benchee, "~> 1.5", only: [:dev, :test]}
     ]
   end
 
@@ -117,6 +118,8 @@ defmodule Lazypock.MixProject do
         "studio.build",
         "phx.digest"
       ],
+      "bench.filter": ["run --no-start bench/filter_compiler.exs"],
+      "bench.ddl": ["run bench/ddl_throughput.exs"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

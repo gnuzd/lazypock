@@ -5,5 +5,5 @@
   # formatter moves the `# x-release-please-version` annotation onto its own
   # line, and release-please needs it on the `version:` line to locate the
   # version it bumps. Formatting mix.exs by hand would silently break releases.
-  inputs: ["{config,lib,test}/**/*.{ex,exs}", "priv/*/seeds.exs"]
+  inputs: ["{config,lib,test}/**/*.{ex,exs}", "priv/*/seeds.exs", "bench/**/*.exs"]
 ]
