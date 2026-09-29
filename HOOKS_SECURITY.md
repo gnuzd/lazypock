@@ -117,6 +117,11 @@ compiled Elixir with direct access to the BEAM, the DB adapter, and the OS.
 - **Default posture**: hooks are **trusted, same-privilege code** authored by
   the operator (like PocketBase). Do not allow app end-users to write hook
   files; treat `~/.lazypock/hooks/` as sensitive as the server binary.
+  Concretely: restrict the directory to the service account
+  (`chmod 700 ~/.lazypock/hooks`), ensure only the deploy user can write it,
+  and never mount it from a shared/network path. There is **no** checksum or
+  signature verification of hook files — write access to that directory is
+  equivalent to arbitrary code execution on the server.
 - **Quick wins (implemented)**: boot warning + `LAZYPOCK_DISABLE_HOOKS=1`.
 - **Next best (recommend, not implemented)**: request-path hook timeouts (#4)
   and a deny-list that refuses `System.halt`/`:os.cmd`/`Port.open` at compile

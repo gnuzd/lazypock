@@ -22,6 +22,14 @@ defmodule Lazypock.Schemas.FilterCompiler do
   @max_filter_length 3500
   @max_filter_expressions 200
 
+  # Parsed-AST memo cache. Parsing (tokenize + parse) is the expensive part of
+  # compiling a filter and, unlike emission, depends on **nothing but the
+  # filter string** — no schema, no token values, no opts. Caching the AST
+  # therefore needs no invalidation when collections change, and relation
+  # dot-paths are still resolved against the live registry on every call.
+  @cache_table :lazypock_filter_ast_cache
+  @cache_limit 1_000
+
   @doc """
   Compiles a PocketBase filter string into a SQL WHERE clause with parameters.
 
@@ -53,10 +61,8 @@ defmodule Lazypock.Schemas.FilterCompiler do
         {:error, "Filter exceeds the maximum length of #{@max_filter_length} characters"}
 
       true ->
-        {:ok, tokens} = tokenize(filter_str)
-
-        case parse_or(tokens) do
-          {:ok, ast, []} ->
+        case parse_cached(filter_str) do
+          {:ok, ast} ->
             case resolve_relations(ast, opts) do
               {:ok, ast} ->
                 if count_expressions(ast) > @max_filter_expressions do
@@ -69,13 +75,92 @@ defmodule Lazypock.Schemas.FilterCompiler do
                 {:error, reason}
             end
 
-          {:ok, _ast, leftover} ->
-            {:error, "Unexpected tokens after expression: #{inspect(leftover)}"}
-
           :error ->
             {:error, "Failed to parse filter expression"}
         end
     end
+  end
+
+  # Returns the parsed AST for `filter_str`, memoized in ETS. Caches only
+  # successful parses that consume all tokens; parse failures are re-evaluated
+  # (and so remain cheap to reject without unbounded cache growth from junk).
+  defp parse_cached(filter_str) do
+    ensure_cache()
+
+    case :ets.lookup(@cache_table, filter_str) do
+      [{^filter_str, ast}] ->
+        {:ok, ast}
+
+      [] ->
+        case parse(filter_str) do
+          {:ok, ast} ->
+            cache_put(filter_str, ast)
+            {:ok, ast}
+
+          :error ->
+            :error
+        end
+    end
+  end
+
+  defp parse(filter_str) do
+    with {:ok, tokens} <- tokenize(filter_str),
+         {:ok, ast, []} <- parse_or(tokens) do
+      {:ok, ast}
+    else
+      _ -> :error
+    end
+  end
+
+  defp cache_put(filter_str, ast) do
+    if :ets.info(@cache_table, :size) >= @cache_limit do
+      :ets.delete_all_objects(@cache_table)
+    end
+
+    :ets.insert(@cache_table, {filter_str, ast})
+    :ok
+  end
+
+  defp ensure_cache do
+    case :ets.whereis(@cache_table) do
+      :undefined ->
+        try do
+          :ets.new(@cache_table, [
+            :named_table,
+            :public,
+            :set,
+            read_concurrency: true,
+            write_concurrency: true
+          ])
+        rescue
+          # Another process created it between whereis/1 and new/2.
+          ArgumentError -> :ok
+        end
+
+      _table ->
+        :ok
+    end
+  end
+
+  @doc false
+  def clear_cache do
+    if :ets.whereis(@cache_table) != :undefined do
+      :ets.delete_all_objects(@cache_table)
+    end
+
+    :ok
+  end
+
+  @doc false
+  def cache_size do
+    ensure_cache()
+    :ets.info(@cache_table, :size)
+  end
+
+  @doc false
+  def cached?(filter_str) when is_binary(filter_str) do
+    ensure_cache()
+    :ets.member(@cache_table, String.trim(filter_str))
   end
 
   defp build_expr(ast, types, token_values, opts) do

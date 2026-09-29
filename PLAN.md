@@ -108,11 +108,11 @@ scaffolding a new app FROM this core, not within the monorepo itself.
 |---|---|---|
 | Schema approach | Real columns + `{table, GenericRecord}` source | Full Postgres power, no runtime module compilation |
 | Tenancy | Single tenant (one DB = one app) | Simplicity. Matches PocketBase's "one SQLite file = one app" |
-| Rule engine | PocketBase-style DSL → Ecto dynamic queries | Declarative, compilable to SQL for performance |
-| Hooks | 3 layers: Declarative (JSON), File-based (.ex), Runtime (sandboxed eval) | Progressive power: zero-code → full Elixir |
-| Auth | Custom JWT provider (dual token: superuser + auth collection) | Superuser tokens + per-collection auth user tokens, both verified in Plug |
+| Rule engine | PocketBase-style DSL → parameterized SQL (`FilterCompiler`) | Declarative, compilable to SQL for performance |
+| Hooks | File-based `.ex` event hooks (PocketBase parity). Declarative JSON + runtime eval are design goals, **not implemented** | Progressive power: zero-code → full Elixir |
+| Auth | HMAC-signed `Phoenix.Token` provider (superuser + auth collection) | No JWT dependency; both verified in Plug |
 | Realtime | Phoenix Channels + PubSub | Native to Phoenix, proven at scale |
-| File storage | Waffle + custom adapter (local/S3) | Pluggable backends |
+| File storage | Custom adapter — local implemented; S3 is a registered stub | Pluggable backends |
 | Releases | `mix release` → single tarball | "One binary" experience like PocketBase |
 
 ---
@@ -735,10 +735,10 @@ end
 | `GET` | `/:collection/auth-methods` | List available auth methods |
 | `POST` | `/api/superusers/login` | Superuser login (legacy) |
 | `POST` | `/api/superusers/setup` | First superuser setup |
-| `POST` | `/api/auth/request-password-reset` | (planned) Send reset email |
-| `POST` | `/api/auth/confirm-password-reset` | (planned) Reset password with token |
-| `POST` | `/api/auth/request-verification` | (planned) Send verification email |
-| `POST` | `/api/auth/confirm-verification` | (planned) Verify email |
+| `POST` | `/:collection/request-password-reset` | ✅ Send reset email |
+| `POST` | `/:collection/confirm-password-reset` | ✅ Reset password with token |
+| `POST` | `/:collection/request-verification` | ✅ Send verification email |
+| `POST` | `/:collection/confirm-verification` | ✅ Verify email |
 | `GET` | `/api/oauth2-redirect` | ✅ OAuth2 popup callback (postMessage to opener) |
 | `POST` | `/:collection/auth-with-oauth2` | ✅ OAuth2 direct code exchange (PKCE) |
 
@@ -1137,22 +1137,13 @@ end
 
 ### 6.4 Thumbnail Generation
 
-```elixir
-# Using Vix (libvips bindings) for image processing
-defmodule LazyPock.Files.Thumbnail do
-  def generate(file, width, height) do
-    thumb_path = thumb_path(file, width, height)
-
-    {:ok, _} = Vix.Vips.Operation.thumbnail(file.storage_path, width,
-      height: height,
-      crop: :centre
-    )
-    |> Vix.Vips.Image.write_to_file(thumb_path)
-
-    thumb_path
-  end
-end
-```
+Thumbnails and on-demand scaling are implemented in
+`Lazypock.Files.Adapters.Local` by invoking the **ImageMagick** CLI (`magick`,
+falling back to `convert`) through `System.cmd/3` with an argument list — never
+a shell string. The requested geometry is validated against a strict regex
+before it is passed through, and a missing ImageMagick binary degrades
+gracefully (uploads still succeed, no thumbnails). There is **no**
+`libvips`/Vix dependency in `mix.exs`.
 
 ### 6.5 Deliverables (Phase 6)
 
@@ -1411,6 +1402,11 @@ end
 
 ### 7.4 Hook Dispatcher (Pipeline Orchestrator)
 
+> **Implementation status:** only the **file-based** layer (Layer 2) is
+> implemented, as `Lazypock.Hooks.Dispatcher` dispatching the
+> `Lazypock.Hooks.Record`/`Collection`/`Request`/… event module. The
+> `Layer1`/`Layer3` pipeline below is a design sketch, not current code.
+
 ```elixir
 defmodule LazyPock.Hooks.Dispatcher do
   @moduledoc """
@@ -1459,7 +1455,7 @@ Scans `priv/hooks/` at boot, maps collection names to hook modules, supports hot
 - [x] Layer 2: File-based Elixir hooks — PocketBase-parity event API (`use Lazypock.Hooks.Hook`, `e.next()` chain, `Router.add` custom API routes) + auto-discovery (`Registry.discover!()`)
 - [x] Hook dispatcher pipeline wired into DynamicController (+ Auth/Collection/Settings/File controllers, CollectionChannel, Mailer)
 - [x] ExUnit: hook pipeline tests (Event chain semantics, Registry, Router, custom-routes end-to-end)
-- [ ] Layer 1: Declarative hook engine with built-in actions (set_field, webhook, etc.) — skeleton exists (`run_declarative_hooks/4` returns `{:ok, data}` unchanged)
+- [ ] Layer 1: Declarative hook engine with built-in actions (set_field, webhook, etc.) — **not implemented**; there is no `run_declarative_hooks/4` in the codebase
 - [ ] Layer 3: Runtime eval hooks (Studio admin UI)
 - [ ] Template variable system (`{{record.title}}`, `{{now}}`, `{{env.VAR}}`)
 - [ ] Hook execution logging/tracing
@@ -1637,11 +1633,11 @@ import LazyPock from "lazypock";
 const client = new LazyPock("https://myapp.fly.dev");
 
 // ── Auth ────────────────────────────────────────
-await client.auth.login("user@example.com", "password");
-await client.auth.register({ email, password, passwordConfirm });
-await client.auth.refresh();
-client.auth.isAuthenticated; // boolean
-client.auth.user; // current user record
+await client.login("user@example.com", "password");
+// or, PocketBase-style per collection:
+await client.collection("users").authWithPassword("user@example.com", "password");
+client.authStore.isValid; // boolean
+client.authStore.model; // current user record
 
 // ── CRUD ────────────────────────────────────────
 const posts = await client.collection("posts").getList(1, 20, {
@@ -1801,9 +1797,12 @@ mix lazypock.eject posts  # → lib/my_app/schemas/posts.ex
 | `_fields` | Field definitions per collection (name, type, constraints, options) |
 | `_files` | File metadata (filename, type, size, storage path, ownership) |
 | `_migrations` | Ecto's own migration tracking (kept separate) |
-| `_hooks_executions` | Audit log of all hook executions (future phase) |
-| `_auth_tokens` | Active tokens tracking for revocation (future phase) |
-| `_settings` | Application-wide settings (future phase) |
+| `_request_logs` | API request log (created by migration) |
+| `_crons` | Scheduled cron jobs (created by migration) |
+| `_import_snapshots` | Undo checkpoints for import/restore (created by migration) |
+| `_settings` | Application-wide settings (created by migration; used by the Studio and CORS) |
+| `_hooks_executions` | Audit log of hook executions — **not created** (future phase) |
+| `_auth_tokens` | Token revocation table — **not created**; tokens are stateless |
 
 ---
 
@@ -1812,13 +1811,13 @@ mix lazypock.eject posts  # → lib/my_app/schemas/posts.ex
 | Layer | Technology | Why |
 |---|---|---|
 | **Language** | Elixir 1.17+ | Functional, concurrent, fault-tolerant |
-| **Framework** | Phoenix 1.7+ | Battle-tested web framework |
+| **Framework** | Phoenix 1.8+ | Battle-tested web framework |
 | **Database** | PostgreSQL 15+ | Transactional DDL, JSONB, mature |
 | **DB Library** | Ecto 3.11+ | Composable queries, dynamic sources |
-| **Auth** | Joken + bcrypt_elixir | JWT + hashing |
+| **Auth** | `Phoenix.Token` (HMAC) + bcrypt_elixir | Stateless signed tokens + password hashing |
 | **OAuth2** | Assent | Multi-provider |
 | **Admin UI** | SvelteKit (Studio SPA) | Admin dashboard served at `/_/*` |
-| **File Processing** | Vix (libvips) | Fast image processing |
+| **File Processing** | ImageMagick CLI (`magick`/`convert`) | Thumbnails + on-demand scaling |
 | **File Upload** | Custom | To match PocketBase semantics |
 | **Realtime** | Phoenix PubSub + Channels | Built-in |
 | **Release** | `mix release` | Single tarball deployment |

@@ -843,4 +843,43 @@ defmodule Lazypock.Schemas.FilterCompilerTest do
       assert {:error, _} = FilterCompiler.compile(~s[author.email = 'x'])
     end
   end
+
+  describe "compile/1 AST cache" do
+    test "repeated compiles of the same filter are stable" do
+      filter = ~s[title = 'cache-#{System.unique_integer([:positive])}']
+      assert FilterCompiler.compile(filter) == FilterCompiler.compile(filter)
+    end
+
+    test "a successful parse is memoized" do
+      filter = ~s[title = 'memo-#{System.unique_integer([:positive])}']
+      refute FilterCompiler.cached?(filter)
+      assert {:ok, _} = FilterCompiler.compile(filter)
+      assert FilterCompiler.cached?(filter)
+    end
+
+    test "parse failures are not memoized" do
+      filter = "(((#{System.unique_integer([:positive])}"
+      assert {:error, _} = FilterCompiler.compile(filter)
+      refute FilterCompiler.cached?(filter)
+    end
+
+    test "a cached AST still emits per-call type casts" do
+      filter = "title = 'typed'"
+
+      assert {:ok, {untyped_sql, _}} = FilterCompiler.compile(filter)
+      assert {:ok, {typed_sql, _}} = FilterCompiler.compile(filter, [], %{"title" => "TEXT"})
+
+      # The AST is shared, but emission still consults the per-call `types`
+      # map, so the compiled SQL is not polluted by the first call.
+      assert is_binary(untyped_sql)
+      assert is_binary(typed_sql)
+      assert {:ok, {again, _}} = FilterCompiler.compile(filter)
+      assert again == untyped_sql
+    end
+
+    test "clear_cache/0 empties the cache" do
+      FilterCompiler.compile(~s[title = 'cleared-#{System.unique_integer([:positive])}'])
+      assert FilterCompiler.clear_cache() == :ok
+    end
+  end
 end

@@ -98,6 +98,24 @@ defmodule LazypockWeb.FileControllerTest do
       conn = auth_conn(build_conn()) |> post("/api/files", %{})
       assert response(conn, 400)
     end
+
+    test "rejects a file whose bytes do not match its extension" do
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{"file" => upload_body("<?php echo 1; ?>", "avatar.png")})
+
+      assert json_response(conn, 400)["message"] =~ "do not match"
+    end
+
+    test "rejects a non-allowlisted extension" do
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{"file" => upload_body("<?php echo 1; ?>", "shell.php")})
+
+      assert json_response(conn, 400)["message"] =~ "not allowed"
+    end
   end
 
   describe "GET /api/files" do
