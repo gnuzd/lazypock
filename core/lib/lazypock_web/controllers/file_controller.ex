@@ -2,6 +2,7 @@ defmodule LazypockWeb.FileController do
   use LazypockWeb, :controller
 
   alias Lazypock.Files.Store
+  alias Lazypock.Files.Validation
   alias Lazypock.Collections.Registry
 
   @default_max_file_size 10 * 1024 * 1024
@@ -105,36 +106,65 @@ defmodule LazypockWeb.FileController do
   end
 
   defp do_upload(conn, upload) do
-    cond do
-      upload.content_type not in ~w(image/jpeg image/png image/gif image/webp
-                                    application/pdf text/csv text/plain
-                                    application/json application/zip
-                                    video/mp4 audio/mpeg) ->
+    case File.read(upload.path) do
+      {:error, _reason} ->
         conn
         |> put_status(400)
-        |> json(%{"code" => 400, "message" => "File type not allowed", "data" => %{}})
+        |> json(%{"code" => 400, "message" => "Could not read uploaded file", "data" => %{}})
 
-      true ->
-        thumb_sizes = resolve_thumb_sizes(conn.params)
-
-        opts = %{
-          collection_name: conn.params["collection_name"],
-          record_id: conn.params["record_id"],
-          field_name: conn.params["field_name"],
-          thumb_sizes: thumb_sizes
-        }
-
-        case Store.store(upload, opts) do
-          {:ok, file_record} ->
-            conn
-            |> put_status(201)
-            |> json(format_file(file_record))
-
+      {:ok, binary} ->
+        # The client's content-type and filename are both untrusted: confirm
+        # the bytes actually match an allowlisted extension before storing.
+        case Validation.validate(upload.filename, binary) do
           {:error, reason} ->
             conn
             |> put_status(400)
-            |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+            |> json(%{
+              "code" => 400,
+              "message" => upload_error_message(reason),
+              "data" => %{}
+            })
+
+          {:ok, _mime} ->
+            thumb_sizes = resolve_thumb_sizes(conn.params)
+
+            opts = [
+              collection_name: conn.params["collection_name"],
+              record_id: conn.params["record_id"],
+              field_name: conn.params["field_name"],
+              thumb_sizes: thumb_sizes
+            ]
+
+            # Reuse the binary we already read (avoids a second disk read);
+            # the persisted MIME type is derived server-side from the extension.
+            case Store.store(binary, upload.filename, opts) do
+              {:ok, file_record} ->
+                conn
+                |> put_status(201)
+                |> json(format_file(file_record))
+
+              {:error, reason} ->
+                conn
+                |> put_status(400)
+                |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+            end
         end
+    end
+  end
+
+  defp upload_error_message(reason) do
+    case reason do
+      :extension_not_allowed ->
+        "File type not allowed. Upload an image, PDF, CSV, TXT, JSON, ZIP, MP4, or MP3 file."
+
+      :content_mismatch ->
+        "File contents do not match the filename extension."
+
+      :invalid_text ->
+        "Text uploads must be valid UTF-8 (and valid JSON for .json files)."
+
+      _ ->
+        "File type not allowed."
     end
   end
 
