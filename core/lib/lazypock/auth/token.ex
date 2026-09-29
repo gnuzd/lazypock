@@ -90,9 +90,7 @@ defmodule Lazypock.Auth.Token do
   """
   @spec verify_token(String.t()) :: {:ok, map()} | {:error, term()}
   def verify_token(token) when is_binary(token) do
-    case Phoenix.Token.verify(signer(), @superuser_salt, token,
-           max_age: access_token_ttl()
-         ) do
+    case Phoenix.Token.verify(signer(), @superuser_salt, token, max_age: access_token_ttl()) do
       {:ok, %{"type" => "superuser"} = data} ->
         {:ok, data}
 
