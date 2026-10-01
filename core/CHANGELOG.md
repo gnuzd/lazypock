@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.15.0](https://github.com/gnuzd/lazypock/compare/v0.14.1...v0.15.0) (2026-09-29)
+
+
+### Features
+
+* **auth:** configurable token TTL and optional dedicated signing secret ([ad230ba](https://github.com/gnuzd/lazypock/commit/ad230baf0ca9f43dbbcca8672f099ad3e6a2c5b1))
+* **auth:** implement email-change flow (request/confirm endpoints) ([11435f1](https://github.com/gnuzd/lazypock/commit/11435f1dd3f97f0094f48f98218ffa02f0bfe11d))
+* **auth:** implement email-change flow (request/confirm endpoints) ([57ffb97](https://github.com/gnuzd/lazypock/commit/57ffb9756f1d054ce92cf61bc6cc486a75a8a4fd))
+
+
+### Bug Fixes
+
+* **security:** constant-time API key verification ([b0e33f2](https://github.com/gnuzd/lazypock/commit/b0e33f20faf199e3f539e606a5aa9beddddddfcf))
+* **security:** validate uploads by extension allowlist + magic bytes ([82fc8ea](https://github.com/gnuzd/lazypock/commit/82fc8ea4bc273a91c658ab37f91cc855e5c4cb37))
+
+
+### Performance Improvements
+
+* **filters:** memoize parsed filter ASTs in ETS ([b8942e9](https://github.com/gnuzd/lazypock/commit/b8942e99f076c5660aef38d45038b3ff360b975e))
+
 ## [0.14.1](https://github.com/gnuzd/lazypock/compare/v0.14.0...v0.14.1) (2026-09-27)
 
 
