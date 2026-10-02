@@ -348,6 +348,36 @@ other tools are picked up on the next migrate or restart. Log in with the
 superuser created on first boot (Studio **Setup** flow or the
 `LAZYPOCK_SUPERUSER_EMAIL`/`LAZYPOCK_SUPERUSER_PASSWORD` env vars above).
 
+#### TLS / SSL
+
+LazyPock honors libpq-style TLS parameters in `DATABASE_URL` (also via the
+`PGSSLMODE` environment variable) and maps them onto the connection:
+
+| Parameter in `DATABASE_URL` | Behavior |
+|---|---|
+| `?sslmode=require` | Encrypts the connection (TLS). Verifies the server certificate only when `sslrootcert` is also set. |
+| `?sslmode=verify-ca` | Encrypts and verifies the certificate chain against the CA; hostname is **not** checked. |
+| `?sslmode=verify-full` | Encrypts, verifies the chain, and checks the hostname. |
+| `?sslmode=disable` | No TLS (plaintext). |
+| `?sslrootcert=/path/ca.pem` | CA to verify against for `require`/`verify-ca`/`verify-full` (defaults to the OS trust store). |
+| `?sslcert=/path/client.pem&sslkey=/path/client.key` | Client certificate / key. |
+| `?ssl=true` | Same as `verify-full` (Postgrex secure defaults). |
+
+```bash
+# Managed Postgres (Neon, Supabase, …) — encrypt and verify against public CAs
+export DATABASE_URL="ecto://user:password@ep-xxx.us-east-2.aws.neon.tech/neondb?sslmode=verify-full"
+
+# AWS RDS or a private CA — point at the downloaded CA bundle
+export DATABASE_URL="ecto://user:password@db.xxx.rds.amazonaws.com/app?sslmode=verify-full&sslrootcert=/etc/ssl/rds-ca.pem"
+```
+
+`sslmode=allow` and `sslmode=prefer` are rejected at boot: Postgrex has no
+opportunistic-TLS fallback, and silently downgrading a TLS request to
+plaintext is a security bug, not a fallback. An unrecognized `sslmode` also
+fails loudly. `channel_binding=require` is accepted but logged as a warning —
+Postgrex does not implement SCRAM-SHA-256-PLUS, so the connection is
+authenticated with SCRAM-SHA-256 (encrypted, but without channel binding).
+
 ### User Hooks (PocketBase `pb_hooks` style)
 
 Hooks live in a **user-writable directory** — `~/.lazypock/hooks/` (override with
