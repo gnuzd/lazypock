@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.15.2](https://github.com/gnuzd/lazypock/compare/v0.15.1...v0.15.2) (2026-10-02)
+
+
+### Bug Fixes
+
+* **auth:** harden the OAuth2 redirect flow (XSS, token leak, session store) ([74901e7](https://github.com/gnuzd/lazypock/commit/74901e7ad9595182eda102bd6aa84ebaf2df761b))
+* **auth:** harden the OAuth2 redirect flow (XSS, token leak, session store) ([17583cf](https://github.com/gnuzd/lazypock/commit/17583cfcfa57d091223af1c5a7b2d85020c50b6c))
+* **db:** stop the connect CaseClauseError from a raw ?ssl= parameter ([6083333](https://github.com/gnuzd/lazypock/commit/6083333cd162d141e3e947938d5fcc48143abd94))
+* **db:** stop the connect CaseClauseError from a raw ?ssl= parameter ([a13681f](https://github.com/gnuzd/lazypock/commit/a13681f9098bcc71b5459a1a6a0e69f6d876c8c5))
+
 ## [0.15.1](https://github.com/gnuzd/lazypock/compare/v0.15.0...v0.15.1) (2026-10-02)
 
 
