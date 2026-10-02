@@ -37,14 +37,15 @@ defmodule LazypockWeb.OAuth2FlowTest do
     end
 
     @impl Assent.Strategy
-    def callback(_config, _params) do
+    def callback(config, _params) do
       {:ok,
        %{
          user: %{
            "id" => "ext-user-123",
            "name" => "Mock User",
            "email" => "mock@example.com",
-           "avatar_url" => "https://example.test/avatar.png"
+           "avatar_url" => "https://example.test/avatar.png",
+           "redirect_uri" => Keyword.get(config, :redirect_uri)
          },
          token: %{"access_token" => "mock-token", "token_type" => "Bearer"}
        }}
@@ -64,7 +65,6 @@ defmodule LazypockWeb.OAuth2FlowTest do
 
   setup do
     OAuth2.ensure_external_auths_table!()
-    OAuth2.ensure_session_table!()
 
     # Create an auth collection ("oauth_users") with email + password fields
     {:ok, _coll} =
@@ -72,7 +72,8 @@ defmodule LazypockWeb.OAuth2FlowTest do
         type: "auth",
         fields: [
           %{"name" => "email", "type" => "email", "required" => true, "indexed" => false},
-          %{"name" => "password", "type" => "password", "required" => true, "indexed" => false}
+          %{"name" => "password", "type" => "password", "required" => true, "indexed" => false},
+          %{"name" => "name", "type" => "text", "required" => false, "indexed" => false}
         ]
       )
 
@@ -190,18 +191,114 @@ defmodule LazypockWeb.OAuth2FlowTest do
 
       assert json_response(conn, 404)["message"] =~ "Collection not found"
     end
+
+    test "createData cannot override the provider email, password or id" do
+      conn =
+        post(build_conn(), "/api/oauth_users/auth-with-oauth2", %{
+          "provider" => "mock",
+          "code" => "auth-code-sanitize",
+          "codeVerifier" => "verifier-xyz",
+          "redirectUrl" => "http://localhost:4000/api/oauth2-redirect",
+          "createData" => %{
+            "email" => "attacker@evil.test",
+            "password" => "known-password",
+            "id" => "11111111-1111-1111-1111-111111111111",
+            "name" => "Legit Name"
+          }
+        })
+
+      body = json_response(conn, 200)
+
+      assert body["record"]["email"] == "mock@example.com"
+      refute body["record"]["id"] == "11111111-1111-1111-1111-111111111111"
+      assert body["record"]["name"] == "Legit Name"
+
+      # A password planted through createData must not be usable.
+      login =
+        post(build_conn(), "/api/oauth_users/auth-with-password", %{
+          "identity" => "mock@example.com",
+          "password" => "known-password"
+        })
+
+      assert json_response(login, 401)
+    end
+
+    test "uses the client redirectUrl for the token exchange" do
+      custom = "http://localhost:4000/api/custom-oauth2-redirect"
+
+      conn =
+        post(build_conn(), "/api/oauth_users/auth-with-oauth2", %{
+          "provider" => "mock",
+          "code" => "auth-code-redirect",
+          "codeVerifier" => "verifier-xyz",
+          "redirectUrl" => custom
+        })
+
+      body = json_response(conn, 200)
+      assert body["meta"]["rawUser"]["redirect_uri"] == custom
+    end
   end
 
   describe "GET /api/oauth2-redirect" do
-    test "exchanges code via session state and returns postMessage HTML" do
-      # Simulate auth-methods flow: store a session with state
+    test "relays only the authorization code (never a token or user data)" do
       OAuth2.store_session("mock", "oauth_users", "verifier-xyz", "state-123")
 
       conn = get(build_conn(), "/api/oauth2-redirect?code=auth-code-999&state=state-123")
+
       assert conn.status == 200
       assert Plug.Conn.get_resp_header(conn, "content-type") |> List.first() =~ "text/html"
       assert conn.resp_body =~ "lazypock:oauth2"
-      assert conn.resp_body =~ "mock@example.com"
+      assert conn.resp_body =~ "auth-code-999"
+      refute conn.resp_body =~ "mock@example.com"
+      refute conn.resp_body =~ ~s("token")
+    end
+
+    test "sets a nonce-based CSP and no-store headers" do
+      OAuth2.store_session("mock", "oauth_users", "verifier-xyz", "state-csp")
+
+      conn = get(build_conn(), "/api/oauth2-redirect?code=c&state=state-csp")
+
+      csp = conn |> Plug.Conn.get_resp_header("content-security-policy") |> List.first()
+      assert csp =~ "nonce-"
+      assert csp =~ "default-src 'none'"
+      assert [cache] = Plug.Conn.get_resp_header(conn, "cache-control")
+      assert cache =~ "no-store"
+    end
+
+    test "escapes an attacker-controlled code so it cannot break out of the script" do
+      OAuth2.store_session("mock", "oauth_users", "verifier-xyz", "state-xss")
+      payload = "</script><script>alert(1)</script>"
+
+      conn =
+        get(
+          build_conn(),
+          "/api/oauth2-redirect?" <>
+            URI.encode_query(%{"code" => payload, "state" => "state-xss"})
+        )
+
+      assert conn.status == 200
+      refute conn.resp_body =~ "</script><script>"
+      assert conn.resp_body =~ "\\u003C"
+    end
+
+    test "session state is single-use" do
+      OAuth2.store_session("mock", "oauth_users", "verifier-xyz", "state-once")
+
+      assert get(build_conn(), "/api/oauth2-redirect?code=c&state=state-once").status == 200
+
+      replay = get(build_conn(), "/api/oauth2-redirect?code=c&state=state-once")
+      assert replay.status == 400
+      assert replay.resp_body =~ "Invalid or expired OAuth2 session"
+    end
+
+    test "provider errors are reported generically (no echoed detail)" do
+      OAuth2.store_session("mock", "oauth_users", "verifier-xyz", "state-err")
+
+      conn = get(build_conn(), "/api/oauth2-redirect?error=access_denied&state=state-err")
+
+      assert conn.status == 400
+      assert conn.resp_body =~ "lazypock:oauth2:error"
+      refute conn.resp_body =~ "access_denied"
     end
 
     test "rejects invalid session state" do

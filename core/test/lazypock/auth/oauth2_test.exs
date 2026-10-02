@@ -60,7 +60,6 @@ defmodule Lazypock.Auth.OAuth2Test do
   setup do
     # Ensure the external auths table exists (boot normally does this)
     OAuth2.ensure_external_auths_table!()
-    OAuth2.ensure_session_table!()
 
     # Register a mock provider via runtime settings
     Lazypock.Settings.put(%{
@@ -119,7 +118,7 @@ defmodule Lazypock.Auth.OAuth2Test do
   describe "session store" do
     test "store_session + take_session roundtrip" do
       OAuth2.store_session("mock", "users", "verifier-123", "state-abc")
-      assert {:ok, "mock", "users", "verifier-123"} = OAuth2.take_session("state-abc")
+      assert {:ok, "mock", "users", "verifier-123", nil} = OAuth2.take_session("state-abc")
       # consumed once
       assert {:error, :not_found} = OAuth2.take_session("state-abc")
     end
