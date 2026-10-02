@@ -739,7 +739,7 @@ end
 | `POST` | `/:collection/confirm-password-reset` | ✅ Reset password with token |
 | `POST` | `/:collection/request-verification` | ✅ Send verification email |
 | `POST` | `/:collection/confirm-verification` | ✅ Verify email |
-| `GET` | `/api/oauth2-redirect` | ✅ OAuth2 popup callback (postMessage to opener) |
+| `GET` | `/api/oauth2-redirect` | ✅ OAuth2 popup callback (validates state, relays the single-use code to the opener) |
 | `POST` | `/:collection/auth-with-oauth2` | ✅ OAuth2 direct code exchange (PKCE) |
 
 ### 3.4 Auth Plug Pipeline

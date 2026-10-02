@@ -7,6 +7,8 @@ defmodule LazypockWeb.AuthController do
   """
   use LazypockWeb, :controller
 
+  require Logger
+
   alias Lazypock.Collections.Registry
   alias Lazypock.Schemas.GenericRecord
   alias Lazypock.Auth.Token
@@ -141,9 +143,11 @@ defmodule LazypockWeb.AuthController do
     case Registry.get(collection_name) do
       {:ok, collection} ->
         if collection.type == "auth" do
+          app_origin = oauth2_app_origin(conn)
+
           json(conn, %{
             "password" => true,
-            "oauth2" => %{"providers" => oauth2_providers_payload(collection_name)},
+            "oauth2" => %{"providers" => oauth2_providers_payload(collection_name, app_origin)},
             "mfa" => %{}
           })
         else
@@ -220,29 +224,76 @@ defmodule LazypockWeb.AuthController do
     end
   end
 
-  defp oauth2_providers_payload(collection_name) do
+  defp oauth2_providers_payload(collection_name, app_origin) do
     Enum.map(Lazypock.Auth.OAuth2.providers(), fn {name, _cfg} ->
       case Lazypock.Auth.OAuth2.authorize_url(name) do
         {:ok, %{url: url, session_params: session_params}} ->
           state = session_params[:state] || session_params["state"]
           verifier = session_params[:code_verifier] || session_params["code_verifier"]
 
-          # Store provider + collection + verifier server-side keyed by state
-          # so the redirect callback can recover them (PocketBase parity).
-          Lazypock.Auth.OAuth2.store_session(name, collection_name, verifier, state)
+          # Store provider + collection + verifier server-side keyed by state so
+          # the redirect callback can validate/consume the session, and record
+          # the app origin the popup result must be posted back to.
+          case Lazypock.Auth.OAuth2.store_session(
+                 name,
+                 collection_name,
+                 verifier,
+                 state,
+                 app_origin
+               ) do
+            {:ok, _state} ->
+              %{
+                "name" => name,
+                "authURL" => url,
+                "state" => state,
+                "codeVerifier" => verifier
+              }
 
-          %{
-            "name" => name,
-            "authURL" => url,
-            "state" => state,
-            "codeVerifier" => verifier
-          }
+            {:error, :too_many_sessions} ->
+              Logger.warning(
+                "OAuth2 session store is at capacity; omitting provider #{name} from auth-methods"
+              )
+
+              nil
+          end
 
         {:error, _} ->
           nil
       end
     end)
     |> Enum.reject(&is_nil/1)
+  end
+
+  # The front-end origin that initiated the flow. Browsers send `Origin` on
+  # cross-origin fetches (and most non-GET same-origin ones); validate it against
+  # the configured CORS allow-list. Fall back to this request's own origin so
+  # same-origin deployments (e.g. the bundled Studio) keep working.
+  #
+  # The returned string is in the browser's own origin format (no default port)
+  # so it can be used directly as a `postMessage` targetOrigin.
+  defp oauth2_app_origin(conn) do
+    raw = conn |> get_req_header("origin") |> List.first()
+    raw = raw && String.trim(raw)
+    normalized = raw && Lazypock.CORS.normalize_origin(raw)
+
+    cond do
+      is_binary(normalized) and Lazypock.CORS.origin_allowed?(URI.parse(normalized), :any) ->
+        raw
+
+      true ->
+        request_origin(conn)
+    end
+  end
+
+  defp request_origin(conn) do
+    scheme = Atom.to_string(conn.scheme)
+    default? = (scheme == "http" and conn.port == 80) or (scheme == "https" and conn.port == 443)
+
+    if default? do
+      "#{scheme}://#{conn.host}"
+    else
+      "#{scheme}://#{conn.host}:#{conn.port}"
+    end
   end
 
   defp do_auth_with_oauth2(
@@ -256,9 +307,13 @@ defmodule LazypockWeb.AuthController do
        ) do
     case Registry.get(collection_name) do
       {:ok, %{type: "auth"} = collection} ->
-        # Direct code exchange (PB authWithOAuth2Code): client provides the
-        # codeVerifier but not the state, so skip state verification.
-        session_params = %{state: false, code_verifier: code_verifier}
+        # Direct code exchange (PB authWithOAuth2Code): the client provides the
+        # codeVerifier but not the state, so PKCE is the binding (skip state).
+        session_params = %{
+          state: false,
+          code_verifier: code_verifier,
+          redirect_url: redirect_url
+        }
 
         case Lazypock.Auth.OAuth2.callback(provider, %{"code" => code}, session_params) do
           {:ok, %{user: oauth2_user, token: oauth2_token}} ->
@@ -477,94 +532,80 @@ defmodule LazypockWeb.AuthController do
 
   OAuth2 provider redirect callback (PocketBase parity).
 
-  The provider redirects the browser here with `?code=...&state=...`.
-  This endpoint exchanges the code, links/upserts the auth record, and
-  serves a tiny HTML page that posts the result back to the popup opener
-  via `postMessage` (matching the JS SDK's `authWithOAuth2` popup flow).
+  The provider redirects the browser here with `?code=...&state=...`. The
+  pending session created by `auth-methods` is validated and consumed, then this
+  endpoint serves a tiny HTML page that relays **only the authorization code**
+  back to the popup opener via `postMessage`, targeted at the origin captured
+  when the flow started.
+
+  The code is exchanged — and the auth record created/linked — by the SDK calling
+  `POST /api/:collection/auth-with-oauth2` (`authWithOAuth2Code`). Keeping the
+  token and record out of this page means an injection here cannot leak a
+  session, and it lets the client forward `createData` on first sign-up.
   """
   def oauth2_redirect(conn, params) do
-    code = params["code"]
-    state = params["state"]
-
-    if is_nil(code) or code == "" do
-      send_redirect_error(conn, "Missing authorization code")
-    else
-      # Recover provider + collection + code_verifier from the session store
-      case Lazypock.Auth.OAuth2.take_session(state || "") do
-        {:ok, provider, collection_name, code_verifier} ->
-          handle_oauth2_redirect(conn, provider, collection_name, code, code_verifier)
-
-        {:error, reason} ->
-          send_redirect_error(conn, "Invalid or expired OAuth2 session (#{reason})")
+    {app_origin, session?} =
+      case Lazypock.Auth.OAuth2.take_session(params["state"] || "") do
+        {:ok, _provider, _collection, _code_verifier, app_origin} -> {app_origin, true}
+        {:error, _reason} -> {nil, false}
       end
+
+    provider_error = params["error"]
+    code = params["code"]
+
+    cond do
+      not session? ->
+        send_redirect_error(conn, nil, "Invalid or expired OAuth2 session")
+
+      provider_error not in [nil, ""] ->
+        Logger.warning("OAuth2 provider returned an error: #{provider_error}")
+        send_redirect_error(conn, app_origin, "The OAuth2 provider rejected the sign-in request.")
+
+      code in [nil, ""] ->
+        send_redirect_error(conn, app_origin, "Missing authorization code")
+
+      true ->
+        send_redirect_code(conn, app_origin, code, params["state"])
     end
   end
 
-  defp handle_oauth2_redirect(conn, provider, collection_name, code, code_verifier) do
-    case Registry.get(collection_name) do
-      {:ok, %{type: "auth"} = collection} ->
-        session_params = %{state: false, code_verifier: code_verifier}
+  defp send_redirect_code(conn, app_origin, code, state) do
+    payload = %{"type" => "lazypock:oauth2", "code" => code, "state" => state}
 
-        case Lazypock.Auth.OAuth2.callback(provider, %{"code" => code}, session_params) do
-          {:ok, %{user: oauth2_user, token: _oauth2_token}} ->
-            provider_id = oauth2_user["sub"] || oauth2_user["id"]
-
-            case Lazypock.Auth.OAuth2.find_or_create_record(
-                   collection_name,
-                   collection,
-                   provider,
-                   provider_id,
-                   oauth2_user,
-                   %{}
-                 ) do
-              {:ok, %{record: record, is_new: is_new}} ->
-                password_field = find_password_field(collection)
-                safe_user = Map.drop(record, [password_field])
-                {:ok, token} = Token.generate_user_token(record, collection_name)
-
-                result = %{
-                  "token" => token,
-                  "record" => safe_user,
-                  "meta" => %{
-                    "id" => record["id"],
-                    "name" => oauth2_user["name"],
-                    "email" => oauth2_user["email"],
-                    "isNew" => is_new,
-                    "avatarURL" => oauth2_user["picture"],
-                    "rawUser" => oauth2_user
-                  }
-                }
-
-                send_redirect_result(conn, result)
-
-              {:error, reason} ->
-                send_redirect_error(conn, to_string(reason))
-            end
-
-          {:error, reason} ->
-            send_redirect_error(conn, to_string(reason))
-        end
-
-      _ ->
-        send_redirect_error(conn, "Collection not found or not an auth collection")
-    end
+    send_oauth2_result(conn, 200, payload, app_origin)
   end
 
-  defp send_redirect_result(conn, result) do
-    json = Jason.encode!(result)
+  defp send_redirect_error(conn, app_origin, message) do
+    payload = %{"type" => "lazypock:oauth2:error", "message" => message}
+
+    send_oauth2_result(conn, 400, payload, app_origin)
+  end
+
+  # Render the popup bridge page. The payload is JSON-encoded with HTML-safe
+  # escaping and covered by a per-response CSP nonce, so provider/record data
+  # can never break out of the inline script. Only the single-use `code` is
+  # relayed — never a token or user record.
+  defp send_oauth2_result(conn, status, payload, app_origin) do
+    target_origin = app_origin || request_origin(conn)
+    nonce = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+    payload_json = Jason.encode!(payload, escape: :html_safe)
+    origin_json = Jason.encode!(target_origin)
 
     html = """
     <!doctype html>
     <html>
+      <head><meta charset="utf-8"><title>LazyPock sign-in</title></head>
       <body>
-        <script>
-          const result = #{json};
-          if (window.opener) {
-            window.opener.postMessage({type: 'lazypock:oauth2', result}, window.location.origin);
-            window.close();
-          } else {
-            document.body.textContent = JSON.stringify(result);
-          }
+        <script nonce="#{nonce}">
+          (function () {
+            var payload = #{payload_json};
+            if (window.opener) {
+              window.opener.postMessage(payload, #{origin_json});
+              window.close();
+            } else {
+              document.body.textContent = "Sign-in complete. You can close this window and return to the app.";
+            }
+          })();
         </script>
       </body>
     </html>
@@ -572,32 +613,14 @@ defmodule LazypockWeb.AuthController do
 
     conn
     |> put_resp_content_type("text/html")
-    |> send_resp(200, html)
-  end
-
-  defp send_redirect_error(conn, message) do
-    json = Jason.encode!(%{"code" => 400, "message" => message, "data" => %{}})
-
-    html = """
-    <!doctype html>
-    <html>
-      <body>
-        <script>
-          const result = #{json};
-          if (window.opener) {
-            window.opener.postMessage({type: 'lazypock:oauth2:error', result}, window.location.origin);
-            window.close();
-          } else {
-            document.body.textContent = JSON.stringify(result);
-          }
-        </script>
-      </body>
-    </html>
-    """
-
-    conn
-    |> put_resp_content_type("text/html")
-    |> send_resp(400, html)
+    |> put_resp_header(
+      "content-security-policy",
+      "default-src 'none'; script-src 'nonce-#{nonce}'; base-uri 'none'; form-action 'none'"
+    )
+    |> put_resp_header("cache-control", "no-store")
+    |> put_resp_header("x-content-type-options", "nosniff")
+    |> put_resp_header("referrer-policy", "no-referrer")
+    |> send_resp(status, html)
   end
 
   defp handle_successful_login(conn, collection_name, user, password_field) do

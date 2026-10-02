@@ -35,65 +35,43 @@ defmodule Lazypock.Auth.OAuth2 do
   `user_url` and any `authorization_params`.
   """
 
+  alias Lazypock.Auth.OAuth2.SessionStore
   alias Lazypock.Schemas.GenericRecord
 
   @system_external_auths "_external_auths"
-  @session_table :lazypock_oauth2_sessions
-  # 10 minutes
-  @session_ttl_ms 10 * 60 * 1000
 
   @doc """
-  Ensure the OAuth2 session ETS table exists (called at boot).
+  Store an OAuth2 session (state → provider, collection, verifier, app origin).
+
+  Sessions live in a `:protected` ETS table owned by
+  `Lazypock.Auth.OAuth2.SessionStore`, so only that process can write to it.
+
+  Returns `{:ok, state}`, or `{:error, :too_many_sessions}` when the store is at
+  capacity even after sweeping expired entries.
   """
-  def ensure_session_table! do
-    case :ets.whereis(@session_table) do
-      :undefined ->
-        :ets.new(@session_table, [:named_table, :set, :public, read_concurrency: true])
-        :ok
-
-      _pid ->
-        :ok
-    end
-  end
-
-  @doc """
-  Store an OAuth2 session (state → {provider, collection, code_verifier}).
-
-  Returns the state key.
-  """
-  @spec store_session(String.t(), String.t(), String.t(), String.t()) :: String.t()
-  def store_session(provider, collection, code_verifier, state) do
-    :ets.insert(
-      @session_table,
-      {state, provider, collection, code_verifier, System.system_time(:millisecond)}
-    )
-
-    state
+  @spec store_session(String.t(), String.t(), String.t(), String.t(), String.t() | nil) ::
+          {:ok, String.t()} | {:error, :too_many_sessions}
+  def store_session(provider, collection, code_verifier, state, app_origin \\ nil) do
+    SessionStore.store(provider, collection, code_verifier, state, app_origin)
   end
 
   @doc """
   Look up and consume an OAuth2 session by state.
 
-  Returns `{:ok, provider, collection, code_verifier}` or `{:error, :expired}` /
-  `{:error, :not_found}`.
+  Returns `{:ok, provider, collection, code_verifier, app_origin}` or
+  `{:error, :expired}` / `{:error, :not_found}`.
   """
   @spec take_session(String.t()) ::
-          {:ok, String.t(), String.t(), String.t()} | {:error, atom()}
-  def take_session(state) do
-    case :ets.take(@session_table, state) do
-      [{^state, provider, collection, code_verifier, ts}] ->
-        now = System.system_time(:millisecond)
+          {:ok, String.t(), String.t(), String.t(), String.t() | nil} | {:error, atom()}
+  def take_session(state), do: SessionStore.take(state)
 
-        if now - ts <= @session_ttl_ms do
-          {:ok, provider, collection, code_verifier}
-        else
-          {:error, :expired}
-        end
+  @doc "Delete sessions older than the TTL. Returns the number deleted."
+  @spec sweep_sessions() :: non_neg_integer()
+  def sweep_sessions, do: SessionStore.sweep()
 
-      [] ->
-        {:error, :not_found}
-    end
-  end
+  @doc "Number of stored OAuth2 sessions."
+  @spec session_count() :: non_neg_integer()
+  def session_count, do: SessionStore.count()
 
   @doc """
   Ensure the `_external_auths` system table exists (called at boot).
@@ -248,6 +226,7 @@ defmodule Lazypock.Auth.OAuth2 do
         assented_config(cfg)
         |> Keyword.put(:session_params, session_params)
         |> maybe_disable_state(session_params)
+        |> maybe_set_redirect_uri(session_params)
 
       strategy.callback(config, params)
     else
@@ -257,6 +236,31 @@ defmodule Lazypock.Auth.OAuth2 do
 
   defp maybe_disable_state(config, %{state: false}), do: Keyword.put(config, :state, false)
   defp maybe_disable_state(config, _session_params), do: config
+
+  # Honor the client-supplied `redirectUrl` (PocketBase parity) as the token
+  # exchange `redirect_uri`, but only when it is a well-formed http(s) URL —
+  # arbitrary schemes (javascript:, data:, file:) are ignored.
+  defp maybe_set_redirect_uri(config, %{redirect_url: url}) do
+    case normalize_redirect_uri(url) do
+      nil -> config
+      uri -> Keyword.put(config, :redirect_uri, uri)
+    end
+  end
+
+  defp maybe_set_redirect_uri(config, _session_params), do: config
+
+  defp normalize_redirect_uri(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{scheme: scheme, host: host} = uri
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        %{uri | fragment: nil} |> URI.to_string()
+
+      _ ->
+        nil
+    end
+  end
+
+  defp normalize_redirect_uri(_), do: nil
 
   @doc """
   Find an external auth link, or create it if missing.
@@ -426,13 +430,16 @@ defmodule Lazypock.Auth.OAuth2 do
        ) do
     field_names = Enum.map(collection.fields || [], & &1.name)
 
+    create_data =
+      sanitize_create_data(create_data, collection, field_names, email_field, password_field)
+
     attrs =
       %{}
       |> Map.put(email_field, oauth2_user["email"])
       |> Map.put(password_field, random_password())
       |> maybe_put(oauth2_user["name"], :name)
       |> maybe_put(oauth2_user["picture"], :avatar)
-      |> Map.merge(create_data || %{})
+      |> Map.merge(create_data)
       |> Map.take(field_names)
 
     case GenericRecord.insert(collection_name, attrs) do
@@ -449,6 +456,31 @@ defmodule Lazypock.Auth.OAuth2 do
 
   defp maybe_put(map, nil, _key), do: map
   defp maybe_put(map, value, key), do: Map.put(map, to_string(key), value)
+
+  # Fields a client may never set through `createData` — auth-owned / system
+  # fields (PocketBase restricts these too). The email comes from the verified
+  # provider response and the password is a random value, so `createData` cannot
+  # hijack the identity or plant a known password.
+  @protected_create_fields ~w(id created updated collectionId collectionName expand
+                              password passwordConfirm tokenKey verified emailVisibility)
+
+  defp sanitize_create_data(create_data, collection, field_names, email_field, password_field) do
+    blocked =
+      (@protected_create_fields ++
+         [email_field, password_field] ++ password_and_email_fields(collection))
+      |> MapSet.new()
+
+    (create_data || %{})
+    |> Enum.reject(fn {key, _value} -> MapSet.member?(blocked, to_string(key)) end)
+    |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    |> Map.take(field_names)
+  end
+
+  defp password_and_email_fields(collection) do
+    (collection.fields || [])
+    |> Enum.filter(&(&1.type in ["password", "email"]))
+    |> Enum.map(& &1.name)
+  end
 
   defp random_password, do: :crypto.strong_rand_bytes(24) |> Base.url_encode64(padding: false)
 

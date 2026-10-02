@@ -168,9 +168,10 @@ defmodule Lazypock.CORS do
   # Normalize a stored origin string to "scheme://host:port" so it matches
   # what origin_string/1 produces for websocket URIs (default ports filled in).
   # The "*" wildcard passes through unchanged.
-  defp normalize_origin("*"), do: "*"
+  @doc false
+  def normalize_origin("*"), do: "*"
 
-  defp normalize_origin(origin) when is_binary(origin) do
+  def normalize_origin(origin) when is_binary(origin) do
     case URI.parse(String.trim(origin)) do
       %URI{scheme: scheme, host: host} when is_binary(scheme) and is_binary(host) ->
         origin_string(URI.parse(String.trim(origin)))
@@ -180,7 +181,7 @@ defmodule Lazypock.CORS do
     end
   end
 
-  defp normalize_origin(_), do: nil
+  def normalize_origin(_), do: nil
 
   defp ensure_cache! do
     case :ets.whereis(:lazypock_cors_cache) do

@@ -277,7 +277,8 @@ defmodule Lazypock.Application do
         Lazypock.Repo,
         {DNSCluster, query: Application.get_env(:lazypock, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Lazypock.PubSub},
-        Lazypock.Collections.Registry
+        Lazypock.Collections.Registry,
+        Lazypock.Auth.OAuth2.SessionStore
       ] ++
         cron_scheduler_children() ++
         [LazypockWeb.Endpoint]
@@ -305,8 +306,6 @@ defmodule Lazypock.Application do
 
         # Create _external_auths table for OAuth2 provider linking
         Lazypock.Auth.OAuth2.ensure_external_auths_table!()
-        # Create OAuth2 session store (state → provider/collection/verifier)
-        Lazypock.Auth.OAuth2.ensure_session_table!()
 
         # Create ETS rate limiter table (owned by the Application process)
         Lazypock.Auth.RateLimiter.ensure_table()
