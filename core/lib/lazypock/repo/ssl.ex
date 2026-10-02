@@ -24,6 +24,18 @@ defmodule Lazypock.Repo.SSL do
   fallback, and silently downgrading to plaintext is exactly the failure this
   module exists to prevent. An unrecognized `sslmode` value is rejected too.
 
+  The `?ssl=` parameter is handled as well: `?ssl=true|false` map to Postgrex's
+  boolean, and an sslmode-like value (`?ssl=require`, `?ssl=verify-full`, …) is
+  treated as an alias for `sslmode`. Any other `ssl` value fails loudly —
+  previously it reached Postgrex as a string such as `ssl: "require"`, whose
+  `:ssl` case has no matching clause and surfaced as a cryptic
+  `CaseClauseError` on connect.
+
+  All of these parameters are then removed from the `:url` (and the config),
+  because Ecto parses the URL *after* `init/2` and would otherwise re-inject a
+  raw `:ssl`/`:sslmode` value that overrides the translation. Other query
+  parameters (`pool_size`, `timeout`, …) are preserved.
+
   An explicit `:ssl` option in the repo config always wins over the URL.
   """
 
@@ -37,6 +49,12 @@ defmodule Lazypock.Repo.SSL do
     {"channel_binding", :channel_binding}
   ]
 
+  # TLS-related keys we own: they are removed from the URL/config (so Ecto does
+  # not forward a raw `ssl: "require"`-style value to Postgrex, whose `:ssl`
+  # case only accepts booleans/option lists) and replaced by a translated `:ssl`.
+  @tls_keys ~w(sslmode ssl sslrootcert sslcert sslkey channel_binding)a
+  @tls_url_params ~w(sslmode ssl sslrootcert sslcert sslkey channel_binding)
+
   @doc """
   Returns the repo config with `:ssl` derived from the URL's TLS parameters.
 
@@ -48,22 +66,105 @@ defmodule Lazypock.Repo.SSL do
     params = params(config)
     maybe_warn_channel_binding(params)
 
-    mode = sslmode(params)
+    ssl =
+      cond do
+        Keyword.has_key?(config, :ssl) ->
+          warn_explicit_ssl(params)
+          config[:ssl]
 
-    cond do
-      is_nil(mode) ->
+        mode = sslmode(params) ->
+          ssl_opts(mode, params)
+
+        ssl_param = params["ssl"] ->
+          ssl_param_opts(ssl_param, params)
+
+        true ->
+          nil
+      end
+
+    config
+    |> Keyword.drop(@tls_keys)
+    |> put_ssl(ssl)
+    |> sanitize_url()
+    |> validate_ssl!()
+  end
+
+  defp put_ssl(config, nil), do: config
+  defp put_ssl(config, ssl), do: Keyword.put(config, :ssl, ssl)
+
+  defp warn_explicit_ssl(params) do
+    what =
+      cond do
+        mode = sslmode(params) -> "sslmode=#{mode}"
+        ssl = params["ssl"] -> "ssl=#{ssl}"
+        true -> "the URL TLS parameters"
+      end
+
+    Logger.warning(
+      "#{what} is ignored because an explicit :ssl option is already configured for the repo"
+    )
+  end
+
+  # `?ssl=` is not a libpq parameter, but tools commonly emit `?ssl=require` or
+  # `?ssl=true`. Accept the boolean forms and treat an sslmode-like value as an
+  # alias for `sslmode=`; anything else fails loudly instead of reaching
+  # Postgrex as an unmatchable `:ssl` value (which surfaced as a cryptic
+  # CaseClauseError on connect).
+  defp ssl_param_opts(value, params) do
+    case value |> to_string() |> String.trim() |> String.downcase() do
+      "true" ->
+        true
+
+      "false" ->
+        false
+
+      mode when mode in ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] ->
+        ssl_opts(mode, params)
+
+      other ->
+        raise ArgumentError,
+              "invalid `ssl=#{other}` in the connection URL: expected true|false " <>
+                "or sslmode=disable|allow|prefer|require|verify-ca|verify-full"
+    end
+  end
+
+  # Strip our TLS parameters from the URL so Ecto's own `parse_url/1` cannot
+  # re-inject a raw `:ssl`/`:sslmode` option after `init/2` has run.
+  defp sanitize_url(config) do
+    case config[:url] do
+      url when is_binary(url) ->
+        case URI.parse(url) do
+          %URI{query: query} = uri when is_binary(query) ->
+            filtered = query |> URI.decode_query() |> Map.drop(@tls_url_params)
+            new_query = if map_size(filtered) == 0, do: nil, else: URI.encode_query(filtered)
+            Keyword.put(config, :url, uri |> Map.put(:query, new_query) |> URI.to_string())
+
+          _ ->
+            config
+        end
+
+      _ ->
+        config
+    end
+  rescue
+    _ -> config
+  end
+
+  defp validate_ssl!(config) do
+    case Keyword.fetch(config, :ssl) do
+      :error ->
         config
 
-      Keyword.has_key?(config, :ssl) ->
-        Logger.warning(
-          "sslmode=#{mode} in the connection URL is ignored because an explicit " <>
-            ":ssl option is already configured for the repo"
-        )
-
+      {:ok, value} when value in [true, false] ->
         config
 
-      true ->
-        Keyword.put(config, :ssl, ssl_opts(mode, params))
+      {:ok, value} when is_list(value) ->
+        config
+
+      {:ok, value} ->
+        raise ArgumentError,
+              "invalid :ssl value #{inspect(value)}: expected true, false, or a keyword list " <>
+                "of Erlang :ssl options"
     end
   end
 

@@ -118,4 +118,59 @@ defmodule Lazypock.Repo.SSLTest do
       assert SSL.apply(url: url("?pool_size=5")) == [url: url("?pool_size=5")]
     end
   end
+
+  describe "ssl URL parameter" do
+    test "ssl=true and ssl=false map to booleans" do
+      assert ssl("?ssl=true") == true
+      assert ssl("?ssl=false") == false
+    end
+
+    test "an sslmode-like ssl value is treated as an alias for sslmode" do
+      assert ssl("?ssl=require") == [verify: :verify_none]
+      assert ssl("?ssl=verify-full&sslrootcert=/r.pem")[:verify] == :verify_peer
+      assert ssl("?ssl=disable") == false
+    end
+
+    test "an unknown ssl value fails loudly instead of reaching Postgrex" do
+      for bad <- ["1", "", "yes", "truee"] do
+        assert_raise ArgumentError, ~r/invalid `ssl=/, fn -> ssl("?ssl=#{bad}") end
+      end
+    end
+
+    test "sslmode wins over ssl when both are present" do
+      assert ssl("?sslmode=disable&ssl=true") == false
+      assert ssl("?sslmode=require&ssl=false") == [verify: :verify_none]
+    end
+
+    test "a non-boolean :ssl config value fails loudly" do
+      assert_raise ArgumentError, ~r/invalid :ssl value/, fn ->
+        SSL.apply(url: url(), ssl: "true")
+      end
+    end
+
+    test "a boolean :ssl config value is kept as-is" do
+      assert SSL.apply(url: url(), ssl: true)[:ssl] == true
+    end
+  end
+
+  describe "URL sanitization" do
+    test "strips TLS parameters from the URL but keeps other query params" do
+      config = SSL.apply(url: url("?sslmode=require&sslrootcert=/r.pem&pool_size=5&timeout=1000"))
+
+      assert URI.decode_query(URI.parse(config[:url]).query) == %{
+               "pool_size" => "5",
+               "timeout" => "1000"
+             }
+
+      refute config[:url] =~ "sslmode"
+      refute config[:url] =~ "sslrootcert"
+      assert config[:ssl][:verify] == :verify_peer
+      assert config[:ssl][:cacertfile] == ~c"/r.pem"
+    end
+
+    test "removes the query entirely when only TLS params were present" do
+      assert SSL.apply(url: url("?ssl=true"))[:url] == url()
+      assert SSL.apply(url: url("?ssl=require"))[:url] == url()
+    end
+  end
 end
