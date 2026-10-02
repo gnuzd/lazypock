@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.1](https://github.com/gnuzd/lazypock/compare/v0.15.0...v0.15.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **db:** honor sslmode in DATABASE_URL for Postgres TLS ([3849a8a](https://github.com/gnuzd/lazypock/commit/3849a8adbf563c647838b0a9e464c278d2361462))
+* **db:** honor sslmode in DATABASE_URL for Postgres TLS ([a7ccba7](https://github.com/gnuzd/lazypock/commit/a7ccba743576b1da7b742690ec120a7520c9948e))
+
 ## [0.15.0](https://github.com/gnuzd/lazypock/compare/v0.14.1...v0.15.0) (2026-09-29)
 
 
