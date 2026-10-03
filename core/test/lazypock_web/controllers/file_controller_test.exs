@@ -194,4 +194,87 @@ defmodule LazypockWeb.FileControllerTest do
       Lazypock.Files.Store.delete(file["id"])
     end
   end
+
+  describe "POST /api/files upload policy" do
+    defp create_file_collection!(options) do
+      name = "files_policy_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Lazypock.Schema.DDL.create_collection(name,
+          type: "base",
+          fields: [%{"name" => "avatar", "type" => "file", "options" => options}]
+        )
+
+      Lazypock.Collections.Registry.reload!()
+      name
+    end
+
+    test "rejects a MIME type outside the field's mimeTypes" do
+      collection = create_file_collection!(%{"mimeTypes" => ["image/png"]})
+      jpeg = <<0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10>> <> :binary.copy(<<0>>, 64)
+
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(jpeg, "photo.jpg"),
+          "collection_name" => collection
+        })
+
+      assert json_response(conn, 400)["message"] =~ "not allowed"
+    end
+
+    test "accepts an image allowed by the field's mimeTypes" do
+      collection = create_file_collection!(%{"mimeTypes" => ["image/png"]})
+
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(Lazypock.TestImage.tiny_png!(40, 40), "photo.png"),
+          "collection_name" => collection
+        })
+
+      body = json_response(conn, 201)
+      assert body["mimeType"] == "image/png"
+      Lazypock.Files.Store.delete(body["id"])
+    end
+
+    test "rejects a file over the field's maxFileSize" do
+      collection = create_file_collection!(%{"maxFileSize" => 10})
+
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(Lazypock.TestImage.tiny_png!(40, 40), "photo.png"),
+          "collection_name" => collection
+        })
+
+      assert json_response(conn, 413)["message"] =~ "Maximum size"
+    end
+
+    test "rejects an image over the megapixel cap (422)" do
+      original = Lazypock.Settings.get()
+      Lazypock.Settings.put(Map.put(original, "upload", %{"max_megapixels" => 1}))
+      Lazypock.Files.Policy.clear_cache()
+
+      on_exit(fn ->
+        Lazypock.Settings.put(original)
+        Lazypock.Files.Policy.clear_cache()
+      end)
+
+      collection = create_file_collection!(%{})
+
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(Lazypock.TestImage.tiny_png!(1100, 1000), "photo.png"),
+          "collection_name" => collection
+        })
+
+      assert json_response(conn, 422)["message"] =~ "megapixels"
+    end
+  end
 end

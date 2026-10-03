@@ -7,6 +7,7 @@ defmodule Lazypock.Files.ValidationTest do
   @jpeg <<0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10>>
   @gif "GIF89a" <> <<0x01, 0x00, 0x01, 0x00, 0x00>>
   @webp "RIFF" <> <<0x04, 0x00, 0x00, 0x00>> <> "WEBP"
+  @avif <<0x00, 0x00, 0x00, 0x20>> <> "ftypavif" <> :binary.copy(<<0>>, 16)
   @pdf "%PDF-1.7\n1 0 obj\n"
   @zip <<0x50, 0x4B, 0x03, 0x04, 0x14, 0x00>>
   @mp4 <<0x00, 0x00, 0x00, 0x18>> <> "ftypisom"
@@ -19,6 +20,7 @@ defmodule Lazypock.Files.ValidationTest do
       assert {:ok, "image/jpeg"} = Validation.validate("a.JPEG", @jpeg)
       assert {:ok, "image/gif"} = Validation.validate("a.gif", @gif)
       assert {:ok, "image/webp"} = Validation.validate("a.webp", @webp)
+      assert {:ok, "image/avif"} = Validation.validate("a.avif", @avif)
     end
 
     test "documents and archives" do

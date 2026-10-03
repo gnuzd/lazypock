@@ -557,6 +557,30 @@ Examples:
   instantly (no daily re-encoding).
 - The TypeScript SDK exposes `getScaleUrl(baseUrl, fileId, size)`.
 
+### Upload policy
+
+`POST /api/files` resolves its limits from **field options → global settings →
+defaults** (`Lazypock.Files.Policy`):
+
+| Limit | Source | Default |
+| --- | --- | --- |
+| Max size | field `maxFileSize` / `upload.max_size` | 10 MB |
+| Allowed MIME types | field `mimeTypes` / `upload.mime_types` (optional allowlist, `image/*` wildcards allowed) | Validation's allowlist |
+| Megapixels | `upload.max_megapixels` | 40 |
+| Max dimension | `upload.max_dimension` | 10000 px |
+
+Global settings live under the `upload` key of `_settings.data` (editable via
+`PATCH /api/settings`, no restart needed):
+
+```json
+{ "upload": { "max_size": "5MB", "mime_types": ["image/*"], "max_megapixels": 40 } }
+```
+
+`LAZYPOCK_UPLOAD_MAX_MB` overrides the size setting, and the request-body limit
+for `POST /api/files` follows it (other routes keep the 8 MB default). A file
+over the size cap returns `413`, a disallowed type `400`, and an image over the
+dimension/megapixel caps `422`.
+
 ---
 
 ## Quick Preview

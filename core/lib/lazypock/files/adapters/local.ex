@@ -21,7 +21,7 @@ defmodule Lazypock.Files.Adapters.Local do
 
   @behaviour Lazypock.Files.Adapter
 
-  @image_exts ~w(.jpg .jpeg .png .gif .webp)
+  @image_exts ~w(.jpg .jpeg .png .gif .webp .avif)
 
   # Largest single dimension an on-demand `/scale` (or a configured thumbnail)
   # may request. Without this, `GET /scale/:size` accepts any size up to 9999
@@ -484,6 +484,7 @@ defmodule Lazypock.Files.Adapters.Local do
   defp mime_type(".png"), do: "image/png"
   defp mime_type(".gif"), do: "image/gif"
   defp mime_type(".webp"), do: "image/webp"
+  defp mime_type(".avif"), do: "image/avif"
   defp mime_type(".svg"), do: "image/svg+xml"
   defp mime_type(".pdf"), do: "application/pdf"
   defp mime_type(".mp4"), do: "video/mp4"

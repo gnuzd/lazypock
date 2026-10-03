@@ -31,6 +31,7 @@ defmodule Lazypock.Files.Validation do
     ".png" => "image/png",
     ".gif" => "image/gif",
     ".webp" => "image/webp",
+    ".avif" => "image/avif",
     ".pdf" => "application/pdf",
     ".csv" => "text/csv",
     ".txt" => "text/plain",
@@ -147,6 +148,7 @@ defmodule Lazypock.Files.Validation do
       prefix?(binary, <<0x89, ?P, ?N, ?G, 0x0D, 0x0A, 0x1A, 0x0A>>) -> {:ok, "image/png"}
       prefix?(binary, "GIF87a") or prefix?(binary, "GIF89a") -> {:ok, "image/gif"}
       webp?(binary) -> {:ok, "image/webp"}
+      avif?(binary) -> {:ok, "image/avif"}
       prefix?(binary, "%PDF-") -> {:ok, "application/pdf"}
       zip?(binary) -> {:ok, "application/zip"}
       mp4?(binary) -> {:ok, "video/mp4"}
@@ -186,6 +188,13 @@ defmodule Lazypock.Files.Validation do
   defp webp?(binary) do
     byte_size(binary) >= 12 and binary_part(binary, 0, 4) == "RIFF" and
       binary_part(binary, 8, 4) == "WEBP"
+  end
+
+  # AVIF is ISOBMFF like MP4, so the brand at offset 8 disambiguates it. Checked
+  # before `mp4?/1`, which only looks for `ftyp`.
+  defp avif?(binary) do
+    byte_size(binary) >= 12 and binary_part(binary, 4, 4) == "ftyp" and
+      binary_part(binary, 8, 4) in ["avif", "avis"]
   end
 
   defp zip?(binary), do: Enum.any?(@zip_magics, &prefix?(binary, &1))
