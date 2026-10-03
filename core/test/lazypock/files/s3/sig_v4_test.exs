@@ -18,11 +18,16 @@ defmodule Lazypock.Files.S3.SigV4Test do
 
   test "GET object example from the AWS documentation" do
     headers =
-      SigV4.sign("GET", "https://examplebucket.s3.amazonaws.com/test.txt", %{
-        "range" => "bytes=0-9",
-        "x-amz-content-sha256" => SigV4.empty_sha256(),
-        "x-amz-date" => "20130524T000000Z"
-      }, @opts)
+      SigV4.sign(
+        "GET",
+        "https://examplebucket.s3.amazonaws.com/test.txt",
+        %{
+          "range" => "bytes=0-9",
+          "x-amz-content-sha256" => SigV4.empty_sha256(),
+          "x-amz-date" => "20130524T000000Z"
+        },
+        @opts
+      )
 
     assert headers["authorization"] =~
              "Credential=#{@access_key}/20130524/us-east-1/s3/aws4_request"
@@ -38,12 +43,17 @@ defmodule Lazypock.Files.S3.SigV4Test do
     payload_hash = "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072"
 
     headers =
-      SigV4.sign("PUT", "https://examplebucket.s3.amazonaws.com/test%24file.text", %{
-        "date" => "Fri, 24 May 2013 00:00:00 GMT",
-        "x-amz-content-sha256" => payload_hash,
-        "x-amz-date" => "20130524T000000Z",
-        "x-amz-storage-class" => "REDUCED_REDUNDANCY"
-      }, Keyword.put(@opts, :payload_hash, payload_hash))
+      SigV4.sign(
+        "PUT",
+        "https://examplebucket.s3.amazonaws.com/test%24file.text",
+        %{
+          "date" => "Fri, 24 May 2013 00:00:00 GMT",
+          "x-amz-content-sha256" => payload_hash,
+          "x-amz-date" => "20130524T000000Z",
+          "x-amz-storage-class" => "REDUCED_REDUNDANCY"
+        },
+        Keyword.put(@opts, :payload_hash, payload_hash)
+      )
 
     assert headers["authorization"] =~
              "SignedHeaders=date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class"

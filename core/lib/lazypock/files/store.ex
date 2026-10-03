@@ -210,6 +210,7 @@ defmodule Lazypock.Files.Store do
     * `:collection_name` — only files belonging to a collection
     * `:field_name` — only files for a field
     * `:mime` — only files whose mime_type starts with this prefix (e.g. `image/`)
+    * `:q` — case-insensitive substring match on the filename
   """
   def list(opts \\ []) do
     page = max(opts[:page] || 1, 1)
@@ -257,7 +258,8 @@ defmodule Lazypock.Files.Store do
     filters = [
       {:collection_name, opts[:collection_name], "collection_name"},
       {:field_name, opts[:field_name], "field_name"},
-      {:mime, opts[:mime], "mime_type"}
+      {:mime, opts[:mime], "mime_type"},
+      {:q, opts[:q], "filename"}
     ]
 
     {clauses, args} =
@@ -266,13 +268,19 @@ defmodule Lazypock.Files.Store do
       |> Enum.with_index(1)
       |> Enum.map_reduce([], fn {{key, value, column}, i}, acc ->
         clause =
-          if key == :mime do
-            "#{column} LIKE $#{i}::text"
-          else
-            "#{column} = $#{i}"
+          case key do
+            :mime -> "#{column} LIKE $#{i}::text"
+            :q -> "#{column} ILIKE $#{i}::text"
+            _ -> "#{column} = $#{i}"
           end
 
-        arg = if key == :mime, do: value <> "%", else: value
+        arg =
+          case key do
+            :mime -> value <> "%"
+            :q -> "%" <> value <> "%"
+            _ -> value
+          end
+
         {clause, [arg | acc]}
       end)
 

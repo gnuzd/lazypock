@@ -15,6 +15,7 @@ defmodule LazypockWeb.FileController do
     * `collectionName` — only files for a collection
     * `fieldName` — only files for a field
     * `mime` — only files whose mime_type starts with this prefix (e.g. `image/`)
+    * `q` — case-insensitive filename search
   """
   def index(conn, params) do
     conn = require_superuser!(conn)
@@ -30,7 +31,8 @@ defmodule LazypockWeb.FileController do
       per_page: per_page,
       collection_name: blank_to_nil(params["collectionName"]),
       field_name: blank_to_nil(params["fieldName"]),
-      mime: blank_to_nil(params["mime"])
+      mime: blank_to_nil(params["mime"]),
+      q: blank_to_nil(params["q"])
     ]
 
     {:ok, %{items: items, page: page, per_page: per_page, total: total}} = Store.list(opts)

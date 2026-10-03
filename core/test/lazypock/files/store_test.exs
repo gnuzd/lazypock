@@ -147,6 +147,20 @@ defmodule Lazypock.Files.StoreTest do
       ids = MapSet.new([f1["id"], f2["id"], f3["id"]])
       assert MapSet.member?(ids, hd(page1)["id"])
     end
+
+    test "searches filenames case-insensitively with q" do
+      {:ok, holiday} = Store.store(sample_binary(), "Holiday-Photo.png", [])
+      {:ok, invoice} = Store.store(sample_binary(), "invoice.pdf", [])
+
+      {:ok, %{items: items}} = Store.list(q: "holiday")
+      assert Enum.any?(items, &(&1["id"] == holiday["id"]))
+      refute Enum.any?(items, &(&1["id"] == invoice["id"]))
+
+      assert {:ok, %{items: upper}} = Store.list(q: "HOLIDAY")
+      assert Enum.any?(upper, &(&1["id"] == holiday["id"]))
+
+      assert {:ok, %{total: 0}} = Store.list(q: "no-such-file")
+    end
   end
 
   describe "Store.delete/1 and delete_by_record/2" do
