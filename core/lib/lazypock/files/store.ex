@@ -31,6 +31,7 @@ defmodule Lazypock.Files.Store do
         record_id       TEXT DEFAULT '',
         field_name      TEXT DEFAULT '',
         thumbs          JSONB DEFAULT '{}'::jsonb,
+        variants        JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
       )
@@ -43,6 +44,14 @@ defmodule Lazypock.Files.Store do
       Repo,
       """
       ALTER TABLE _files ADD COLUMN IF NOT EXISTS thumbs JSONB DEFAULT '{}'::jsonb
+      """,
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      ALTER TABLE _files ADD COLUMN IF NOT EXISTS variants JSONB NOT NULL DEFAULT '{}'::jsonb
       """,
       []
     )
@@ -148,7 +157,13 @@ defmodule Lazypock.Files.Store do
 
     case Ecto.Adapters.SQL.query(Repo, query, [to_uuid_binary(id)]) do
       {:ok, %{rows: [row], columns: cols}} ->
-        {:ok, cols |> Enum.zip(row) |> Map.new() |> normalize_uuid() |> normalize_thumbs()}
+        {:ok,
+         cols
+         |> Enum.zip(row)
+         |> Map.new()
+         |> normalize_uuid()
+         |> normalize_thumbs()
+         |> normalize_variants()}
 
       {:ok, _} ->
         {:error, :not_found}
@@ -203,6 +218,7 @@ defmodule Lazypock.Files.Store do
         |> Map.new()
         |> normalize_uuid()
         |> normalize_thumbs()
+        |> normalize_variants()
       end)
 
     {:ok, %{items: items, page: page, per_page: per_page, total: total}}
@@ -272,6 +288,19 @@ defmodule Lazypock.Files.Store do
     end
   end
 
+  defp normalize_variants(file_record) do
+    case Map.fetch(file_record, "variants") do
+      {:ok, variants} when is_binary(variants) ->
+        case Jason.decode(variants) do
+          {:ok, map} -> Map.put(file_record, "variants", map)
+          _ -> file_record
+        end
+
+      _ ->
+        file_record
+    end
+  end
+
   @doc """
   Returns the file binary.
   """
@@ -294,7 +323,11 @@ defmodule Lazypock.Files.Store do
   """
   def scale(file_record, size) do
     mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
-    mod.scale(file_record, size)
+
+    case Lazypock.Files.Presets.for_size(size) do
+      nil -> mod.scale(file_record, size)
+      preset -> mod.scale(file_record, preset)
+    end
   end
 
   @doc """
@@ -350,23 +383,37 @@ defmodule Lazypock.Files.Store do
         mime = opts[:mime_type] || content_type || meta[:mime_type]
         thumb_sizes = opts[:thumb_sizes] || []
 
-        # Generate thumbs before the INSERT so the row and its variants are
-        # written in one round-trip (`RETURNING *`) instead of INSERT + UPDATE +
-        # SELECT against a possibly remote database.
+        # Generate thumbs and preset variants before the INSERT so the row, its
+        # thumbs and its variants are written in one round-trip (`RETURNING *`)
+        # instead of INSERT + UPDATE + SELECT against a possibly remote database.
         thumbs_map =
           thumb_sizes
           |> generate_thumbs(adapter_mod, source, filename)
           |> Map.new(fn t -> {t["size"], t} end)
 
+        # The id is generated here (rather than by the column default) so the
+        # variant paths — which include it — exist before the row is inserted.
+        id = Ecto.UUID.generate()
+
+        file_record = %{
+          "id" => id,
+          "filename" => filename,
+          "storage_path" => meta[:path],
+          "storage_backend" => "local"
+        }
+
+        variants_map = generate_variants(adapter_mod, file_record, mime, opts)
+
         {:ok, %{rows: [row], columns: cols}} =
           Ecto.Adapters.SQL.query(
             Repo,
             """
-            INSERT INTO _files (filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name, thumbs)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+            INSERT INTO _files (id, filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name, thumbs, variants)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb)
             RETURNING *
             """,
             [
+              Ecto.UUID.dump!(id),
               filename,
               ext,
               mime,
@@ -376,16 +423,52 @@ defmodule Lazypock.Files.Store do
               opts[:collection_name] || "",
               to_string(opts[:record_id] || ""),
               opts[:field_name] || "",
-              Jason.encode!(thumbs_map)
+              Jason.encode!(thumbs_map),
+              Jason.encode!(variants_map)
             ]
           )
 
-        {:ok, cols |> Enum.zip(row) |> Map.new() |> normalize_uuid() |> normalize_thumbs()}
+        {:ok,
+         cols
+         |> Enum.zip(row)
+         |> Map.new()
+         |> normalize_uuid()
+         |> normalize_thumbs()
+         |> normalize_variants()}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  # Generate the configured `eager` presets (plus any explicitly requested via
+  # `opts[:variants]`), so the response contains valid variant URLs immediately.
+  defp generate_variants(adapter_mod, file_record, mime, opts) do
+    requested = opts[:variants] || []
+
+    names =
+      (Enum.map(Lazypock.Files.Presets.eager(), & &1["name"]) ++ requested)
+      |> Enum.uniq()
+
+    if image_mime?(mime) and names != [] do
+      Enum.reduce(names, %{}, fn name, acc ->
+        case Lazypock.Files.Presets.get(name) do
+          nil ->
+            acc
+
+          preset ->
+            case adapter_mod.scale(file_record, preset) do
+              {:ok, _binary, _mime} -> Map.put(acc, name, %{"mime_type" => "image/webp"})
+              _ -> acc
+            end
+        end
+      end)
+    else
+      %{}
+    end
+  end
+
+  defp image_mime?(mime), do: is_binary(mime) and String.starts_with?(mime, "image/")
 
   defp generate_thumbs([], _adapter_mod, _source, _filename), do: []
 

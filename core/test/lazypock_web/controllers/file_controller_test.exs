@@ -277,4 +277,47 @@ defmodule LazypockWeb.FileControllerTest do
       assert json_response(conn, 422)["message"] =~ "megapixels"
     end
   end
+
+  describe "preset variants" do
+    test "the upload response advertises preset variant URLs for images" do
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(Lazypock.TestImage.tiny_png!(300, 180), "photo.png")
+        })
+
+      body = json_response(conn, 201)
+      assert body["variants"]["thumb"] == "/api/files/#{body["id"]}/scale/thumb"
+      assert body["variants"]["content"] == "/api/files/#{body["id"]}/scale/content"
+
+      Lazypock.Files.Store.delete(body["id"])
+      Lazypock.Files.Reaper.drain()
+    end
+
+    test "GET /scale/:preset serves a real webp variant" do
+      {:ok, file} =
+        Lazypock.Files.Store.store(Lazypock.TestImage.tiny_png!(300, 180), "img.png", [])
+
+      conn = auth_conn(build_conn()) |> get("/api/files/#{file["id"]}/scale/thumb")
+      body = response(conn, 200)
+      assert List.first(get_resp_header(conn, "content-type")) == "image/webp"
+      assert binary_part(body, 0, 4) == "RIFF"
+      assert binary_part(body, 8, 4) == "WEBP"
+
+      Lazypock.Files.Store.delete(file["id"])
+      Lazypock.Files.Reaper.drain()
+    end
+
+    test "GET /scale/:size still works for arbitrary sizes" do
+      {:ok, file} =
+        Lazypock.Files.Store.store(Lazypock.TestImage.tiny_png!(300, 180), "img.png", [])
+
+      conn = auth_conn(build_conn()) |> get("/api/files/#{file["id"]}/scale/120x120")
+      assert List.first(get_resp_header(conn, "content-type")) == "image/webp"
+
+      Lazypock.Files.Store.delete(file["id"])
+      Lazypock.Files.Reaper.drain()
+    end
+  end
 end

@@ -38,7 +38,7 @@ defmodule Lazypock.Files.Adapter do
   # Optional: on-demand scale an image to an arbitrary size. Reads the original
   # file binary, generates a resized version (cached), and returns the resized
   # binary + mime type. Used by GET /api/files/:id/scale/:size.
-  @callback scale(map(), String.t()) ::
+  @callback scale(map(), String.t() | map()) ::
               {:ok, binary(), String.t()} | {:error, term()}
 
   # Optional: absolute on-disk path of a stored object, when the backend has one.

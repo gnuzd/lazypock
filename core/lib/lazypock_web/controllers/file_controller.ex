@@ -162,6 +162,7 @@ defmodule LazypockWeb.FileController do
       record_id: conn.params["record_id"],
       field_name: conn.params["field_name"],
       thumb_sizes: resolve_thumb_sizes(field_options),
+      variants: resolve_variants(conn.params),
       mime_type: mime
     ]
 
@@ -429,6 +430,21 @@ defmodule LazypockWeb.FileController do
     end
   end
 
+  # `?variants=thumb,content` asks for those preset variants to be generated
+  # before responding, so the returned URLs are valid immediately.
+  defp resolve_variants(params) do
+    case params["variants"] do
+      value when is_binary(value) ->
+        value |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+
+      value when is_list(value) ->
+        value
+
+      _ ->
+        []
+    end
+  end
+
   defp format_bytes(bytes) when is_integer(bytes) do
     cond do
       bytes >= 1_073_741_824 ->
@@ -462,8 +478,23 @@ defmodule LazypockWeb.FileController do
       "mimeType" => file_record["mime_type"],
       "size" => file_record["size"],
       "url" => Store.url(file_record),
-      "thumbs" => normalize_thumbs(file_record["thumbs"], file_record["id"])
+      "thumbs" => normalize_thumbs(file_record["thumbs"], file_record["id"]),
+      "variants" => variant_urls(file_record)
     }
+  end
+
+  # Preset variant URLs, by convention `/api/files/:id/scale/:preset`. They are
+  # generated eagerly on upload or lazily on first request.
+  defp variant_urls(file_record) do
+    if is_binary(file_record["mime_type"]) and
+         String.starts_with?(file_record["mime_type"], "image/") do
+      id = file_record["id"]
+
+      Lazypock.Files.Presets.all()
+      |> Map.new(fn preset -> {preset["name"], "/api/files/#{id}/scale/#{preset["name"]}"} end)
+    else
+      %{}
+    end
   end
 
   # thumbs JSONB column is a map of {size => meta}; convert to a map of
