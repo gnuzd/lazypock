@@ -581,6 +581,69 @@ for `POST /api/files` follows it (other routes keep the 8 MB default). A file
 over the size cap returns `413`, a disallowed type `400`, and an image over the
 dimension/megapixel caps `422`.
 
+### Presets & variants
+
+Named variants are configured under the `image` key of `_settings.data` and
+serve `GET /api/files/:id/scale/:preset`. Defaults: `thumb` (100×100 cover) and
+`content` (1280w contain), both generated during upload so their URLs are valid
+immediately; add `"eager": false` for lazy generation on first request.
+
+```json
+{ "image": { "presets": [
+  { "name": "thumb", "width": 100, "height": 100, "fit": "cover", "eager": true },
+  { "name": "content", "width": 1280, "height": null, "fit": "contain", "eager": true }
+] } }
+```
+
+Every response includes `variants` (`preset name → URL`). Requests for the same
+missing variant are coalesced, so a burst generates it once. Image work is
+bounded by `LAZYPOCK_IMAGE_CONCURRENCY` (default 1 slot per instance) and the
+engine is chosen with `LAZYPOCK_IMAGE_ENGINE` (`magick`).
+
+### S3 / R2 storage
+
+Configure the backend in **Settings → Storage** (superuser) or via the
+`LAZYPOCK_S3_*` environment variables (env wins, and the Studio locks those
+fields). `POST /api/settings/storage/test` runs a real PUT/HEAD/GET/DELETE
+round-trip and reports each step. The secret access key is stored encrypted
+(AES-256-GCM, key derived from `SECRET_KEY_BASE`) and is never returned by the
+API; rotating `SECRET_KEY_BASE` requires re-entering it.
+
+`_files.storage_backend` is recorded per row, so files written while the local
+backend was active stay readable after switching to S3.
+
+### Direct upload (S3/R2)
+
+When the S3 backend is configured, uploads can bypass the app entirely:
+
+1. `POST /api/files/presign` `{filename, size, mime}` → a pending row + a
+   presigned `PUT` (content-type and content-length signed to fixed values).
+2. The client PUTs the bytes straight to the bucket.
+3. `POST /api/files/:id/complete` → the server `HEAD`s the object, re-runs the
+   magic-byte and dimension checks, generates the eager variants and marks it
+   ready. On failure the object and row are removed.
+
+Abandoned pending uploads are deleted after `files.pending_ttl_ms` (default 1 h).
+
+### References, delete guard and GC
+
+Richtext (Markdown) content is scanned for file ids and stored in `_file_refs`
+on record create/update. Deleting a file that a record still references returns
+`409` with the usage list; `?force=true` deletes it anyway (superuser). Editor
+uploads that were never inserted into a record are garbage-collected after
+`files.unattached_ttl_ms` (default 24 h); library uploads are kept. After moving
+to a CDN, rewrite embedded URLs with
+`lazypock content rewrite-urls --from /api/files --to https://cdn.example.com`
+(`--dry-run` to preview).
+
+### Operations
+
+`GET /api/health` reports the deletion outbox depth and the image-queue state.
+The CLI adds `lazypock files reap|regen|reconcile|migrate|trim` (see
+`lazypock files` for usage), and deletions are database-first: the `_files` row
+is removed immediately and a `_file_deletions` outbox plus `Lazypock.Files.Reaper`
+removes the objects, retrying with backoff if the bucket is unreachable.
+
 ---
 
 ## Quick Preview
