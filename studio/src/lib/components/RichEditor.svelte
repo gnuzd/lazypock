@@ -386,6 +386,13 @@
 		border-radius: 4px;
 	}
 
+	/* Node selection (e.g. clicking an image) is otherwise invisible. */
+	:global(.editor-content .ProseMirror-selectednode) {
+		outline: 2px solid var(--color-primary);
+		outline-offset: 2px;
+		border-radius: 4px;
+	}
+
 	:global(.editor-content table) {
 		border-collapse: collapse;
 		width: 100%;

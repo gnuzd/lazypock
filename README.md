@@ -13,7 +13,7 @@ LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoeni
 
 **Status:** Beta. The backend (schema engine, REST API, rules, realtime, file storage, hooks, cron, auth incl. OAuth2), the Studio admin UI, and the TypeScript SDK are all complete and usable end-to-end. See [What Works Now](#what-works-now) for the full breakdown.
 
-📚 **Docs:** [What is Lazypock](https://lazypock.gnuzd.dev/) · [Server Guide](https://lazypock.gnuzd.dev/server) · [TypeScript SDK](https://lazypock.gnuzd.dev/sdk/typescript) · [all SDKs](https://lazypock.gnuzd.dev/sdk)
+📚 **Docs:** [What is Lazypock](https://lazypock.gnuzd.dev/) · [Server Guide](https://lazypock.gnuzd.dev/server) · [File storage & images](https://lazypock.gnuzd.dev/files) · [TypeScript SDK](https://lazypock.gnuzd.dev/sdk/typescript) · [all SDKs](https://lazypock.gnuzd.dev/sdk)
 
 ---
 
@@ -76,7 +76,7 @@ Full SDK docs (install, codegen, type safety, queries, realtime, files, auth): *
 | 🔐 **Auth** | Superuser + auth collection signed tokens (HMAC `Phoenix.Token`, **not JWT**) (`auth-with-password`/`auth-refresh`/`auth-methods`) + OAuth2 (Google/GitHub/generic via Assent) ✅ | Login page, auth guard, token persistence, auto-redirect ✅ | `login/me/logout`, `AuthStore` with pluggable storage (localStorage-backed by default) ✅ |
 | 🛡️ **Rules** | Three-state rules (nil = superuser, `""` = public, filter expr), enforced on all CRUD + `manageRule` ✅ | Rule editor with lock/unlock per field ✅ | — |
 | ⚡ **Realtime** | Phoenix Channels, rule-enforced join, anonymous allowed on public/rule-based collections ✅ | Live record updates via `client.realtime.subscribe()` ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`, auto-connects without a token for public reads ✅ |
-| 📁 **File Storage** | Upload/serve/delete, thumbnails + on-demand scaling, local adapter ✅ (S3 adapter is a registered stub — not yet implemented) | Upload in record form, image picker, thumbnails in list/form ✅ | `files.upload/list/delete`, `getFileUrl`, `getThumbUrl`, `getScaleUrl` ✅ |
+| 📁 **File Storage** | Upload/serve/delete with the shared upload policy, image presets + on-demand scaling, deletion outbox/reaper, **local and S3/R2 adapters** (encrypted secret, Test connection), direct-to-bucket uploads ✅ | Upload in record form, shared media picker (library or upload), Media library for browsing/deleting, richtext image insert, thumbnails in list/form, Settings → Files Storage ✅ | `files.upload/list/delete/uploadDirect`, `getFileUrl`, `getThumbUrl`, `getScaleUrl`, `getVariantUrl` ✅ |
 | 🪝 **Hooks** | PocketBase-style event hooks (`use Lazypock.Hooks.Hook`, `e.next()` chain, ~80 hook points), custom API routes via `Router.add` ✅ | — | — |
 | ⏰ **Cron Jobs** | Persisted `_crons` scheduler: 5/6-field expressions, per-job IANA timezone, SQL / HTTP-webhook / Elixir-hook actions, run-now, pg advisory-lock guarded execution ✅ | Settings → Cron dashboard: CRUD, enable/disable, run-now, next-run preview, last-run status ✅ | — |
 | 🎨 **Admin Dashboard** | Serves the Studio SPA at `/_/*`, dev proxy support ✅ | Collections sidebar, record CRUD, field editor, rules, indexes, API keys, import/export, backups ✅ | — |
@@ -484,11 +484,41 @@ collections), `--id-map-file` (default `pocketbase_id_map.json`).
 
 ---
 
-## File Storage & Thumbnails
+## File Storage & Images
 
-Uploaded files are stored on disk under `core/priv/uploads/YYYY/MM/DD/{uuid}.{ext}`
-(date-based directories). The `_files` table records metadata (filename, mime type,
-size, storage backend, and the collection/record/field the file belongs to).
+Uploads live on the local disk by default (or in an S3-compatible bucket), are validated against a
+configurable policy, and are resized into named image **presets**. The full guide — including the
+Studio UI and troubleshooting — is at
+**[lazypock.gnuzd.dev/files](https://lazypock.gnuzd.dev/files)**.
+
+| Topic | Section |
+| --- | --- |
+| Studio: browse, pick, delete uploads | [Media library](#media-library-studio) |
+| Thumbnails and `/scale` | [Thumbnails & on-demand scaling](#thumbnails--on-demand-scaling-requires-imagemagick) |
+| Size / type / dimension limits | [Upload policy](#upload-policy) |
+| Image presets | [Presets & variants](#presets--variants) |
+| S3 / Cloudflare R2 | [S3 / R2 storage](#s3--r2-storage) |
+| Direct-to-bucket uploads | [Direct upload](#direct-upload-s3r2) |
+| References, delete guard, GC | [References, delete guard and GC](#references-delete-guard-and-gc) |
+| CLI and health | [Operations](#operations) |
+
+The `_files` table records the metadata (filename, MIME type, size, storage backend, and the
+collection/record/field the file belongs to), and `_files.storage_backend` is set **per row**, so
+files written before a backend switch stay readable afterwards.
+
+### Media library (Studio)
+
+**Media** in the top navigation lists every upload with thumbnails, filename search and paging;
+select a file to see its URL and metadata, or delete it. Deleting a file that a record still uses
+asks for confirmation first (the API answers `409` with the list of records that reference it).
+
+The same picker is used everywhere a file is chosen:
+
+- **Richtext (`editor`) fields** — the 🖼 toolbar button opens **Insert image** with two tabs:
+  **Library** (pick an existing image) and **Upload** (drag & drop or choose files, used
+  immediately). Images are embedded as the `content` preset, never the original. Pasting or dropping
+  an image into the editor uploads it the same way.
+- **`file` / `multi_file` fields** — the same modal, multi-select when the field allows it.
 
 ### Thumbnails & on-demand scaling (requires ImageMagick)
 

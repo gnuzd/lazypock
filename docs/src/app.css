@@ -317,6 +317,22 @@ code.doc-inline,
 	vertical-align: top;
 }
 
+/* Reference tables: variable names, paths and code must stay on one line.
+   Wrapping them mid-token (`LAZYPOCK_…`) is what makes these tables hard to
+   read — the table scrolls horizontally instead of squeezing the column. */
+.prose-md th,
+table code.doc-inline,
+.prose-md th code,
+.prose-md td code {
+	white-space: nowrap;
+	overflow-wrap: normal;
+}
+
+/* Zebra rows make the longer reference tables much easier to scan. */
+.prose-md tbody tr:nth-child(even) {
+	background: color-mix(in oklch, var(--color-base-content) 3%, transparent);
+}
+
 .prose-md pre {
 	background: var(--color-neutral);
 	color: var(--color-neutral-content);

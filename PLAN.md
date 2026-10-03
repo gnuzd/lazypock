@@ -112,7 +112,7 @@ scaffolding a new app FROM this core, not within the monorepo itself.
 | Hooks | File-based `.ex` event hooks (PocketBase parity). Declarative JSON + runtime eval are design goals, **not implemented** | Progressive power: zero-code → full Elixir |
 | Auth | HMAC-signed `Phoenix.Token` provider (superuser + auth collection) | No JWT dependency; both verified in Plug |
 | Realtime | Phoenix Channels + PubSub | Native to Phoenix, proven at scale |
-| File storage | Custom adapter — local implemented; S3 is a registered stub | Pluggable backends |
+| File storage | Adapter-based: local disk (default) or S3/R2. Upload policy, image presets, deletion outbox + reaper, direct uploads | Pluggable backends |
 | Releases | `mix release` → single tarball | "One binary" experience like PocketBase |
 
 ---
