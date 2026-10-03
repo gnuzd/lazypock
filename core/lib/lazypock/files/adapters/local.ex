@@ -215,6 +215,9 @@ defmodule Lazypock.Files.Adapters.Local do
     System.get_env("LAZYPOCK_THUMBNAILS") == "0"
   end
 
+  @doc false
+  def variant_url(file_record, name), do: "/api/files/#{file_record["id"]}/scale/#{name}"
+
   @impl true
   def thumb_get(_file_record, thumb) do
     path = thumb["path"]

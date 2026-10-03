@@ -358,6 +358,20 @@ defmodule Lazypock.Files.Store do
   end
 
   @doc """
+  URL for a preset variant. Adapters may override it (S3 returns the CDN URL
+  when `public_base_url` is configured); otherwise the app route is used.
+  """
+  def variant_url(file_record, name) do
+    mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
+
+    if function_exported?(mod, :variant_url, 2) do
+      mod.variant_url(file_record, name)
+    else
+      "/api/files/#{file_record["id"]}/scale/#{name}"
+    end
+  end
+
+  @doc """
   Returns the URL for a file.
   """
   def url(file_record) do
@@ -396,6 +410,12 @@ defmodule Lazypock.Files.Store do
         {:error, reason}
     end
   end
+
+  # Allowed values for the `origin` column; anything else is treated as `field`.
+  @origins ~w(field editor library)
+
+  @doc false
+  def normalize_origin(value), do: if(value in @origins, do: value, else: "field")
 
   defp do_store(source, filename, content_type, opts) do
     backend = Lazypock.Files.Storage.backend()
@@ -436,8 +456,8 @@ defmodule Lazypock.Files.Store do
           Ecto.Adapters.SQL.query(
             Repo,
             """
-            INSERT INTO _files (id, filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name, thumbs, variants)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb)
+            INSERT INTO _files (id, filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name, thumbs, variants, origin)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13)
             RETURNING *
             """,
             [
@@ -452,7 +472,8 @@ defmodule Lazypock.Files.Store do
               to_string(opts[:record_id] || ""),
               opts[:field_name] || "",
               Jason.encode!(thumbs_map),
-              Jason.encode!(variants_map)
+              Jason.encode!(variants_map),
+              opts[:origin] || "field"
             ]
           )
 

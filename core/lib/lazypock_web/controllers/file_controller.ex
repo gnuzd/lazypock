@@ -163,6 +163,7 @@ defmodule LazypockWeb.FileController do
       field_name: conn.params["field_name"],
       thumb_sizes: resolve_thumb_sizes(field_options),
       variants: resolve_variants(conn.params),
+      origin: Store.normalize_origin(conn.params["origin"]),
       mime_type: mime
     ]
 
@@ -585,10 +586,10 @@ defmodule LazypockWeb.FileController do
   defp variant_urls(file_record) do
     if is_binary(file_record["mime_type"]) and
          String.starts_with?(file_record["mime_type"], "image/") do
-      id = file_record["id"]
-
       Lazypock.Files.Presets.all()
-      |> Map.new(fn preset -> {preset["name"], "/api/files/#{id}/scale/#{preset["name"]}"} end)
+      |> Map.new(fn preset ->
+        {preset["name"], Store.variant_url(file_record, preset["name"])}
+      end)
     else
       %{}
     end

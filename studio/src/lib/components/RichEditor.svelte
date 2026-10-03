@@ -4,13 +4,93 @@
 	import Link from '@tiptap/extension-link';
 	import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 	import Placeholder from '@tiptap/extension-placeholder';
+	import Image from '@tiptap/extension-image';
 	import { Markdown } from '@tiptap/markdown';
 	import { EditorContent, createEditor } from 'svelte-tiptap';
 	import type { Editor } from 'svelte-tiptap';
+	import { client } from '$lib/client';
 
 	let { value = $bindable(), disabled = false }: { value?: unknown; disabled?: boolean } = $props();
 
 	let editor = $state<Editor | null>(null);
+
+	/** Last Markdown we emitted, so a `$effect` can tell our own update apart. */
+	let lastEmitted = '';
+
+	// ── Image picker state ──
+	type PickerItem = {
+		id: string;
+		filename: string;
+		url?: string;
+		variants?: Record<string, string>;
+		thumbs?: Record<string, string>;
+	};
+
+	let pickerOpen = $state(false);
+	let pickerItems = $state<PickerItem[]>([]);
+	let pickerLoading = $state(false);
+	let pickerError = $state('');
+	let uploadError = $state('');
+
+	/** The `content` preset is what gets embedded — never the original. */
+	function contentUrl(item: PickerItem): string {
+		return (
+			item.variants?.content ??
+			item.variants?.thumb ??
+			item.url ??
+			`/api/files/${item.id}/scale/content`
+		);
+	}
+
+	function insertImage(item: PickerItem) {
+		editor?.chain().focus().setImage({ src: contentUrl(item), alt: item.filename }).run();
+	}
+
+	async function uploadFiles(files: File[]) {
+		uploadError = '';
+		for (const file of files) {
+			if (!file.type.startsWith('image/')) continue;
+			try {
+				// `origin` is understood by lazypock >= 0.10 (editor uploads that are
+				// never inserted into a record are garbage-collected); the cast keeps
+				// this compiling against older SDK type definitions.
+				const meta = { origin: 'editor' } as unknown as Parameters<
+					typeof client.files.upload
+				>[3];
+				const res = await client.files.upload(file, file.name, undefined, meta);
+				if (res?.id) insertImage(res as unknown as PickerItem);
+			} catch (e) {
+				uploadError = (e as Error).message || 'Upload failed';
+			}
+		}
+	}
+
+	/** Paste/drop handler: true means "we handled this event". */
+	function handleFiles(files: FileList | null | undefined): boolean {
+		if (!files || files.length === 0) return false;
+		void uploadFiles(Array.from(files));
+		return true;
+	}
+
+	async function openPicker() {
+		pickerOpen = true;
+		pickerError = '';
+		pickerLoading = true;
+		try {
+			const res = await client.files.list({ mime: 'image/', perPage: 60 });
+			pickerItems = (res?.items ?? []) as unknown as PickerItem[];
+		} catch (e) {
+			pickerError = (e as Error).message || 'Failed to load the library';
+			pickerItems = [];
+		} finally {
+			pickerLoading = false;
+		}
+	}
+
+	function pick(item: PickerItem) {
+		insertImage(item);
+		pickerOpen = false;
+	}
 
 	onMount(() => {
 		const edStore = createEditor({
@@ -23,6 +103,8 @@
 				TableRow,
 				TableCell,
 				TableHeader,
+				// Pasted images must never be inlined as base64.
+				Image.configure({ inline: false, allowBase64: false }),
 				Placeholder.configure({ placeholder: 'Write something…' }),
 				Markdown.configure({
 					indentation: { style: 'space', size: 2 },
@@ -33,7 +115,17 @@
 			content: String(value ?? ''),
 			editable: !disabled,
 			onUpdate: ({ editor: ed }) => {
-				value = (ed as unknown as { getMarkdown: () => string }).getMarkdown();
+				// Serialise once and remember it, so the value-sync effect does not
+				// re-serialise the whole document on every keystroke.
+				const md = (ed as unknown as { getMarkdown: () => string }).getMarkdown();
+				lastEmitted = md;
+				value = md;
+			},
+			editorProps: {
+				handlePaste: (_view, event) =>
+					handleFiles((event as ClipboardEvent).clipboardData?.files),
+				handleDrop: (_view, event) =>
+					handleFiles((event as DragEvent).dataTransfer?.files)
 			}
 		});
 
@@ -41,7 +133,11 @@
 			editor = ed;
 		});
 
-		return unsub;
+		return () => {
+			unsub();
+			editor?.destroy();
+			editor = null;
+		};
 	});
 
 	function exec(cmd: string, attrs?: Record<string, unknown>) {
@@ -64,14 +160,17 @@
 
 	$effect(() => {
 		if (!editor) return;
-		const ed = editor as unknown as {
-			getMarkdown: () => string;
-			commands: { setContent: (content: string, opts?: { contentType?: string }) => void };
-		};
-		const md: string | undefined = ed.getMarkdown();
-		if (md !== undefined && value !== md) {
-			ed.commands.setContent(String(value ?? ''), { contentType: 'markdown' });
-		}
+		void editor;
+
+		const incoming = String(value ?? '');
+		// Our own emission (or an unchanged value) — nothing to sync.
+		if (incoming === lastEmitted) return;
+
+		lastEmitted = incoming;
+
+		(editor as unknown as {
+			commands: { setContent: (c: string, o?: { contentType?: string; emitUpdate?: boolean }) => void };
+		}).commands.setContent(incoming, { contentType: 'markdown', emitUpdate: false });
 	});
 </script>
 
@@ -146,6 +245,9 @@
 				onclick={() => exec('setLink', { href: prompt('Link URL:') })}
 				title="Link">🔗</button
 			>
+			<button type="button" class="toolbar-btn" onclick={openPicker} title="Insert image"
+				>🖼</button
+			>
 			<button
 				type="button"
 				class="toolbar-btn"
@@ -162,6 +264,58 @@
 
 	<EditorContent editor={editor!} class="editor-content" />
 </div>
+
+{#if uploadError}
+	<p class="picker-status picker-error">{uploadError}</p>
+{/if}
+
+{#if pickerOpen}
+	<div class="picker-backdrop" role="presentation" onclick={() => (pickerOpen = false)}>
+		<div
+			class="picker"
+			role="dialog"
+			aria-label="Image library"
+			onclick={(e) => e.stopPropagation()}
+		>
+			<div class="picker-head">
+				<strong>Image library</strong>
+				<label class="picker-upload">
+					Upload
+					<input
+						type="file"
+						accept="image/*"
+						multiple
+						onchange={(e) => uploadFiles(Array.from((e.target as HTMLInputElement).files ?? []))}
+					/>
+				</label>
+				<button type="button" class="picker-close" onclick={() => (pickerOpen = false)}>✕</button>
+			</div>
+
+			{#if pickerLoading}
+				<div class="picker-status">Loading images…</div>
+			{:else if pickerError}
+				<div class="picker-status picker-error">{pickerError}</div>
+			{:else if pickerItems.length === 0}
+				<div class="picker-status">No images yet — upload one above.</div>
+			{:else}
+				<div class="picker-grid">
+					{#each pickerItems as item (item.id)}
+						{@const thumb =
+							item.variants?.thumb ??
+							(item.thumbs ? item.thumbs[Object.keys(item.thumbs)[0]] : undefined)}
+						<button type="button" class="picker-cell" onclick={() => pick(item)}>
+							{#if thumb}
+								<img src={thumb} alt={item.filename} loading="lazy" />
+							{:else}
+								<span class="picker-no-thumb">{item.filename}</span>
+							{/if}
+						</button>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	</div>
+{/if}
 
 <style>
 	.rich-editor {
@@ -288,6 +442,12 @@
 		padding-left: 1.5rem;
 	}
 
+	:global(.editor-content img) {
+		max-width: 100%;
+		height: auto;
+		border-radius: 4px;
+	}
+
 	:global(.editor-content table) {
 		border-collapse: collapse;
 		width: 100%;
@@ -310,5 +470,98 @@
 		color: var(--color-primary);
 		text-decoration: underline;
 		cursor: pointer;
+	}
+
+	.picker-status {
+		padding: 8px 12px;
+		font-size: 0.8125rem;
+		color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+	}
+
+	.picker-error {
+		color: var(--color-error, #dc2626);
+	}
+
+	.picker-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgb(0 0 0 / 0.45);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 60;
+	}
+
+	.picker {
+		width: min(680px, 92vw);
+		max-height: 80vh;
+		overflow: auto;
+		background: var(--color-base-100);
+		border-radius: 8px;
+		box-shadow: 0 20px 50px rgb(0 0 0 / 0.3);
+	}
+
+	.picker-head {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 10px 14px;
+		border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 12%, transparent);
+	}
+
+	.picker-head strong {
+		flex: 1;
+	}
+
+	.picker-upload {
+		cursor: pointer;
+		font-size: 0.8125rem;
+		padding: 4px 10px;
+		border-radius: 4px;
+		background: color-mix(in oklab, var(--color-primary) 15%, var(--color-base-100));
+	}
+
+	.picker-upload input {
+		display: none;
+	}
+
+	.picker-close {
+		border: none;
+		background: none;
+		cursor: pointer;
+		font-size: 1rem;
+		color: var(--color-base-content);
+	}
+
+	.picker-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+		gap: 8px;
+		padding: 12px;
+	}
+
+	.picker-cell {
+		border: 1px solid color-mix(in oklab, var(--color-base-content) 12%, transparent);
+		border-radius: 6px;
+		background: none;
+		padding: 0;
+		cursor: pointer;
+		aspect-ratio: 1;
+		overflow: hidden;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.picker-cell img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+
+	.picker-no-thumb {
+		font-size: 0.6875rem;
+		padding: 8px;
+		word-break: break-all;
 	}
 </style>

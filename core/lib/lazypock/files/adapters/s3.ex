@@ -402,6 +402,14 @@ defmodule Lazypock.Files.Adapters.S3 do
   @doc false
   def encode_key(key), do: URI.encode(key, fn c -> c == ?/ or URI.char_unreserved?(c) end)
 
+  @doc "CDN URL for a preset variant, or the app route when no public base URL."
+  def variant_url(file_record, name) do
+    case public_base_url() do
+      nil -> "/api/files/#{file_record["id"]}/scale/#{name}"
+      base -> base <> "/" <> encode_key(variant_key(file_record, "#{name}.webp"))
+    end
+  end
+
   # ── Direct upload support (P4) ───────────────────────
 
   @doc "Object key for a direct upload's original."
