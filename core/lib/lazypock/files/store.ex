@@ -371,11 +371,16 @@ defmodule Lazypock.Files.Store do
   end
 
   defp do_store(source, filename, content_type, opts) do
-    # always local by default
-    adapter_mod = Lazypock.Files.Adapters.Local
+    backend = Lazypock.Files.Storage.backend()
+    adapter_mod = Lazypock.Files.Adapter.for_backend(backend)
     filename = sanitize_filename(filename)
 
-    case adapter_mod.store(source, filename, []) do
+    # The id is generated here (rather than by the column default) so storage
+    # keys and variant paths — which include it — exist before the row is
+    # inserted, and the adapter can place the original under `<id>/`.
+    id = Ecto.UUID.generate()
+
+    case adapter_mod.store(source, filename, id: id) do
       {:ok, meta} ->
         ext = filename |> Path.extname() |> String.downcase()
         # Prefer the server-determined MIME type (set by `Lazypock.Files.Validation`
@@ -391,15 +396,11 @@ defmodule Lazypock.Files.Store do
           |> generate_thumbs(adapter_mod, source, filename)
           |> Map.new(fn t -> {t["size"], t} end)
 
-        # The id is generated here (rather than by the column default) so the
-        # variant paths — which include it — exist before the row is inserted.
-        id = Ecto.UUID.generate()
-
         file_record = %{
           "id" => id,
           "filename" => filename,
           "storage_path" => meta[:path],
-          "storage_backend" => "local"
+          "storage_backend" => backend
         }
 
         variants_map = generate_variants(adapter_mod, file_record, mime, opts)
@@ -419,7 +420,7 @@ defmodule Lazypock.Files.Store do
               mime,
               meta[:size],
               meta[:path],
-              "local",
+              backend,
               opts[:collection_name] || "",
               to_string(opts[:record_id] || ""),
               opts[:field_name] || "",

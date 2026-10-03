@@ -91,6 +91,13 @@ defmodule LazypockWeb.Router do
     get("/settings", SettingsController, :show)
     patch("/settings", SettingsController, :update)
     put("/settings", SettingsController, :update)
+
+    # Files storage (S3/R2) — superuser
+    get("/settings/storage", StorageController, :show)
+    patch("/settings/storage", StorageController, :update)
+    put("/settings/storage", StorageController, :update)
+    post("/settings/storage/test", StorageController, :test)
+
     # Force-refresh the CORS origins cache after a settings change
     post("/settings/refresh-cors", SettingsController, :refresh_cors)
 

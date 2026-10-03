@@ -444,7 +444,6 @@ defmodule Lazypock.Files.Adapters.Local do
   defp mime_type(".png"), do: "image/png"
   defp mime_type(".gif"), do: "image/gif"
   defp mime_type(".webp"), do: "image/webp"
-  defp mime_type(".avif"), do: "image/avif"
   defp mime_type(".svg"), do: "image/svg+xml"
   defp mime_type(".pdf"), do: "application/pdf"
   defp mime_type(".mp4"), do: "video/mp4"
@@ -454,6 +453,16 @@ defmodule Lazypock.Files.Adapters.Local do
   defp mime_type(".txt"), do: "text/plain"
   defp mime_type(".zip"), do: "application/zip"
   defp mime_type(_), do: "application/octet-stream"
+
+  @doc """
+  MIME type for an extension (with or without the dot, any case). Exposed so
+  other adapters resolve stored MIME types consistently.
+  """
+  def mime_type_for(extension) do
+    ext = extension |> to_string() |> String.downcase()
+    ext = if String.starts_with?(ext, "."), do: ext, else: "." <> ext
+    mime_type(ext)
+  end
 
   defp clean_empty_dirs(dir) do
     case File.ls(dir) do
