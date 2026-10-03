@@ -75,6 +75,9 @@ defmodule LazypockWeb.Router do
     # File routes — must be BEFORE dynamic :collection routes
     get("/files", FileController, :index)
     post("/files", FileController, :upload)
+    # Direct upload (Mode B): presign + complete. Must precede /files/:id.
+    post("/files/presign", FileController, :presign)
+    post("/files/:id/complete", FileController, :complete)
     get("/files/:id/thumbs/:size", FileController, :show_thumb)
     get("/files/:id/scale/:size", FileController, :show_scaled)
     get("/files/:id", FileController, :show)
@@ -91,6 +94,13 @@ defmodule LazypockWeb.Router do
     get("/settings", SettingsController, :show)
     patch("/settings", SettingsController, :update)
     put("/settings", SettingsController, :update)
+
+    # Files storage (S3/R2) — superuser
+    get("/settings/storage", StorageController, :show)
+    patch("/settings/storage", StorageController, :update)
+    put("/settings/storage", StorageController, :update)
+    post("/settings/storage/test", StorageController, :test)
+
     # Force-refresh the CORS origins cache after a settings change
     post("/settings/refresh-cors", SettingsController, :refresh_cors)
 

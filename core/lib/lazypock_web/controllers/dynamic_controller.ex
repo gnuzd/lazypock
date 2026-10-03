@@ -179,6 +179,7 @@ defmodule LazypockWeb.DynamicController do
               })
 
               Hooks.dispatch_after_create(record, context)
+              Lazypock.Files.Refs.sync_record(name, record["id"], record)
               Broadcaster.broadcast_create(name, record, conn.assigns[:connection_id])
               Lazypock.Realtime.Views.after_mutation(name)
 
@@ -247,6 +248,7 @@ defmodule LazypockWeb.DynamicController do
             })
 
             Hooks.dispatch_after_update(updated_record, context)
+            Lazypock.Files.Refs.sync_record(name, updated_record["id"], updated_record)
             Broadcaster.broadcast_update(name, updated_record, conn.assigns[:connection_id])
             Lazypock.Realtime.Views.after_mutation(name)
             conn |> json(DynamicView.format_item(updated_record, name))
@@ -303,6 +305,7 @@ defmodule LazypockWeb.DynamicController do
           case GenericRecord.delete(name, id) do
             :ok ->
               Store.delete_by_record(name, id)
+              Lazypock.Files.Refs.delete_record(name, id)
               Broadcaster.broadcast_delete(name, id, conn.assigns[:connection_id])
               Lazypock.Realtime.Views.after_mutation(name)
               Hooks.dispatch_after_delete(record, context)

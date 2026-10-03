@@ -174,6 +174,29 @@ The codegen CLI emits a `lazypockSchema` snapshot next to the types, and the gen
 wires it in automatically — so the schema-driven behaviour below (hidden-field exclusion, query
 validation) works out of the box.
 
+### Query autocomplete
+
+On a typed service, `filter` / `sort` / `expand` are validated at compile time.
+For per-field **autocomplete**, use the array forms of `sort`/`expand` and
+the typed filter builder:
+
+```typescript
+const q = client.collection('posts').where;
+
+client.collection('posts').getList(1, 20, { sort: ['-created'] });
+client.collection('posts').getList(1, 20, { expand: ['author.name'] });
+client.collection('posts').getList(1, 20, {
+  filter: q('title').contains('x').and(q('published').eq(true))
+});
+```
+
+- `sort: ['-created']` — the editor suggests each field (`-created`, `title`, …).
+- `expand: ['author.name']` — relation fields are suggested.
+- `q('title')` — field names are suggested, operators are methods, and
+  values are escaped for you.
+
+See [Queries](/sdk/typescript/queries) for the full guide.
+
 ### CLI reference
 
 ```
@@ -200,79 +223,383 @@ You must provide credentials one of two ways (or via the matching env vars):
 
 <h2 id="queries">Queries</h2>
 
-### `select(...)` — pick the fields you want
+Everything you can pass to `getList`, `getFullList`, `getFirstListItem`, and
+`getOne`: **sorting**, **filtering**, **relation expansion**, and **field
+projection**. Each section starts with the simplest form and ends with the
+typed helpers.
 
-`select()` projects list/read responses to the given fields (PocketBase `fields` param). Field names
-are **type-checked** when the service is typed:
+> **New here?** Use the [recipes](#recipes) at the bottom for the most common
+> tasks (fetch by ids, search, filter by relation, …).
+
+### Quick reference
+
+Throughout this guide `q` is the typed filter builder:
 
 ```typescript
-const t = await client.collection('posts').select('id', 'title').getList();
-// GET /api/posts?fields=id,title
-
-await client.collection('posts').select('id', 'title').getOne('abc123'); // same
+const q = postsSvc.where;
 ```
 
-- `select('*')` (or no `select()` call) — request all visible fields; hidden fields are excluded
-  automatically when a schema is available.
-- `select()` with no arguments resets back to the default.
-- `select()` returns a **derived service** — the original is untouched, so you can keep one default
-  service and project per-request.
-- Passing an explicit `fields` option overrides the `select()` preset.
+| I want to… | Do this |
+| --- | --- |
+| Sort newest first | `getFullList({ sort: ['-created'] })` |
+| Sort by two fields | `getList(1, 20, { sort: ['-published', 'title'] })` |
+| Filter by a list of ids | `getFullList({ filter: q('id').in(ids) })` |
+| Search a text field | `getList(1, 20, { filter: q('title').contains(term) })` |
+| Filter by relation id | `getFullList({ filter: q('author').eq(userId) })` |
+| Combine conditions (AND) | `q('published').eq(true).and(q('views').gt(100))` |
+| Either of two conditions (OR) | `q('a').eq(1).or(q('b').eq(2))` |
+| Negate a condition | `q('archived').eq(true).not()` |
+| Also fetch the related record | `getList(1, 20, { expand: ['author'] })` |
+| Only some fields of the related record | `getList(1, 20, { expand: ['author.name', 'author.email'] })` |
+| Return only some fields | `client.collection('posts').select('id', 'title').getList()` |
 
-When a schema is known (via `types.schemas` or codegen), hidden fields are **not returned by the
-server**: every read sends `fields=<visible fields>` by default, and selecting an unknown field logs
-a warning.
+Every option works with the raw string form too — the builder is a
+convenience that checks field names and escapes values for you.
 
-### `filter` / `sort` / `expand` — type-checked suggestions
+---
 
-With a typed service, the query options validate field names (and filter operators) at compile time —
-your editor suggests valid fields as you type:
+### Sorting
+
+`sort` accepts a comma-separated string or an **array**. `-` means descending,
+a bare field (or `+field`) means ascending.
 
 ```typescript
-await postsSvc.getList(1, 20, { sort: '-title' }); // ✓ suggests title/published/…
-await postsSvc.getList(1, 20, { sort: '-nope' }); // ✗ compile error
+// String form
+await postsSvc.getList(1, 20, { sort: '-created' });
+await postsSvc.getList(1, 20, { sort: 'title,-published' });
+
+// Array form — one entry per field (recommended: the editor suggests each one)
+await postsSvc.getList(1, 20, { sort: ['-created'] });
+await postsSvc.getList(1, 20, { sort: ['title', '-published'] });
+```
+
+| Form | Editor suggests fields? | Validated? |
+| --- | --- | --- |
+| `sort: '-title,published'` (string) | No (only the whole string) | ✅ every token |
+| `sort: ['-title', 'published']` (array) | ✅ each entry | ✅ each entry |
+
+Unknown fields are a **compile error** on a typed service:
+
+```typescript
+await postsSvc.getList(1, 20, { sort: ['-nope'] }); // ✗ compile error
+```
+
+---
+
+### Filtering
+
+There are two ways to build a filter:
+
+1. **Filter expression string** — full PocketBase syntax, validated at compile
+   time on typed services. Best for dynamic strings and advanced expressions.
+2. **Typed builder** (`service.where(field)`) — field names are suggested,
+   operators are methods, and values are escaped automatically. Best for
+   hand-written queries.
+
+Both produce the same thing and can be mixed: pass either as `filter`.
+For one-off filters you can also build inline with a callback — see
+[Inline filter callback](#inline-filter-callback).
+
+#### Filter expressions (string)
+
+The syntax is `field operator value`, combined with `&&` (and), `||` (or),
+`!` (not), and parentheses.
+
+```typescript
+await postsSvc.getList(1, 20, { filter: "title ~ 'hello'" });
+await postsSvc.getList(1, 20, { filter: "published = true" });
+await postsSvc.getList(1, 20, { filter: "views >= 100" });
+await postsSvc.getList(1, 20, { filter: "title ~ 'a' && published = true" });
+await postsSvc.getList(1, 20, { filter: "(title = 'a' || title = 'b')" });
+await postsSvc.getList(1, 20, { filter: "author.email = 'ada@example.com'" });
+await postsSvc.getList(1, 20, { filter: "deleted_at = null" }); // IS NULL
+```
+
+> **Relation dot-paths** (`author.email = 'x'`, including multi-level paths
+> and multi-relations) and **null checks** (`field = null` /
+> `field != null`) are supported by current LazyPock servers. On an older
+> server a dot-path filter is rejected with `400 Invalid filter expression`;
+> filter by the relation id (`author = 'USER_ID'`) instead.
+
+##### Operators
+
+| Operator | Meaning | Example |
+| --- | --- | --- |
+| `=` | equal | `status = 'open'` |
+| `!=` | not equal | `status != 'closed'` |
+| `~` | contains (LIKE) | `title ~ 'hello'` |
+| `!~` | does not contain | `title !~ 'draft'` |
+| `>` `>=` `<` `<=` | comparisons | `views >= 100` |
+| `?=` | any array element equals | `tags ?= 'news'` |
+| `?!=` | any array element differs | `tags ?!= 'news'` |
+| `?~` | any array element contains | `tags ?~ 'new'` |
+| `?!~` | any array element does not contain | `tags ?!~ 'new'` |
+| `?>` `?>=` `?<` `?<=` | any array element compares | `scores ?> 10` |
+
+Strings use single or double quotes. Values containing `&&`, `||`, or quotes
+must be quoted (`title ~ 'a && b'`). On a typed service **every clause** is
+checked — a typo in any field or operator is a compile error:
+
+```typescript
+await postsSvc.getList(1, 20, { filter: "title = 'a' && nope = 'b'" }); // ✗ compile error
+```
+
+#### The typed filter builder
+
+Start a clause with `service.where(field)`, pick an operator method, then
+combine expressions. Field names are suggested from the collection's schema,
+and values are quoted/escaped by the builder.
+
+```typescript
+const q = postsSvc.where;
+
+// one clause
+await postsSvc.getList(1, 20, { filter: q('title').contains('hello') });
+
+// combine
+await postsSvc.getList(1, 20, {
+  filter: q('title').contains('hello').and(q('published').eq(true)),
+});
+```
+
+##### Comparison methods
+
+| Method | Emits | Notes |
+| --- | --- | --- |
+| `eq(v)` | `field = v` | use `eq(null)` for *is empty* |
+| `neq(v)` | `field != v` | |
+| `contains(v)` | `field ~ v` | text search |
+| `notContains(v)` | `field !~ v` | |
+| `gt(v)` / `gte(v)` | `field > v` / `field >= v` | |
+| `lt(v)` / `lte(v)` | `field < v` / `field <= v` | |
+| `in(values)` | `(field = a \|\| field = b \|\| …)` | **list membership** |
+| `notIn(values)` | `(field != a && field != b && …)` | |
+
+##### Array ("any element") methods
+
+For multi-select / multiple-relation / multiple-file fields, prefix with `any`:
+
+| Method | Emits |
+| --- | --- |
+| `anyEq(v)` | `field ?= v` |
+| `anyNeq(v)` | `field ?!= v` |
+| `anyContains(v)` | `field ?~ v` |
+| `anyNotContains(v)` | `field ?!~ v` |
+| `anyGt(v)` / `anyGte(v)` | `field ?> v` / `field ?>= v` |
+| `anyLt(v)` / `anyLte(v)` | `field ?< v` / `field ?<= v` |
+
+##### Combining expressions
+
+| Method | Emits | Meaning |
+| --- | --- | --- |
+| `.and(other)` | `(a && b)` | both must match |
+| `.or(other)` | `(a \|\| b)` | either may match |
+| `.not()` | `!(a)` | invert |
+| `.toString()` | — | the raw filter string |
+
+Combinations are parenthesised, so chaining never introduces precedence
+surprises:
+
+```typescript
+const filter = q('title').contains('x').and(q('published').eq(true));
+// → (title ~ 'x' && published = true)
 
 await postsSvc.getList(1, 20, {
-  filter: "title ~ 'x' && published = true" // ✓ field + operator checked
+  filter: q('status').eq('open').or(q('status').eq('pending')).not(),
 });
-await postsSvc.getList(1, 20, { filter: 'nope = 1' }); // ✗ compile error
-
-await postsSvc.getList(1, 20, { expand: 'author' }); // ✓ field suggested
-await postsSvc.getOne('abc', { expand: 'author' });
+// → !((status = 'open' || status = 'pending'))
 ```
 
-- `filter` — `field op value` clauses with `= != ~ !~ > >= < <=` operators, plus the PocketBase
-  `?`-prefixed array operators `?= ?!= ?~ ?!~ ?> ?>= ?< ?<=` (see below); `&&`, `||`, `!`, and
-  parentheses are allowed after the first clause.
-- `sort` — `field`, `-field` (desc), `+field`, or comma-separated.
-- `expand` — comma-separated relation field names; non-relation fields warn at runtime when a schema
-  is available.
-- The **untyped** client (`client.collection('posts')` without `typed<T>()`) still accepts any
-  string — suggestions kick in once the service is typed.
+##### Values and escaping
 
-#### The `?` operators — any/at-least-one-of
-
-PocketBase array-valued fields (multi-select, multiple relation, multiple file) apply a **match-all**
-constraint by default. Prefix the operator with `?` for an **any/at-least-one-of** constraint:
+Values may be `string`, `number`, `boolean`, or `null`. Strings are
+single-quoted and escaped for you, so inputs like `it's` are safe:
 
 ```typescript
-// tags is a multi-select field (string[])
-await postsSvc.getList(1, 20, { filter: "tags ?= 'news'" }); // has 'news'
-await postsSvc.getList(1, 20, { filter: "tags ?!= 'news'" }); // has a tag ≠ 'news'
-await postsSvc.getList(1, 20, { filter: "tags ?~ 'new'" }); // a tag contains 'new'
-await postsSvc.getList(1, 20, { filter: "tags ?= 'news' && published = true" });
+q('title').eq("it's"); // → title = 'it\'s'
 ```
 
-| Operator | Meaning |
-| --- | --- |
-| `?=` | any element equals |
-| `?!=` | any element differs |
-| `?~` | any element matches (auto-wrapped in `%…%`) |
-| `?!~` | any element does not match |
-| `?>` / `?>=` / `?<` / `?<=` | any element compares |
+The builder checks values as filter scalars; the server enforces the exact
+per-field type. An empty `in([])` / `notIn([])` throws (it can never match —
+that is usually a bug).
 
-The backend compiles `?=` to `= ANY (...)` and `?~` / `?!~` to an `ILIKE` over `unnest(...)`, so the
-suggestion types accept these operators wherever the server does.
+##### Mixing builder and string
+
+A builder expression can be passed wherever a filter string is accepted, and
+you can still use the raw string for advanced cases:
+
+```typescript
+await postsSvc.getFirstListItem(q('slug').eq('hello-world'));
+await postsSvc.getList(1, 20, { filter: "title ~ 'x' && published = true" });
+```
+
+##### Inline filter callback
+
+For a one-off filter, pass a callback instead of binding `where` to a
+variable. The callback receives the same typed `where` helper, so field names
+are still suggested and checked:
+
+```typescript
+await postsSvc.getFullList({
+  filter: (w) => w('title').contains('x').and(w('published').eq(true)),
+});
+
+await postsSvc.getFirstListItem((w) => w('slug').eq('hello-world'));
+```
+
+This is equivalent to the `q` form and works anywhere `filter` is accepted
+(`getList`, `getFullList`, `getFirstListItem`).
+
+---
+
+### Expanding relations
+
+`expand` fetches the referenced records and attaches them under
+`record.expand` instead of leaving just the id. It accepts a comma-separated
+string or an array.
+
+```typescript
+const post = await postsSvc.getOne('abc123', { expand: 'author' });
+post.expand?.author?.email; // the full related record
+
+// array form (per-token autocomplete)
+const posts = await postsSvc.getFullList({ expand: ['author', 'category'] });
+```
+
+`record.author` stays the relation id; the related record is on
+`record.expand.author`.
+
+#### Nested relations
+
+Use a dot-path to expand a relation *of* a relation:
+
+```typescript
+await postsSvc.getFullList({ expand: ['author.profile'] });
+// post.expand.author.expand.profile
+```
+
+#### Only some fields of the expanded record
+
+Add the field(s) after the relation:
+
+```typescript
+await postsSvc.getFullList({ expand: ['author.name', 'author.email'] });
+// post.expand.author === { name: '…', email: '…' }  (no other fields)
+
+// combine a full expansion with a narrowed one
+await postsSvc.getFullList({ expand: ['author', 'category.name'] });
+```
+
+The SDK applies this selection itself, so it works the same against every
+server: PocketBase narrows it server-side, the LazyPock server returns the
+full related record and the SDK keeps only the requested fields.
+
+> **How this works:** `expand` only understands *relations* —
+> `expand=author.name` on its own is ignored. The SDK detects that `name` is
+> not a relation, asks for the `author` relation instead, and then keeps only
+> the requested fields.
+>
+> Distinguishing "field on the relation" from "nested relation" needs the
+> target collection's schema. The codegen `createClient()` wires schemas in
+> automatically; with a hand-written client, pass `types.schemas`. Without a
+> schema, two or more dotted tokens under one relation are treated as a field
+> selection, and a lone dotted token stays a nested relation (with a warning).
+
+#### Typed results
+
+With a codegen/typed service, `record.expand.author` is typed as the target
+collection's record, so `post.expand?.author?.email` autocompletes instead of
+being `unknown`.
+
+#### Expanded records are never dropped
+
+If you also project fields (`select(...)` or an explicit `fields`), the
+`expand.*` entries are merged into the projection, so the server's strict
+`fields` filter can't silently remove the expanded data.
+
+---
+
+### Projecting fields
+
+`select(...)` limits the fields returned by reads (PocketBase `fields`). It
+returns a derived service — the original is untouched.
+
+```typescript
+const slim = client.collection('posts').select('id', 'title');
+const list = await slim.getList(1, 20);
+// GET /api/posts?fields=id,title
+
+await slim.getOne('abc123');
+```
+
+- `select('*')` (or no `select()` call) requests all visible fields.
+- `select()` with no arguments resets to the default.
+- When a schema is known, hidden fields are excluded from responses.
+- An explicit `fields` option overrides the `select()` preset for that call.
+
+---
+
+### Recipes
+
+#### Fetch records by a list of ids
+
+```typescript
+const q = postsSvc.where;
+const posts = await postsSvc.getFullList({ filter: q('id').in(ids) });
+```
+
+`in()` builds the `(id = 'a' || id = 'b' || …)` expression PocketBase needs.
+
+#### Search a text field
+
+```typescript
+const q = postsSvc.where;
+await postsSvc.getFullList({ filter: q('title').contains(search) });
+// or: filter: `title ~ '${search.replaceAll("'", "\\'")}'`  — the builder escapes for you
+```
+
+#### Filter by relation, and show the related record
+
+```typescript
+const q = postsSvc.where;
+const posts = await postsSvc.getFullList({
+  filter: q('author').eq(userId),
+  expand: ['author.name'],
+});
+```
+
+> To filter on a field *of* the related record, use a relation dot-path —
+> `q('author.email').eq(email)` or `"author.email = 'x'"`. This compiles to a
+> correlated subquery (requires a server with relation dot-path support).
+> `field = null` / `field != null` select empty / non-empty values.
+
+#### Filter by status, newest first, expand the author
+
+```typescript
+const q = postsSvc.where;
+await postsSvc.getList(1, 20, {
+  filter: q('status').eq('published').and(q('views').gte(100)),
+  sort: ['-created'],
+  expand: ['author.name'],
+});
+```
+
+#### Unpublished drafts, excluding archived
+
+```typescript
+const q = postsSvc.where;
+await postsSvc.getFullList({
+  filter: q('published').eq(false).and(q('archived').eq(true).not()),
+});
+```
+
+#### Any tag matches
+
+```typescript
+await postsSvc.getList(1, 20, { filter: "tags ?= 'news'" });
+// or with the builder:
+await postsSvc.getList(1, 20, { filter: postsSvc.where('tags').anyEq('news') });
+```
 
 ---
 
@@ -324,18 +651,74 @@ For advanced use cases you can talk to the underlying service directly:
 
 <h2 id="files">Files</h2>
 
-Upload, delete, and build URLs for file records.
+Upload, list, delete and build URLs for file records. Richtext/Markdown fields store plain URLs, so
+the same helpers work for images embedded in content.
 
 ```typescript
-// Upload a file
-const file = await client.files.upload(fileInput.files[0]);
+// Upload a file (through the app)
+const file = await client.files.upload(input.files[0], undefined, undefined, {
+  collectionName: 'posts',
+  fieldName: 'cover',
+  origin: 'library', // field | editor | library
+  variants: ['content'] // generate this preset before the response
+});
 
-// Get file metadata
-const meta = await client.files.getUrl(file.id);
+// Direct-to-bucket upload (S3/R2): presign → PUT → verify
+const direct = await client.files.uploadDirect(input.files[0], {
+  collectionName: 'posts',
+  fieldName: 'cover'
+});
 
-// Delete a file
-await client.files.delete(file.id);
+// List the library (superuser)
+const { items, total } = await client.files.list({ mime: 'image/', q: 'sunset', page: 1 });
+
+// Delete one
+await client.files.delete(file!.id);
 ```
+
+### Upload methods
+
+| Method | Description |
+| --- | --- |
+| `upload(file, filename?, options?, meta?)` | Multipart upload through the app. `meta` accepts `collectionName`, `recordId`, `fieldName`, `origin` (`field` \| `editor` \| `library`) and `variants` |
+| `uploadDirect(file, opts?)` | Presign → `PUT` straight to the bucket → verify. Falls back to `upload()` when the server has no direct upload |
+| `presign({ filename, size, mime, ... })` | Step 1 on its own: returns `{ id, key, method, url, headers }` |
+| `complete(fileId, { variant? })` | Step 2 on its own: verify the uploaded object |
+| `list({ mime?, q?, page?, perPage? })` | Library listing (superuser) |
+| `delete(fileId)` | Delete the file and its variants (superuser) |
+
+### URLs
+
+| Helper | Result |
+| --- | --- |
+| `getFileUrl(baseUrl, fileId)` | The original: `/api/files/<id>` |
+| `getThumbUrl(baseUrl, fileId, size)` | Legacy thumbnail: `/thumbs/<size>` |
+| `getScaleUrl(baseUrl, fileId, size)` | Arbitrary size: `/scale/300x200` |
+| `getVariantUrl(baseUrl, fileId, preset)` | Named preset: `/scale/content` |
+
+### File records
+
+A `FileRecord` carries ready-made URLs, so you rarely build them by hand:
+
+```json
+{
+  "id": "1f0c…",
+  "filename": "sunset.png",
+  "mimeType": "image/png",
+  "size": 482913,
+  "url": "/api/files/1f0c…",
+  "thumbs": { "100x100": "/api/files/1f0c…/thumbs/100x100" },
+  "variants": {
+    "thumb": "/api/files/1f0c…/scale/thumb",
+    "content": "https://cdn.example.com/lazypock/1f0c…/content.webp"
+  }
+}
+```
+
+> Embedded images should use the `content` variant (`getVariantUrl(url, id, 'content')`), never the
+> original — that is what the Studio editor inserts. See
+> [File storage & images](https://lazypock.gnuzd.dev/files) for presets, storage backends and
+> presigned uploads.
 
 ### Utilities
 
@@ -379,6 +762,69 @@ const user = await client.collection('users').create({
 const session = await client.authWithPassword('users', 'ada@example.com', 'correct-horse-battery');
 // session.token — stored in client.authStore for subsequent requests
 ```
+
+### OAuth2
+
+Sign in with an OAuth2 provider (Google, GitHub, Apple, …) on an auth collection.
+
+#### Popup flow (web)
+
+```typescript
+const auth = await client.collection('users').authWithOAuth2({ provider: 'google' });
+// auth.token + auth.record + auth.meta (isNew, email, avatarURL, …)
+// client.authStore is populated when the promise resolves
+```
+
+One call handles the whole flow: it fetches the provider's authorization URL,
+opens a popup, receives the single-use authorization `code` the backend relays
+via `postMessage`, exchanges it, and populates the auth store — the same result
+shape as `authWithPassword`. `createData` is forwarded on first sign-up.
+
+Options:
+
+- `provider` (required) — the provider name, e.g. `'google'`
+- `createData` — extra fields merged into the record on first sign-up
+- `urlCallback(url)` — called with the authorization URL instead of opening a
+  popup (the presented window must preserve `window.opener`)
+- `popup: { width, height }` — popup geometry (default 500×700)
+- `timeoutMs` — abandon after this long (default 120000)
+
+#### Direct code exchange (mobile / non-browser)
+
+The popup flow depends on `window.postMessage`, so on React Native (or when you
+present the URL yourself), capture the `code` from your redirect and exchange it:
+
+```typescript
+const methods = await client.collection('users').listAuthMethods();
+const google = methods?.oauth2.providers.find((p) => p.name === 'google');
+// …present google.authURL (expo-web-browser, ASWebAuthenticationSession, …)
+// …capture the redirect `code` via your deep link, then:
+const auth = await client.collection('users').authWithOAuth2Code({
+  provider: 'google',
+  code,
+  codeVerifier: google.codeVerifier,
+  createData: { /* extra fields on first sign-up */ },
+});
+```
+
+#### Available providers
+
+```typescript
+const methods = await client.collection('users').listAuthMethods();
+// methods.oauth2.providers → [{ name, authURL, state, codeVerifier }]
+```
+
+#### Notes
+
+- The backend creates the PKCE `state`/`codeVerifier` and validates the pending
+  session on the redirect. The popup page relays **only the single-use
+  authorization `code`** (never a token or user record); the SDK then exchanges
+  it via `authWithOAuth2Code`.
+- The `codeVerifier` returned by `listAuthMethods()` is the PKCE verifier, not a
+  provider secret — `client_secret` never leaves the backend.
+- The popup flow posts the result back to the origin that started it, so it also
+  works when the API and the app are on different origins (as long as the app's
+  origin is in the server's allowed origins / `LAZYPOCK_CORS_ORIGINS`).
 
 ### AuthStore
 
@@ -432,22 +878,79 @@ PocketBase-style service for the collections themselves (admin):
 
 ### CollectionService
 
-Returned by `client.collection(name)`.
+Returned by `client.collection(name)`. All reads accept typed query options —
+see [Queries](/sdk/typescript/queries) for the full guide.
 
+- `where(field)` — start a **typed filter clause** (see below)
 - `select(...fields)` — Project reads to the given fields (see [Queries](/sdk/typescript/queries));
   `select('*')` restores the all-visible default
 - `getList(page, perPage, options?)` — Paginated list of records (typed `filter`/`sort`/`expand`/`fields`)
 - `getFullList(options?)` — Fetch all records (auto-paginates)
-- `getFirstListItem(filter, options?)` — Fetch first record matching filter
+- `getFirstListItem(filter, options?)` — Fetch first record matching filter; `filter` may be a string or a `FilterExpr`
 - `getOne(id, options?)` — Get record by ID
+- `expandFields(options?)` — List the collection's relation fields (for building `expand`)
 - `create(data, options?)` — Create record
 - `update(id, data, options?)` — Update record
 - `delete(id, options?)` — Delete record
 - `subscribe(callback, recordId?)` — Subscribe to record changes (PocketBase-style)
 - `unsubscribe(recordId?)` — Unsubscribe
+- `typed<T>()` — Cast this service to a record shape (compile-time only)
+- `withSchema(schema)` — Bind a schema explicitly (hidden-field exclusion + query checking)
 - `authWithPassword(identity, password, options?)` — Login to this auth collection
 - `authRefresh(options?)` — Refresh token for this auth collection
 - `authMethods(options?)` — Get available auth methods
+
+#### Query options
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `filter` | `string \| FilterExpr` | PocketBase filter expression, or a builder expression |
+| `sort` | `string \| string[]` | Field(s) to sort by; `-field` = descending |
+| `expand` | `string \| string[]` | Relation field(s) to expand (`author`, `author.name`, `author.profile`) |
+| `fields` | `string` | Explicit field projection for this call (overrides `select()`) |
+| `requestKey` | `string \| null` | Override/disable auto-cancellation for this request |
+| `singleFlight` | `boolean` | Coalesce concurrent identical requests |
+| `fetch` | `typeof fetch` | Custom fetch (tests / React Native) |
+| `signal` | `AbortSignal` | Abort signal |
+| `headers` | `Record<string, string>` | Extra request headers |
+
+Use the **array** form of `sort`/`expand` to get per-field autocomplete; the
+string form works identically but is validated as a whole.
+
+#### Filter builder
+
+`client.collection('posts').where('title')` returns a `FilterBuilder`. Field
+names are checked/suggested against the collection and values are escaped.
+
+```typescript
+const q = client.collection('posts').where;
+
+q('title').eq('x');                          // title = 'x'
+q('title').contains('x');                    // title ~ 'x'
+q('views').gte(100);                         // views >= 100
+q('id').in(['a', 'b', 'c']);                 // (id = 'a' || id = 'b' || id = 'c')
+q('id').notIn(['a', 'b']);                   // (id != 'a' && id != 'b')
+q('author').eq(userId);                      // filter by relation id
+q('author.email').eq('ada@example.com');     // relation dot-path
+q('deleted_at').eq(null);                    // IS NULL
+q('title').eq('x').and(q('published').eq(true));
+q('a').eq(1).or(q('b').eq(2)).not();
+```
+
+| Method | Emits | | Method | Emits |
+| --- | --- | --- | --- | --- |
+| `eq(v)` | `field = v` | | `anyEq(v)` | `field ?= v` |
+| `neq(v)` | `field != v` | | `anyNeq(v)` | `field ?!= v` |
+| `contains(v)` | `field ~ v` | | `anyContains(v)` | `field ?~ v` |
+| `notContains(v)` | `field !~ v` | | `anyNotContains(v)` | `field ?!~ v` |
+| `gt(v)` / `gte(v)` | `field > v` / `field >= v` | | `anyGt(v)` / `anyGte(v)` | `field ?> v` / `field ?>= v` |
+| `lt(v)` / `lte(v)` | `field < v` / `field <= v` | | `anyLt(v)` / `anyLte(v)` | `field ?< v` / `field ?<= v` |
+| `in(values)` | `(field = a \|\| field = b \|\| …)` | | `and(other)` | `(a && b)` |
+| `notIn(values)` | `(field != a && field != b && …)` | | `or(other)` / `not()` | `(a \|\| b)` / `!(a)` |
+
+Values may be `string | number | boolean | null`; the server enforces the
+exact per-field type. The raw string form remains available for dynamic or
+advanced expressions.
 
 ### Types
 

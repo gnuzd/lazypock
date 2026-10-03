@@ -48,10 +48,13 @@ metadata row whose blob was already missing when the backup was taken is counted
 `manifest.files.missing` rather than aborting the backup. Pass `--no-files` on the CLI (or
 `include_files: false` in `Backup.export_stream/1`) for a schema+records-only backup.
 
-> Uploaded-file support currently means the **local** storage adapter. `Files.Adapters.S3` is still a
-> stub (`LazyPock` cannot store uploads in S3 yet), so an S3-backed deployment has no S3 blobs to back
-> up in the first place. The archive writes and restores through the adapter interface, so blob backup
-> starts working for S3 as soon as that adapter is implemented.
+> Blob backup uses the configured storage adapter, so it works for **both** the local and the S3/R2
+> backend: blobs are read with the adapter's `local_path/1` when it has one (a local copy on disk) and
+> fall back to `get/1` otherwise, and restore writes them back at the exact `storage_path`. An S3/R2
+> deployment therefore backs up its objects like any other file. A metadata row whose blob was already
+> missing when the backup was taken is counted in `manifest.files.missing` rather than aborting.
+
+See [File storage & images](/files) for the storage backends, presets and the media library.
 
 ### Exporting it
 

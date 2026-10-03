@@ -7,6 +7,7 @@ defmodule Lazypock.Files.ValidationTest do
   @jpeg <<0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10>>
   @gif "GIF89a" <> <<0x01, 0x00, 0x01, 0x00, 0x00>>
   @webp "RIFF" <> <<0x04, 0x00, 0x00, 0x00>> <> "WEBP"
+  @avif <<0x00, 0x00, 0x00, 0x20>> <> "ftypavif" <> :binary.copy(<<0>>, 16)
   @pdf "%PDF-1.7\n1 0 obj\n"
   @zip <<0x50, 0x4B, 0x03, 0x04, 0x14, 0x00>>
   @mp4 <<0x00, 0x00, 0x00, 0x18>> <> "ftypisom"
@@ -19,6 +20,7 @@ defmodule Lazypock.Files.ValidationTest do
       assert {:ok, "image/jpeg"} = Validation.validate("a.JPEG", @jpeg)
       assert {:ok, "image/gif"} = Validation.validate("a.gif", @gif)
       assert {:ok, "image/webp"} = Validation.validate("a.webp", @webp)
+      assert {:ok, "image/avif"} = Validation.validate("a.avif", @avif)
     end
 
     test "documents and archives" do
@@ -69,6 +71,46 @@ defmodule Lazypock.Files.ValidationTest do
     test "sniff/1 reports :unknown for text" do
       assert Validation.sniff("just text") == :unknown
       assert {:ok, "image/png"} = Validation.sniff(@png)
+    end
+  end
+
+  describe "validate_file/2" do
+    setup do
+      dir = Path.join(System.tmp_dir!(), "lazypock-vf-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+      %{dir: dir}
+    end
+
+    defp write(dir, name, bytes) do
+      path = Path.join(dir, name)
+      File.write!(path, bytes)
+      path
+    end
+
+    test "accepts an image read straight from disk", %{dir: dir} do
+      path = write(dir, "a.png", @png <> :binary.copy(<<0>>, 200))
+      assert {:ok, "image/png"} = Validation.validate_file("a.png", path)
+    end
+
+    test "rejects a mismatch and a disallowed extension without a full read", %{dir: dir} do
+      assert {:error, :content_mismatch} =
+               Validation.validate_file("a.png", write(dir, "a.png", "<?php ?>"))
+
+      assert {:error, :extension_not_allowed} =
+               Validation.validate_file("a.svg", write(dir, "a.svg", "<svg/>"))
+    end
+
+    test "still fully reads text files for the UTF-8/JSON checks", %{dir: dir} do
+      assert {:ok, "application/json"} =
+               Validation.validate_file("a.json", write(dir, "a.json", ~s({"ok":true})))
+
+      assert {:error, :invalid_text} =
+               Validation.validate_file("a.json", write(dir, "bad.json", "{not json"))
+    end
+
+    test "returns an error for a missing file", %{dir: dir} do
+      assert {:error, :enoent} = Validation.validate_file("a.png", Path.join(dir, "nope.png"))
     end
   end
 end

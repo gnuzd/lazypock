@@ -78,4 +78,50 @@ defmodule LazypockWeb.BodyParserTest do
 
     System.delete_env("LAZYPOCK_IMPORT_MAX_MB")
   end
+
+  defp multipart_conn(path, filename, bytes) do
+    boundary = "----lazypocktest"
+    payload = String.duplicate("z", bytes)
+
+    body =
+      IO.iodata_to_binary([
+        "--#{boundary}\r\n",
+        "Content-Disposition: form-data; name=\"file\"; filename=\"#{filename}\"\r\n",
+        "Content-Type: application/octet-stream\r\n\r\n",
+        payload,
+        "\r\n--#{boundary}--\r\n"
+      ])
+
+    Plug.Test.conn(:post, path, body)
+    |> Plug.Conn.put_req_header("content-type", "multipart/form-data; boundary=#{boundary}")
+  end
+
+  test "a multipart part over 8 MB is accepted on the file-upload route" do
+    parsed =
+      multipart_conn("/api/files", "big.txt", 9_000_000)
+      |> then(&BodyParser.call(&1, BodyParser.init([])))
+
+    assert %Plug.Upload{filename: "big.txt"} = parsed.body_params["file"]
+    assert File.stat!(parsed.body_params["file"].path).size == 9_000_000
+
+    File.rm(parsed.body_params["file"].path)
+  end
+
+  test "the same body is still rejected on other routes" do
+    assert_raise Plug.Parsers.RequestTooLargeError, fn ->
+      multipart_conn("/api/export", "big.txt", 9_000_000)
+      |> then(&BodyParser.call(&1, BodyParser.init([])))
+    end
+  end
+
+  test "the upload limit is configurable" do
+    System.put_env("LAZYPOCK_UPLOAD_MAX_MB", "1")
+
+    assert_raise Plug.Parsers.RequestTooLargeError, fn ->
+      multipart_conn("/api/files", "big.txt", 2_000_000)
+      |> then(&BodyParser.call(&1, BodyParser.init([])))
+    end
+
+    System.delete_env("LAZYPOCK_UPLOAD_MAX_MB")
+  end
 end

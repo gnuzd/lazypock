@@ -38,6 +38,14 @@ defmodule Lazypock.Application do
         inspect_cli(args)
         System.halt(0)
 
+      ["files" | args] ->
+        files_cli(args)
+        System.halt(0)
+
+      ["content" | args] ->
+        content_cli(args)
+        System.halt(0)
+
       _ ->
         start_app()
     end
@@ -61,6 +69,77 @@ defmodule Lazypock.Application do
 
       path ->
         restore(path, opts)
+    end
+  end
+
+  # ── CLI: files / content ─────────────────────────────────────────────────
+
+  defp files_cli([]) do
+    IO.puts(
+      "Usage: lazypock files <reap|regen|reconcile|migrate|trim> " <>
+        "[--preset NAME] [--dry-run] [--delete-local]"
+    )
+  end
+
+  defp files_cli([command | args]) do
+    with_repo(fn ->
+      Lazypock.Files.Store.ensure_files_table!()
+
+      result =
+        case command do
+          "reap" ->
+            Lazypock.Files.Commands.reap()
+
+          "regen" ->
+            Lazypock.Files.Commands.regen(preset: flag_value(args, "--preset"))
+
+          "reconcile" ->
+            Lazypock.Files.Commands.reconcile(dry_run: "--dry-run" in args)
+
+          "migrate" ->
+            Lazypock.Files.Commands.migrate_to_s3(
+              dry_run: "--dry-run" in args,
+              delete_local: "--delete-local" in args
+            )
+
+          "trim" ->
+            Lazypock.Files.Commands.trim_cache()
+
+          other ->
+            IO.puts(:stderr, "Unknown files command: #{other}")
+            :error
+        end
+
+      IO.inspect(result, label: "files #{command}")
+    end)
+  end
+
+  defp content_cli(["rewrite-urls" | args]) do
+    from = flag_value(args, "--from")
+    to = flag_value(args, "--to")
+
+    if is_nil(from) or is_nil(to) do
+      IO.puts(:stderr, "Usage: lazypock content rewrite-urls --from OLD --to NEW [--dry-run]")
+    else
+      with_repo(fn ->
+        Lazypock.Files.Refs.rewrite_urls(from, to, dry_run: "--dry-run" in args)
+        |> IO.inspect(label: "content rewrite-urls")
+      end)
+    end
+  end
+
+  defp content_cli(_args) do
+    IO.puts(:stderr, "Usage: lazypock content rewrite-urls --from OLD --to NEW [--dry-run]")
+  end
+
+  defp with_repo(fun) do
+    Ecto.Migrator.with_repo(Lazypock.Repo, fn _repo -> fun.() end)
+  end
+
+  defp flag_value(args, flag) do
+    case Enum.find_index(args, &(&1 == flag)) do
+      nil -> nil
+      index -> Enum.at(args, index + 1)
     end
   end
 
@@ -278,7 +357,9 @@ defmodule Lazypock.Application do
         {DNSCluster, query: Application.get_env(:lazypock, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Lazypock.PubSub},
         Lazypock.Collections.Registry,
-        Lazypock.Auth.OAuth2.SessionStore
+        Lazypock.Auth.OAuth2.SessionStore,
+        Lazypock.Files.Limiter,
+        Lazypock.Files.Reaper
       ] ++
         cron_scheduler_children() ++
         [LazypockWeb.Endpoint]

@@ -4,13 +4,56 @@
 	import Link from '@tiptap/extension-link';
 	import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 	import Placeholder from '@tiptap/extension-placeholder';
+	import Image from '@tiptap/extension-image';
 	import { Markdown } from '@tiptap/markdown';
 	import { EditorContent, createEditor } from 'svelte-tiptap';
 	import type { Editor } from 'svelte-tiptap';
+	import { client } from '$lib/client';
+	import MediaLibrary, { type MediaItem } from '$lib/components/MediaLibrary.svelte';
 
 	let { value = $bindable(), disabled = false }: { value?: unknown; disabled?: boolean } = $props();
 
 	let editor = $state<Editor | null>(null);
+	let mediaOpen = $state(false);
+	let uploadError = $state('');
+
+	/** Last Markdown we emitted, so a `$effect` can tell our own update apart. */
+	let lastEmitted = '';
+
+	/** Embedded images always use the `content` preset, never the original. */
+	function contentUrl(item: MediaItem): string {
+		return item.variants?.content ?? item.url ?? `/api/files/${item.id}/scale/content`;
+	}
+
+	function insertImage(item: MediaItem) {
+		editor?.chain().focus().setImage({ src: contentUrl(item), alt: item.filename }).run();
+	}
+
+	async function uploadFiles(files: File[]) {
+		uploadError = '';
+
+		for (const file of files) {
+			if (!file.type.startsWith('image/')) continue;
+
+			try {
+				// Editor uploads are GC'd if they never end up in a record.
+				const meta = { origin: 'editor' } as unknown as Parameters<
+					typeof client.files.upload
+				>[3];
+				const res = await client.files.upload(file, file.name, undefined, meta);
+				if (res?.id) insertImage(res as unknown as MediaItem);
+			} catch (e) {
+				uploadError = (e as Error).message || 'Upload failed';
+			}
+		}
+	}
+
+	/** Paste/drop handler: true means "we handled this event". */
+	function handleFiles(files: FileList | null | undefined): boolean {
+		if (!files || files.length === 0) return false;
+		void uploadFiles(Array.from(files));
+		return true;
+	}
 
 	onMount(() => {
 		const edStore = createEditor({
@@ -23,6 +66,8 @@
 				TableRow,
 				TableCell,
 				TableHeader,
+				// Pasted images must never be inlined as base64.
+				Image.configure({ inline: false, allowBase64: false }),
 				Placeholder.configure({ placeholder: 'Write something…' }),
 				Markdown.configure({
 					indentation: { style: 'space', size: 2 },
@@ -33,7 +78,16 @@
 			content: String(value ?? ''),
 			editable: !disabled,
 			onUpdate: ({ editor: ed }) => {
-				value = (ed as unknown as { getMarkdown: () => string }).getMarkdown();
+				// Serialise once and remember it, so the value-sync effect does not
+				// re-serialise the whole document on every keystroke.
+				const md = (ed as unknown as { getMarkdown: () => string }).getMarkdown();
+				lastEmitted = md;
+				value = md;
+			},
+			editorProps: {
+				handlePaste: (_view, event) =>
+					handleFiles((event as ClipboardEvent).clipboardData?.files),
+				handleDrop: (_view, event) => handleFiles((event as DragEvent).dataTransfer?.files)
 			}
 		});
 
@@ -41,7 +95,11 @@
 			editor = ed;
 		});
 
-		return unsub;
+		return () => {
+			unsub();
+			editor?.destroy();
+			editor = null;
+		};
 	});
 
 	function exec(cmd: string, attrs?: Record<string, unknown>) {
@@ -64,14 +122,24 @@
 
 	$effect(() => {
 		if (!editor) return;
-		const ed = editor as unknown as {
-			getMarkdown: () => string;
-			commands: { setContent: (content: string, opts?: { contentType?: string }) => void };
-		};
-		const md: string | undefined = ed.getMarkdown();
-		if (md !== undefined && value !== md) {
-			ed.commands.setContent(String(value ?? ''), { contentType: 'markdown' });
-		}
+		void editor;
+
+		const incoming = String(value ?? '');
+		// Our own emission (or an unchanged value) — nothing to sync.
+		if (incoming === lastEmitted) return;
+
+		lastEmitted = incoming;
+
+		(
+			editor as unknown as {
+				commands: {
+					setContent: (
+						c: string,
+						o?: { contentType?: string; emitUpdate?: boolean }
+					) => void;
+				};
+			}
+		).commands.setContent(incoming, { contentType: 'markdown', emitUpdate: false });
 	});
 </script>
 
@@ -149,6 +217,12 @@
 			<button
 				type="button"
 				class="toolbar-btn"
+				onclick={() => (mediaOpen = true)}
+				title="Insert image">🖼</button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
 				onclick={() => exec('insertTable', { rows: 3, cols: 3, withHeaderRow: true })}
 				title="Insert table">⊞</button
 			>
@@ -162,6 +236,18 @@
 
 	<EditorContent editor={editor!} class="editor-content" />
 </div>
+
+{#if uploadError}
+	<p class="upload-error">{uploadError}</p>
+{/if}
+
+<MediaLibrary
+	bind:open={mediaOpen}
+	title="Insert image"
+	onSelect={(items) => {
+		if (items[0]) insertImage(items[0]);
+	}}
+/>
 
 <style>
 	.rich-editor {
@@ -215,6 +301,12 @@
 		margin: 4px 2px;
 		background: color-mix(in oklab, var(--color-base-content) 15%, transparent);
 		align-self: center;
+	}
+
+	.upload-error {
+		margin: 4px 0 0;
+		font-size: 0.8125rem;
+		color: var(--color-error, #dc2626);
 	}
 
 	:global(.editor-content) {
@@ -286,6 +378,19 @@
 	:global(.editor-content ul),
 	:global(.editor-content ol) {
 		padding-left: 1.5rem;
+	}
+
+	:global(.editor-content img) {
+		max-width: 100%;
+		height: auto;
+		border-radius: 4px;
+	}
+
+	/* Node selection (e.g. clicking an image) is otherwise invisible. */
+	:global(.editor-content .ProseMirror-selectednode) {
+		outline: 2px solid var(--color-primary);
+		outline-offset: 2px;
+		border-radius: 4px;
 	}
 
 	:global(.editor-content table) {

@@ -7,6 +7,10 @@ defmodule Lazypock.Files.Store do
   """
 
   alias Lazypock.Repo
+  alias Lazypock.Files.Reaper
+
+  @default_filename "file"
+  @max_filename_length 255
 
   @doc """
   Ensures the `_files` table exists on boot.
@@ -27,6 +31,14 @@ defmodule Lazypock.Files.Store do
         record_id       TEXT DEFAULT '',
         field_name      TEXT DEFAULT '',
         thumbs          JSONB DEFAULT '{}'::jsonb,
+        variants        JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status          TEXT NOT NULL DEFAULT 'ready',
+        original_name   TEXT,
+        width           INT,
+        height          INT,
+        checksum        TEXT,
+        origin          TEXT NOT NULL DEFAULT 'field',
+        attached_at     TIMESTAMPTZ,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
       )
@@ -42,6 +54,103 @@ defmodule Lazypock.Files.Store do
       """,
       []
     )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      ALTER TABLE _files ADD COLUMN IF NOT EXISTS variants JSONB NOT NULL DEFAULT '{}'::jsonb
+      """,
+      []
+    )
+
+    # Columns for direct uploads (pending rows) and library/reference tracking.
+    for statement <- [
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready'",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS original_name TEXT",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS width INT",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS height INT",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS checksum TEXT",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'field'",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS attached_at TIMESTAMPTZ"
+        ] do
+      Ecto.Adapters.SQL.query!(Repo, statement, [])
+    end
+
+    # _files is queried by (collection_name, record_id) on every record delete
+    # and listed newest-first; both were unindexed.
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _files_record_idx ON _files (collection_name, record_id)",
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _files_created_idx ON _files (created_at DESC, id DESC)",
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _files_pending_idx ON _files (created_at) WHERE status = 'pending'",
+      []
+    )
+
+    ensure_deletion_outbox!()
+    Lazypock.Files.Refs.ensure_table!()
+  end
+
+  # Deletion outbox + trigger. Every delete path (API, Studio, cascade, raw SQL)
+  # leaves a row here in the same transaction; `Lazypock.Files.Reaper` removes the
+  # objects and the row afterwards.
+  defp ensure_deletion_outbox! do
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE TABLE IF NOT EXISTS _file_deletions (
+        id           BIGSERIAL PRIMARY KEY,
+        file_id      UUID        NOT NULL,
+        backend      TEXT        NOT NULL,
+        storage_path TEXT        NOT NULL,
+        thumbs       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        attempts     INT         NOT NULL DEFAULT 0,
+        next_try_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+      """,
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _file_deletions_due_idx ON _file_deletions (next_try_at)",
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE OR REPLACE FUNCTION _files_enqueue_deletion() RETURNS trigger AS $fn$
+      BEGIN
+        INSERT INTO _file_deletions (file_id, backend, storage_path, thumbs)
+        VALUES (OLD.id, OLD.storage_backend, OLD.storage_path, COALESCE(OLD.thumbs, '{}'::jsonb));
+        RETURN OLD;
+      END;
+      $fn$ LANGUAGE plpgsql
+      """,
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(Repo, "DROP TRIGGER IF EXISTS _files_after_delete ON _files", [])
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE TRIGGER _files_after_delete AFTER DELETE ON _files
+        FOR EACH ROW EXECUTE FUNCTION _files_enqueue_deletion()
+      """,
+      []
+    )
   end
 
   @doc """
@@ -54,8 +163,13 @@ defmodule Lazypock.Files.Store do
     * `:field_name` — the field name on the record
   """
   def store(%Plug.Upload{} = upload, opts \\ []) do
-    binary = File.read!(upload.path)
-    do_store(binary, upload.filename, upload.content_type, opts)
+    do_store({:file, upload.path}, upload.filename, upload.content_type, opts)
+  end
+
+  # Accept bytes inline or, preferably, as `{:file, path}` so nothing reads the
+  # whole upload into the BEAM.
+  def store({:file, path} = source, filename, opts) when is_binary(path) do
+    do_store(source, filename, nil, opts)
   end
 
   def store(binary, filename, opts) when is_binary(binary) do
@@ -70,7 +184,13 @@ defmodule Lazypock.Files.Store do
 
     case Ecto.Adapters.SQL.query(Repo, query, [to_uuid_binary(id)]) do
       {:ok, %{rows: [row], columns: cols}} ->
-        {:ok, cols |> Enum.zip(row) |> Map.new() |> normalize_uuid() |> normalize_thumbs()}
+        {:ok,
+         cols
+         |> Enum.zip(row)
+         |> Map.new()
+         |> normalize_uuid()
+         |> normalize_thumbs()
+         |> normalize_variants()}
 
       {:ok, _} ->
         {:error, :not_found}
@@ -90,6 +210,7 @@ defmodule Lazypock.Files.Store do
     * `:collection_name` — only files belonging to a collection
     * `:field_name` — only files for a field
     * `:mime` — only files whose mime_type starts with this prefix (e.g. `image/`)
+    * `:q` — case-insensitive substring match on the filename
   """
   def list(opts \\ []) do
     page = max(opts[:page] || 1, 1)
@@ -125,6 +246,7 @@ defmodule Lazypock.Files.Store do
         |> Map.new()
         |> normalize_uuid()
         |> normalize_thumbs()
+        |> normalize_variants()
       end)
 
     {:ok, %{items: items, page: page, per_page: per_page, total: total}}
@@ -136,7 +258,8 @@ defmodule Lazypock.Files.Store do
     filters = [
       {:collection_name, opts[:collection_name], "collection_name"},
       {:field_name, opts[:field_name], "field_name"},
-      {:mime, opts[:mime], "mime_type"}
+      {:mime, opts[:mime], "mime_type"},
+      {:q, opts[:q], "filename"}
     ]
 
     {clauses, args} =
@@ -145,13 +268,19 @@ defmodule Lazypock.Files.Store do
       |> Enum.with_index(1)
       |> Enum.map_reduce([], fn {{key, value, column}, i}, acc ->
         clause =
-          if key == :mime do
-            "#{column} LIKE $#{i}::text"
-          else
-            "#{column} = $#{i}"
+          case key do
+            :mime -> "#{column} LIKE $#{i}::text"
+            :q -> "#{column} ILIKE $#{i}::text"
+            _ -> "#{column} = $#{i}"
           end
 
-        arg = if key == :mime, do: value <> "%", else: value
+        arg =
+          case key do
+            :mime -> value <> "%"
+            :q -> "%" <> value <> "%"
+            _ -> value
+          end
+
         {clause, [arg | acc]}
       end)
 
@@ -194,6 +323,19 @@ defmodule Lazypock.Files.Store do
     end
   end
 
+  defp normalize_variants(file_record) do
+    case Map.fetch(file_record, "variants") do
+      {:ok, variants} when is_binary(variants) ->
+        case Jason.decode(variants) do
+          {:ok, map} -> Map.put(file_record, "variants", map)
+          _ -> file_record
+        end
+
+      _ ->
+        file_record
+    end
+  end
+
   @doc """
   Returns the file binary.
   """
@@ -216,7 +358,25 @@ defmodule Lazypock.Files.Store do
   """
   def scale(file_record, size) do
     mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
-    mod.scale(file_record, size)
+
+    case Lazypock.Files.Presets.for_size(size) do
+      nil -> mod.scale(file_record, size)
+      preset -> mod.scale(file_record, preset)
+    end
+  end
+
+  @doc """
+  URL for a preset variant. Adapters may override it (S3 returns the CDN URL
+  when `public_base_url` is configured); otherwise the app route is used.
+  """
+  def variant_url(file_record, name) do
+    mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
+
+    if function_exported?(mod, :variant_url, 2) do
+      mod.variant_url(file_record, name)
+    else
+      "/api/files/#{file_record["id"]}/scale/#{name}"
+    end
   end
 
   @doc """
@@ -229,44 +389,29 @@ defmodule Lazypock.Files.Store do
 
   @doc """
   Deletes all files associated with a collection record.
+
+  Only the rows are deleted; the `AFTER DELETE` trigger enqueues the objects and
+  the reaper removes them (database first, storage second).
   """
   def delete_by_record(collection_name, record_id) do
-    {:ok, %{rows: rows}} =
-      Ecto.Adapters.SQL.query(
-        Repo,
-        "SELECT storage_backend, storage_path FROM _files WHERE collection_name = $1 AND record_id = $2",
-        [collection_name, to_string(record_id)]
-      )
-
-    # Delete physical files
-    Enum.each(rows, fn [backend, storage_path] ->
-      mod = Lazypock.Files.Adapter.for_backend(backend)
-      mod.delete(%{"storage_backend" => backend, "storage_path" => storage_path})
-    end)
-
-    # Delete metadata
     Ecto.Adapters.SQL.query!(
       Repo,
       "DELETE FROM _files WHERE collection_name = $1 AND record_id = $2",
       [collection_name, to_string(record_id)]
     )
 
+    Reaper.kick()
     :ok
   end
 
   @doc """
-  Deletes a file record and its underlying storage.
+  Deletes a file record; the reaper removes the stored objects.
   """
   def delete(id) do
     case get(id) do
-      {:ok, file_record} ->
-        mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
-        mod.delete(file_record)
-
-        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [
-          to_uuid_binary(file_record["id"])
-        ])
-
+      {:ok, _file_record} ->
+        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [to_uuid_binary(id)])
+        Reaper.kick()
         :ok
 
       {:error, reason} ->
@@ -274,66 +419,140 @@ defmodule Lazypock.Files.Store do
     end
   end
 
-  defp do_store(binary, filename, content_type, opts) do
-    # always local by default
-    adapter_mod = Lazypock.Files.Adapters.Local
+  # Allowed values for the `origin` column; anything else is treated as `field`.
+  @origins ~w(field editor library)
 
-    case adapter_mod.store(binary, filename, []) do
+  @doc false
+  def normalize_origin(value), do: if(value in @origins, do: value, else: "field")
+
+  defp do_store(source, filename, content_type, opts) do
+    backend = Lazypock.Files.Storage.backend()
+    adapter_mod = Lazypock.Files.Adapter.for_backend(backend)
+    filename = sanitize_filename(filename)
+
+    # The id is generated here (rather than by the column default) so storage
+    # keys and variant paths — which include it — exist before the row is
+    # inserted, and the adapter can place the original under `<id>/`.
+    id = Ecto.UUID.generate()
+
+    case adapter_mod.store(source, filename, id: id) do
       {:ok, meta} ->
-        ext = Path.extname(filename)
-        mime = content_type || meta[:mime_type]
+        ext = filename |> Path.extname() |> String.downcase()
+        # Prefer the server-determined MIME type (set by `Lazypock.Files.Validation`
+        # via `opts[:mime_type]`) over anything client-supplied.
+        mime = opts[:mime_type] || content_type || meta[:mime_type]
         thumb_sizes = opts[:thumb_sizes] || []
 
-        {:ok, %{rows: [[id]]}} =
+        # Generate thumbs and preset variants before the INSERT so the row, its
+        # thumbs and its variants are written in one round-trip (`RETURNING *`)
+        # instead of INSERT + UPDATE + SELECT against a possibly remote database.
+        thumbs_map =
+          thumb_sizes
+          |> generate_thumbs(adapter_mod, source, filename)
+          |> Map.new(fn t -> {t["size"], t} end)
+
+        file_record = %{
+          "id" => id,
+          "filename" => filename,
+          "storage_path" => meta[:path],
+          "storage_backend" => backend
+        }
+
+        variants_map = generate_variants(adapter_mod, file_record, mime, opts)
+
+        {:ok, %{rows: [row], columns: cols}} =
           Ecto.Adapters.SQL.query(
             Repo,
             """
-            INSERT INTO _files (filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            RETURNING id
+            INSERT INTO _files (id, filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name, thumbs, variants, origin)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13)
+            RETURNING *
             """,
             [
+              Ecto.UUID.dump!(id),
               filename,
               ext,
               mime,
               meta[:size],
               meta[:path],
-              "local",
+              backend,
               opts[:collection_name] || "",
               to_string(opts[:record_id] || ""),
-              opts[:field_name] || ""
+              opts[:field_name] || "",
+              Jason.encode!(thumbs_map),
+              Jason.encode!(variants_map),
+              opts[:origin] || "field"
             ]
           )
 
-        thumbs =
-          if thumb_sizes != [] do
-            safe_generate_thumbs(adapter_mod, binary, filename, thumb_sizes)
-          else
-            []
-          end
-
-        if thumbs != [] do
-          thumbs_map = Map.new(thumbs, fn t -> {t["size"], t} end)
-          thumbs_json = Jason.encode!(thumbs_map)
-
-          Ecto.Adapters.SQL.query!(
-            Repo,
-            "UPDATE _files SET thumbs = $1::jsonb WHERE id = $2::uuid",
-            [thumbs_json, to_uuid_binary(id)]
-          )
-        end
-
-        get(id)
+        {:ok,
+         cols
+         |> Enum.zip(row)
+         |> Map.new()
+         |> normalize_uuid()
+         |> normalize_thumbs()
+         |> normalize_variants()}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
+  # Generate the configured `eager` presets (plus any explicitly requested via
+  # `opts[:variants]`), so the response contains valid variant URLs immediately.
+  defp generate_variants(adapter_mod, file_record, mime, opts) do
+    requested = opts[:variants] || []
+
+    names =
+      (Enum.map(Lazypock.Files.Presets.eager(), & &1["name"]) ++ requested)
+      |> Enum.uniq()
+
+    if image_mime?(mime) and names != [] do
+      Enum.reduce(names, %{}, fn name, acc ->
+        case Lazypock.Files.Presets.get(name) do
+          nil ->
+            acc
+
+          preset ->
+            case adapter_mod.scale(file_record, preset) do
+              {:ok, _binary, _mime} -> Map.put(acc, name, %{"mime_type" => "image/webp"})
+              _ -> acc
+            end
+        end
+      end)
+    else
+      %{}
+    end
+  end
+
+  defp image_mime?(mime), do: is_binary(mime) and String.starts_with?(mime, "image/")
+
+  defp generate_thumbs([], _adapter_mod, _source, _filename), do: []
+
+  defp generate_thumbs(sizes, adapter_mod, source, filename) do
+    safe_generate_thumbs(adapter_mod, source, filename, sizes)
+  end
+
+  # Strip path separators, control characters and quotes: the stored name is
+  # echoed back in `Content-Disposition` and used to build the storage path.
+  defp sanitize_filename(nil), do: @default_filename
+
+  defp sanitize_filename(name) when is_binary(name) do
+    cleaned =
+      name
+      |> Path.basename()
+      |> String.replace(~r/[[:cntrl:]]/, "_")
+      |> String.replace(["\"", "\\", "/"], "_")
+      |> String.trim()
+      |> String.slice(0, @max_filename_length)
+
+    if cleaned == "", do: @default_filename, else: cleaned
+  end
+
   # Thumbnail generation is best-effort: any failure (missing ImageMagick,
-  # non-image file, resize error) must not break the upload.
-  defp safe_generate_thumbs(adapter_mod, binary, filename, thumb_sizes) do
-    {:ok, thumbs} = adapter_mod.thumbs(binary, filename, thumb_sizes)
+  # non-image file, resize error, image queue full) must not break the upload.
+  defp safe_generate_thumbs(adapter_mod, source, filename, thumb_sizes) do
+    {:ok, thumbs} = adapter_mod.thumbs(source, filename, thumb_sizes)
     thumbs
   rescue
     _ -> []

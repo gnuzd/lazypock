@@ -13,7 +13,7 @@ LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoeni
 
 **Status:** Beta. The backend (schema engine, REST API, rules, realtime, file storage, hooks, cron, auth incl. OAuth2), the Studio admin UI, and the TypeScript SDK are all complete and usable end-to-end. See [What Works Now](#what-works-now) for the full breakdown.
 
-📚 **Docs:** [What is Lazypock](https://lazypock.gnuzd.dev/) · [Server Guide](https://lazypock.gnuzd.dev/server) · [TypeScript SDK](https://lazypock.gnuzd.dev/sdk/typescript) · [all SDKs](https://lazypock.gnuzd.dev/sdk)
+📚 **Docs:** [What is Lazypock](https://lazypock.gnuzd.dev/) · [Server Guide](https://lazypock.gnuzd.dev/server) · [File storage & images](https://lazypock.gnuzd.dev/files) · [TypeScript SDK](https://lazypock.gnuzd.dev/sdk/typescript) · [all SDKs](https://lazypock.gnuzd.dev/sdk)
 
 ---
 
@@ -76,7 +76,7 @@ Full SDK docs (install, codegen, type safety, queries, realtime, files, auth): *
 | 🔐 **Auth** | Superuser + auth collection signed tokens (HMAC `Phoenix.Token`, **not JWT**) (`auth-with-password`/`auth-refresh`/`auth-methods`) + OAuth2 (Google/GitHub/generic via Assent) ✅ | Login page, auth guard, token persistence, auto-redirect ✅ | `login/me/logout`, `AuthStore` with pluggable storage (localStorage-backed by default) ✅ |
 | 🛡️ **Rules** | Three-state rules (nil = superuser, `""` = public, filter expr), enforced on all CRUD + `manageRule` ✅ | Rule editor with lock/unlock per field ✅ | — |
 | ⚡ **Realtime** | Phoenix Channels, rule-enforced join, anonymous allowed on public/rule-based collections ✅ | Live record updates via `client.realtime.subscribe()` ✅ | `RealtimeService` + PocketBase-style `collection(name).subscribe/unsubscribe`, auto-connects without a token for public reads ✅ |
-| 📁 **File Storage** | Upload/serve/delete, thumbnails + on-demand scaling, local adapter ✅ (S3 adapter is a registered stub — not yet implemented) | Upload in record form, image picker, thumbnails in list/form ✅ | `files.upload/list/delete`, `getFileUrl`, `getThumbUrl`, `getScaleUrl` ✅ |
+| 📁 **File Storage** | Upload/serve/delete with the shared upload policy, image presets + on-demand scaling, deletion outbox/reaper, **local and S3/R2 adapters** (encrypted secret, Test connection), direct-to-bucket uploads ✅ | Upload in record form, shared media picker (library or upload), Media library for browsing/deleting, richtext image insert, thumbnails in list/form, Settings → Files Storage ✅ | `files.upload/list/delete/uploadDirect`, `getFileUrl`, `getThumbUrl`, `getScaleUrl`, `getVariantUrl` ✅ |
 | 🪝 **Hooks** | PocketBase-style event hooks (`use Lazypock.Hooks.Hook`, `e.next()` chain, ~80 hook points), custom API routes via `Router.add` ✅ | — | — |
 | ⏰ **Cron Jobs** | Persisted `_crons` scheduler: 5/6-field expressions, per-job IANA timezone, SQL / HTTP-webhook / Elixir-hook actions, run-now, pg advisory-lock guarded execution ✅ | Settings → Cron dashboard: CRUD, enable/disable, run-now, next-run preview, last-run status ✅ | — |
 | 🎨 **Admin Dashboard** | Serves the Studio SPA at `/_/*`, dev proxy support ✅ | Collections sidebar, record CRUD, field editor, rules, indexes, API keys, import/export, backups ✅ | — |
@@ -484,17 +484,48 @@ collections), `--id-map-file` (default `pocketbase_id_map.json`).
 
 ---
 
-## File Storage & Thumbnails
+## File Storage & Images
 
-Uploaded files are stored on disk under `core/priv/uploads/YYYY/MM/DD/{uuid}.{ext}`
-(date-based directories). The `_files` table records metadata (filename, mime type,
-size, storage backend, and the collection/record/field the file belongs to).
+Uploads live on the local disk by default (or in an S3-compatible bucket), are validated against a
+configurable policy, and are resized into named image **presets**. The full guide — including the
+Studio UI and troubleshooting — is at
+**[lazypock.gnuzd.dev/files](https://lazypock.gnuzd.dev/files)**.
+
+| Topic | Section |
+| --- | --- |
+| Studio: browse, pick, delete uploads | [Media library](#media-library-studio) |
+| Thumbnails and `/scale` | [Thumbnails & on-demand scaling](#thumbnails--on-demand-scaling-requires-imagemagick) |
+| Size / type / dimension limits | [Upload policy](#upload-policy) |
+| Image presets | [Presets & variants](#presets--variants) |
+| S3 / Cloudflare R2 | [S3 / R2 storage](#s3--r2-storage) |
+| Direct-to-bucket uploads | [Direct upload](#direct-upload-s3r2) |
+| References, delete guard, GC | [References, delete guard and GC](#references-delete-guard-and-gc) |
+| CLI and health | [Operations](#operations) |
+
+The `_files` table records the metadata (filename, MIME type, size, storage backend, and the
+collection/record/field the file belongs to), and `_files.storage_backend` is set **per row**, so
+files written before a backend switch stay readable afterwards.
+
+### Media library (Studio)
+
+**Media** in the top navigation lists every upload with thumbnails, filename search and paging;
+select a file to see its URL and metadata, or delete it. Deleting a file that a record still uses
+asks for confirmation first (the API answers `409` with the list of records that reference it).
+
+The same picker is used everywhere a file is chosen:
+
+- **Richtext (`editor`) fields** — the 🖼 toolbar button opens **Insert image** with two tabs:
+  **Library** (pick an existing image) and **Upload** (drag & drop or choose files, used
+  immediately). Images are embedded as the `content` preset, never the original. Pasting or dropping
+  an image into the editor uploads it the same way.
+- **`file` / `multi_file` fields** — the same modal, multi-select when the field allows it.
 
 ### Thumbnails & on-demand scaling (requires ImageMagick)
 
 When a **file** or **multi_file** field has **Thumb sizes** configured in the
 collection editor (e.g. `50x50, 480x720`), LazyPock generates WebP thumbnails
-server-side on upload.
+server-side on upload. Output is encoded explicitly as WebP regardless of the
+source format.
 
 - Thumbnails are stored under `priv/uploads/YYYY/MM/DD/thumbs/`
 - Served at `GET /api/files/:id/thumbs/:size`
@@ -517,6 +548,12 @@ If ImageMagick is **not** installed, uploads still work — the file is stored
 normally, but no thumbnails/scaling are available and a one-time warning is
 logged. Set `LAZYPOCK_THUMBNAILS=0` to disable image resizing entirely (and
 silence the warning).
+
+**Resource limits:** at most `LAZYPOCK_IMAGE_CONCURRENCY` (default `1`) resizes
+run at once per instance. Requests that arrive while every slot is busy wait for
+a short time, then fail with `503` + `Retry-After` rather than spawning
+unbounded ImageMagick processes. Each resize also gets an ImageMagick memory cap
+(`LAZYPOCK_MAGICK_MEMORY_LIMIT`, default `256MiB`) and metadata is stripped.
 
 ### On-demand image scaling
 
@@ -543,10 +580,99 @@ Examples:
 <img src="/api/files/<id>/scale/400x" alt="">
 ```
 
-- Sizes are validated (max 4 digits per dimension) to prevent abuse.
-- Results are **cached** on disk under `priv/uploads/YYYY/MM/DD/thumbs/` — the
-  first request generates, subsequent requests are served instantly.
+- Sizes are validated: each dimension must be a positive integer up to **2000px**
+  to prevent abuse. Larger sizes are rejected with `400`.
+- Results are **cached** on disk under `priv/uploads/_cache/scale/`, keyed by
+  file id and size — the first request generates, subsequent requests are served
+  instantly (no daily re-encoding).
 - The TypeScript SDK exposes `getScaleUrl(baseUrl, fileId, size)`.
+
+### Upload policy
+
+`POST /api/files` resolves its limits from **field options → global settings →
+defaults** (`Lazypock.Files.Policy`):
+
+| Limit | Source | Default |
+| --- | --- | --- |
+| Max size | field `maxFileSize` / `upload.max_size` | 10 MB |
+| Allowed MIME types | field `mimeTypes` / `upload.mime_types` (optional allowlist, `image/*` wildcards allowed) | Validation's allowlist |
+| Megapixels | `upload.max_megapixels` | 40 |
+| Max dimension | `upload.max_dimension` | 10000 px |
+
+Global settings live under the `upload` key of `_settings.data` (editable via
+`PATCH /api/settings`, no restart needed):
+
+```json
+{ "upload": { "max_size": "5MB", "mime_types": ["image/*"], "max_megapixels": 40 } }
+```
+
+`LAZYPOCK_UPLOAD_MAX_MB` overrides the size setting, and the request-body limit
+for `POST /api/files` follows it (other routes keep the 8 MB default). A file
+over the size cap returns `413`, a disallowed type `400`, and an image over the
+dimension/megapixel caps `422`.
+
+### Presets & variants
+
+Named variants are configured under the `image` key of `_settings.data` and
+serve `GET /api/files/:id/scale/:preset`. Defaults: `thumb` (100×100 cover) and
+`content` (1280w contain), both generated during upload so their URLs are valid
+immediately; add `"eager": false` for lazy generation on first request.
+
+```json
+{ "image": { "presets": [
+  { "name": "thumb", "width": 100, "height": 100, "fit": "cover", "eager": true },
+  { "name": "content", "width": 1280, "height": null, "fit": "contain", "eager": true }
+] } }
+```
+
+Every response includes `variants` (`preset name → URL`). Requests for the same
+missing variant are coalesced, so a burst generates it once. Image work is
+bounded by `LAZYPOCK_IMAGE_CONCURRENCY` (default 1 slot per instance) and the
+engine is chosen with `LAZYPOCK_IMAGE_ENGINE` (`magick`).
+
+### S3 / R2 storage
+
+Configure the backend in **Settings → Storage** (superuser) or via the
+`LAZYPOCK_S3_*` environment variables (env wins, and the Studio locks those
+fields). `POST /api/settings/storage/test` runs a real PUT/HEAD/GET/DELETE
+round-trip and reports each step. The secret access key is stored encrypted
+(AES-256-GCM, key derived from `SECRET_KEY_BASE`) and is never returned by the
+API; rotating `SECRET_KEY_BASE` requires re-entering it.
+
+`_files.storage_backend` is recorded per row, so files written while the local
+backend was active stay readable after switching to S3.
+
+### Direct upload (S3/R2)
+
+When the S3 backend is configured, uploads can bypass the app entirely:
+
+1. `POST /api/files/presign` `{filename, size, mime}` → a pending row + a
+   presigned `PUT` (content-type and content-length signed to fixed values).
+2. The client PUTs the bytes straight to the bucket.
+3. `POST /api/files/:id/complete` → the server `HEAD`s the object, re-runs the
+   magic-byte and dimension checks, generates the eager variants and marks it
+   ready. On failure the object and row are removed.
+
+Abandoned pending uploads are deleted after `files.pending_ttl_ms` (default 1 h).
+
+### References, delete guard and GC
+
+Richtext (Markdown) content is scanned for file ids and stored in `_file_refs`
+on record create/update. Deleting a file that a record still references returns
+`409` with the usage list; `?force=true` deletes it anyway (superuser). Editor
+uploads that were never inserted into a record are garbage-collected after
+`files.unattached_ttl_ms` (default 24 h); library uploads are kept. After moving
+to a CDN, rewrite embedded URLs with
+`lazypock content rewrite-urls --from /api/files --to https://cdn.example.com`
+(`--dry-run` to preview).
+
+### Operations
+
+`GET /api/health` reports the deletion outbox depth and the image-queue state.
+The CLI adds `lazypock files reap|regen|reconcile|migrate|trim` (see
+`lazypock files` for usage), and deletions are database-first: the `_files` row
+is removed immediately and a `_file_deletions` outbox plus `Lazypock.Files.Reaper`
+removes the objects, retrying with backoff if the bucket is unreachable.
 
 ---
 

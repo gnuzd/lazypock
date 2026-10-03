@@ -549,6 +549,59 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
           </tr>
           <tr>
             <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_CONCURRENCY</code></td
+            >
+            <td class="px-3 py-2"
+              >Concurrent image resizes per instance (requests wait, then get
+              <code class="doc-inline px-1 py-0.5">503</code>)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">1</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_UPLOAD_MAX_MB</code></td
+            >
+            <td class="px-3 py-2"
+              >Request-body cap for
+              <code class="doc-inline px-1 py-0.5">POST /api/files</code> (other routes stay at
+              8 MB)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">20</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_MAGICK_MEMORY_LIMIT</code></td
+            >
+            <td class="px-3 py-2">Per-process ImageMagick memory cap</td>
+            <td class="px-3 py-2 font-mono text-xs">256MiB</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_VARIANT_CACHE_MAX</code></td
+            >
+            <td class="px-3 py-2"
+              >Local variant cache cap — oldest files are evicted first</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">5GB</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_S3_*</code></td
+            >
+            <td class="px-3 py-2"
+              >S3/R2 backend: <code class="doc-inline px-1 py-0.5">ENDPOINT</code>,
+              <code class="doc-inline px-1 py-0.5">BUCKET</code>,
+              <code class="doc-inline px-1 py-0.5">REGION</code>,
+              <code class="doc-inline px-1 py-0.5">ACCESS_KEY</code>,
+              <code class="doc-inline px-1 py-0.5">SECRET</code>,
+              <code class="doc-inline px-1 py-0.5">PREFIX</code>,
+              <code class="doc-inline px-1 py-0.5">PUBLIC_URL</code> — override and lock the matching
+              Studio fields. See <a href="/files">File storage &amp; images</a></td
+            >
+            <td class="px-3 py-2 font-mono text-xs">—</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
               ><code class="doc-inline px-1 py-0.5">LAZYPOCK_DATA_DIR</code></td
             >
             <td class="px-3 py-2"

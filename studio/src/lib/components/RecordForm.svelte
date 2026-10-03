@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { slide } from 'svelte/transition';
-	import { getFileUrl, getThumbUrl, type FileRecord } from 'lazypock';
+	import { getFileUrl, getThumbUrl } from 'lazypock';
 
 	import RichEditor from '$lib/components/RichEditor.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
+	import MediaLibrary, { type MediaItem } from '$lib/components/MediaLibrary.svelte';
 
 	import { client } from '$lib/client';
-	import Modal from '$lib/components/Modal.svelte';
 
 	let {
 		fields,
@@ -126,60 +126,11 @@
 			}));
 	}
 
-	/** Human-readable label for a related record (presentable field, name/email, or id). */
-	function recordLabel(rec: Record<string, unknown>, targetColl: string): string {
-		const presentField = getPresentableField(targetColl);
-		const val = presentField ? ((rec[presentField] as string) ?? '') : '';
-		const id = (rec.id as string) ?? '';
-		if (val) return `${val} (${id.slice(0, 8)}...)`;
-		return id;
-	}
-
 	/** Current value(s) for a field as an array of ids. */
 	function recordValue(fieldName: string): string[] {
 		const v = data[fieldName];
 		if (Array.isArray(v)) return (v as string[]).filter(Boolean);
 		return v ? [v as string] : [];
-	}
-
-	/** Labels for the currently selected value(s). */
-	function selectedLabels(fieldName: string, targetColl: string): string[] {
-		const records = relationCache[targetColl] ?? [];
-		const selected = recordValue(fieldName);
-		if (selected.length === 0) return [];
-		return selected.map((id) => {
-			const rec = records.find((r) => r.id === id);
-			return rec ? recordLabel(rec, targetColl) : id;
-		});
-	}
-
-	async function toggleRelationOption(fieldName: string, value: string, maxSelect: number) {
-		if (maxSelect > 1) {
-			const cur = recordValue(fieldName);
-			if (cur.includes(value)) {
-				update(fieldName, cur.length > 1 ? cur.filter((v) => v !== value) : null);
-			} else {
-				update(fieldName, [...cur, value]);
-			}
-		} else {
-			update(fieldName, value);
-			relationOpen[fieldName] = false;
-			relationSearch[fieldName] = '';
-			relationOpen = { ...relationOpen };
-			relationSearch = { ...relationSearch };
-		}
-	}
-
-	function removeRelationValue(fieldName: string, value: string) {
-		const cur = recordValue(fieldName);
-		if (cur.length <= 1) {
-			update(fieldName, null);
-		} else {
-			update(
-				fieldName,
-				cur.filter((v) => v !== value)
-			);
-		}
 	}
 
 	const TEXT_INPUT_TYPES = new Set(['text', 'number', 'email', 'url', 'password']);
@@ -268,55 +219,39 @@
 		}
 	}
 
-	// ── File library picker state ──
+	// ── File library picker (shared MediaLibrary modal) ──
 	let pickerOpen = $state(false);
 	let pickerField = $state('');
-	let pickerItems = $state<FileRecord[]>([]);
-	let pickerLoading = $state(false);
-	let pickerError = $state('');
 
-	async function openPicker(fieldName: string) {
+	function openPicker(fieldName: string) {
 		pickerField = fieldName;
 		pickerOpen = true;
-		pickerError = '';
-		pickerLoading = true;
-		try {
-			const res = await client.files.list({ mime: 'image/', perPage: 200 });
-			pickerItems = res?.items ?? [];
-		} catch (e) {
-			pickerError = (e as Error).message || 'Failed to load library';
-			pickerItems = [];
-		} finally {
-			pickerLoading = false;
-		}
 	}
 
-	function closePicker() {
-		pickerOpen = false;
-		pickerField = '';
-		pickerItems = [];
+	function isMultiField(fieldName: string): boolean {
+		return fields.find((f) => f.name === fieldName)?.type === 'multi_file';
 	}
 
-	function pickFile(fileId: string) {
-		const isMulti =
-			pickerField && fields.find((f) => f.name === pickerField)?.type === 'multi_file';
-		if (isMulti) {
-			const cur = recordValue(pickerField);
-			if (!cur.includes(fileId)) update(pickerField, [...cur, fileId]);
+	/** Called with the library selection: store the file ids in the field. */
+	function onPicked(items: MediaItem[]) {
+		if (!pickerField || items.length === 0) return;
+
+		if (isMultiField(pickerField)) {
+			const next = [...recordValue(pickerField)];
+
+			for (const item of items) {
+				if (!next.includes(item.id)) next.push(item.id);
+				rememberFile(item.id, item.filename, item.url ?? '', item.thumbs);
+			}
+
+			update(pickerField, next);
 		} else {
-			update(pickerField, fileId);
+			const item = items[0];
+			rememberFile(item.id, item.filename, item.url ?? '', item.thumbs);
+			update(pickerField, item.id);
 		}
-		closePicker();
-	}
 
-	async function deleteFromLibrary(fileId: string) {
-		if (!confirm('Delete this file permanently? This cannot be undone.')) return;
-		try {
-			await client.files.delete(fileId);
-			pickerItems = pickerItems.filter((f) => f.id !== fileId);
-		} catch (e) {
-			pickerError = (e as Error).message || 'Delete failed';
-		}
+		pickerOpen = false;
 	}
 
 	async function removeFile(fieldName: string, fileId: string) {
@@ -534,7 +469,6 @@
 						{disabled}
 						onOpen={() => {
 							if (disabled) return;
-							console.log(relationOpen[name]);
 							if (relationOpen[name]) {
 								relationOpen[name] = false;
 								relationOpen = { ...relationOpen };
@@ -698,43 +632,13 @@
 	{/each}
 </div>
 
-<!-- ═══ FILE LIBRARY PICKER ═══ -->
-<Modal show={pickerOpen} title="Image Library">
-	{#if pickerLoading}
-		<div class="picker-status">Loading images…</div>
-	{:else if pickerError}
-		<div class="picker-status picker-error">{pickerError}</div>
-	{:else if pickerItems.length === 0}
-		<div class="picker-status">No images uploaded yet. Upload files to build the library.</div>
-	{:else}
-		<div class="picker-grid">
-			{#each pickerItems as item (item.id)}
-				{@const t = item.thumbs
-					? Object.keys(item.thumbs).sort((a, b) => a.length - b.length)[0]
-					: undefined}
-				<div class="picker-cell" role="button" tabindex="0" onclick={() => pickFile(item.id)}>
-					{#if t && item.thumbs}
-						<img src={item.thumbs[t]} alt={item.filename} class="picker-img" loading="lazy" />
-					{:else}
-						<div class="picker-img picker-img-empty">
-							<span class="picker-no-thumb">No thumb</span>
-						</div>
-					{/if}
-					<span class="picker-name">{item.filename}</span>
-					<button
-						type="button"
-						class="picker-delete"
-						aria-label="Delete {item.filename}"
-						onclick={(e) => {
-							e.stopPropagation();
-							deleteFromLibrary(item.id);
-						}}>×</button
-					>
-				</div>
-			{/each}
-		</div>
-	{/if}
-</Modal>
+<!-- ═══ FILE LIBRARY PICKER (shared with the richtext editor) ═══ -->
+<MediaLibrary
+	bind:open={pickerOpen}
+	title="Select file"
+	multiple={pickerField ? isMultiField(pickerField) : false}
+	onSelect={onPicked}
+/>
 
 <style>
 	/* ── Container ── */
@@ -1084,12 +988,6 @@
 		position: relative;
 	}
 
-	/* Lift the open relation field above the following fields so the dropdown
-	   is never painted behind the next field's container. */
-	.relation-wrap:has(.relation-dropdown) {
-		z-index: 20;
-	}
-
 	.relation-trigger {
 		display: flex;
 		align-items: center;
@@ -1227,92 +1125,11 @@
 		text-align: center;
 	}
 
-	/* ── File library picker ── */
+	/* ── File actions (the library picker itself is MediaLibrary) ── */
 	.file-actions {
 		display: flex;
 		gap: 8px;
 		align-items: center;
 		padding: 8px;
-	}
-
-	.picker-status {
-		padding: 24px;
-		text-align: center;
-		opacity: 0.5;
-		font-size: 0.8125rem;
-	}
-
-	.picker-error {
-		color: var(--color-error);
-		opacity: 1;
-	}
-
-	.picker-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-		gap: 10px;
-		max-height: 60vh;
-		overflow-y: auto;
-	}
-
-	.picker-cell {
-		position: relative;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		padding: 6px;
-		border: 1px solid var(--color-base-300);
-		border-radius: var(--radius-box, 8px);
-		cursor: pointer;
-	}
-
-	.picker-cell:hover {
-		border-color: var(--color-primary);
-	}
-
-	.picker-img {
-		width: 100%;
-		height: 80px;
-		object-fit: cover;
-		border-radius: 4px;
-		background: var(--color-base-200);
-	}
-
-	.picker-img-empty {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.picker-no-thumb {
-		font-size: 0.6875rem;
-		opacity: 0.4;
-	}
-
-	.picker-name {
-		font-size: 0.6875rem;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.picker-delete {
-		position: absolute;
-		top: 4px;
-		right: 4px;
-		width: 20px;
-		height: 20px;
-		line-height: 1;
-		border: none;
-		border-radius: 50%;
-		background: color-mix(in oklab, var(--color-error) 80%, #000);
-		color: #fff;
-		font-size: 0.75rem;
-		cursor: pointer;
-		opacity: 0;
-	}
-
-	.picker-cell:hover .picker-delete {
-		opacity: 1;
 	}
 </style>

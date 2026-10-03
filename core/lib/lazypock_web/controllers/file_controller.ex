@@ -1,11 +1,10 @@
 defmodule LazypockWeb.FileController do
   use LazypockWeb, :controller
 
+  alias Lazypock.Files.Policy
   alias Lazypock.Files.Store
   alias Lazypock.Files.Validation
   alias Lazypock.Collections.Registry
-
-  @default_max_file_size 10 * 1024 * 1024
 
   @doc """
   GET /api/files
@@ -16,6 +15,7 @@ defmodule LazypockWeb.FileController do
     * `collectionName` — only files for a collection
     * `fieldName` — only files for a field
     * `mime` — only files whose mime_type starts with this prefix (e.g. `image/`)
+    * `q` — case-insensitive filename search
   """
   def index(conn, params) do
     conn = require_superuser!(conn)
@@ -31,7 +31,8 @@ defmodule LazypockWeb.FileController do
       per_page: per_page,
       collection_name: blank_to_nil(params["collectionName"]),
       field_name: blank_to_nil(params["fieldName"]),
-      mime: blank_to_nil(params["mime"])
+      mime: blank_to_nil(params["mime"]),
+      q: blank_to_nil(params["q"])
     ]
 
     {:ok, %{items: items, page: page, per_page: per_page, total: total}} = Store.list(opts)
@@ -65,11 +66,9 @@ defmodule LazypockWeb.FileController do
   POST /api/files
   Upload a file (multipart/form-data).
 
-  Supports an optional `collection_name` field in the multipart body.
-  When provided, the max file size is resolved from:
-    1. The file field's `options.maxFileSize` in the collection schema
-    2. App config: `config :lazypock, Lazypock.Files.Store, max_file_size: N`
-    3. Default: 10 MB
+  Supports an optional `collection_name` field in the multipart body. The size,
+  MIME and image-dimension limits are resolved by `Lazypock.Files.Policy`:
+  field options first, then the global `upload` settings, then the default.
   """
   def upload(conn, %{"file" => upload}) do
     conn = require_authenticated!(conn)
@@ -89,7 +88,9 @@ defmodule LazypockWeb.FileController do
   end
 
   defp do_upload_with_size_check(conn, upload) do
-    max_size = resolve_max_file_size(conn.params)
+    field_options = file_field_options(conn.params)
+    policy = Policy.resolve(field_options)
+    max_size = Policy.max_size(policy)
     size = file_size(upload)
 
     if size > max_size do
@@ -101,55 +102,180 @@ defmodule LazypockWeb.FileController do
         "data" => %{}
       })
     else
-      do_upload(conn, upload)
+      do_upload(conn, upload, policy, field_options)
     end
   end
 
-  defp do_upload(conn, upload) do
-    case File.read(upload.path) do
-      {:error, _reason} ->
+  defp do_upload(conn, upload, policy, field_options) do
+    # Validate straight from the temp file so image uploads are never buffered
+    # in the BEAM; `validate_file/2` only reads a magic-byte prefix.
+    case Validation.validate_file(upload.filename, upload.path) do
+      {:error, reason} ->
         conn
         |> put_status(400)
-        |> json(%{"code" => 400, "message" => "Could not read uploaded file", "data" => %{}})
+        |> json(%{
+          "code" => 400,
+          "message" => upload_error_message(reason),
+          "data" => %{}
+        })
 
-      {:ok, binary} ->
-        # The client's content-type and filename are both untrusted: confirm
-        # the bytes actually match an allowlisted extension before storing.
-        case Validation.validate(upload.filename, binary) do
-          {:error, reason} ->
+      {:ok, mime} ->
+        cond do
+          not Policy.mime_allowed?(mime, policy) ->
             conn
             |> put_status(400)
             |> json(%{
               "code" => 400,
-              "message" => upload_error_message(reason),
+              "message" => upload_error_message(:extension_not_allowed),
               "data" => %{}
             })
 
-          {:ok, _mime} ->
-            thumb_sizes = resolve_thumb_sizes(conn.params)
-
-            opts = [
-              collection_name: conn.params["collection_name"],
-              record_id: conn.params["record_id"],
-              field_name: conn.params["field_name"],
-              thumb_sizes: thumb_sizes
-            ]
-
-            # Reuse the binary we already read (avoids a second disk read);
-            # the persisted MIME type is derived server-side from the extension.
-            case Store.store(binary, upload.filename, opts) do
-              {:ok, file_record} ->
-                conn
-                |> put_status(201)
-                |> json(format_file(file_record))
-
-              {:error, reason} ->
-                conn
-                |> put_status(400)
-                |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
-            end
+          true ->
+            do_store_upload(conn, upload, policy, field_options, mime)
         end
     end
+  end
+
+  defp do_store_upload(conn, upload, policy, field_options, mime) do
+    case check_dimensions(upload, mime, policy) do
+      {:error, :overloaded} ->
+        conn
+        |> put_resp_header("retry-after", "2")
+        |> put_status(503)
+        |> json(%{
+          "code" => 503,
+          "message" => "Image queue is busy, retry shortly.",
+          "data" => %{}
+        })
+
+      {:error, reason} ->
+        conn
+        |> put_status(422)
+        |> json(%{"code" => 422, "message" => dimension_error_message(reason), "data" => %{}})
+
+      _ok_or_unknown ->
+        store_uploaded_file(conn, upload, field_options, mime)
+    end
+  end
+
+  defp store_uploaded_file(conn, upload, field_options, mime) do
+    opts = [
+      collection_name: conn.params["collection_name"],
+      record_id: conn.params["record_id"],
+      field_name: conn.params["field_name"],
+      thumb_sizes: resolve_thumb_sizes(field_options),
+      variants: resolve_variants(conn.params),
+      origin: Store.normalize_origin(conn.params["origin"]),
+      mime_type: mime
+    ]
+
+    # Stream from the temp file; the persisted MIME type is the
+    # server-determined one from validation.
+    case Store.store({:file, upload.path}, upload.filename, opts) do
+      {:ok, file_record} ->
+        conn
+        |> put_status(201)
+        |> json(format_file(file_record))
+
+      {:error, reason} ->
+        conn
+        |> put_status(400)
+        |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+    end
+  end
+
+  # The dimension guard only applies to images. `:unknown` (no ImageMagick)
+  # lets the upload through — the size cap and limiter still apply.
+  defp check_dimensions(upload, "image/" <> _rest, policy),
+    do: Policy.check_image(upload.path, policy)
+
+  defp check_dimensions(_upload, _mime, _policy), do: :ok
+
+  defp dimension_error_message(:image_too_large),
+    do: "Image dimensions exceed the maximum allowed."
+
+  defp dimension_error_message(:image_too_many_pixels),
+    do: "Image exceeds the maximum allowed megapixels."
+
+  @doc """
+  POST /api/files/presign
+  Creates a pending file row and a presigned PUT for a direct upload (Mode B).
+  """
+  def presign(conn, _params) do
+    conn = require_authenticated!(conn)
+
+    if conn.halted do
+      conn
+    else
+      policy = Policy.resolve(file_field_options(conn.params))
+
+      case Lazypock.Files.DirectUpload.presign(conn.params, policy) do
+        {:ok, info} ->
+          conn |> put_status(200) |> json(info)
+
+        {:error, :too_large} ->
+          fail(
+            conn,
+            413,
+            "File too large. Maximum size is #{format_bytes(Policy.max_size(policy))}."
+          )
+
+        {:error, :direct_upload_requires_s3} ->
+          fail(conn, 400, "Direct upload requires the s3 storage backend.")
+
+        {:error, reason} ->
+          fail(conn, 400, "Invalid direct-upload request: #{inspect(reason)}")
+      end
+    end
+  end
+
+  @doc """
+  POST /api/files/:id/complete
+  Verifies an uploaded object and marks the file ready (Mode B, step 2).
+  """
+  def complete(conn, %{"id" => id}) do
+    conn = require_authenticated!(conn)
+
+    if conn.halted do
+      conn
+    else
+      policy = Policy.resolve(file_field_options(conn.params))
+
+      case Lazypock.Files.DirectUpload.complete(id, policy) do
+        {:ok, record} ->
+          conn |> put_status(200) |> json(format_file(record))
+
+        {:error, :not_found} ->
+          conn
+          |> put_status(404)
+          |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
+
+        {:error, :not_uploaded} ->
+          fail(conn, 422, "The object was not uploaded to storage.")
+
+        {:error, {:size_mismatch, actual, expected}} ->
+          fail(conn, 422, "Uploaded size #{actual} does not match the declared #{expected}.")
+
+        {:error, :image_too_large} ->
+          fail(conn, 422, "Image dimensions exceed the maximum allowed.")
+
+        {:error, :image_too_many_pixels} ->
+          fail(conn, 422, "Image exceeds the maximum allowed megapixels.")
+
+        {:error, :content_mismatch} ->
+          fail(conn, 415, "File contents do not match the filename extension.")
+
+        {:error, :extension_not_allowed} ->
+          fail(conn, 415, "File type not allowed.")
+
+        {:error, reason} ->
+          fail(conn, 422, "Could not verify the uploaded object: #{inspect(reason)}")
+      end
+    end
+  end
+
+  defp fail(conn, status, message) do
+    conn |> put_status(status) |> json(%{"code" => status, "message" => message, "data" => %{}})
   end
 
   defp upload_error_message(reason) do
@@ -253,20 +379,36 @@ defmodule LazypockWeb.FileController do
   DELETE /api/files/:id
   Delete a file.
   """
-  def delete(conn, %{"id" => id}) do
+  def delete(conn, %{"id" => id} = params) do
     conn = require_superuser!(conn)
-    if conn.halted, do: conn, else: do_delete(conn, id)
+    if conn.halted, do: conn, else: do_delete(conn, id, params)
   end
 
-  defp do_delete(conn, id) do
-    case Store.delete(id) do
-      :ok ->
-        conn |> put_status(204) |> json(nil)
+  defp do_delete(conn, id, params) do
+    usage = Lazypock.Files.Refs.usage(id)
+    force? = params["force"] in ["true", "1", true]
 
-      {:error, reason} ->
+    cond do
+      usage != [] and not force? ->
         conn
-        |> put_status(400)
-        |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+        |> put_status(409)
+        |> json(%{
+          "code" => 409,
+          "message" =>
+            "File is still referenced by records. Pass ?force=true to delete it anyway.",
+          "data" => %{"usage" => usage}
+        })
+
+      true ->
+        case Store.delete(id) do
+          :ok ->
+            conn |> put_status(204) |> json(nil)
+
+          {:error, reason} ->
+            conn
+            |> put_status(400)
+            |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+        end
     end
   end
 
@@ -326,6 +468,16 @@ defmodule LazypockWeb.FileController do
             |> put_resp_header("cache-control", "public, max-age=31536000, immutable")
             |> send_resp(200, binary)
 
+          {:error, :overloaded} ->
+            conn
+            |> put_resp_header("retry-after", "2")
+            |> put_status(503)
+            |> json(%{
+              "code" => 503,
+              "message" => "Image queue is busy, retry shortly.",
+              "data" => %{}
+            })
+
           {:error, reason} ->
             conn
             |> put_status(400)
@@ -354,54 +506,43 @@ defmodule LazypockWeb.FileController do
     end
   end
 
-  defp resolve_max_file_size(params) do
+  defp file_field_options(params) do
     case params["collection_name"] do
-      nil ->
-        global_config()
-
-      collection_name when is_binary(collection_name) and collection_name != "" ->
-        collection_max_size(collection_name) || global_config()
-    end
-  end
-
-  defp collection_max_size(collection_name) do
-    with {:ok, collection} <- Registry.get(collection_name),
-         fields <- collection.fields || [],
-         file_field <- Enum.find(fields, fn f -> f.type == "file" end) do
-      if file_field && is_integer(file_field.options["maxFileSize"]) do
-        file_field.options["maxFileSize"]
-      else
-        nil
-      end
-    else
-      _ -> nil
-    end
-  end
-
-  # Resolve thumbnail sizes configured on the file field of the collection.
-  defp resolve_thumb_sizes(params) do
-    case params["collection_name"] do
-      collection_name when is_binary(collection_name) and collection_name != "" ->
-        with {:ok, collection} <- Registry.get(collection_name),
+      name when is_binary(name) and name != "" ->
+        with {:ok, collection} <- Registry.get(name),
              fields <- collection.fields || [],
-             file_field <- Enum.find(fields, fn f -> f.type in ~w(file multi_file) end),
-             opts <- file_field.options || %{} do
-          case opts["thumbs"] do
-            thumbs when is_list(thumbs) -> thumbs
-            _ -> []
-          end
+             %{} = field <- Enum.find(fields, fn f -> f.type in ~w(file multi_file) end) do
+          field.options || %{}
         else
-          _ -> []
+          _ -> %{}
         end
+
+      _ ->
+        %{}
+    end
+  end
+
+  # Thumbnail sizes configured on the file field of the collection.
+  defp resolve_thumb_sizes(field_options) do
+    case field_options["thumbs"] do
+      thumbs when is_list(thumbs) -> thumbs
+      _ -> []
+    end
+  end
+
+  # `?variants=thumb,content` asks for those preset variants to be generated
+  # before responding, so the returned URLs are valid immediately.
+  defp resolve_variants(params) do
+    case params["variants"] do
+      value when is_binary(value) ->
+        value |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+
+      value when is_list(value) ->
+        value
 
       _ ->
         []
     end
-  end
-
-  defp global_config do
-    Application.get_env(:lazypock, Lazypock.Files.Store, [])
-    |> Keyword.get(:max_file_size, @default_max_file_size)
   end
 
   defp format_bytes(bytes) when is_integer(bytes) do
@@ -437,8 +578,23 @@ defmodule LazypockWeb.FileController do
       "mimeType" => file_record["mime_type"],
       "size" => file_record["size"],
       "url" => Store.url(file_record),
-      "thumbs" => normalize_thumbs(file_record["thumbs"], file_record["id"])
+      "thumbs" => normalize_thumbs(file_record["thumbs"], file_record["id"]),
+      "variants" => variant_urls(file_record)
     }
+  end
+
+  # Preset variant URLs, by convention `/api/files/:id/scale/:preset`. They are
+  # generated eagerly on upload or lazily on first request.
+  defp variant_urls(file_record) do
+    if is_binary(file_record["mime_type"]) and
+         String.starts_with?(file_record["mime_type"], "image/") do
+      Lazypock.Files.Presets.all()
+      |> Map.new(fn preset ->
+        {preset["name"], Store.variant_url(file_record, preset["name"])}
+      end)
+    else
+      %{}
+    end
   end
 
   # thumbs JSONB column is a map of {size => meta}; convert to a map of

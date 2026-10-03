@@ -21,6 +21,25 @@ body {
 	height: 100%;
 }
 
+/* ── Text selection ──
+   The browser default highlight is nearly invisible against the themed code
+   blocks and muted surfaces, so selection always uses the primary colour, which
+   every theme pairs with a contrasting `-content` colour. */
+::selection {
+	background-color: var(--color-primary);
+	color: var(--color-primary-content);
+}
+
+/* Code/text blocks set their own background — keep the highlight solid there so
+   a selection inside a snippet is just as visible. */
+pre::selection,
+pre *::selection,
+code::selection,
+code *::selection {
+	background-color: var(--color-primary);
+	color: var(--color-primary-content);
+}
+
 input {
 	@apply outline-none;
 }

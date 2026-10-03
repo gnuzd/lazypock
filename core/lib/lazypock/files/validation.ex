@@ -31,6 +31,7 @@ defmodule Lazypock.Files.Validation do
     ".png" => "image/png",
     ".gif" => "image/gif",
     ".webp" => "image/webp",
+    ".avif" => "image/avif",
     ".pdf" => "application/pdf",
     ".csv" => "text/csv",
     ".txt" => "text/plain",
@@ -41,6 +42,10 @@ defmodule Lazypock.Files.Validation do
   }
 
   @text_extensions ~w(.csv .txt .json)
+
+  # How many bytes are read from disk for the magic-byte sniff. Enough for every
+  # signature above (the longest is WebP/MP4 at 12 bytes).
+  @magic_probe_bytes 64
 
   @zip_magics [
     <<0x50, 0x4B, 0x03, 0x04>>,
@@ -79,6 +84,53 @@ defmodule Lazypock.Files.Validation do
     end
   end
 
+  @doc """
+  Same decision as `validate/2`, but reads the bytes from disk.
+
+  Only the first `#{@magic_probe_bytes}` bytes are read for the magic-byte
+  sniff; the whole file is read only for text extensions (UTF-8/JSON checks).
+  That keeps image uploads from being buffered in the BEAM just to be validated.
+  """
+  @spec validate_file(String.t(), String.t()) :: {:ok, String.t()} | {:error, atom()}
+  def validate_file(filename, path) when is_binary(filename) and is_binary(path) do
+    ext = extension(filename)
+
+    case Map.fetch(@extensions, ext) do
+      :error ->
+        {:error, :extension_not_allowed}
+
+      {:ok, canonical} ->
+        with {:ok, prefix} <- read_prefix(path) do
+          case sniff(prefix) do
+            {:ok, ^canonical} -> {:ok, canonical}
+            {:ok, _other} -> {:error, :content_mismatch}
+            :unknown -> validate_unrecognized_file(canonical, ext, path)
+          end
+        end
+    end
+  end
+
+  defp read_prefix(path) do
+    case File.open(path, [:read, :binary], fn io -> IO.binread(io, @magic_probe_bytes) end) do
+      {:ok, data} when is_binary(data) -> {:ok, data}
+      {:ok, :eof} -> {:ok, ""}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_unrecognized_file(canonical, ext, path) do
+    cond do
+      ext not in @text_extensions ->
+        {:error, :content_mismatch}
+
+      true ->
+        case File.read(path) do
+          {:ok, binary} -> validate_unrecognized(canonical, ext, binary)
+          {:error, _reason} -> {:error, :invalid_text}
+        end
+    end
+  end
+
   @doc "Returns the lowercased extension of `filename` (including the dot), or `\"\"`."
   @spec extension(String.t()) :: String.t()
   def extension(filename) when is_binary(filename) do
@@ -96,6 +148,7 @@ defmodule Lazypock.Files.Validation do
       prefix?(binary, <<0x89, ?P, ?N, ?G, 0x0D, 0x0A, 0x1A, 0x0A>>) -> {:ok, "image/png"}
       prefix?(binary, "GIF87a") or prefix?(binary, "GIF89a") -> {:ok, "image/gif"}
       webp?(binary) -> {:ok, "image/webp"}
+      avif?(binary) -> {:ok, "image/avif"}
       prefix?(binary, "%PDF-") -> {:ok, "application/pdf"}
       zip?(binary) -> {:ok, "application/zip"}
       mp4?(binary) -> {:ok, "video/mp4"}
@@ -135,6 +188,13 @@ defmodule Lazypock.Files.Validation do
   defp webp?(binary) do
     byte_size(binary) >= 12 and binary_part(binary, 0, 4) == "RIFF" and
       binary_part(binary, 8, 4) == "WEBP"
+  end
+
+  # AVIF is ISOBMFF like MP4, so the brand at offset 8 disambiguates it. Checked
+  # before `mp4?/1`, which only looks for `ftyp`.
+  defp avif?(binary) do
+    byte_size(binary) >= 12 and binary_part(binary, 4, 4) == "ftyp" and
+      binary_part(binary, 8, 4) in ["avif", "avis"]
   end
 
   defp zip?(binary), do: Enum.any?(@zip_magics, &prefix?(binary, &1))

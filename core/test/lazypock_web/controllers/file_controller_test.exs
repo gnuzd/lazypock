@@ -194,4 +194,155 @@ defmodule LazypockWeb.FileControllerTest do
       Lazypock.Files.Store.delete(file["id"])
     end
   end
+
+  describe "POST /api/files upload policy" do
+    defp create_file_collection!(options) do
+      name = "files_policy_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Lazypock.Schema.DDL.create_collection(name,
+          type: "base",
+          fields: [%{"name" => "avatar", "type" => "file", "options" => options}]
+        )
+
+      Lazypock.Collections.Registry.reload!()
+      name
+    end
+
+    test "rejects a MIME type outside the field's mimeTypes" do
+      collection = create_file_collection!(%{"mimeTypes" => ["image/png"]})
+      jpeg = <<0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10>> <> :binary.copy(<<0>>, 64)
+
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(jpeg, "photo.jpg"),
+          "collection_name" => collection
+        })
+
+      assert json_response(conn, 400)["message"] =~ "not allowed"
+    end
+
+    test "accepts an image allowed by the field's mimeTypes" do
+      collection = create_file_collection!(%{"mimeTypes" => ["image/png"]})
+
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(Lazypock.TestImage.tiny_png!(40, 40), "photo.png"),
+          "collection_name" => collection
+        })
+
+      body = json_response(conn, 201)
+      assert body["mimeType"] == "image/png"
+      Lazypock.Files.Store.delete(body["id"])
+    end
+
+    test "rejects a file over the field's maxFileSize" do
+      collection = create_file_collection!(%{"maxFileSize" => 10})
+
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(Lazypock.TestImage.tiny_png!(40, 40), "photo.png"),
+          "collection_name" => collection
+        })
+
+      assert json_response(conn, 413)["message"] =~ "Maximum size"
+    end
+
+    test "rejects an image over the megapixel cap (422)" do
+      original = Lazypock.Settings.get()
+      Lazypock.Settings.put(Map.put(original, "upload", %{"max_megapixels" => 1}))
+      Lazypock.Files.Policy.clear_cache()
+
+      on_exit(fn ->
+        Lazypock.Settings.put(original)
+        Lazypock.Files.Policy.clear_cache()
+      end)
+
+      collection = create_file_collection!(%{})
+
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(Lazypock.TestImage.tiny_png!(1100, 1000), "photo.png"),
+          "collection_name" => collection
+        })
+
+      assert json_response(conn, 422)["message"] =~ "megapixels"
+    end
+  end
+
+  describe "preset variants" do
+    test "the upload response advertises preset variant URLs for images" do
+      conn =
+        auth_conn(build_conn())
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{
+          "file" => upload_body(Lazypock.TestImage.tiny_png!(300, 180), "photo.png")
+        })
+
+      body = json_response(conn, 201)
+      assert body["variants"]["thumb"] == "/api/files/#{body["id"]}/scale/thumb"
+      assert body["variants"]["content"] == "/api/files/#{body["id"]}/scale/content"
+
+      Lazypock.Files.Store.delete(body["id"])
+      Lazypock.Files.Reaper.drain()
+    end
+
+    test "GET /scale/:preset serves a real webp variant" do
+      {:ok, file} =
+        Lazypock.Files.Store.store(Lazypock.TestImage.tiny_png!(300, 180), "img.png", [])
+
+      conn = auth_conn(build_conn()) |> get("/api/files/#{file["id"]}/scale/thumb")
+      body = response(conn, 200)
+      assert List.first(get_resp_header(conn, "content-type")) == "image/webp"
+      assert binary_part(body, 0, 4) == "RIFF"
+      assert binary_part(body, 8, 4) == "WEBP"
+
+      Lazypock.Files.Store.delete(file["id"])
+      Lazypock.Files.Reaper.drain()
+    end
+
+    test "GET /scale/:size still works for arbitrary sizes" do
+      {:ok, file} =
+        Lazypock.Files.Store.store(Lazypock.TestImage.tiny_png!(300, 180), "img.png", [])
+
+      conn = auth_conn(build_conn()) |> get("/api/files/#{file["id"]}/scale/120x120")
+      assert List.first(get_resp_header(conn, "content-type")) == "image/webp"
+
+      Lazypock.Files.Store.delete(file["id"])
+      Lazypock.Files.Reaper.drain()
+    end
+  end
+
+  describe "reference guard and health" do
+    test "refuses to delete a referenced file, unless forced" do
+      {:ok, file} = Lazypock.Files.Store.store("referenced", "doc.txt", [])
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "INSERT INTO _file_refs (file_id, collection, record_id, field) VALUES ($1, 'posts', 'r1', 'body')",
+        [Ecto.UUID.dump!(file["id"])]
+      )
+
+      conn = auth_conn(build_conn()) |> delete("/api/files/#{file["id"]}")
+      body = json_response(conn, 409)
+      assert [%{"collection" => "posts", "recordId" => "r1"}] = body["data"]["usage"]
+
+      conn = auth_conn(build_conn()) |> delete("/api/files/#{file["id"]}?force=true")
+      assert response(conn, 204)
+    end
+
+    test "health reports the file queues" do
+      body = json_response(get(build_conn(), "/api/health"), 200)
+      assert body["files"]["imageQueue"]["limit"] >= 1
+      assert is_integer(body["files"]["deletionQueue"]["pending"])
+    end
+  end
 end

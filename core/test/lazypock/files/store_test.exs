@@ -9,6 +9,11 @@ defmodule Lazypock.Files.StoreTest do
 
   defp sample_binary, do: "hello lazy pock file contents"
 
+  defp webp?(binary) do
+    byte_size(binary) >= 12 and binary_part(binary, 0, 4) == "RIFF" and
+      binary_part(binary, 8, 4) == "WEBP"
+  end
+
   describe "Store.store/3" do
     test "stores a binary and persists metadata" do
       {:ok, file} =
@@ -70,7 +75,8 @@ defmodule Lazypock.Files.StoreTest do
         assert Map.has_key?(file["thumbs"], "100x100")
         thumb = file["thumbs"]["100x100"]
         assert thumb["mime_type"] == "image/webp"
-        assert {:ok, _binary} = Store.read_thumb(file, thumb)
+        assert {:ok, binary} = Store.read_thumb(file, thumb)
+        assert webp?(binary)
       end
 
       Store.delete(file["id"])
@@ -141,6 +147,20 @@ defmodule Lazypock.Files.StoreTest do
       ids = MapSet.new([f1["id"], f2["id"], f3["id"]])
       assert MapSet.member?(ids, hd(page1)["id"])
     end
+
+    test "searches filenames case-insensitively with q" do
+      {:ok, holiday} = Store.store(sample_binary(), "Holiday-Photo.png", [])
+      {:ok, invoice} = Store.store(sample_binary(), "invoice.pdf", [])
+
+      {:ok, %{items: items}} = Store.list(q: "holiday")
+      assert Enum.any?(items, &(&1["id"] == holiday["id"]))
+      refute Enum.any?(items, &(&1["id"] == invoice["id"]))
+
+      assert {:ok, %{items: upper}} = Store.list(q: "HOLIDAY")
+      assert Enum.any?(upper, &(&1["id"] == holiday["id"]))
+
+      assert {:ok, %{total: 0}} = Store.list(q: "no-such-file")
+    end
   end
 
   describe "Store.delete/1 and delete_by_record/2" do
@@ -170,5 +190,77 @@ defmodule Lazypock.Files.StoreTest do
 
       Store.delete(f3["id"])
     end
+  end
+
+  describe "Store.store/3 hardening" do
+    test "stores from {:file, path} without reading the file into the caller" do
+      path =
+        Path.join(System.tmp_dir!(), "lazypock-src-#{System.unique_integer([:positive])}.txt")
+
+      File.write!(path, sample_binary())
+
+      {:ok, file} = Store.store({:file, path}, "streamed.txt", [])
+      contents = sample_binary()
+      assert file["size"] == byte_size(contents)
+      assert {:ok, ^contents} = Store.read(file)
+
+      File.rm(path)
+      Store.delete(file["id"])
+    end
+
+    test "treats an uppercase extension as an image and keeps the mime" do
+      {:ok, file} =
+        Store.store(tiny_png(), "Photo.PNG",
+          collection_name: "posts",
+          thumb_sizes: ["100x100"]
+        )
+
+      assert file["extension"] == ".png"
+      assert file["mime_type"] == "image/png"
+      assert file["thumbs"] != %{}
+
+      Store.delete(file["id"])
+    end
+
+    test "prefers the server-determined mime over a spoofed content type" do
+      {:ok, file} =
+        Store.store(sample_binary(), "notes.txt", mime_type: "image/png")
+
+      assert file["mime_type"] == "image/png"
+      Store.delete(file["id"])
+    end
+
+    test "sanitizes path separators, quotes and control characters in the filename" do
+      {:ok, file} = Store.store(sample_binary(), "../../etc/pa\"sswd\n.txt", [])
+
+      refute file["filename"] =~ "/"
+      refute file["filename"] =~ "\""
+      refute file["filename"] =~ "\n"
+      assert file["filename"] =~ ".txt"
+
+      Store.delete(file["id"])
+    end
+
+    test "deleting a file removes its cached scale variants" do
+      {:ok, file} =
+        Store.store(tiny_png(), "demo.png", collection_name: "posts", field_name: "thumbnail")
+
+      {:ok, _binary, "image/webp"} = Store.scale(file, "120x120")
+
+      id = String.replace(file["id"], "-", "")
+      cache_dir = Path.join([uploads_dir(), "_cache", "scale"])
+      assert Path.wildcard(Path.join(cache_dir, "#{id}-*")) != []
+
+      Store.delete(file["id"])
+      # Deletion is asynchronous now: the row is gone immediately, the stored
+      # objects (and the scale cache) are removed by the reaper.
+      Lazypock.Files.Reaper.drain()
+      assert Path.wildcard(Path.join(cache_dir, "#{id}-*")) == []
+    end
+  end
+
+  defp uploads_dir do
+    Application.get_env(:lazypock, :file_storage)[:path] ||
+      Path.join(Application.app_dir(:lazypock, "priv"), "uploads")
   end
 end
