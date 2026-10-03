@@ -320,4 +320,29 @@ defmodule LazypockWeb.FileControllerTest do
       Lazypock.Files.Reaper.drain()
     end
   end
+
+  describe "reference guard and health" do
+    test "refuses to delete a referenced file, unless forced" do
+      {:ok, file} = Lazypock.Files.Store.store("referenced", "doc.txt", [])
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "INSERT INTO _file_refs (file_id, collection, record_id, field) VALUES ($1, 'posts', 'r1', 'body')",
+        [Ecto.UUID.dump!(file["id"])]
+      )
+
+      conn = auth_conn(build_conn()) |> delete("/api/files/#{file["id"]}")
+      body = json_response(conn, 409)
+      assert [%{"collection" => "posts", "recordId" => "r1"}] = body["data"]["usage"]
+
+      conn = auth_conn(build_conn()) |> delete("/api/files/#{file["id"]}?force=true")
+      assert response(conn, 204)
+    end
+
+    test "health reports the file queues" do
+      body = json_response(get(build_conn(), "/api/health"), 200)
+      assert body["files"]["imageQueue"]["limit"] >= 1
+      assert is_integer(body["files"]["deletionQueue"]["pending"])
+    end
+  end
 end

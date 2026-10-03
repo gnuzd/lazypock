@@ -97,6 +97,7 @@ defmodule Lazypock.Files.Store do
     )
 
     ensure_deletion_outbox!()
+    Lazypock.Files.Refs.ensure_table!()
   end
 
   # Deletion outbox + trigger. Every delete path (API, Studio, cascade, raw SQL)

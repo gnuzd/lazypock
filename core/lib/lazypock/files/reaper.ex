@@ -95,6 +95,7 @@ defmodule Lazypock.Files.Reaper do
 
   defp safe_drain do
     reap_stale_pending()
+    Lazypock.Files.Refs.gc_unattached()
     drain()
   rescue
     e -> Logger.warning("File reaper failed: #{Exception.message(e)}")
@@ -108,7 +109,7 @@ defmodule Lazypock.Files.Reaper do
   def reap_stale_pending do
     Ecto.Adapters.SQL.query!(
       Repo,
-      "DELETE FROM _files WHERE status = 'pending' AND created_at < now() - make_interval(secs => $1)",
+      "DELETE FROM _files WHERE status = 'pending' AND created_at < clock_timestamp() - make_interval(secs => $1)",
       [pending_ttl_seconds()]
     )
 

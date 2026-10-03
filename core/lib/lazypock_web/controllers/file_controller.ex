@@ -376,20 +376,36 @@ defmodule LazypockWeb.FileController do
   DELETE /api/files/:id
   Delete a file.
   """
-  def delete(conn, %{"id" => id}) do
+  def delete(conn, %{"id" => id} = params) do
     conn = require_superuser!(conn)
-    if conn.halted, do: conn, else: do_delete(conn, id)
+    if conn.halted, do: conn, else: do_delete(conn, id, params)
   end
 
-  defp do_delete(conn, id) do
-    case Store.delete(id) do
-      :ok ->
-        conn |> put_status(204) |> json(nil)
+  defp do_delete(conn, id, params) do
+    usage = Lazypock.Files.Refs.usage(id)
+    force? = params["force"] in ["true", "1", true]
 
-      {:error, reason} ->
+    cond do
+      usage != [] and not force? ->
         conn
-        |> put_status(400)
-        |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+        |> put_status(409)
+        |> json(%{
+          "code" => 409,
+          "message" =>
+            "File is still referenced by records. Pass ?force=true to delete it anyway.",
+          "data" => %{"usage" => usage}
+        })
+
+      true ->
+        case Store.delete(id) do
+          :ok ->
+            conn |> put_status(204) |> json(nil)
+
+          {:error, reason} ->
+            conn
+            |> put_status(400)
+            |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+        end
     end
   end
 
