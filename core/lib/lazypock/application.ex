@@ -278,7 +278,8 @@ defmodule Lazypock.Application do
         {DNSCluster, query: Application.get_env(:lazypock, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Lazypock.PubSub},
         Lazypock.Collections.Registry,
-        Lazypock.Auth.OAuth2.SessionStore
+        Lazypock.Auth.OAuth2.SessionStore,
+        Lazypock.Files.Limiter
       ] ++
         cron_scheduler_children() ++
         [LazypockWeb.Endpoint]

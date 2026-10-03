@@ -494,7 +494,8 @@ size, storage backend, and the collection/record/field the file belongs to).
 
 When a **file** or **multi_file** field has **Thumb sizes** configured in the
 collection editor (e.g. `50x50, 480x720`), LazyPock generates WebP thumbnails
-server-side on upload.
+server-side on upload. Output is encoded explicitly as WebP regardless of the
+source format.
 
 - Thumbnails are stored under `priv/uploads/YYYY/MM/DD/thumbs/`
 - Served at `GET /api/files/:id/thumbs/:size`
@@ -517,6 +518,12 @@ If ImageMagick is **not** installed, uploads still work — the file is stored
 normally, but no thumbnails/scaling are available and a one-time warning is
 logged. Set `LAZYPOCK_THUMBNAILS=0` to disable image resizing entirely (and
 silence the warning).
+
+**Resource limits:** at most `LAZYPOCK_IMAGE_CONCURRENCY` (default `1`) resizes
+run at once per instance. Requests that arrive while every slot is busy wait for
+a short time, then fail with `503` + `Retry-After` rather than spawning
+unbounded ImageMagick processes. Each resize also gets an ImageMagick memory cap
+(`LAZYPOCK_MAGICK_MEMORY_LIMIT`, default `256MiB`) and metadata is stripped.
 
 ### On-demand image scaling
 
@@ -543,9 +550,11 @@ Examples:
 <img src="/api/files/<id>/scale/400x" alt="">
 ```
 
-- Sizes are validated (max 4 digits per dimension) to prevent abuse.
-- Results are **cached** on disk under `priv/uploads/YYYY/MM/DD/thumbs/` — the
-  first request generates, subsequent requests are served instantly.
+- Sizes are validated: each dimension must be a positive integer up to **2000px**
+  to prevent abuse. Larger sizes are rejected with `400`.
+- Results are **cached** on disk under `priv/uploads/_cache/scale/`, keyed by
+  file id and size — the first request generates, subsequent requests are served
+  instantly (no daily re-encoding).
 - The TypeScript SDK exposes `getScaleUrl(baseUrl, fileId, size)`.
 
 ---

@@ -8,6 +8,9 @@ defmodule Lazypock.Files.Store do
 
   alias Lazypock.Repo
 
+  @default_filename "file"
+  @max_filename_length 255
+
   @doc """
   Ensures the `_files` table exists on boot.
   """
@@ -54,8 +57,13 @@ defmodule Lazypock.Files.Store do
     * `:field_name` — the field name on the record
   """
   def store(%Plug.Upload{} = upload, opts \\ []) do
-    binary = File.read!(upload.path)
-    do_store(binary, upload.filename, upload.content_type, opts)
+    do_store({:file, upload.path}, upload.filename, upload.content_type, opts)
+  end
+
+  # Accept bytes inline or, preferably, as `{:file, path}` so nothing reads the
+  # whole upload into the BEAM.
+  def store({:file, path} = source, filename, opts) when is_binary(path) do
+    do_store(source, filename, nil, opts)
   end
 
   def store(binary, filename, opts) when is_binary(binary) do
@@ -274,23 +282,34 @@ defmodule Lazypock.Files.Store do
     end
   end
 
-  defp do_store(binary, filename, content_type, opts) do
+  defp do_store(source, filename, content_type, opts) do
     # always local by default
     adapter_mod = Lazypock.Files.Adapters.Local
+    filename = sanitize_filename(filename)
 
-    case adapter_mod.store(binary, filename, []) do
+    case adapter_mod.store(source, filename, []) do
       {:ok, meta} ->
-        ext = Path.extname(filename)
-        mime = content_type || meta[:mime_type]
+        ext = filename |> Path.extname() |> String.downcase()
+        # Prefer the server-determined MIME type (set by `Lazypock.Files.Validation`
+        # via `opts[:mime_type]`) over anything client-supplied.
+        mime = opts[:mime_type] || content_type || meta[:mime_type]
         thumb_sizes = opts[:thumb_sizes] || []
 
-        {:ok, %{rows: [[id]]}} =
+        # Generate thumbs before the INSERT so the row and its variants are
+        # written in one round-trip (`RETURNING *`) instead of INSERT + UPDATE +
+        # SELECT against a possibly remote database.
+        thumbs_map =
+          thumb_sizes
+          |> generate_thumbs(adapter_mod, source, filename)
+          |> Map.new(fn t -> {t["size"], t} end)
+
+        {:ok, %{rows: [row], columns: cols}} =
           Ecto.Adapters.SQL.query(
             Repo,
             """
-            INSERT INTO _files (filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            RETURNING id
+            INSERT INTO _files (filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name, thumbs)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+            RETURNING *
             """,
             [
               filename,
@@ -301,39 +320,44 @@ defmodule Lazypock.Files.Store do
               "local",
               opts[:collection_name] || "",
               to_string(opts[:record_id] || ""),
-              opts[:field_name] || ""
+              opts[:field_name] || "",
+              Jason.encode!(thumbs_map)
             ]
           )
 
-        thumbs =
-          if thumb_sizes != [] do
-            safe_generate_thumbs(adapter_mod, binary, filename, thumb_sizes)
-          else
-            []
-          end
-
-        if thumbs != [] do
-          thumbs_map = Map.new(thumbs, fn t -> {t["size"], t} end)
-          thumbs_json = Jason.encode!(thumbs_map)
-
-          Ecto.Adapters.SQL.query!(
-            Repo,
-            "UPDATE _files SET thumbs = $1::jsonb WHERE id = $2::uuid",
-            [thumbs_json, to_uuid_binary(id)]
-          )
-        end
-
-        get(id)
+        {:ok, cols |> Enum.zip(row) |> Map.new() |> normalize_uuid() |> normalize_thumbs()}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
+  defp generate_thumbs([], _adapter_mod, _source, _filename), do: []
+
+  defp generate_thumbs(sizes, adapter_mod, source, filename) do
+    safe_generate_thumbs(adapter_mod, source, filename, sizes)
+  end
+
+  # Strip path separators, control characters and quotes: the stored name is
+  # echoed back in `Content-Disposition` and used to build the storage path.
+  defp sanitize_filename(nil), do: @default_filename
+
+  defp sanitize_filename(name) when is_binary(name) do
+    cleaned =
+      name
+      |> Path.basename()
+      |> String.replace(~r/[[:cntrl:]]/, "_")
+      |> String.replace(["\"", "\\", "/"], "_")
+      |> String.trim()
+      |> String.slice(0, @max_filename_length)
+
+    if cleaned == "", do: @default_filename, else: cleaned
+  end
+
   # Thumbnail generation is best-effort: any failure (missing ImageMagick,
-  # non-image file, resize error) must not break the upload.
-  defp safe_generate_thumbs(adapter_mod, binary, filename, thumb_sizes) do
-    {:ok, thumbs} = adapter_mod.thumbs(binary, filename, thumb_sizes)
+  # non-image file, resize error, image queue full) must not break the upload.
+  defp safe_generate_thumbs(adapter_mod, source, filename, thumb_sizes) do
+    {:ok, thumbs} = adapter_mod.thumbs(source, filename, thumb_sizes)
     thumbs
   rescue
     _ -> []

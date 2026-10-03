@@ -7,18 +7,42 @@ defmodule Lazypock.Files.ScaleTest do
   # `magick` or `convert` (IM7 vs IM6), see Lazypock.TestImage.
   defp tiny_png, do: Lazypock.TestImage.tiny_png!(300, 180)
 
+  # The declared MIME type is not enough: the old implementation wrote an
+  # extensionless temp file, so ImageMagick inherited the *input* format (e.g. a
+  # PNG/JPEG body) and it was then served as `image/webp`. Assert the container.
+  defp webp?(binary) do
+    byte_size(binary) >= 12 and binary_part(binary, 0, 4) == "RIFF" and
+      binary_part(binary, 8, 4) == "WEBP"
+  end
+
   describe "Store.scale/2" do
-    test "scales an image on demand and returns webp" do
+    test "scales an image on demand and returns real webp bytes" do
       {:ok, file_record} =
         Store.store(tiny_png(), "demo.png", collection_name: "posts", field_name: "thumbnail")
 
       {:ok, binary, mime} = Store.scale(file_record, "100x100")
       assert mime == "image/webp"
-      assert byte_size(binary) > 0
+      assert webp?(binary)
 
       # Cached: second call returns same bytes
       {:ok, binary2, "image/webp"} = Store.scale(file_record, "100x100")
       assert binary2 == binary
+      assert webp?(binary2)
+
+      Store.delete(file_record["id"])
+    end
+
+    test "rejects sizes above the dimension cap" do
+      {:ok, file_record} =
+        Store.store(tiny_png(), "demo.png", collection_name: "posts", field_name: "thumbnail")
+
+      for size <- ["5000", "9999x300", "3000x3000", "x100000"] do
+        assert {:error, :invalid_size} = Store.scale(file_record, size),
+               "expected #{size} to be rejected"
+      end
+
+      # Still accepts the documented forms up to the cap.
+      assert {:ok, _, "image/webp"} = Store.scale(file_record, "2000")
 
       Store.delete(file_record["id"])
     end

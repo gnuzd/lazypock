@@ -18,15 +18,22 @@ defmodule Lazypock.Files.Adapter do
           optional(:height) => non_neg_integer()
         }
 
-  @callback store(binary(), String.t(), keyword()) :: {:ok, file_meta()} | {:error, term()}
+  # Bytes may be given inline (`binary`) or, preferably for uploads, as
+  # `{:file, path}` so the adapter streams from disk instead of the caller
+  # holding the whole file in memory.
+  @type source :: binary() | {:file, String.t()}
+
+  @callback store(source(), String.t(), keyword()) :: {:ok, file_meta()} | {:error, term()}
   @callback url(map()) :: String.t()
   @callback get(map()) :: {:ok, binary()} | {:error, term()}
   @callback delete(map()) :: :ok | {:error, term()}
+  @callback thumb_get(map(), map()) :: {:ok, binary()} | {:error, term()}
 
-  # Optional: generate thumbnails from an image binary. Returns a list of thumb
-  # meta maps (each with :size, :path, :width, :height, :mime_type) or [] if
-  # unsupported. Only implemented by adapters that can resize images.
-  @callback thumbs(binary(), String.t(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
+  # Optional: generate thumbnails from an image binary or `{:file, path}`.
+  # Returns a list of thumb meta maps (each with :size, :path, :width, :height,
+  # :mime_type) or [] if unsupported. Only implemented by adapters that can
+  # resize images.
+  @callback thumbs(source(), String.t(), [String.t()]) :: {:ok, [map()]} | {:error, term()}
 
   # Optional: on-demand scale an image to an arbitrary size. Reads the original
   # file binary, generates a resized version (cached), and returns the resized
@@ -44,7 +51,7 @@ defmodule Lazypock.Files.Adapter do
   # which is wrong when restoring a backup (the path is referenced by
   # `_files.storage_path` and must be preserved). `source` is either a binary or
   # `{:file, path}` so a local backend can copy without buffering.
-  @callback put_at(String.t(), binary() | {:file, String.t()}, keyword()) ::
+  @callback put_at(String.t(), source(), keyword()) ::
               :ok | {:error, term()}
 
   @optional_callbacks thumbs: 3, scale: 2

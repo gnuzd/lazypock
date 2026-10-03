@@ -106,48 +106,41 @@ defmodule LazypockWeb.FileController do
   end
 
   defp do_upload(conn, upload) do
-    case File.read(upload.path) do
-      {:error, _reason} ->
+    # Validate straight from the temp file so image uploads are never buffered
+    # in the BEAM; `validate_file/2` only reads a magic-byte prefix.
+    case Validation.validate_file(upload.filename, upload.path) do
+      {:error, reason} ->
         conn
         |> put_status(400)
-        |> json(%{"code" => 400, "message" => "Could not read uploaded file", "data" => %{}})
+        |> json(%{
+          "code" => 400,
+          "message" => upload_error_message(reason),
+          "data" => %{}
+        })
 
-      {:ok, binary} ->
-        # The client's content-type and filename are both untrusted: confirm
-        # the bytes actually match an allowlisted extension before storing.
-        case Validation.validate(upload.filename, binary) do
+      {:ok, mime} ->
+        thumb_sizes = resolve_thumb_sizes(conn.params)
+
+        opts = [
+          collection_name: conn.params["collection_name"],
+          record_id: conn.params["record_id"],
+          field_name: conn.params["field_name"],
+          thumb_sizes: thumb_sizes,
+          mime_type: mime
+        ]
+
+        # Stream from the temp file; the persisted MIME type is the
+        # server-determined one from validation.
+        case Store.store({:file, upload.path}, upload.filename, opts) do
+          {:ok, file_record} ->
+            conn
+            |> put_status(201)
+            |> json(format_file(file_record))
+
           {:error, reason} ->
             conn
             |> put_status(400)
-            |> json(%{
-              "code" => 400,
-              "message" => upload_error_message(reason),
-              "data" => %{}
-            })
-
-          {:ok, _mime} ->
-            thumb_sizes = resolve_thumb_sizes(conn.params)
-
-            opts = [
-              collection_name: conn.params["collection_name"],
-              record_id: conn.params["record_id"],
-              field_name: conn.params["field_name"],
-              thumb_sizes: thumb_sizes
-            ]
-
-            # Reuse the binary we already read (avoids a second disk read);
-            # the persisted MIME type is derived server-side from the extension.
-            case Store.store(binary, upload.filename, opts) do
-              {:ok, file_record} ->
-                conn
-                |> put_status(201)
-                |> json(format_file(file_record))
-
-              {:error, reason} ->
-                conn
-                |> put_status(400)
-                |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
-            end
+            |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
         end
     end
   end
@@ -325,6 +318,16 @@ defmodule LazypockWeb.FileController do
             |> put_resp_header("content-type", mime_type)
             |> put_resp_header("cache-control", "public, max-age=31536000, immutable")
             |> send_resp(200, binary)
+
+          {:error, :overloaded} ->
+            conn
+            |> put_resp_header("retry-after", "2")
+            |> put_status(503)
+            |> json(%{
+              "code" => 503,
+              "message" => "Image queue is busy, retry shortly.",
+              "data" => %{}
+            })
 
           {:error, reason} ->
             conn

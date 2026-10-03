@@ -42,6 +42,10 @@ defmodule Lazypock.Files.Validation do
 
   @text_extensions ~w(.csv .txt .json)
 
+  # How many bytes are read from disk for the magic-byte sniff. Enough for every
+  # signature above (the longest is WebP/MP4 at 12 bytes).
+  @magic_probe_bytes 64
+
   @zip_magics [
     <<0x50, 0x4B, 0x03, 0x04>>,
     <<0x50, 0x4B, 0x05, 0x06>>,
@@ -75,6 +79,53 @@ defmodule Lazypock.Files.Validation do
           {:ok, ^canonical} -> {:ok, canonical}
           {:ok, _other} -> {:error, :content_mismatch}
           :unknown -> validate_unrecognized(canonical, ext, binary)
+        end
+    end
+  end
+
+  @doc """
+  Same decision as `validate/2`, but reads the bytes from disk.
+
+  Only the first `#{@magic_probe_bytes}` bytes are read for the magic-byte
+  sniff; the whole file is read only for text extensions (UTF-8/JSON checks).
+  That keeps image uploads from being buffered in the BEAM just to be validated.
+  """
+  @spec validate_file(String.t(), String.t()) :: {:ok, String.t()} | {:error, atom()}
+  def validate_file(filename, path) when is_binary(filename) and is_binary(path) do
+    ext = extension(filename)
+
+    case Map.fetch(@extensions, ext) do
+      :error ->
+        {:error, :extension_not_allowed}
+
+      {:ok, canonical} ->
+        with {:ok, prefix} <- read_prefix(path) do
+          case sniff(prefix) do
+            {:ok, ^canonical} -> {:ok, canonical}
+            {:ok, _other} -> {:error, :content_mismatch}
+            :unknown -> validate_unrecognized_file(canonical, ext, path)
+          end
+        end
+    end
+  end
+
+  defp read_prefix(path) do
+    case File.open(path, [:read, :binary], fn io -> IO.binread(io, @magic_probe_bytes) end) do
+      {:ok, data} when is_binary(data) -> {:ok, data}
+      {:ok, :eof} -> {:ok, ""}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_unrecognized_file(canonical, ext, path) do
+    cond do
+      ext not in @text_extensions ->
+        {:error, :content_mismatch}
+
+      true ->
+        case File.read(path) do
+          {:ok, binary} -> validate_unrecognized(canonical, ext, binary)
+          {:error, _reason} -> {:error, :invalid_text}
         end
     end
   end

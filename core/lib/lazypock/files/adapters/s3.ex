@@ -57,6 +57,7 @@ defmodule Lazypock.Files.Adapters.S3 do
     {:error, "S3 adapter not yet implemented — on-demand scaling unavailable"}
   end
 
+  @impl true
   def thumb_get(_file_record, _thumb) do
     {:error, "S3 adapter not yet implemented"}
   end

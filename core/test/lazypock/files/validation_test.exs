@@ -71,4 +71,44 @@ defmodule Lazypock.Files.ValidationTest do
       assert {:ok, "image/png"} = Validation.sniff(@png)
     end
   end
+
+  describe "validate_file/2" do
+    setup do
+      dir = Path.join(System.tmp_dir!(), "lazypock-vf-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+      %{dir: dir}
+    end
+
+    defp write(dir, name, bytes) do
+      path = Path.join(dir, name)
+      File.write!(path, bytes)
+      path
+    end
+
+    test "accepts an image read straight from disk", %{dir: dir} do
+      path = write(dir, "a.png", @png <> :binary.copy(<<0>>, 200))
+      assert {:ok, "image/png"} = Validation.validate_file("a.png", path)
+    end
+
+    test "rejects a mismatch and a disallowed extension without a full read", %{dir: dir} do
+      assert {:error, :content_mismatch} =
+               Validation.validate_file("a.png", write(dir, "a.png", "<?php ?>"))
+
+      assert {:error, :extension_not_allowed} =
+               Validation.validate_file("a.svg", write(dir, "a.svg", "<svg/>"))
+    end
+
+    test "still fully reads text files for the UTF-8/JSON checks", %{dir: dir} do
+      assert {:ok, "application/json"} =
+               Validation.validate_file("a.json", write(dir, "a.json", ~s({"ok":true})))
+
+      assert {:error, :invalid_text} =
+               Validation.validate_file("a.json", write(dir, "bad.json", "{not json"))
+    end
+
+    test "returns an error for a missing file", %{dir: dir} do
+      assert {:error, :enoent} = Validation.validate_file("a.png", Path.join(dir, "nope.png"))
+    end
+  end
 end

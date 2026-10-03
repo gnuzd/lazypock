@@ -6,9 +6,15 @@ defmodule Lazypock.Files.Adapters.Local do
     priv/uploads/YYYY/MM/DD/{uuid}.{ext}
 
   Image resizing (thumbnails and on-demand scaling) uses ImageMagick
-  (`magick` or `convert`). If it is not installed, uploads still work but no
-  thumbnails/scaling are generated (a warning is logged once). Set the env var
-  `LAZYPOCK_THUMBNAILS=0` to disable image resizing entirely.
+  (`magick` or `convert`) through `Lazypock.Files.Limiter`, so at most
+  `LAZYPOCK_IMAGE_CONCURRENCY` resizes run at once per instance. If ImageMagick
+  is not installed, uploads still work but no thumbnails/scaling are generated
+  (a warning is logged once). Set the env var `LAZYPOCK_THUMBNAILS=0` to
+  disable image resizing entirely.
+
+  All resized output is encoded as WebP explicitly (`webp:` prefix), regardless
+  of the source format — writing to an extensionless temp file lets ImageMagick
+  inherit the *input* format (a JPEG payload served as `image/webp`).
   """
 
   require Logger
@@ -17,26 +23,54 @@ defmodule Lazypock.Files.Adapters.Local do
 
   @image_exts ~w(.jpg .jpeg .png .gif .webp)
 
+  # Largest single dimension an on-demand `/scale` (or a configured thumbnail)
+  # may request. Without this, `GET /scale/:size` accepts any size up to 9999
+  # and lets anyone force expensive resizes and fill the disk.
+  @max_scale_dimension 2000
+
   @doc """
   Stores a file on the local filesystem.
+
+  Accepts inline bytes or `{:file, path}` — the latter copies from disk so the
+  caller never holds the whole upload in memory.
   """
   @impl true
-  def store(binary, filename, _opts) do
-    ext = Path.extname(filename)
+  def store(source, filename, _opts) do
+    ext = filename |> Path.extname() |> String.downcase()
     uuid = Ecto.UUID.generate()
     date_path = date_based_path()
     storage_path = Path.join([base_path(), date_path, "#{uuid}#{ext}"])
-    dir = Path.dirname(storage_path)
-    File.mkdir_p!(dir)
+    File.mkdir_p!(Path.dirname(storage_path))
 
-    case File.write(storage_path, binary) do
-      :ok ->
+    case write_source(source, storage_path) do
+      {:ok, size} ->
         {:ok,
          %{
            path: Path.join(date_path, "#{uuid}#{ext}"),
-           size: byte_size(binary),
+           size: size,
            mime_type: mime_type(ext)
          }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp write_source({:file, src}, dest) do
+    with_written_size(dest, fn -> File.cp(src, dest) end)
+  end
+
+  defp write_source(binary, dest) when is_binary(binary) do
+    with_written_size(dest, fn -> File.write(dest, binary) end)
+  end
+
+  defp with_written_size(dest, fun) do
+    case fun.() do
+      :ok ->
+        case File.stat(dest) do
+          {:ok, %File.Stat{size: size}} -> {:ok, size}
+          {:error, reason} -> {:error, reason}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -88,13 +122,19 @@ defmodule Lazypock.Files.Adapters.Local do
     |> thumb_paths()
     |> Enum.each(fn p -> File.rm(Path.join(base_path(), p)) end)
 
+    # Remove cached on-demand variants for this file id
+    file_record
+    |> scale_cache_glob()
+    |> Path.wildcard()
+    |> Enum.each(&File.rm/1)
+
     # Try to clean up empty parent dirs (ignore errors)
     clean_empty_dirs(Path.dirname(full_path))
     :ok
   end
 
   @impl true
-  def thumbs(binary, filename, sizes) do
+  def thumbs(source, filename, sizes) do
     cond do
       not image?(filename) ->
         {:ok, []}
@@ -110,7 +150,7 @@ defmodule Lazypock.Files.Adapters.Local do
           {:ok, geometry} ->
             case find_magick() do
               {:ok, magick} ->
-                generate_with_magick(magick, binary, filename, geometry)
+                generate_with_magick(magick, source, geometry)
 
               :error ->
                 warn_missing_magick()
@@ -120,18 +160,38 @@ defmodule Lazypock.Files.Adapters.Local do
     end
   end
 
-  defp generate_with_magick(magick, binary, _filename, geometry) do
-    tmp_in = temp_path("lazypock-in")
-    tmp_dir = Path.dirname(tmp_in)
-    File.write!(tmp_in, binary)
+  # Thumbnail generation is best-effort but must not oversubscribe the image
+  # slots: a reload under load skips thumbnails rather than queueing forever.
+  defp generate_with_magick(magick, source, geometry) do
+    case Lazypock.Files.Limiter.run(fn -> do_generate_thumbs(magick, source, geometry) end) do
+      {:ok, result} -> result
+      {:error, :overloaded} -> {:ok, []}
+    end
+  end
 
-    results =
-      geometry
-      |> Enum.map(fn {size, geom} -> make_thumb(magick, tmp_in, tmp_dir, size, geom) end)
-      |> Enum.reject(&is_nil/1)
+  defp do_generate_thumbs(magick, source, geometry) do
+    with {:ok, input, cleanup} <- materialize(source) do
+      try do
+        results =
+          geometry
+          |> Enum.map(fn {size, geom} -> make_thumb(magick, input, size, geom) end)
+          |> Enum.reject(&is_nil/1)
 
-    File.rm(tmp_in)
-    {:ok, results}
+        {:ok, results}
+      after
+        cleanup.()
+      end
+    end
+  end
+
+  # Hand ImageMagick a filesystem path. `{:file, path}` is used as-is (no copy
+  # into the BEAM); inline bytes are written to a uniquely named temp file.
+  defp materialize({:file, path}), do: {:ok, path, fn -> :ok end}
+
+  defp materialize(binary) when is_binary(binary) do
+    tmp = temp_path("lazypock-thumb-in", ".bin")
+    File.write!(tmp, binary)
+    {:ok, tmp, fn -> File.rm(tmp) end}
   end
 
   # Logged once per VM so users notice thumbnails are silently skipped.
@@ -154,6 +214,7 @@ defmodule Lazypock.Files.Adapters.Local do
     System.get_env("LAZYPOCK_THUMBNAILS") == "0"
   end
 
+  @impl true
   def thumb_get(_file_record, thumb) do
     path = thumb["path"]
     full_path = Path.join(base_path(), path)
@@ -168,46 +229,17 @@ defmodule Lazypock.Files.Adapters.Local do
   def scale(file_record, size) do
     with {:ok, geometry} <- parse_scale_size(size),
          true <- image?(file_record["filename"] || "") || {:error, :not_an_image},
-         {:ok, magick} <- find_magick() do
-      cache_key = "scale-#{size}"
-      cache_dir = Path.join([base_path(), date_based_path(), "thumbs"])
-      File.mkdir_p!(cache_dir)
-
-      cached_path = Path.join(cache_dir, "#{thumb_basename_for(file_record)}-#{cache_key}.webp")
+         {:ok, magick} <- find_magick(),
+         {:ok, source_path} <- local_path(file_record),
+         :ok <- ensure_file(source_path) do
+      cached_path = scale_cache_path(file_record, size)
 
       case File.read(cached_path) do
         {:ok, binary} ->
           {:ok, binary, "image/webp"}
 
         {:error, _} ->
-          case read_original(file_record) do
-            {:ok, original} ->
-              tmp_in = temp_path("lazypock-scale-in")
-              tmp_out = temp_path("lazypock-scale-out")
-              File.write!(tmp_in, original)
-
-              try do
-                args = [tmp_in, "-auto-orient", "-resize", geometry, "-quality", "85", tmp_out]
-
-                case System.cmd(magick, args, stderr_to_stdout: true) do
-                  {_, 0} ->
-                    File.cp(tmp_out, cached_path)
-                    binary = File.read!(tmp_out)
-                    {:ok, binary, "image/webp"}
-
-                  {_, _} ->
-                    {:error, :resize_failed}
-                end
-              rescue
-                _ -> {:error, :resize_failed}
-              after
-                File.rm(tmp_in)
-                File.rm(tmp_out)
-              end
-
-            {:error, reason} ->
-              {:error, reason}
-          end
+          generate_scale(magick, source_path, geometry, cached_path)
       end
     else
       {:error, reason} -> {:error, reason}
@@ -216,43 +248,92 @@ defmodule Lazypock.Files.Adapters.Local do
     end
   end
 
-  defp read_original(file_record) do
-    full_path = Path.join(base_path(), file_record["storage_path"])
+  defp ensure_file(path) do
+    if File.regular?(path), do: :ok, else: {:error, :enoent}
+  end
 
-    case File.read(full_path) do
-      {:ok, binary} -> {:ok, binary}
-      {:error, reason} -> {:error, reason}
+  defp generate_scale(magick, source_path, geometry, cached_path) do
+    case Lazypock.Files.Limiter.run(fn ->
+           do_scale(magick, source_path, geometry, cached_path)
+         end) do
+      {:ok, result} -> result
+      {:error, :overloaded} -> {:error, :overloaded}
     end
   end
 
-  defp thumb_basename_for(file_record) do
-    file_record["id"]
-    |> to_string()
-    |> String.replace("-", "")
-    |> String.slice(0, 16)
+  defp do_scale(magick, source_path, geometry, cached_path) do
+    File.mkdir_p!(Path.dirname(cached_path))
+    # Same directory as the target so the rename is atomic and same-filesystem.
+    tmp_out = cached_path <> ".tmp-#{Ecto.UUID.generate()}"
+
+    try do
+      case run_magick(magick, source_path, geometry, tmp_out) do
+        :ok ->
+          case File.rename(tmp_out, cached_path) do
+            :ok -> {:ok, File.read!(cached_path), "image/webp"}
+            {:error, reason} -> {:error, reason}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    rescue
+      _ -> {:error, :resize_failed}
+    after
+      File.rm(tmp_out)
+    end
   end
 
+  # Stable, unbounded-lifetime cache path. Keying the cache by the current date
+  # (the previous behaviour) re-encoded every variant daily and orphaned the
+  # previous day's files.
+  defp scale_cache_path(file_record, size) do
+    id = file_record["id"] |> to_string() |> String.replace("-", "")
+    safe_size = String.replace(size, ~r/[^A-Za-z0-9]/, "_")
+    Path.join([base_path(), "_cache", "scale", "#{id}-#{safe_size}.webp"])
+  end
+
+  defp scale_cache_glob(file_record) do
+    id = file_record["id"] |> to_string() |> String.replace("-", "")
+    Path.join([base_path(), "_cache", "scale", "#{id}-*"])
+  end
+
+  # ImageMagick geometry: 300 | 300x | x300 | 300x200 | 300x200! (exact).
+  # Dimensions are capped so a public `/scale/:size` cannot be used to force
+  # arbitrarily expensive resizes.
   defp parse_scale_size(size) when is_binary(size) do
-    # ImageMagick geometry: 300 | 300x | x300 | 300x200 | 300x200! (exact)
     s = String.trim(size)
 
-    cond do
-      Regex.match?(~r/^\d{1,4}x\d{1,4}!$/, s) -> {:ok, s}
-      Regex.match?(~r/^\d{1,4}x\d{1,4}$/, s) -> {:ok, s}
-      Regex.match?(~r/^\d{1,4}x$/, s) -> {:ok, s}
-      Regex.match?(~r/^x\d{1,4}$/, s) -> {:ok, s}
-      Regex.match?(~r/^\d{1,4}$/, s) -> {:ok, s}
-      true -> {:error, :invalid_size}
+    with :ok <- validate_geometry_shape(s),
+         :ok <- validate_geometry_range(s) do
+      {:ok, s}
     end
   end
 
   defp parse_scale_size(_), do: {:error, :invalid_size}
 
+  defp validate_geometry_shape(s) do
+    if Regex.match?(~r/^(?:\d{1,5}x\d{1,5}!?|\d{1,5}x?|x\d{1,5})$/, s),
+      do: :ok,
+      else: {:error, :invalid_size}
+  end
+
+  defp validate_geometry_range(s) do
+    dims = ~r/\d+/ |> Regex.scan(s) |> List.flatten() |> Enum.map(&String.to_integer/1)
+
+    if dims != [] and Enum.all?(dims, &(&1 >= 1 and &1 <= @max_scale_dimension)),
+      do: :ok,
+      else: {:error, :invalid_size}
+  end
+
   # ── Thumbnail helpers ────────────────────────────────
 
-  defp image?(filename), do: Path.extname(filename) in @image_exts
+  defp image?(filename) do
+    filename |> Path.extname() |> String.downcase() |> then(&(&1 in @image_exts))
+  end
 
   # Parse "50x50", "480x720", or a single dimension "300" (keep aspect).
+  # Sizes above the dimension cap are dropped rather than handed to ImageMagick.
   defp parse_sizes(sizes) do
     parsed =
       sizes
@@ -260,12 +341,16 @@ defmodule Lazypock.Files.Adapters.Local do
       |> Enum.reject(&(&1 == ""))
       |> Enum.map(fn s ->
         case Regex.run(~r/^(\d+)(?:x(\d+))?$/, s) do
-          [_, w, h] -> {s, "#{w}x#{h}"}
-          [_, w] -> {s, "#{w}"}
+          [_, w, h] -> {s, "#{w}x#{h}", [w, h]}
+          [_, w] -> {s, "#{w}", [w]}
           _ -> nil
         end
       end)
       |> Enum.reject(&is_nil/1)
+      |> Enum.filter(fn {_s, _geom, dims} ->
+        Enum.all?(dims, fn d -> String.to_integer(d) <= @max_scale_dimension end)
+      end)
+      |> Enum.map(fn {s, geom, _dims} -> {s, geom} end)
 
     if parsed == [], do: {:error, :no_sizes}, else: {:ok, parsed}
   end
@@ -281,40 +366,78 @@ defmodule Lazypock.Files.Adapters.Local do
     end)
   end
 
-  defp make_thumb(magick, tmp_in, tmp_dir, size, geometry) do
-    ext = ".webp"
-    tmp_out = Path.join(tmp_dir, "lazypock-thumb-#{size}")
+  defp make_thumb(magick, input, size, geometry) do
     rel_dir = Path.join([date_based_path(), "thumbs"])
     dir = Path.join(base_path(), rel_dir)
     File.mkdir_p!(dir)
-    final = Path.join(dir, "#{thumb_basename(tmp_in)}-#{size}#{ext}")
+    name = "thumb-#{Ecto.UUID.generate()}-#{size}.webp"
+    final = Path.join(dir, name)
+    tmp_out = Path.join(dir, ".tmp-#{Ecto.UUID.generate()}.webp")
 
     try do
-      args = [tmp_in, "-auto-orient", "-resize", geometry, "-quality", "85", tmp_out]
+      case run_magick(magick, input, geometry, tmp_out) do
+        :ok ->
+          case File.rename(tmp_out, final) do
+            :ok ->
+              {w, h} = identify_size(magick, final) || {0, 0}
 
-      case System.cmd(magick, args, stderr_to_stdout: true) do
-        {_out, 0} ->
-          File.rename(tmp_out, final)
-          dims = identify_size(magick, final)
-          {w, h} = dims || {0, 0}
+              %{
+                "size" => size,
+                "path" => Path.join(rel_dir, name),
+                "width" => w,
+                "height" => h,
+                "mime_type" => "image/webp"
+              }
 
-          %{
-            "size" => size,
-            "path" => Path.join(rel_dir, Path.basename(final)),
-            "width" => w,
-            "height" => h,
-            "mime_type" => "image/webp"
-          }
+            {:error, _} ->
+              nil
+          end
 
-        {_out, _} ->
-          File.rm(tmp_out)
+        {:error, _} ->
           nil
       end
     rescue
       _ ->
-        File.rm(tmp_out)
         nil
+    after
+      File.rm(tmp_out)
     end
+  end
+
+  # All resizing goes through one place so the resource limits are applied
+  # consistently, metadata is stripped, and the output format is fixed to WebP.
+  defp run_magick(magick, input, geometry, output) do
+    args = [
+      "-limit",
+      "memory",
+      image_memory_limit(),
+      "-limit",
+      "map",
+      image_memory_limit(),
+      input,
+      "-auto-orient",
+      "-strip",
+      "-resize",
+      geometry,
+      "-quality",
+      "85",
+      "webp:#{output}"
+    ]
+
+    case System.cmd(magick, args, stderr_to_stdout: true) do
+      {_out, 0} ->
+        :ok
+
+      {out, code} ->
+        Logger.debug("ImageMagick resize failed (#{code}): #{String.trim(out)}")
+        {:error, :resize_failed}
+    end
+  rescue
+    _ -> {:error, :resize_failed}
+  end
+
+  defp image_memory_limit do
+    System.get_env("LAZYPOCK_MAGICK_MEMORY_LIMIT") || "256MiB"
   end
 
   defp identify_size(magick, path) do
@@ -332,10 +455,6 @@ defmodule Lazypock.Files.Adapters.Local do
     _ -> nil
   end
 
-  defp thumb_basename(tmp_in) do
-    tmp_in |> Path.basename() |> String.replace_prefix("lazypock-in", "thumb")
-  end
-
   defp thumb_paths(file_record) do
     case file_record["thumbs"] do
       thumbs when is_map(thumbs) -> Enum.map(thumbs, fn {_k, v} -> v["path"] end)
@@ -343,8 +462,8 @@ defmodule Lazypock.Files.Adapters.Local do
     end
   end
 
-  defp temp_path(prefix) do
-    Path.join(System.tmp_dir!(), "#{prefix}-#{Ecto.UUID.generate()}")
+  defp temp_path(prefix, suffix) do
+    Path.join(System.tmp_dir!(), "#{prefix}-#{Ecto.UUID.generate()}#{suffix}")
   end
 
   defp base_path do
