@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.16.0](https://github.com/gnuzd/lazypock/compare/v0.15.2...v0.16.0) (2026-10-03)
+
+
+### Features
+
+* **files:** deletion outbox + reaper (G7) ([d66c00a](https://github.com/gnuzd/lazypock/commit/d66c00a4c463e5eaeedf50f1286dcee74390025e))
+* **files:** direct-to-R2 uploads (presign + complete) ([1c0e2a7](https://github.com/gnuzd/lazypock/commit/1c0e2a7035434d7c575d19e2461032c9e1910b51))
+* **files:** image engine abstraction, presets and variants ([f348aa9](https://github.com/gnuzd/lazypock/commit/f348aa9ffbf5c56f1f54e4ce6e20d7aa29af2fb5))
+* **files:** image upload & scaling plan (P0-P5) ([ef17412](https://github.com/gnuzd/lazypock/commit/ef1741284f6aad8144cd7a263920de98b541f041))
+* **files:** operations CLI, reference tracking, delete guard, health ([ca714dc](https://github.com/gnuzd/lazypock/commit/ca714dcb934d0c6317a48ffddbda983fe1f37c39))
+* **files:** real S3/R2 storage adapter + storage settings ([bbc5666](https://github.com/gnuzd/lazypock/commit/bbc5666204f77e8527c9873309fe96728fb9614d))
+* **files:** richtext image picker (TipTap) + variant/CDN URLs ([1fdc4d7](https://github.com/gnuzd/lazypock/commit/1fdc4d77e1d70a9ad1d7d09f3bb6e9202165a347))
+* **files:** settings-backed upload policy, scoped body limit, AVIF ([38380f1](https://github.com/gnuzd/lazypock/commit/38380f17f29d9a9ca734fa231fb8253407223a9c))
+* **studio:** shared media library (pick or upload) + media page + storage page fix ([d0da341](https://github.com/gnuzd/lazypock/commit/d0da341dcb872bf07d6af6ddf3c4a9dc57a76f37))
+
+
+### Bug Fixes
+
+* **files:** bound image work, stream uploads, fix variant format ([7439164](https://github.com/gnuzd/lazypock/commit/74391641c03e6d0e2553c781e533c0b3c108b34f))
+
 ## [0.15.2](https://github.com/gnuzd/lazypock/compare/v0.15.1...v0.15.2) (2026-10-02)
 
 
