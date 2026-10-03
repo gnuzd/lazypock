@@ -194,6 +194,87 @@ defmodule LazypockWeb.FileController do
   defp dimension_error_message(:image_too_many_pixels),
     do: "Image exceeds the maximum allowed megapixels."
 
+  @doc """
+  POST /api/files/presign
+  Creates a pending file row and a presigned PUT for a direct upload (Mode B).
+  """
+  def presign(conn, _params) do
+    conn = require_authenticated!(conn)
+
+    if conn.halted do
+      conn
+    else
+      policy = Policy.resolve(file_field_options(conn.params))
+
+      case Lazypock.Files.DirectUpload.presign(conn.params, policy) do
+        {:ok, info} ->
+          conn |> put_status(200) |> json(info)
+
+        {:error, :too_large} ->
+          fail(
+            conn,
+            413,
+            "File too large. Maximum size is #{format_bytes(Policy.max_size(policy))}."
+          )
+
+        {:error, :direct_upload_requires_s3} ->
+          fail(conn, 400, "Direct upload requires the s3 storage backend.")
+
+        {:error, reason} ->
+          fail(conn, 400, "Invalid direct-upload request: #{inspect(reason)}")
+      end
+    end
+  end
+
+  @doc """
+  POST /api/files/:id/complete
+  Verifies an uploaded object and marks the file ready (Mode B, step 2).
+  """
+  def complete(conn, %{"id" => id}) do
+    conn = require_authenticated!(conn)
+
+    if conn.halted do
+      conn
+    else
+      policy = Policy.resolve(file_field_options(conn.params))
+
+      case Lazypock.Files.DirectUpload.complete(id, policy) do
+        {:ok, record} ->
+          conn |> put_status(200) |> json(format_file(record))
+
+        {:error, :not_found} ->
+          conn
+          |> put_status(404)
+          |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
+
+        {:error, :not_uploaded} ->
+          fail(conn, 422, "The object was not uploaded to storage.")
+
+        {:error, {:size_mismatch, actual, expected}} ->
+          fail(conn, 422, "Uploaded size #{actual} does not match the declared #{expected}.")
+
+        {:error, :image_too_large} ->
+          fail(conn, 422, "Image dimensions exceed the maximum allowed.")
+
+        {:error, :image_too_many_pixels} ->
+          fail(conn, 422, "Image exceeds the maximum allowed megapixels.")
+
+        {:error, :content_mismatch} ->
+          fail(conn, 415, "File contents do not match the filename extension.")
+
+        {:error, :extension_not_allowed} ->
+          fail(conn, 415, "File type not allowed.")
+
+        {:error, reason} ->
+          fail(conn, 422, "Could not verify the uploaded object: #{inspect(reason)}")
+      end
+    end
+  end
+
+  defp fail(conn, status, message) do
+    conn |> put_status(status) |> json(%{"code" => status, "message" => message, "data" => %{}})
+  end
+
   defp upload_error_message(reason) do
     case reason do
       :extension_not_allowed ->

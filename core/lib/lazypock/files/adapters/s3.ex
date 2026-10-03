@@ -402,6 +402,113 @@ defmodule Lazypock.Files.Adapters.S3 do
   @doc false
   def encode_key(key), do: URI.encode(key, fn c -> c == ?/ or URI.char_unreserved?(c) end)
 
+  # ── Direct upload support (P4) ───────────────────────
+
+  @doc "Object key for a direct upload's original."
+  def object_key(id, filename) do
+    ext = filename |> Path.extname() |> String.downcase()
+    Storage.config()["prefix"] <> "#{id}/original#{ext}"
+  end
+
+  @doc """
+  Presigns a `PUT` for a direct upload.
+
+  `content-type` and `content-length` are signed to fixed values (R2 has no
+  presigned-POST content-length-range), so the completed object is re-verified
+  by `complete/2`.
+  """
+  def presign_put(key, content_type, content_length) do
+    config = Storage.config()
+
+    with {:ok, url} <- build_url(config, key, nil) do
+      headers = %{"content-type" => content_type, "content-length" => to_string(content_length)}
+
+      presigned =
+        SigV4.presign(
+          "PUT",
+          url,
+          base_presign_opts(config) ++
+            [
+              expires_in: config["presign_ttl"] || 900,
+              headers: headers,
+              sign_headers: ["host", "content-type", "content-length"]
+            ]
+        )
+
+      {:ok, %{method: "PUT", url: presigned, headers: headers}}
+    end
+  end
+
+  @doc "Presigns a `GET` (used for protected files)."
+  def presign_get(key, expires_in \\ nil) do
+    config = Storage.config()
+
+    with {:ok, url} <- build_url(config, key, nil) do
+      {:ok,
+       SigV4.presign(
+         "GET",
+         url,
+         base_presign_opts(config) ++
+           [expires_in: expires_in || config["presign_ttl"] || 900, sign_headers: ["host"]]
+       )}
+    end
+  end
+
+  @doc "Object size from a HEAD request (`{:ok, nil}` when the server omits it)."
+  def head_size(key) do
+    case request(:head, key, []) do
+      {:ok, %{status: status, headers: headers}} when status in 200..299 ->
+        {:ok, content_length(headers)}
+
+      {:ok, %{status: 404}} ->
+        {:error, :not_found}
+
+      {:ok, %{status: status}} ->
+        {:error, {:http, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc "Streams an object to a local file."
+  def download_to(key, dest) do
+    case request(:get, key, into: File.stream!(dest, 1024 * 1024, [:write])) do
+      {:ok, %{status: status}} when status in 200..299 -> :ok
+      {:ok, %{status: 404}} -> {:error, :not_found}
+      {:ok, %{status: status}} -> {:error, {:http, status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp base_presign_opts(config) do
+    [
+      access_key_id: config["access_key_id"],
+      secret_access_key: config["secret_access_key"],
+      region: config["region"] || "us-east-1",
+      service: "s3"
+    ]
+  end
+
+  defp content_length(headers) when is_map(headers) do
+    headers
+    |> Map.get("content-length")
+    |> List.wrap()
+    |> List.first()
+    |> parse_int()
+  end
+
+  defp content_length(_), do: nil
+
+  defp parse_int(nil), do: nil
+
+  defp parse_int(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, _} -> n
+      :error -> nil
+    end
+  end
+
   defp public_base_url do
     case Storage.config()["public_base_url"] do
       nil -> nil

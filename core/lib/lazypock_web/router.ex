@@ -75,6 +75,9 @@ defmodule LazypockWeb.Router do
     # File routes — must be BEFORE dynamic :collection routes
     get("/files", FileController, :index)
     post("/files", FileController, :upload)
+    # Direct upload (Mode B): presign + complete. Must precede /files/:id.
+    post("/files/presign", FileController, :presign)
+    post("/files/:id/complete", FileController, :complete)
     get("/files/:id/thumbs/:size", FileController, :show_thumb)
     get("/files/:id/scale/:size", FileController, :show_scaled)
     get("/files/:id", FileController, :show)

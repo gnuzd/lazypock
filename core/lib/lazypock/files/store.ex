@@ -32,6 +32,13 @@ defmodule Lazypock.Files.Store do
         field_name      TEXT DEFAULT '',
         thumbs          JSONB DEFAULT '{}'::jsonb,
         variants        JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status          TEXT NOT NULL DEFAULT 'ready',
+        original_name   TEXT,
+        width           INT,
+        height          INT,
+        checksum        TEXT,
+        origin          TEXT NOT NULL DEFAULT 'field',
+        attached_at     TIMESTAMPTZ,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
       )
@@ -56,6 +63,19 @@ defmodule Lazypock.Files.Store do
       []
     )
 
+    # Columns for direct uploads (pending rows) and library/reference tracking.
+    for statement <- [
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready'",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS original_name TEXT",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS width INT",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS height INT",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS checksum TEXT",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'field'",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS attached_at TIMESTAMPTZ"
+        ] do
+      Ecto.Adapters.SQL.query!(Repo, statement, [])
+    end
+
     # _files is queried by (collection_name, record_id) on every record delete
     # and listed newest-first; both were unindexed.
     Ecto.Adapters.SQL.query!(
@@ -67,6 +87,12 @@ defmodule Lazypock.Files.Store do
     Ecto.Adapters.SQL.query!(
       Repo,
       "CREATE INDEX IF NOT EXISTS _files_created_idx ON _files (created_at DESC, id DESC)",
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _files_pending_idx ON _files (created_at) WHERE status = 'pending'",
       []
     )
 

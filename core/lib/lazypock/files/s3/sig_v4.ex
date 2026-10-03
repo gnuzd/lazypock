@@ -109,6 +109,93 @@ defmodule Lazypock.Files.S3.SigV4 do
     Map.put(headers, "authorization", authorization)
   end
 
+  @doc """
+  Creates a presigned URL (query-string signing).
+
+  ## Options
+
+    * `:access_key_id` / `:secret_access_key` (required)
+    * `:expires_in` — validity in seconds (default 900)
+    * `:region` / `:service` / `:datetime` — as in `sign/4`
+    * `:headers` — extra headers to sign (e.g. `content-type`, `content-length`)
+    * `:sign_headers` — header names to sign (default `["host"]`)
+    * `:content_sha256` — adds `X-Amz-Content-Sha256`; otherwise the payload is
+      `UNSIGNED-PAYLOAD`, which is what presigned PUTs use
+  """
+  @spec presign(String.t(), String.t(), keyword()) :: String.t()
+  def presign(method, url, opts) do
+    method = String.upcase(method)
+    uri = URI.parse(url)
+    datetime = Keyword.get(opts, :datetime, DateTime.utc_now())
+    amz_datetime = format_datetime(datetime)
+    date = String.slice(amz_datetime, 0, 8)
+    expires = Keyword.get(opts, :expires_in, 900)
+    payload_hash = Keyword.get(opts, :payload_hash, "UNSIGNED-PAYLOAD")
+    scope = "#{date}/#{region(opts)}/#{service(opts)}/aws4_request"
+
+    headers =
+      opts
+      |> Keyword.get(:headers, %{})
+      |> normalize_headers()
+      |> Map.put_new("host", host_header(uri))
+
+    sign_headers =
+      opts
+      |> Keyword.get(:sign_headers, ["host"])
+      |> Enum.map(&String.downcase/1)
+      |> Enum.sort()
+
+    query =
+      (uri.query || "")
+      |> URI.query_decoder()
+      |> Enum.into(%{})
+      |> Map.merge(%{
+        "X-Amz-Algorithm" => @algorithm,
+        "X-Amz-Credential" => "#{Keyword.fetch!(opts, :access_key_id)}/#{scope}",
+        "X-Amz-Date" => amz_datetime,
+        "X-Amz-Expires" => Integer.to_string(expires),
+        "X-Amz-SignedHeaders" => Enum.join(sign_headers, ";")
+      })
+      |> maybe_put("X-Amz-Content-Sha256", Keyword.get(opts, :content_sha256))
+
+    canonical_query =
+      query
+      |> Enum.map(fn {k, v} -> {encode_param(k), encode_param(v)} end)
+      |> Enum.sort()
+      |> Enum.map_join("&", fn {k, v} -> "#{k}=#{v}" end)
+
+    canonical_headers =
+      Enum.map_join(sign_headers, "\n", fn name ->
+        "#{name}:#{headers |> Map.fetch!(name) |> to_string() |> String.trim()}"
+      end) <> "\n"
+
+    canonical_request =
+      [
+        method,
+        canonical_uri(uri.path),
+        canonical_query,
+        canonical_headers,
+        Enum.join(sign_headers, ";"),
+        payload_hash
+      ]
+      |> Enum.join("\n")
+
+    string_to_sign =
+      [@algorithm, amz_datetime, scope, sha256_hex(canonical_request)] |> Enum.join("\n")
+
+    signature =
+      opts
+      |> signing_key(date)
+      |> hmac(string_to_sign)
+      |> Base.encode16(case: :lower)
+
+    "#{uri.scheme}://#{host_header(uri)}#{canonical_uri(uri.path)}?#{canonical_query}" <>
+      "&X-Amz-Signature=#{signature}"
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
   @doc "UTC `YYYYMMDDTHHMMSSZ` timestamp used in the signing scope."
   def format_datetime(%DateTime{} = datetime) do
     datetime

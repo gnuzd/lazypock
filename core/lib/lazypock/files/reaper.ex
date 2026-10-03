@@ -94,9 +94,25 @@ defmodule Lazypock.Files.Reaper do
   def handle_info(_message, state), do: {:noreply, state}
 
   defp safe_drain do
+    reap_stale_pending()
     drain()
   rescue
     e -> Logger.warning("File reaper failed: #{Exception.message(e)}")
+  end
+
+  @doc """
+  Deletes `pending` uploads that were never completed (older than
+  `files.pending_ttl_ms`, default 1 h). The `AFTER DELETE` trigger enqueues the
+  object for removal, so the bucket is cleaned up too.
+  """
+  def reap_stale_pending do
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "DELETE FROM _files WHERE status = 'pending' AND created_at < now() - make_interval(secs => $1)",
+      [pending_ttl_seconds()]
+    )
+
+    :ok
   end
 
   # ── Claim + process ──────────────────────────────────
@@ -188,6 +204,24 @@ defmodule Lazypock.Files.Reaper do
   # 2^attempts seconds, capped at 24 h.
   defp backoff_seconds(attempts) do
     trunc(:math.pow(2, attempts)) |> min(div(@max_backoff_ms, 1000))
+  end
+
+  defp pending_ttl_seconds do
+    case System.get_env("LAZYPOCK_PENDING_UPLOAD_TTL_MS") do
+      nil ->
+        case Lazypock.Settings.get("files", %{}) do
+          %{"pending_ttl_ms" => ms} when is_integer(ms) and ms > 0 -> div(ms, 1000)
+          _ -> 3600
+        end
+
+      value ->
+        case Integer.parse(value) do
+          {ms, _} when ms > 0 -> div(ms, 1000)
+          _ -> 3600
+        end
+    end
+  rescue
+    _ -> 3600
   end
 
   defp config, do: Application.get_env(:lazypock, __MODULE__, [])
