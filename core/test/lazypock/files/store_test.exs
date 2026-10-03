@@ -238,6 +238,9 @@ defmodule Lazypock.Files.StoreTest do
       assert Path.wildcard(Path.join(cache_dir, "#{id}-*")) != []
 
       Store.delete(file["id"])
+      # Deletion is asynchronous now: the row is gone immediately, the stored
+      # objects (and the scale cache) are removed by the reaper.
+      Lazypock.Files.Reaper.drain()
       assert Path.wildcard(Path.join(cache_dir, "#{id}-*")) == []
     end
   end

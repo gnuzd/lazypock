@@ -279,7 +279,8 @@ defmodule Lazypock.Application do
         {Phoenix.PubSub, name: Lazypock.PubSub},
         Lazypock.Collections.Registry,
         Lazypock.Auth.OAuth2.SessionStore,
-        Lazypock.Files.Limiter
+        Lazypock.Files.Limiter,
+        Lazypock.Files.Reaper
       ] ++
         cron_scheduler_children() ++
         [LazypockWeb.Endpoint]

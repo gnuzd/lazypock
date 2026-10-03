@@ -7,6 +7,7 @@ defmodule Lazypock.Files.Store do
   """
 
   alias Lazypock.Repo
+  alias Lazypock.Files.Reaper
 
   @default_filename "file"
   @max_filename_length 255
@@ -42,6 +43,75 @@ defmodule Lazypock.Files.Store do
       Repo,
       """
       ALTER TABLE _files ADD COLUMN IF NOT EXISTS thumbs JSONB DEFAULT '{}'::jsonb
+      """,
+      []
+    )
+
+    # _files is queried by (collection_name, record_id) on every record delete
+    # and listed newest-first; both were unindexed.
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _files_record_idx ON _files (collection_name, record_id)",
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _files_created_idx ON _files (created_at DESC, id DESC)",
+      []
+    )
+
+    ensure_deletion_outbox!()
+  end
+
+  # Deletion outbox + trigger. Every delete path (API, Studio, cascade, raw SQL)
+  # leaves a row here in the same transaction; `Lazypock.Files.Reaper` removes the
+  # objects and the row afterwards.
+  defp ensure_deletion_outbox! do
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE TABLE IF NOT EXISTS _file_deletions (
+        id           BIGSERIAL PRIMARY KEY,
+        file_id      UUID        NOT NULL,
+        backend      TEXT        NOT NULL,
+        storage_path TEXT        NOT NULL,
+        thumbs       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        attempts     INT         NOT NULL DEFAULT 0,
+        next_try_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+      """,
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _file_deletions_due_idx ON _file_deletions (next_try_at)",
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE OR REPLACE FUNCTION _files_enqueue_deletion() RETURNS trigger AS $fn$
+      BEGIN
+        INSERT INTO _file_deletions (file_id, backend, storage_path, thumbs)
+        VALUES (OLD.id, OLD.storage_backend, OLD.storage_path, COALESCE(OLD.thumbs, '{}'::jsonb));
+        RETURN OLD;
+      END;
+      $fn$ LANGUAGE plpgsql
+      """,
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(Repo, "DROP TRIGGER IF EXISTS _files_after_delete ON _files", [])
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE TRIGGER _files_after_delete AFTER DELETE ON _files
+        FOR EACH ROW EXECUTE FUNCTION _files_enqueue_deletion()
       """,
       []
     )
@@ -237,44 +307,29 @@ defmodule Lazypock.Files.Store do
 
   @doc """
   Deletes all files associated with a collection record.
+
+  Only the rows are deleted; the `AFTER DELETE` trigger enqueues the objects and
+  the reaper removes them (database first, storage second).
   """
   def delete_by_record(collection_name, record_id) do
-    {:ok, %{rows: rows}} =
-      Ecto.Adapters.SQL.query(
-        Repo,
-        "SELECT storage_backend, storage_path FROM _files WHERE collection_name = $1 AND record_id = $2",
-        [collection_name, to_string(record_id)]
-      )
-
-    # Delete physical files
-    Enum.each(rows, fn [backend, storage_path] ->
-      mod = Lazypock.Files.Adapter.for_backend(backend)
-      mod.delete(%{"storage_backend" => backend, "storage_path" => storage_path})
-    end)
-
-    # Delete metadata
     Ecto.Adapters.SQL.query!(
       Repo,
       "DELETE FROM _files WHERE collection_name = $1 AND record_id = $2",
       [collection_name, to_string(record_id)]
     )
 
+    Reaper.kick()
     :ok
   end
 
   @doc """
-  Deletes a file record and its underlying storage.
+  Deletes a file record; the reaper removes the stored objects.
   """
   def delete(id) do
     case get(id) do
-      {:ok, file_record} ->
-        mod = Lazypock.Files.Adapter.for_backend(file_record["storage_backend"])
-        mod.delete(file_record)
-
-        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [
-          to_uuid_binary(file_record["id"])
-        ])
-
+      {:ok, _file_record} ->
+        Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _files WHERE id = $1", [to_uuid_binary(id)])
+        Reaper.kick()
         :ok
 
       {:error, reason} ->

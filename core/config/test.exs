@@ -5,6 +5,11 @@ import Config
 # supervisor (cascading into "repo not started" failures).
 config :lazypock, start_cron_scheduler: false
 
+# The file reaper shares a single sandboxed connection with the test process
+# when run asynchronously, so under test it only runs via explicit
+# `Lazypock.Files.Reaper.drain/1`.
+config :lazypock, Lazypock.Files.Reaper, async: false
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
