@@ -687,4 +687,66 @@ defmodule Lazypock.Schema.DDLTest do
       assert email.unique
     end
   end
+
+  describe "auth collection system fields" do
+    defp fields_of(name) do
+      collection = Repo.get_by(Lazypock.Collections.Collection, name: name)
+
+      Repo.all(
+        from(f in Lazypock.Collections.Field,
+          where: f.collection_id == ^collection.id,
+          order_by: f.sort_order
+        )
+      )
+    end
+
+    test "a new auth collection gets email/password/verified/... automatically" do
+      name = cname("auth_fields")
+
+      # Like the Studio: type auth, only a custom field, no system fields.
+      {:ok, _} =
+        DDL.create_collection(name,
+          type: "auth",
+          fields: [%{"name" => "nickname", "type" => "text"}]
+        )
+
+      fields = Map.new(fields_of(name), &{&1.name, &1})
+
+      assert Map.has_key?(fields, "email")
+      assert fields["email"].type == "email"
+      assert fields["email"].unique
+      assert fields["email"].system
+
+      assert fields["password_hash"].type == "password"
+      assert fields["password_hash"].hidden
+      refute fields["password_hash"].required
+      assert fields["password_hash"].system
+
+      assert fields["verified"].type == "bool"
+      assert fields["verificationToken"].type == "text"
+      assert fields["emailVisibility"].type == "bool"
+      assert Map.has_key?(fields, "nickname")
+    end
+
+    test "base collections do not get the auth fields" do
+      name = cname("base_fields")
+      {:ok, _} = DDL.create_collection(name, type: "base", fields: [])
+
+      names = Enum.map(fields_of(name), & &1.name)
+
+      refute "password_hash" in names
+      refute "emailVisibility" in names
+    end
+
+    test "switching a base collection to auth adds the missing fields" do
+      name = cname("promote_auth")
+      {:ok, _} = DDL.create_collection(name, type: "base", fields: [])
+
+      {:ok, _} = DDL.update_collection(name, type: "auth", fields: [])
+
+      names = Enum.map(fields_of(name), & &1.name)
+      assert "email" in names
+      assert "password_hash" in names
+    end
+  end
 end

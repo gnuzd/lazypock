@@ -42,6 +42,51 @@ defmodule Lazypock.Schema.DDL do
     }
   ]
 
+  # PocketBase gives every auth collection these system fields. The email/
+  # password pair is what password auth needs and `verified`/`verificationToken`
+  # back the verification flow — without them a freshly created auth collection
+  # could never authenticate anyone, and the Studio deliberately does not offer
+  # a `password` field for manual adding.
+  @auth_system_field_defs [
+    %{
+      "name" => "email",
+      "type" => "email",
+      "required" => true,
+      "unique" => true,
+      "system" => true,
+      "options" => %{}
+    },
+    %{
+      "name" => "password_hash",
+      "type" => "password",
+      "required" => false,
+      "hidden" => true,
+      "system" => true,
+      "options" => %{}
+    },
+    %{
+      "name" => "verified",
+      "type" => "bool",
+      "required" => false,
+      "system" => true,
+      "options" => %{}
+    },
+    %{
+      "name" => "verificationToken",
+      "type" => "text",
+      "required" => false,
+      "system" => true,
+      "options" => %{}
+    },
+    %{
+      "name" => "emailVisibility",
+      "type" => "bool",
+      "required" => false,
+      "system" => true,
+      "options" => %{"defaultValue" => true}
+    }
+  ]
+
   # Broadcast a schema event to the in-process Registry, unless PubSub isn't
   # started yet (CLI migrate / boot-time migrations). The Registry reloads
   # from the DB on startup, so a skipped broadcast is always reconciled.
@@ -103,6 +148,7 @@ defmodule Lazypock.Schema.DDL do
           else
             fields = ensure_system_timestamp_fields(fields)
             fields = normalize_auth_email_unique(type, fields)
+            fields = ensure_auth_system_fields(type, fields)
 
             with :ok <- validate_fields(fields) do
               collection =
@@ -630,6 +676,7 @@ defmodule Lazypock.Schema.DDL do
             # anything else is a partial update that should leave columns alone.
             if not is_nil(new_fields) do
               new_fields = normalize_auth_email_unique(type || collection.type, new_fields)
+              new_fields = ensure_auth_system_fields(type || collection.type, new_fields)
 
               existing_fields =
                 Repo.all(
@@ -698,7 +745,9 @@ defmodule Lazypock.Schema.DDL do
                   set: [
                     required: Map.get(f, "required", false),
                     unique: new_unique,
-                    hidden: Map.get(f, "hidden", false),
+                    # Password fields are never exposed (same invariant as
+                    # `create_field_metadata_entry!`).
+                    hidden: Map.get(f, "hidden", false) or f["type"] == "password",
                     system: Map.get(f, "system", false),
                     options: opts,
                     indexed: new_indexed,
@@ -894,16 +943,43 @@ defmodule Lazypock.Schema.DDL do
   # collection's metadata/schema lists them alongside the physical columns
   # `build_create_table_sql/2` always creates.
   defp ensure_system_timestamp_fields(fields) do
-    existing = MapSet.new(fields, &column_name(&1["name"]))
-    offset = length(fields)
+    ensure_missing_fields(fields, @system_timestamp_field_defs)
+  end
+
+  # Auth collections get their system fields automatically (PocketBase parity);
+  # fields the caller already provides win. `email` and `password` are also
+  # matched by *type*, so a collection that already has an email/password field
+  # under another name (e.g. `password` instead of `password_hash`, or a
+  # PocketBase import) never ends up with two of them.
+  defp ensure_auth_system_fields("auth", fields) when is_list(fields) do
+    names = MapSet.new(fields, &column_name(&1["name"]))
+    types = MapSet.new(fields, & &1["type"])
 
     missing =
-      @system_timestamp_field_defs
-      |> Enum.reject(&MapSet.member?(existing, &1["name"]))
+      Enum.reject(@auth_system_field_defs, fn def_ ->
+        MapSet.member?(names, def_["name"]) or
+          (def_["type"] in ["email", "password"] and MapSet.member?(types, def_["type"]))
+      end)
+
+    append_fields(fields, missing)
+  end
+
+  defp ensure_auth_system_fields(_type, fields), do: fields
+
+  defp ensure_missing_fields(fields, defs) do
+    names = MapSet.new(fields, &column_name(&1["name"]))
+    append_fields(fields, Enum.reject(defs, &MapSet.member?(names, &1["name"])))
+  end
+
+  defp append_fields(fields, missing) do
+    offset = length(fields)
+
+    added =
+      missing
       |> Enum.with_index(offset)
       |> Enum.map(fn {field, idx} -> Map.put(field, "sort_order", idx) end)
 
-    fields ++ missing
+    fields ++ added
   end
 
   defp build_create_table_sql(name, fields) do
@@ -1127,7 +1203,9 @@ defmodule Lazypock.Schema.DDL do
           "unique" => Map.get(f, "unique", false),
           "default" => Map.get(f, "default"),
           "options" => Map.get(f, "options", %{}),
-          "indexed" => Map.get(f, "indexed", false)
+          "indexed" => Map.get(f, "indexed", false),
+          "hidden" => Map.get(f, "hidden", false) or f["type"] == "password",
+          "system" => Map.get(f, "system", false)
         }
       end)
 
@@ -1200,6 +1278,10 @@ defmodule Lazypock.Schema.DDL do
       default_value: field_def["default"],
       options: normalized_opts,
       indexed: Map.get(field_def, "indexed", false),
+      # A password field is always hidden: the metadata writer used to drop
+      # `hidden` entirely, which would have exposed freshly created password
+      # columns in API responses and the Studio.
+      hidden: Map.get(field_def, "hidden", false) or field_def["type"] == "password",
       system: Map.get(field_def, "system", false) or is_system_timestamp,
       sort_order: Map.get(field_def, "sort_order", 0)
     })
