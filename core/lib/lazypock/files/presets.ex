@@ -8,6 +8,7 @@ defmodule Lazypock.Files.Presets do
         "image": {
           "presets": [
             {"name": "thumb",   "width": 100,  "height": 100, "fit": "cover",   "quality": 80, "eager": true},
+            {"name": "small",   "width": 320,  "height": 320, "fit": "cover",   "quality": 80, "eager": true},
             {"name": "content", "width": 1280, "height": null, "fit": "contain", "quality": 80, "eager": true}
           ]
         }
@@ -15,10 +16,13 @@ defmodule Lazypock.Files.Presets do
 
   `fit` is one of `cover` (fill + centre-crop), `contain` (fit inside, never
   upscale) or `exact` (stretch). `eager` presets are generated during upload so
-  their URLs are valid immediately; lazy ones are generated on first request.
+  their URLs are valid immediately; lazy ones are generated on first request
+  (and must be requested through the app route, not straight from a CDN).
 
-  Defaults ship `thumb` and `content` (both eager). Preset changes never delete
-  existing variants — regenerating is an explicit action.
+  Defaults ship `thumb` (100px, avatars/small previews), `small` (320px, grid
+  tiles) and `content` (1280px, detail views and richtext embeds), all eager.
+  Preset changes never delete existing variants — regenerating is an explicit
+  action (`lazypock files regen`).
   """
 
   alias Lazypock.Settings
@@ -31,6 +35,17 @@ defmodule Lazypock.Files.Presets do
       "name" => "thumb",
       "width" => 100,
       "height" => 100,
+      "fit" => "cover",
+      "quality" => 80,
+      "eager" => true
+    },
+    # Grid tiles in the Studio (and file-field pickers) render at 140-180 CSS px,
+    # i.e. up to ~360 device px on a retina screen. The 100px `thumb` was
+    # upscaled and looked soft, so there is a dedicated 320px square variant.
+    %{
+      "name" => "small",
+      "width" => 320,
+      "height" => 320,
       "fit" => "cover",
       "quality" => 80,
       "eager" => true

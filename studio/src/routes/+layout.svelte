@@ -4,8 +4,9 @@
 
 	import favicon from '$lib/assets/favicon.svg';
 	import { onMount } from 'svelte';
+	import AppDialog from '$lib/components/AppDialog.svelte';
 	import { client } from '$lib/client';
-	import { base } from '$app/paths';
+	import { base, resolve } from '$app/paths';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 
@@ -33,19 +34,19 @@
 					) {
 						return;
 					}
-					goto(base + '/collections?collection=users');
+					goto(resolve('/collections?collection=users'));
 					return;
 				} catch {
 					// Token is stale — clear it and show login
 					client.authStore.clear();
 					if (!isLoginPage) {
-						goto(base + '/login');
+						goto(resolve('/login'));
 						return;
 					}
 					// Already on login page — let it render
 				}
 			} else if (!isLoginPage) {
-				goto(base + '/login');
+				goto(resolve('/login'));
 				return;
 			}
 		} finally {
@@ -59,3 +60,7 @@
 	{@render children()}
 {/if}
 <Toaster richColors position="top-right" />
+
+<!-- Single app-wide confirm / alert / prompt dialog (native window dialogs are
+     never used in the Studio). -->
+<AppDialog />

@@ -5,15 +5,29 @@
 	let {
 		show = $bindable(false),
 		title = '',
+		size = 'md' as 'sm' | 'md' | 'lg' | 'xl',
+		bodyClass = '',
+		onDismiss,
 		children
 	}: {
 		show?: boolean;
 		title?: string;
+		/** Width preset — `xl` for media/library views that need room. */
+		size?: 'sm' | 'md' | 'lg' | 'xl';
+		/** Extra classes for the body (e.g. `flex min-h-0 flex-col` so inner areas scroll). */
+		bodyClass?: string;
+		/**
+		 * Called when the dialog closes *itself* (overlay click, Escape, ✕) so
+		 * callers can react — e.g. settling a pending promise. Not called when a
+		 * caller sets `show` to false.
+		 */
+		onDismiss?: () => void;
 		children?: import('svelte').Snippet;
 	} = $props();
 
 	function close() {
 		show = false;
+		onDismiss?.();
 	}
 </script>
 
@@ -32,14 +46,14 @@
 		role="dialog"
 	>
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<div class="modal" onclick={(e) => e.stopPropagation()}>
+		<div class="modal size-{size}" onclick={(e) => e.stopPropagation()}>
 			{#if title}
 				<div class="modal-header">
 					<h2 class="modal-title">{title}</h2>
 					<button class="modal-close" onclick={close}>&times;</button>
 				</div>
 			{/if}
-			<div class="modal-body">
+			<div class="modal-body {bodyClass}">
 				{@render children?.()}
 			</div>
 		</div>
@@ -65,8 +79,8 @@
 		display: flex;
 		flex-direction: column;
 		width: 100%;
-		max-width: 540px;
-		max-height: 85vh;
+		max-width: var(--modal-max-width, 540px);
+		max-height: var(--modal-max-height, 85vh);
 		border: 0;
 		outline: 0;
 		margin: 0;
@@ -78,6 +92,21 @@
 			0 25px 50px -12px rgba(0, 0, 0, 0.25),
 			0 0 0 1px color-mix(in srgb, var(--color-base-content) 10%, transparent);
 		overflow: hidden;
+	}
+
+	/* Width/height presets. `xl` is the media/library size: wide enough for the
+	   thumbnail grid and tall enough that its own area scrolls inside. */
+	.modal.size-sm {
+		--modal-max-width: 420px;
+	}
+
+	.modal.size-lg {
+		--modal-max-width: 820px;
+	}
+
+	.modal.size-xl {
+		--modal-max-width: min(1100px, 94vw);
+		--modal-max-height: 92vh;
 	}
 
 	.modal-header {
@@ -124,5 +153,6 @@
 		padding: 20px;
 		overflow-y: auto;
 		flex: 1;
+		min-height: 0;
 	}
 </style>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { client } from '$lib/client';
+	import { confirmDialog } from '$lib/dialog.svelte';
 	import Dropdown from '$lib/components/Dropdown.svelte';
 	import SidePane from '$lib/components/SidePane.svelte';
 	import RecordForm from '$lib/components/RecordForm.svelte';
@@ -166,7 +167,16 @@
 
 	async function deleteRecord() {
 		if (!collection || !editingRecordId || recordSaving) return;
-		if (!confirm('Delete this record? This action cannot be undone.')) return;
+
+		if (
+			!(await confirmDialog({
+				title: 'Delete record',
+				message: 'Delete this record? This action cannot be undone.',
+				confirmLabel: 'Delete',
+				variant: 'error'
+			}))
+		)
+			return;
 		recordSaving = true;
 		recordError = '';
 		const collName = collection.name as string;

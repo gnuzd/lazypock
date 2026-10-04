@@ -21,10 +21,12 @@ defmodule Lazypock.Files.PresetsTest do
     Presets.clear_cache()
   end
 
-  test "ships thumb and content as eager defaults" do
-    assert Presets.names() == ["thumb", "content"]
-    assert Enum.map(Presets.eager(), & &1["name"]) == ["thumb", "content"]
+  test "ships thumb, small and content as eager defaults" do
+    assert Presets.names() == ["thumb", "small", "content"]
+    assert Enum.map(Presets.eager(), & &1["name"]) == ["thumb", "small", "content"]
     assert Presets.get("thumb")["fit"] == "cover"
+    assert Presets.get("small")["width"] == 320
+    assert Presets.get("small")["fit"] == "cover"
     assert Presets.get("content")["width"] == 1280
   end
 

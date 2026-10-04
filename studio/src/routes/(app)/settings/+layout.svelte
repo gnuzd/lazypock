@@ -10,6 +10,7 @@
 		Database,
 		Download,
 		HardDrive,
+		Images,
 		KeyRound,
 		Mail,
 		Upload
@@ -28,6 +29,7 @@
 		{ id: 'application', label: 'Application', icon: Cog, href: '/settings/application' },
 		{ id: 'mail', label: 'Mail', icon: Mail, href: '/settings/mail' },
 		{ id: 'files', label: 'Files Storage', icon: HardDrive, href: '/settings/files' },
+		{ id: 'media', label: 'Media Library', icon: Images, href: '/settings/media' },
 		{ id: 'api-keys', label: 'API Keys', icon: KeyRound, href: '/settings/api-keys' },
 		{ id: 'backups', label: 'Backups', icon: Archive, href: '/settings/backups' },
 		{ id: 'cron', label: 'Cron', icon: RefreshCw, href: '/settings/cron' }
@@ -91,7 +93,8 @@
 		<div
 			class="mx-auto"
 			style="max-width: {page.url.pathname.endsWith('/export') ||
-			page.url.pathname.endsWith('/import')
+			page.url.pathname.endsWith('/import') ||
+			page.url.pathname.endsWith('/media')
 				? '1200px'
 				: page.url.pathname.endsWith('/sql') || page.url.pathname.endsWith('/api-keys')
 					? '100%'

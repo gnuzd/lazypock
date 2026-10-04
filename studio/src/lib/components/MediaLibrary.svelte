@@ -12,7 +12,10 @@
 </script>
 
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { LayoutGrid, List, Trash2 } from '@lucide/svelte';
 	import { client } from '$lib/client';
+	import { confirmDialog } from '$lib/dialog.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
@@ -47,11 +50,14 @@
 	} = $props();
 
 	const PER_PAGE = 24;
+	const VIEW_KEY = 'lazypock-media-view';
 
 	let tab = $state<'Library' | 'Upload'>('Library');
 	let items = $state<MediaItem[]>([]);
 	let selected = $state<string[]>([]);
 	let preview = $state<MediaItem | null>(null);
+	/** Detail modal — opened by clicking a file in the library. */
+	let detailOpen = $state(false);
 	let q = $state('');
 	let page = $state(1);
 	let total = $state(0);
@@ -61,27 +67,73 @@
 	let deleting = $state<string | null>(null);
 	let error = $state('');
 	let notice = $state('');
+	/** Per-item image load state (skeleton placeholders until the image loads). */
+	let loadedImages = $state<Record<string, boolean>>({});
+	/** Scroll containers — only one of the two is mounted at a time. */
+	let gridEl = $state<HTMLElement | null>(null);
+	let listEl = $state<HTMLElement | null>(null);
+
+	let totalPages = $derived(Math.max(1, Math.ceil(total / PER_PAGE)));
+	let rangeStart = $derived(total === 0 ? 0 : (page - 1) * PER_PAGE + 1);
+	let rangeEnd = $derived(Math.min(page * PER_PAGE, total));
+	let pageWindow = $derived(pageNumbers(page, totalPages));
+	/** Grid vs list presentation (remembered across sessions). */
+	let viewMode = $state<'grid' | 'list'>('grid');
 
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 	let visible = $derived(inline || open);
 	let imageOnly = $derived(accept === 'image/*');
 
-	function thumbOf(item: MediaItem): string | undefined {
-		if (item.variants?.thumb) return item.variants.thumb;
+	// Remember the last view mode, so the preference is shared by the Media page,
+	// the record file picker and the richtext image dialog.
+	onMount(() => {
+		try {
+			const stored = localStorage.getItem(VIEW_KEY);
+			if (stored === 'grid' || stored === 'list') viewMode = stored;
+		} catch {
+			// storage unavailable — keep the default
+		}
+	});
+
+	function setView(mode: 'grid' | 'list') {
+		viewMode = mode;
+
+		try {
+			localStorage.setItem(VIEW_KEY, mode);
+		} catch {
+			// ignore
+		}
+	}
+
+	/** Legacy `thumbs` map (files uploaded before presets existed). */
+	function legacyThumbOf(item: MediaItem): string | undefined {
 		if (!item.thumbs) return undefined;
 		const sizes = Object.keys(item.thumbs).sort((a, b) => a.length - b.length);
 		return sizes.length > 0 ? item.thumbs[sizes[0]] : undefined;
+	}
+
+	/** Small preview (list rows, record field previews): the 100px preset. */
+	function thumbOf(item: MediaItem): string | undefined {
+		return item.variants?.thumb ?? legacyThumbOf(item);
+	}
+
+	/**
+	 * Grid tile image: the 320px `small` preset is sharp at tile size (up to
+	 * ~360 device px on a retina screen, where the 100px `thumb` looked soft).
+	 * The chain falls back to the original so a tile is never blank — e.g. for
+	 * files uploaded before presets existed.
+	 */
+	function gridThumbOf(item: MediaItem): string | undefined {
+		return item.variants?.small ?? thumbOf(item) ?? item.url;
 	}
 
 	function bestUrl(item: MediaItem): string {
 		return item.variants?.content ?? item.variants?.thumb ?? item.url ?? `/api/files/${item.id}`;
 	}
 
-	async function load(reset = false) {
+	async function load() {
 		loading = true;
 		error = '';
-
-		if (reset) page = 1;
 
 		try {
 			const params: Record<string, string> = {
@@ -94,9 +146,10 @@
 			const res = await client.http.get<{ items: MediaItem[]; total: number }>('/files', {
 				params
 			});
-			const fetched = res?.items ?? [];
-			items = reset ? fetched : [...items, ...fetched];
+			items = res?.items ?? [];
 			total = res?.total ?? items.length;
+			// Images that are no longer shown start from a skeleton again.
+			loadedImages = {};
 		} catch (e) {
 			error = (e as Error).message || 'Failed to load the library';
 		} finally {
@@ -104,11 +157,35 @@
 		}
 	}
 
-	// Load once per open, and reset when the panel is dismissed.
+	/** Fetch a page (1-based) and put the list back at the top. */
+	async function goToPage(target: number) {
+		page = Math.min(Math.max(1, target), totalPages);
+		await load();
+		(viewMode === 'grid' ? gridEl : listEl)?.scrollTo({ top: 0 });
+	}
+
+	/** Page numbers around the current page, with `…` gaps (1 … 4 5 6 … 20). */
+	function pageNumbers(current: number, count: number): Array<number | '…'> {
+		if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
+
+		const wanted = new Set([1, count, current - 1, current, current + 1]);
+		const sorted = [...wanted].filter((p) => p >= 1 && p <= count).sort((a, b) => a - b);
+		const out: Array<number | '…'> = [];
+
+		for (let i = 0; i < sorted.length; i++) {
+			if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.push('…');
+			out.push(sorted[i]);
+		}
+
+		return out;
+	}
+
+	// Load once per open (from the first page), and reset when dismissed.
 	$effect(() => {
 		if (visible && !loaded) {
 			loaded = true;
-			void load(true);
+			page = 1;
+			void load();
 		}
 
 		if (!visible && !inline && loaded) {
@@ -116,6 +193,7 @@
 			items = [];
 			selected = [];
 			preview = null;
+			detailOpen = false;
 			q = '';
 			tab = 'Library';
 			error = '';
@@ -125,12 +203,10 @@
 
 	function onSearchInput() {
 		clearTimeout(searchTimer);
-		searchTimer = setTimeout(() => void load(true), 300);
-	}
-
-	async function loadMore() {
-		page += 1;
-		await load(false);
+		searchTimer = setTimeout(() => {
+			page = 1;
+			void load();
+		}, 300);
 	}
 
 	function choose(list: MediaItem[]) {
@@ -139,9 +215,29 @@
 		close();
 	}
 
+	function openDetail(item: MediaItem) {
+		preview = item;
+		detailOpen = true;
+	}
+
+	async function copyUrl(item: MediaItem) {
+		const url = bestUrl(item);
+
+		try {
+			if (typeof navigator !== 'undefined' && navigator.clipboard) {
+				await navigator.clipboard.writeText(url);
+				notice = 'URL copied to the clipboard.';
+			} else {
+				notice = url;
+			}
+		} catch {
+			notice = url;
+		}
+	}
+
 	function toggle(item: MediaItem) {
 		if (mode === 'manage') {
-			preview = preview?.id === item.id ? null : item;
+			openDetail(item);
 			return;
 		}
 
@@ -188,7 +284,7 @@
 				// "Upload a new file and use it" — insert straight away.
 				choose(uploaded);
 			} else {
-				await load(true);
+				await load();
 				tab = 'Library';
 				notice = `Uploaded ${uploaded.length} file${uploaded.length === 1 ? '' : 's'}.`;
 			}
@@ -199,11 +295,24 @@
 		}
 	}
 
-	function usageOf(e: unknown): string {
+	/** `collection.field (recordId)` strings from a delete-guard 409 response. */
+	function usageList(e: unknown): string[] {
 		const body = (e as { data?: { data?: { usage?: Array<Record<string, unknown>> } } }).data;
 		const usage = body?.data?.usage ?? [];
 
-		return usage.map((u) => `${u.collection}.${u.field} (${u.recordId})`).join(', ');
+		return usage.map((u) => `${u.collection}.${u.field} (${u.recordId})`);
+	}
+
+	/** Ask first, then delete — the confirmation is always a modal. */
+	async function askDelete(item: MediaItem) {
+		const ok = await confirmDialog({
+			title: 'Delete file',
+			message: `Delete "${item.filename}"? This removes the file and all of its variants from storage.`,
+			confirmLabel: 'Delete',
+			variant: 'error'
+		});
+
+		if (ok) await remove(item);
 	}
 
 	async function remove(item: MediaItem, force = false) {
@@ -221,23 +330,32 @@
 			items = items.filter((i) => i.id !== item.id);
 			total = Math.max(0, total - 1);
 			selected = selected.filter((id) => id !== item.id);
-			if (preview?.id === item.id) preview = null;
+			if (preview?.id === item.id) {
+				preview = null;
+				detailOpen = false;
+			}
 			notice = `Deleted ${item.filename}.`;
+
+			// Keep the page full: step back if it emptied, otherwise refill it.
+			if (items.length === 0 && page > 1) await goToPage(page - 1);
+			else if (items.length < PER_PAGE && total > items.length) await load();
 		} catch (e) {
 			const status = (e as { status?: number }).status;
 
 			if (status === 409 && !force) {
-				const usage = usageOf(e);
-				const question = usage
-					? `"${item.filename}" is still used by ${usage}. Delete it anyway?`
-					: `"${item.filename}" is still referenced by records. Delete it anyway?`;
+				// The delete guard: show exactly what still points at the file and let
+				// the user decide — always a modal, never window.confirm().
+				const refs = usageList(e);
 
-				if (confirm(question)) {
-					await remove(item, true);
-					return;
-				}
+				const forceIt = await confirmDialog({
+					title: 'File is still in use',
+					message: `"${item.filename}" is still referenced by ${refs.length === 1 ? 'this record' : `${refs.length} records`}. Deleting it leaves those records pointing at a missing file.`,
+					details: refs,
+					confirmLabel: 'Delete anyway',
+					variant: 'error'
+				});
 
-				notice = 'File is still referenced and was not deleted.';
+				if (forceIt) await remove(item, true);
 			} else {
 				error = (e as Error).message || 'Delete failed';
 			}
@@ -297,7 +415,25 @@
 				Insert {selected.length > 0 ? selected.length : ''}
 			</Button>
 		{/if}
-		<Button class="btn-sm" loading={loading} onclick={() => load(true)}>Refresh</Button>
+		<div class="media-view-toggle" role="group" aria-label="View mode">
+			<button
+				type="button"
+				class="media-view-btn"
+				class:active={viewMode === 'grid'}
+				aria-pressed={viewMode === 'grid'}
+				title="Grid view"
+				onclick={() => setView('grid')}><LayoutGrid size={15} /></button
+			>
+			<button
+				type="button"
+				class="media-view-btn"
+				class:active={viewMode === 'list'}
+				aria-pressed={viewMode === 'list'}
+				title="List view"
+				onclick={() => setView('list')}><List size={15} /></button
+			>
+		</div>
+		<Button class="btn-sm" loading={loading} onclick={() => void load()}>Refresh</Button>
 	</div>
 {/snippet}
 
@@ -308,70 +444,167 @@
 		<p class="media-empty">
 			No {imageOnly ? 'images' : 'files'} yet — upload one from the <strong>Upload</strong> tab.
 		</p>
-	{:else}
-		<div class="media-grid">
+	{:else if viewMode === 'grid'}
+		<div class="media-grid" bind:this={gridEl}>
 			{#each items as item (item.id)}
-				{@const thumb = thumbOf(item)}
+				{@const thumb = gridThumbOf(item)}
 				<div
 					class="media-cell"
 					class:picked={selected.includes(item.id)}
 					class:active={preview?.id === item.id}
 				>
-					<button
-						type="button"
-						class="media-thumb"
-						title={item.filename}
-						onclick={() => toggle(item)}
-					>
-						{#if thumb}
-							<img src={thumb} alt={item.filename} loading="lazy" />
-						{:else}
-							<span class="media-no-thumb">{item.filename}</span>
+					<div class="media-tile-wrap">
+						{#if thumb && !loadedImages[item.id]}
+							<span class="media-skeleton"></span>
 						{/if}
-					</button>
+						<button
+							type="button"
+							class="media-tile"
+							title={item.filename}
+							onclick={() => toggle(item)}
+						>
+							{#if thumb}
+								<img
+									src={thumb}
+									alt={item.filename}
+									loading="lazy"
+									decoding="async"
+									class:media-img-loaded={loadedImages[item.id]}
+									onload={() => (loadedImages[item.id] = true)}
+									onerror={(e) => {
+										// A variant that has not been generated yet (e.g. an old file on a
+										// CDN-backed bucket) must not leave an empty tile: step down to the
+										// smaller preset, then the original.
+										const img = e.currentTarget as HTMLImageElement;
+										const fallback = item.variants?.thumb ?? item.url ?? '';
 
+										if (fallback && img.src !== fallback) img.src = fallback;
+									}}
+								/>
+							{:else}
+								<span class="media-no-thumb">{item.filename}</span>
+							{/if}
+						</button>
+
+						<button
+							type="button"
+							class="media-delete"
+							title="Delete"
+							aria-label="Delete {item.filename}"
+							disabled={deleting === item.id}
+							onclick={() => void askDelete(item)}
+						>
+							{#if deleting === item.id}
+								<span class="loading-spinner loading-xs"></span>
+							{:else}
+								<Trash2 size={14} />
+							{/if}
+						</button>
+					</div>
 					<div class="media-meta">
 						<span class="media-name" title={item.filename}>{item.filename}</span>
 						<span class="media-size">{formatSize(item.size)}</span>
 					</div>
+				</div>
+			{/each}
+		</div>
+	{:else}
+		<div class="media-list" bind:this={listEl}>
+			{#each items as item (item.id)}
+				{@const thumb = thumbOf(item) ?? item.url}
+				<div
+					class="media-row"
+					class:picked={selected.includes(item.id)}
+					class:active={preview?.id === item.id}
+				>
+					<button
+						type="button"
+						class="media-row-main"
+						title={item.filename}
+						onclick={() => toggle(item)}
+					>
+						<span class="media-row-thumb">
+							{#if thumb}
+								{#if !loadedImages[item.id]}
+									<span class="media-skeleton"></span>
+								{/if}
+								<img
+									src={thumb}
+									alt={item.filename}
+									loading="lazy"
+									decoding="async"
+									class:media-img-loaded={loadedImages[item.id]}
+									onload={() => (loadedImages[item.id] = true)}
+								/>
+							{:else}
+								<span class="media-no-thumb">—</span>
+							{/if}
+						</span>
+						<span class="media-row-name">{item.filename}</span>
+						<span class="media-row-type">{item.mimeType ?? ''}</span>
+						<span class="media-row-size">{formatSize(item.size)}</span>
+					</button>
 
 					<button
 						type="button"
-						class="media-delete"
+						class="media-row-delete"
 						title="Delete"
 						aria-label="Delete {item.filename}"
 						disabled={deleting === item.id}
-						onclick={() => remove(item)}
+						onclick={() => void askDelete(item)}
 					>
-						{deleting === item.id ? '…' : '🗑'}
+						{#if deleting === item.id}
+							<span class="loading-spinner loading-xs"></span>
+						{:else}
+							<Trash2 size={14} />
+						{/if}
 					</button>
 				</div>
 			{/each}
 		</div>
 
-		{#if items.length < total}
-			<div class="media-more">
-				<Button class="btn-sm" loading={loading} onclick={loadMore}>
-					Load more ({items.length}/{total})
-				</Button>
-			</div>
-		{/if}
 	{/if}
 
-	{#if preview}
-		<div class="media-preview">
-			<img src={thumbOf(preview) ?? bestUrl(preview)} alt={preview.filename} />
-			<div class="media-preview-meta">
-				<strong>{preview.filename}</strong>
-				<span>{preview.mimeType} · {formatSize(preview.size)}</span>
-				<code class="media-url">{bestUrl(preview)}</code>
-			</div>
-			<div class="media-preview-actions">
-				{#if mode === 'pick'}
-					<Button class="btn-primary btn-sm" onclick={() => choose([preview!])}>Use this file</Button>
-				{/if}
-				<Button class="btn-sm" onclick={() => remove(preview!)}>Delete</Button>
-			</div>
+	{#if items.length > 0}
+		<div class="media-pager">
+			<span class="media-range">{rangeStart}–{rangeEnd} of {total}</span>
+
+			{#if totalPages > 1}
+				<div class="media-pages">
+					<button
+						type="button"
+						class="media-page-btn"
+						title="Previous page"
+						aria-label="Previous page"
+						disabled={page <= 1 || loading}
+						onclick={() => void goToPage(page - 1)}>‹</button
+					>
+
+					{#each pageWindow as entry (entry)}
+						{#if entry === '…'}
+							<span class="media-page-gap">…</span>
+						{:else}
+							<button
+								type="button"
+								class="media-page-btn"
+								class:active={entry === page}
+								aria-current={entry === page ? 'page' : undefined}
+								disabled={loading}
+								onclick={() => void goToPage(Number(entry))}>{entry}</button
+							>
+						{/if}
+					{/each}
+
+					<button
+						type="button"
+						class="media-page-btn"
+						title="Next page"
+						aria-label="Next page"
+						disabled={page >= totalPages || loading}
+						onclick={() => void goToPage(page + 1)}>›</button
+					>
+				</div>
+			{/if}
 		</div>
 	{/if}
 {/snippet}
@@ -411,17 +644,54 @@
 {#if inline}
 	{@render panel()}
 {:else}
-	<Modal bind:show={open} {title}>
+	<Modal
+		bind:show={open}
+		{title}
+		size="xl"
+		bodyClass="flex min-h-0 flex-col overflow-hidden"
+	>
 		{@render panel()}
 	</Modal>
 {/if}
+
+<!-- Detail view: clicking a file in the library opens this instead of an
+     inline panel at the bottom, so the whole file is visible in one place. -->
+<Modal bind:show={detailOpen} size="lg" title="File details" bodyClass="flex min-h-0 flex-col">
+	{#if preview}
+		<div class="detail">
+			<div class="detail-media">
+				<img src={bestUrl(preview)} alt={preview.filename} />
+			</div>
+			<div class="detail-meta">
+				<strong class="detail-name" title={preview.filename}>{preview.filename}</strong>
+				<span>
+					{preview.mimeType ?? 'unknown type'}{preview.size
+						? ` · ${formatSize(preview.size)}`
+						: ''}
+				</span>
+				<code class="detail-url" title={bestUrl(preview)}>{bestUrl(preview)}</code>
+				<span class="detail-id">id: {preview.id}</span>
+			</div>
+		</div>
+		<div class="detail-actions">
+			<Button class="btn-sm" onclick={() => void copyUrl(preview!)}>Copy URL</Button>
+			{#if mode === 'pick'}
+				<Button class="btn-primary btn-sm" onclick={() => choose([preview!])}>Use this file</Button>
+			{/if}
+			<Button class="btn-error btn-sm" onclick={() => void askDelete(preview!)}>Delete</Button>
+		</div>
+	{/if}
+</Modal>
 
 <style>
 	.media-panel {
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		min-width: min(720px, 88vw);
+		/* Fill the modal body so the grid (not the dialog) scrolls. In the
+		   inline/page case the flex properties are inert and the page scrolls. */
+		flex: 1;
+		min-height: 0;
 	}
 
 	.media-toolbar {
@@ -458,45 +728,54 @@
 		color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
 	}
 
+	/* ── Grid: square tiles with the name underneath (Drive-like) ── */
 	.media-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-		gap: 10px;
-		max-height: min(420px, 52vh);
+		grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+		gap: 14px;
+		/* Grow into whatever height the modal/page gives us and scroll inside. */
+		flex: 1 1 auto;
+		min-height: 200px;
 		overflow-y: auto;
 		padding: 2px;
 	}
 
 	.media-cell {
-		position: relative;
 		display: flex;
 		flex-direction: column;
+		gap: 6px;
+		min-width: 0;
+	}
+
+	.media-tile-wrap {
+		position: relative;
+		aspect-ratio: 1;
 		border: 1px solid var(--color-base-300);
 		border-radius: 8px;
 		overflow: hidden;
-		background: var(--color-base-100);
+		background: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
 	}
 
-	.media-cell.picked,
-	.media-cell.active {
+	.media-cell.picked .media-tile-wrap,
+	.media-cell.active .media-tile-wrap {
 		border-color: var(--color-primary);
-		box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 30%, transparent);
+		box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 35%, transparent);
 	}
 
-	.media-thumb {
+	.media-tile {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		aspect-ratio: 1;
 		width: 100%;
+		height: 100%;
 		padding: 0;
 		border: none;
-		background: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
+		background: none;
 		cursor: pointer;
 		overflow: hidden;
 	}
 
-	.media-thumb img {
+	.media-tile img {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
@@ -512,7 +791,6 @@
 	.media-meta {
 		display: flex;
 		flex-direction: column;
-		padding: 5px 7px;
 		min-width: 0;
 	}
 
@@ -540,11 +818,13 @@
 		padding: 0;
 		border: none;
 		border-radius: 6px;
-		font-size: 0.75rem;
 		cursor: pointer;
+		color: var(--color-error, #dc2626);
 		background: color-mix(in oklab, var(--color-base-100) 85%, transparent);
 		opacity: 0;
-		transition: opacity 0.12s;
+		transition:
+			opacity 0.12s,
+			background 0.12s;
 	}
 
 	.media-cell:hover .media-delete,
@@ -552,56 +832,189 @@
 		opacity: 1;
 	}
 
-	.media-more {
-		display: flex;
-		justify-content: center;
-		padding-top: 4px;
+	.media-delete:hover {
+		background: color-mix(in oklab, var(--color-error) 20%, var(--color-base-100));
 	}
 
-	.media-preview {
+	/* ── Pagination ── */
+	.media-pager {
 		display: flex;
-		gap: 12px;
 		align-items: center;
-		padding: 8px;
-		border: 1px solid var(--color-base-300);
-		border-radius: 8px;
+		justify-content: space-between;
+		gap: 10px;
+		padding-top: 8px;
+		flex-shrink: 0;
 	}
 
-	.media-preview img {
-		width: 72px;
-		height: 72px;
-		object-fit: cover;
+	.media-range {
+		font-size: 0.75rem;
+		color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	}
+
+	.media-pages {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+	}
+
+	.media-page-btn {
+		min-width: 28px;
+		height: 28px;
+		padding: 0 6px;
+		border: 1px solid transparent;
 		border-radius: 6px;
+		background: none;
+		color: var(--color-base-content);
+		font-size: 0.75rem;
+		cursor: pointer;
 	}
 
-	.media-preview-meta {
+	.media-page-btn:hover:not(:disabled) {
+		background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+	}
+
+	.media-page-btn.active {
+		background: color-mix(in oklab, var(--color-primary) 18%, var(--color-base-100));
+		border-color: var(--color-primary);
+		color: var(--color-primary);
+		font-weight: 600;
+	}
+
+	.media-page-btn:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
+
+	.media-page-gap {
+		padding: 0 2px;
+		font-size: 0.75rem;
+		color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+	}
+
+	/* ── Image placeholder (skeleton) ── */
+	.media-skeleton {
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(
+			100deg,
+			color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100)) 30%,
+			color-mix(in oklab, var(--color-base-content) 15%, var(--color-base-100)) 50%,
+			color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100)) 70%
+		);
+		background-size: 200% 100%;
+		animation: media-shimmer 1.2s ease-in-out infinite;
+	}
+
+	@keyframes media-shimmer {
+		from {
+			background-position: 200% 0;
+		}
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.media-skeleton {
+			animation: none;
+		}
+	}
+
+	/* Images fade in over their skeleton. */
+	.media-tile img,
+	.media-row-thumb img {
+		opacity: 0;
+		transition: opacity 0.18s ease-out;
+	}
+
+	.media-tile img.media-img-loaded,
+	.media-row-thumb img.media-img-loaded {
+		opacity: 1;
+	}
+
+	/* ── Detail modal ── */
+	.detail {
+		display: flex;
+		gap: 16px;
+		flex: 1;
+		min-height: 0;
+	}
+
+	.detail-media {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex: 1 1 auto;
+		min-width: 0;
+		border-radius: 8px;
+		overflow: hidden;
+		background: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
+	}
+
+	.detail-media img {
+		max-width: 100%;
+		max-height: min(62vh, 560px);
+		object-fit: contain;
+	}
+
+	.detail-meta {
 		display: flex;
 		flex-direction: column;
-		gap: 2px;
-		min-width: 0;
-		flex: 1;
-		font-size: 0.8125rem;
-	}
-
-	.media-url {
-		font-size: 0.6875rem;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
-	}
-
-	.media-preview-actions {
-		display: flex;
 		gap: 6px;
+		flex-shrink: 0;
+		width: 280px;
+		min-width: 0;
+		font-size: 0.8125rem;
+		color: color-mix(in oklab, var(--color-base-content) 75%, transparent);
+	}
+
+	.detail-name {
+		font-size: 0.9375rem;
+		color: var(--color-base-content);
+		word-break: break-all;
+	}
+
+	.detail-url {
+		padding: 6px 8px;
+		border-radius: 6px;
+		font-size: 0.6875rem;
+		background: color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100));
+		word-break: break-all;
+	}
+
+	.detail-id {
+		font-size: 0.6875rem;
+		color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+		word-break: break-all;
+	}
+
+	.detail-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+		padding-top: 14px;
+		flex-shrink: 0;
+	}
+
+	@media (max-width: 720px) {
+		.detail {
+			flex-direction: column;
+		}
+
+		.detail-meta {
+			width: auto;
+		}
 	}
 
 	.media-dropzone {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
+		justify-content: center;
 		gap: 6px;
 		padding: 36px 16px;
+		flex: 1 1 auto;
+		min-height: 200px;
 		text-align: center;
 		border: 2px dashed var(--color-base-300);
 		border-radius: 10px;
@@ -630,5 +1043,153 @@
 	.media-hint {
 		font-size: 0.75rem;
 		color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+	}
+
+	/* ── List view: rows with a small square thumbnail ── */
+	.media-list {
+		display: flex;
+		flex-direction: column;
+		flex: 1 1 auto;
+		min-height: 200px;
+		overflow-y: auto;
+	}
+
+	.media-row {
+		display: flex;
+		align-items: center;
+		border-radius: 6px;
+	}
+
+	.media-row:hover {
+		background: color-mix(in oklab, var(--color-base-content) 5%, transparent);
+	}
+
+	.media-row.picked,
+	.media-row.active {
+		background: color-mix(in oklab, var(--color-primary) 12%, transparent);
+	}
+
+	.media-row-main {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		flex: 1;
+		min-width: 0;
+		padding: 6px 8px;
+		border: none;
+		background: none;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.media-row-thumb {
+		position: relative;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 40px;
+		height: 40px;
+		flex-shrink: 0;
+		border: 1px solid var(--color-base-300);
+		border-radius: 6px;
+		overflow: hidden;
+		background: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
+	}
+
+	.media-row-thumb img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+
+	.media-row-name {
+		flex: 1;
+		min-width: 0;
+		font-size: 0.8125rem;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.media-row-type,
+	.media-row-size {
+		flex-shrink: 0;
+		font-size: 0.75rem;
+		color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	}
+
+	.media-row-type {
+		width: 130px;
+	}
+
+	.media-row-size {
+		width: 72px;
+		text-align: right;
+	}
+
+	.media-row-delete {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		flex-shrink: 0;
+		margin-right: 4px;
+		padding: 0;
+		border: none;
+		border-radius: 6px;
+		background: none;
+		cursor: pointer;
+		color: var(--color-error, #dc2626);
+		opacity: 0;
+		transition:
+			opacity 0.12s,
+			background 0.12s;
+	}
+
+	.media-row:hover .media-row-delete,
+	.media-row:focus-within .media-row-delete {
+		opacity: 1;
+	}
+
+	.media-row-delete:hover {
+		background: color-mix(in oklab, var(--color-error) 18%, transparent);
+	}
+
+	@media (max-width: 640px) {
+		.media-row-type,
+		.media-row-size {
+			display: none;
+		}
+	}
+
+	/* ── View toggle ── */
+	.media-view-toggle {
+		display: inline-flex;
+		border: 1px solid var(--color-base-300);
+		border-radius: 6px;
+		overflow: hidden;
+	}
+
+	.media-view-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 30px;
+		height: 30px;
+		border: none;
+		background: none;
+		color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+		cursor: pointer;
+		font-size: 0.875rem;
+	}
+
+	.media-view-btn:hover {
+		background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+	}
+
+	.media-view-btn.active {
+		background: color-mix(in oklab, var(--color-primary) 18%, var(--color-base-100));
+		color: var(--color-primary);
 	}
 </style>
