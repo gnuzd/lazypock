@@ -115,7 +115,6 @@
 		expression: '0 0 * * *',
 		timezone: 'UTC',
 		enabled: true,
-		action: 'http' as 'http' | 'sql' | 'hook',
 		method: 'GET',
 		url: '',
 		headers: [{ key: '', value: '' }] as { key: string; value: string }[],
@@ -123,6 +122,17 @@
 		statement: '',
 		hookEvent: ''
 	});
+
+	const actionForTab: Record<string, 'http' | 'sql' | 'hook'> = {
+		'HTTP Request': 'http',
+		SQL: 'sql',
+		Hook: 'hook'
+	};
+
+	// The Action tabs are the source of truth for what gets saved. Derive the
+	// stored action from the active tab — previously the form kept `action: 'http'`
+	// when switching tabs, so a SQL/Hook job failed with "URL is required".
+	let action = $derived(actionForTab[actionTab] ?? 'http');
 
 	// ── Confirm modal state ───────────────────────────
 	let showDeleteConfirm = $state(false);
@@ -162,7 +172,6 @@
 			expression: '0 0 * * *',
 			timezone: 'UTC',
 			enabled: true,
-			action: 'http',
 			method: 'GET',
 			url: '',
 			headers: [{ key: '', value: '' }],
@@ -184,7 +193,6 @@
 			expression: job.expression,
 			timezone: job.timezone || 'UTC',
 			enabled: job.enabled,
-			action: job.action,
 			method: (cfg.method as string) || 'GET',
 			url: (cfg.url as string) || '',
 			headers: (cfg.headers as { key: string; value: string }[])?.length
@@ -256,7 +264,7 @@
 
 	// ── Save ─────────────────────────────────────────
 	function buildConfig(): Record<string, unknown> {
-		if (form.action === 'http') {
+		if (action === 'http') {
 			const headers = Object.fromEntries(
 				form.headers
 					.filter((h) => h.key.trim() && h.value.trim())
@@ -269,7 +277,7 @@
 				...(form.body.trim() ? { body: form.body } : {})
 			};
 		}
-		if (form.action === 'sql') {
+		if (action === 'sql') {
 			return { statement: form.statement };
 		}
 		return form.hookEvent.trim() ? { event: form.hookEvent.trim() } : {};
@@ -285,11 +293,11 @@
 			formError = 'Expression is required';
 			return;
 		}
-		if (form.action === 'http' && !form.url.trim()) {
+		if (action === 'http' && !form.url.trim()) {
 			formError = 'URL is required for HTTP requests';
 			return;
 		}
-		if (form.action === 'sql' && !form.statement.trim()) {
+		if (action === 'sql' && !form.statement.trim()) {
 			formError = 'SQL statement is required';
 			return;
 		}
@@ -301,7 +309,7 @@
 				expression: form.expression.trim(),
 				timezone: form.timezone,
 				enabled: form.enabled,
-				action: form.action,
+				action,
 				config: buildConfig()
 			};
 			if (editingId) {
