@@ -13,6 +13,7 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { LayoutGrid, List, Trash2 } from '@lucide/svelte';
 	import { client } from '$lib/client';
 	import { confirmDialog } from '$lib/dialog.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -386,7 +387,7 @@
 				class:active={viewMode === 'grid'}
 				aria-pressed={viewMode === 'grid'}
 				title="Grid view"
-				onclick={() => setView('grid')}>▦</button
+				onclick={() => setView('grid')}><LayoutGrid size={15} /></button
 			>
 			<button
 				type="button"
@@ -394,7 +395,7 @@
 				class:active={viewMode === 'list'}
 				aria-pressed={viewMode === 'list'}
 				title="List view"
-				onclick={() => setView('list')}>☰</button
+				onclick={() => setView('list')}><List size={15} /></button
 			>
 		</div>
 		<Button class="btn-sm" loading={loading} onclick={() => load(true)}>Refresh</Button>
@@ -453,10 +454,13 @@
 							disabled={deleting === item.id}
 							onclick={() => void askDelete(item)}
 						>
-							{deleting === item.id ? '…' : '🗑'}
+							{#if deleting === item.id}
+								<span class="loading-spinner loading-xs"></span>
+							{:else}
+								<Trash2 size={14} />
+							{/if}
 						</button>
 					</div>
-
 					<div class="media-meta">
 						<span class="media-name" title={item.filename}>{item.filename}</span>
 						<span class="media-size">{formatSize(item.size)}</span>
@@ -499,7 +503,11 @@
 						disabled={deleting === item.id}
 						onclick={() => void askDelete(item)}
 					>
-						{deleting === item.id ? '…' : '🗑'}
+						{#if deleting === item.id}
+							<span class="loading-spinner loading-xs"></span>
+						{:else}
+							<Trash2 size={14} />
+						{/if}
 					</button>
 				</div>
 			{/each}

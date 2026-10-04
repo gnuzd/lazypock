@@ -8,6 +8,13 @@
 	import { Markdown } from '@tiptap/markdown';
 	import { EditorContent, createEditor } from 'svelte-tiptap';
 	import type { Editor } from 'svelte-tiptap';
+	import {
+		Image as ImageIcon,
+		Link as LinkIcon,
+		Table as TableIcon,
+		Undo2,
+		Redo2
+	} from '@lucide/svelte';
 	import { client } from '$lib/client';
 	import { promptDialog } from '$lib/dialog.svelte';
 	import MediaLibrary, { type MediaItem } from '$lib/components/MediaLibrary.svelte';
@@ -224,25 +231,29 @@
 				type="button"
 				class="toolbar-btn"
 				onclick={() => void insertLink()}
-				title="Link">🔗</button
+				title="Link"><LinkIcon size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
 				onclick={() => (mediaOpen = true)}
-				title="Insert image">🖼</button
+				title="Insert image"><ImageIcon size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
 				onclick={() => exec('insertTable', { rows: 3, cols: 3, withHeaderRow: true })}
-				title="Insert table">⊞</button
+				title="Insert table"><TableIcon size={15} /></button
 			>
 
 			<span class="sep"></span>
 
-			<button type="button" class="toolbar-btn" onclick={() => exec('undo')} title="Undo">↩</button>
-			<button type="button" class="toolbar-btn" onclick={() => exec('redo')} title="Redo">↪</button>
+			<button type="button" class="toolbar-btn" onclick={() => exec('undo')} title="Undo"
+				><Undo2 size={15} /></button
+			>
+			<button type="button" class="toolbar-btn" onclick={() => exec('redo')} title="Redo"
+				><Redo2 size={15} /></button
+			>
 		</div>
 	{/if}
 
@@ -295,6 +306,11 @@
 		font-size: 0.8125rem;
 		outline: 0;
 		transition: background 0.1s;
+	}
+
+	/* Lucide icons inherit the button colour. */
+	.toolbar-btn :global(svg) {
+		display: block;
 	}
 
 	.toolbar-btn:hover {
