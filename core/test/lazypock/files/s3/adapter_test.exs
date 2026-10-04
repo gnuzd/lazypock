@@ -43,7 +43,16 @@ defmodule Lazypock.Files.S3.AdapterTest do
 
     stub(fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      send(parent, {:req, conn.method, conn.request_path, body, get_req(conn, "authorization")})
+
+      send(parent, {
+        :req,
+        conn.method,
+        conn.request_path,
+        body,
+        get_req(conn, "authorization"),
+        get_req(conn, "content-length")
+      })
+
       Plug.Conn.send_resp(conn, 200, "")
     end)
 
@@ -54,9 +63,14 @@ defmodule Lazypock.Files.S3.AdapterTest do
     assert meta.size == 5
     assert meta.mime_type == "image/png"
 
-    assert_receive {:req, "PUT", "/bucket/lazypock/abc123/original.png", "hello", [auth]}
+    # The streamed body must carry an explicit content-length: R2 answers 411
+    # when the PUT is chunked.
+    assert_receive {:req, "PUT", "/bucket/lazypock/abc123/original.png", "hello", [auth], ["5"]}
+
     assert auth =~ "AWS4-HMAC-SHA256"
-    assert auth =~ "SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date"
+
+    assert auth =~
+             "SignedHeaders=content-length;content-type;host;x-amz-content-sha256;x-amz-date"
   end
 
   test "get returns the body and maps 404 to :not_found" do

@@ -218,9 +218,19 @@ defmodule Lazypock.Files.Adapters.S3 do
   defp put_object(key, path, content_type) do
     payload_hash = SigV4.sha256_file(path)
 
+    # The body is streamed from disk, so Req/Finch cannot infer its length and
+    # would send it chunked — which Cloudflare R2 rejects with `411 Length
+    # Required` (intermittently, depending on the connection). Set
+    # `content-length` explicitly; SigV4 then signs it along with the rest of
+    # the headers.
+    size = File.stat!(path).size
+
     case request(:put, key,
            body: File.stream!(path, 1024 * 1024, []),
-           headers: %{"content-type" => content_type},
+           headers: %{
+             "content-type" => content_type,
+             "content-length" => Integer.to_string(size)
+           },
            payload_hash: payload_hash,
            sign_headers: ["host", "x-amz-content-sha256", "x-amz-date", "content-type"]
          ) do
