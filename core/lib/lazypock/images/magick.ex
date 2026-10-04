@@ -38,34 +38,40 @@ defmodule Lazypock.Images.Magick do
 
   @impl true
   def dimensions(path) do
-    case find_binary() do
-      nil ->
-        {:error, :magick_not_found}
+    case identify_command() do
+      {:ok, binary, prefix} -> run_identify(binary, prefix, path)
+      :error -> {:error, :magick_not_found}
+    end
+  end
 
-      magick ->
-        args = [
-          "identify",
-          "-limit",
-          "memory",
-          "128MiB",
-          "-limit",
-          "map",
-          "256MiB",
-          "-format",
-          "%w %h",
-          path
-        ]
+  # ImageMagick 6 (Debian/Ubuntu — what CI and most servers install) ships
+  # `identify` but **no** `magick` binary, and `convert identify …` is not a
+  # valid IM6 command: `convert` treats "identify" as an input file and fails
+  # ("no decode delegate for this image format `identify`"). Prefer the separate
+  # `identify` binary — present in both IM6 and IM7 — and only fall back to the
+  # `magick identify` subcommand when there is no such binary.
+  defp identify_command do
+    cond do
+      bin = System.find_executable("identify") -> {:ok, bin, []}
+      bin = System.find_executable("magick") -> {:ok, bin, ["identify"]}
+      true -> :error
+    end
+  end
 
-        case System.cmd(magick, args, stderr_to_stdout: true) do
-          {out, 0} ->
-            case Regex.run(~r/^(\d+)\s+(\d+)$/, String.trim(out)) do
-              [_, w, h] -> {:ok, String.to_integer(w), String.to_integer(h)}
-              _ -> {:error, :unknown_dimensions}
-            end
+  defp run_identify(binary, prefix, path) do
+    args =
+      prefix ++
+        ["-limit", "memory", "128MiB", "-limit", "map", "256MiB", "-format", "%w %h", path]
 
-          {_out, code} ->
-            {:error, {:identify_failed, code}}
+    case System.cmd(binary, args, stderr_to_stdout: true) do
+      {out, 0} ->
+        case Regex.run(~r/^(\d+)\s+(\d+)$/, String.trim(out)) do
+          [_, w, h] -> {:ok, String.to_integer(w), String.to_integer(h)}
+          _ -> {:error, :unknown_dimensions}
         end
+
+      {_out, code} ->
+        {:error, {:identify_failed, code}}
     end
   rescue
     e -> {:error, e}

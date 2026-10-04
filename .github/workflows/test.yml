@@ -53,6 +53,10 @@ jobs:
         env:
           MIX_ENV: test
         run: |
+          # `pipefail` is essential here: without it a pipeline's exit status is
+          # `tee`'s (always 0): `mix test … | tee cover.txt` reported this job
+          # as green even when the suite printed failures.
+          set -o pipefail
           mix ecto.create --quiet
           mix ecto.migrate --quiet
           # Retry once — the async suite has a known rare flake

@@ -47,6 +47,7 @@ export const nav: NavSection[] = [
 					{ href: "/server#first-time", label: "First-time setup" },
 					{ href: "/server#filters", label: "Filters" },
 					{ href: "/server#production", label: "Production" },
+					{ href: "/server#images", label: "Image processing" },
 					{ href: "/server#env-vars", label: "Environment variables" },
 				],
 			},

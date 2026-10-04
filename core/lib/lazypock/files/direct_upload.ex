@@ -160,8 +160,8 @@ defmodule Lazypock.Files.DirectUpload do
   end
 
   defp dimensions(tmp) do
-    case Lazypock.Images.engine().dimensions(tmp) do
-      {:ok, w, h} -> {w, h}
+    case Lazypock.Files.Limiter.run(fn -> Lazypock.Images.engine().dimensions(tmp) end) do
+      {:ok, {:ok, w, h}} -> {w, h}
       _ -> {nil, nil}
     end
   end
