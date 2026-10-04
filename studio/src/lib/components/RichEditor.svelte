@@ -9,9 +9,21 @@
 	import { EditorContent, createEditor } from 'svelte-tiptap';
 	import type { Editor } from 'svelte-tiptap';
 	import {
+		Bold,
+		Italic,
+		Underline,
+		Strikethrough,
+		Heading2,
+		Heading3,
+		List,
+		ListOrdered,
+		Quote,
+		SquareCode,
 		Image as ImageIcon,
 		Link as LinkIcon,
 		Table as TableIcon,
+		Minus,
+		RemoveFormatting,
 		Undo2,
 		Redo2
 	} from '@lucide/svelte';
@@ -24,6 +36,8 @@
 	let editor = $state<Editor | null>(null);
 	let mediaOpen = $state(false);
 	let uploadError = $state('');
+	/** Bumped on every transaction so toolbar active/undo states re-evaluate. */
+	let revision = $state(0);
 
 	/** Last Markdown we emitted, so a `$effect` can tell our own update apart. */
 	let lastEmitted = '';
@@ -34,7 +48,11 @@
 	}
 
 	function insertImage(item: MediaItem) {
-		editor?.chain().focus().setImage({ src: contentUrl(item), alt: item.filename }).run();
+		editor
+			?.chain()
+			.focus()
+			.setImage({ src: contentUrl(item), alt: item.filename })
+			.run();
 	}
 
 	async function uploadFiles(files: File[]) {
@@ -45,9 +63,7 @@
 
 			try {
 				// Editor uploads are GC'd if they never end up in a record.
-				const meta = { origin: 'editor' } as unknown as Parameters<
-					typeof client.files.upload
-				>[3];
+				const meta = { origin: 'editor' } as unknown as Parameters<typeof client.files.upload>[3];
 				const res = await client.files.upload(file, file.name, undefined, meta);
 				if (res?.id) insertImage(res as unknown as MediaItem);
 			} catch (e) {
@@ -92,9 +108,14 @@
 				lastEmitted = md;
 				value = md;
 			},
+			// The store re-emits the *same* Editor reference on every transaction,
+			// so `editor` alone is not reactive. Bump a revision so the toolbar's
+			// active / undo / redo states re-evaluate on selection and typing.
+			onTransaction: () => {
+				revision += 1;
+			},
 			editorProps: {
-				handlePaste: (_view, event) =>
-					handleFiles((event as ClipboardEvent).clipboardData?.files),
+				handlePaste: (_view, event) => handleFiles((event as ClipboardEvent).clipboardData?.files),
 				handleDrop: (_view, event) => handleFiles((event as DragEvent).dataTransfer?.files)
 			}
 		});
@@ -129,8 +150,28 @@
 		}
 	}
 
+	function clearFormatting() {
+		editor?.chain().focus().unsetAllMarks().clearNodes().run();
+	}
+
+	/** Keep focus/selection in the editor when a toolbar button is clicked. */
+	function preventDefault(event: MouseEvent) {
+		event.preventDefault();
+	}
+
 	function isActive(cmd: string, attrs?: Record<string, unknown>): boolean {
+		void revision;
 		return editor?.isActive(cmd, attrs) ?? false;
+	}
+
+	function canUndo(): boolean {
+		void revision;
+		return editor?.can().undo() ?? false;
+	}
+
+	function canRedo(): boolean {
+		void revision;
+		return editor?.can().redo() ?? false;
 	}
 
 	$effect(() => {
@@ -152,10 +193,7 @@
 		(
 			editor as unknown as {
 				commands: {
-					setContent: (
-						c: string,
-						o?: { contentType?: string; emitUpdate?: boolean }
-					) => void;
+					setContent: (c: string, o?: { contentType?: string; emitUpdate?: boolean }) => void;
 				};
 			}
 		).commands.setContent(incoming, { contentType: 'markdown', emitUpdate: false });
@@ -164,34 +202,69 @@
 
 <div class="rich-editor" class:disabled>
 	{#if editor}
-		<div class="toolbar">
+		<div class="toolbar" role="toolbar" aria-label="Formatting">
 			<button
 				type="button"
 				class="toolbar-btn"
 				class:active={isActive('bold')}
-				onclick={() => exec('toggleBold')}
-				title="Bold"><b>B</b></button
+				title="Bold"
+				aria-label="Bold"
+				aria-pressed={isActive('bold')}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleBold')}><Bold size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
 				class:active={isActive('italic')}
-				onclick={() => exec('toggleItalic')}
-				title="Italic"><i>I</i></button
+				title="Italic"
+				aria-label="Italic"
+				aria-pressed={isActive('italic')}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleItalic')}><Italic size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
 				class:active={isActive('underline')}
-				onclick={() => exec('toggleUnderline')}
-				title="Underline"><u>U</u></button
+				title="Underline"
+				aria-label="Underline"
+				aria-pressed={isActive('underline')}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleUnderline')}><Underline size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
 				class:active={isActive('strike')}
-				onclick={() => exec('toggleStrike')}
-				title="Strikethrough"><s>S</s></button
+				title="Strikethrough"
+				aria-label="Strikethrough"
+				aria-pressed={isActive('strike')}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleStrike')}><Strikethrough size={15} /></button
+			>
+
+			<span class="sep"></span>
+
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('heading', { level: 2 })}
+				title="Heading 2"
+				aria-label="Heading 2"
+				aria-pressed={isActive('heading', { level: 2 })}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleHeading', { level: 2 })}><Heading2 size={15} /></button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				class:active={isActive('heading', { level: 3 })}
+				title="Heading 3"
+				aria-label="Heading 3"
+				aria-pressed={isActive('heading', { level: 3 })}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleHeading', { level: 3 })}><Heading3 size={15} /></button
 			>
 
 			<span class="sep"></span>
@@ -200,29 +273,41 @@
 				type="button"
 				class="toolbar-btn"
 				class:active={isActive('bulletList')}
-				onclick={() => exec('toggleBulletList')}
-				title="Bullet list">•</button
+				title="Bullet list"
+				aria-label="Bullet list"
+				aria-pressed={isActive('bulletList')}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleBulletList')}><List size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
 				class:active={isActive('orderedList')}
-				onclick={() => exec('toggleOrderedList')}
-				title="Numbered list">1.</button
+				title="Numbered list"
+				aria-label="Numbered list"
+				aria-pressed={isActive('orderedList')}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleOrderedList')}><ListOrdered size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
 				class:active={isActive('blockquote')}
-				onclick={() => exec('toggleBlockquote')}
-				title="Blockquote">"</button
+				title="Blockquote"
+				aria-label="Blockquote"
+				aria-pressed={isActive('blockquote')}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleBlockquote')}><Quote size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
 				class:active={isActive('codeBlock')}
-				onclick={() => exec('toggleCodeBlock')}
-				title="Code block">&lt;/&gt;</button
+				title="Code block"
+				aria-label="Code block"
+				aria-pressed={isActive('codeBlock')}
+				onmousedown={preventDefault}
+				onclick={() => exec('toggleCodeBlock')}><SquareCode size={15} /></button
 			>
 
 			<span class="sep"></span>
@@ -230,29 +315,63 @@
 			<button
 				type="button"
 				class="toolbar-btn"
-				onclick={() => void insertLink()}
-				title="Link"><LinkIcon size={15} /></button
+				class:active={isActive('link')}
+				title="Link"
+				aria-label="Link"
+				aria-pressed={isActive('link')}
+				onmousedown={preventDefault}
+				onclick={() => void insertLink()}><LinkIcon size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
+				onmousedown={preventDefault}
 				onclick={() => (mediaOpen = true)}
-				title="Insert image"><ImageIcon size={15} /></button
+				title="Insert image"
+				aria-label="Insert image"><ImageIcon size={15} /></button
 			>
 			<button
 				type="button"
 				class="toolbar-btn"
+				onmousedown={preventDefault}
 				onclick={() => exec('insertTable', { rows: 3, cols: 3, withHeaderRow: true })}
-				title="Insert table"><TableIcon size={15} /></button
+				title="Insert table"
+				aria-label="Insert table"><TableIcon size={15} /></button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				onmousedown={preventDefault}
+				onclick={() => exec('setHorizontalRule')}
+				title="Horizontal rule"
+				aria-label="Horizontal rule"><Minus size={15} /></button
+			>
+			<button
+				type="button"
+				class="toolbar-btn"
+				onmousedown={preventDefault}
+				onclick={clearFormatting}
+				title="Clear formatting"
+				aria-label="Clear formatting"><RemoveFormatting size={15} /></button
 			>
 
 			<span class="sep"></span>
 
-			<button type="button" class="toolbar-btn" onclick={() => exec('undo')} title="Undo"
-				><Undo2 size={15} /></button
+			<button
+				type="button"
+				class="toolbar-btn"
+				onclick={() => exec('undo')}
+				title="Undo"
+				aria-label="Undo"
+				disabled={!canUndo()}><Undo2 size={15} /></button
 			>
-			<button type="button" class="toolbar-btn" onclick={() => exec('redo')} title="Redo"
-				><Redo2 size={15} /></button
+			<button
+				type="button"
+				class="toolbar-btn"
+				onclick={() => exec('redo')}
+				title="Redo"
+				aria-label="Redo"
+				disabled={!canRedo()}><Redo2 size={15} /></button
 			>
 		</div>
 	{/if}
@@ -286,8 +405,9 @@
 	.toolbar {
 		display: flex;
 		flex-wrap: wrap;
+		align-items: center;
 		gap: 2px;
-		padding: 4px 12px;
+		padding: 6px 12px;
 		background: color-mix(in oklab, var(--color-base-content) 4%, transparent);
 		border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
 	}
@@ -299,13 +419,15 @@
 		width: 28px;
 		height: 28px;
 		border: none;
-		border-radius: 4px;
+		border-radius: 6px;
 		background: none;
-		color: var(--color-base-content);
+		color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
 		cursor: pointer;
 		font-size: 0.8125rem;
 		outline: 0;
-		transition: background 0.1s;
+		transition:
+			background 0.1s,
+			color 0.1s;
 	}
 
 	/* Lucide icons inherit the button colour. */
@@ -315,6 +437,7 @@
 
 	.toolbar-btn:hover {
 		background: color-mix(in oklab, var(--color-base-content) 10%, transparent);
+		color: var(--color-base-content);
 	}
 
 	.toolbar-btn.active {
@@ -322,11 +445,21 @@
 		color: var(--color-primary);
 	}
 
+	.toolbar-btn:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+
+	.toolbar-btn:disabled:hover {
+		background: none;
+		color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+	}
+
 	.sep {
 		display: inline-block;
 		width: 1px;
 		height: 20px;
-		margin: 4px 2px;
+		margin: 0 4px;
 		background: color-mix(in oklab, var(--color-base-content) 15%, transparent);
 		align-self: center;
 	}
