@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.20.0](https://github.com/gnuzd/lazypock/compare/v0.19.0...v0.20.0) (2026-10-04)
+
+
+### Features
+
+* **logs:** status filter, retention auto-clean, confirm cleanup ([792c6fd](https://github.com/gnuzd/lazypock/commit/792c6fdd91c48f78d840f6ddde287c73b1b36728))
+* **studio:** slide in the media rules available-fields panel ([2a0573b](https://github.com/gnuzd/lazypock/commit/2a0573b617faf5e102e8d580be4b0cd54818db97))
+
+
+### Bug Fixes
+
+* **files:** add castore so outbound TLS has a trust store ([37abed1](https://github.com/gnuzd/lazypock/commit/37abed1fbdb52890dd25f82cae9bd9427cb76975))
+* **files:** send Content-Length on S3/R2 PUTs ([d89e5a0](https://github.com/gnuzd/lazypock/commit/d89e5a0cafd2344089276bb39a5f9731a650ddff))
+* **studio:** derive the cron action from the active tab ([2b41715](https://github.com/gnuzd/lazypock/commit/2b41715bef6970f3dd45611b360fe91f383009d1))
+
 ## [0.19.0](https://github.com/gnuzd/lazypock/compare/v0.18.0...v0.19.0) (2026-10-04)
 
 
