@@ -24,6 +24,8 @@
 		Table as TableIcon,
 		Minus,
 		RemoveFormatting,
+		Images,
+		Upload,
 		Undo2,
 		Redo2
 	} from '@lucide/svelte';
@@ -36,6 +38,10 @@
 	let editor = $state<Editor | null>(null);
 	let mediaOpen = $state(false);
 	let uploadError = $state('');
+	/** Insert-image dropdown: upload a new file or pick one from the library. */
+	let imageMenuOpen = $state(false);
+	let imageMenu = $state<HTMLDivElement | null>(null);
+	let fileInput = $state<HTMLInputElement | null>(null);
 	/** Bumped on every transaction so toolbar active/undo states re-evaluate. */
 	let revision = $state(0);
 
@@ -77,6 +83,26 @@
 		if (!files || files.length === 0) return false;
 		void uploadFiles(Array.from(files));
 		return true;
+	}
+
+	/** Hidden file input: upload the chosen image and insert it. */
+	function onPick(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const files = input.files;
+		input.value = '';
+		if (files && files.length > 0) void uploadFiles(Array.from(files));
+	}
+
+	/** Dropdown → upload a new image through the file picker. */
+	function openUploadPicker() {
+		imageMenuOpen = false;
+		fileInput?.click();
+	}
+
+	/** Dropdown → pick an existing image from the media library. */
+	function openLibraryPicker() {
+		imageMenuOpen = false;
+		mediaOpen = true;
 	}
 
 	onMount(() => {
@@ -178,6 +204,26 @@
 		if (editor && editor.isEditable === disabled) {
 			editor.setEditable(!disabled);
 		}
+	});
+
+	// Close the insert-image dropdown on outside click / Escape.
+	$effect(() => {
+		if (!imageMenuOpen) return;
+
+		const onPointerDown = (event: PointerEvent) => {
+			if (imageMenu && !imageMenu.contains(event.target as Node)) imageMenuOpen = false;
+		};
+		const onKeydown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') imageMenuOpen = false;
+		};
+
+		document.addEventListener('pointerdown', onPointerDown);
+		document.addEventListener('keydown', onKeydown);
+
+		return () => {
+			document.removeEventListener('pointerdown', onPointerDown);
+			document.removeEventListener('keydown', onKeydown);
+		};
 	});
 
 	$effect(() => {
@@ -322,14 +368,42 @@
 				onmousedown={preventDefault}
 				onclick={() => void insertLink()}><LinkIcon size={15} /></button
 			>
-			<button
-				type="button"
-				class="toolbar-btn"
-				onmousedown={preventDefault}
-				onclick={() => (mediaOpen = true)}
-				title="Insert image"
-				aria-label="Insert image"><ImageIcon size={15} /></button
-			>
+			<div class="toolbar-menu" bind:this={imageMenu}>
+				<button
+					type="button"
+					class="toolbar-btn"
+					class:active={imageMenuOpen}
+					onmousedown={preventDefault}
+					onclick={() => (imageMenuOpen = !imageMenuOpen)}
+					title="Insert image"
+					aria-label="Insert image"
+					aria-haspopup="menu"
+					aria-expanded={imageMenuOpen}><ImageIcon size={15} /></button
+				>
+
+				{#if imageMenuOpen}
+					<div class="toolbar-dropdown" role="menu">
+						<button
+							type="button"
+							role="menuitem"
+							class="toolbar-menu-item"
+							onclick={openUploadPicker}
+						>
+							<Upload size={14} />
+							<span>Upload image</span>
+						</button>
+						<button
+							type="button"
+							role="menuitem"
+							class="toolbar-menu-item"
+							onclick={openLibraryPicker}
+						>
+							<Images size={14} />
+							<span>Choose from library</span>
+						</button>
+					</div>
+				{/if}
+			</div>
 			<button
 				type="button"
 				class="toolbar-btn"
@@ -378,6 +452,8 @@
 
 	<EditorContent editor={editor!} class="editor-content" />
 </div>
+
+<input bind:this={fileInput} type="file" accept="image/*" class="file-input" onchange={onPick} />
 
 {#if uploadError}
 	<p class="upload-error">{uploadError}</p>
@@ -453,6 +529,56 @@
 	.toolbar-btn:disabled:hover {
 		background: none;
 		color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+	}
+
+	/* Insert-image dropdown (upload vs. library) */
+	.toolbar-menu {
+		position: relative;
+	}
+
+	.toolbar-dropdown {
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 0;
+		z-index: 20;
+		min-width: 12rem;
+		padding: 4px;
+		border: 1px solid var(--color-base-300);
+		border-radius: 8px;
+		background: var(--color-base-100);
+		box-shadow: 0 10px 30px color-mix(in oklab, var(--color-base-content) 18%, transparent);
+	}
+
+	.toolbar-menu-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		padding: 8px 10px;
+		border: none;
+		border-radius: 6px;
+		background: none;
+		color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
+		cursor: pointer;
+		font-size: 0.8125rem;
+		text-align: left;
+		transition:
+			background 0.1s,
+			color 0.1s;
+	}
+
+	.toolbar-menu-item:hover {
+		background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+		color: var(--color-base-content);
+	}
+
+	.toolbar-menu-item :global(svg) {
+		flex-shrink: 0;
+		color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+	}
+
+	.file-input {
+		display: none;
 	}
 
 	.sep {
