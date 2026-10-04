@@ -466,6 +466,16 @@
 				</div>
 			</Dropdown>
 		</div>
+
+		{#if newType === 'auth'}
+			<p class="mt-2 text-xs text-base-content/60">
+				Auth collections get <code class="rounded bg-base-200 px-1 py-0.5">email</code>,
+				<code class="rounded bg-base-200 px-1 py-0.5">password</code>,
+				<code class="rounded bg-base-200 px-1 py-0.5">verified</code> and
+				<code class="rounded bg-base-200 px-1 py-0.5">emailVisibility</code> automatically
+				(the password field is write-only, so it is created for you rather than added here).
+			</p>
+		{/if}
 	</div>
 
 	<!-- Header: Tabs (separate section with bottom border) -->
