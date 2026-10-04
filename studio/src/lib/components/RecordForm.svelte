@@ -4,7 +4,8 @@
 
 	import RichEditor from '$lib/components/RichEditor.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
-	import MediaLibrary, { type MediaItem } from '$lib/components/MediaLibrary.svelte';
+	import type { MediaItem } from '$lib/components/MediaLibrary.svelte';
+	import MediaPicker from '$lib/components/MediaPicker.svelte';
 
 	import { client } from '$lib/client';
 
@@ -219,9 +220,26 @@
 		}
 	}
 
-	// ── File library picker (shared MediaLibrary modal) ──
+	// ── File library picker (shared MediaPicker modal) ──
 	let pickerOpen = $state(false);
 	let pickerField = $state('');
+
+	/**
+	 * Server-side mime prefix for the picker. A field restricted to one
+	 * top-level type (e.g. all `image/*`) stays scoped to it; an unrestricted or
+	 * mixed field lists every file (non-images show an icon tile).
+	 */
+	let pickerMime = $derived.by(() => {
+		const field = fields.find((f) => f.name === pickerField);
+		const types = ((field?.options ?? {}) as Record<string, unknown>).mimeTypes;
+		if (!Array.isArray(types)) return '';
+
+		const list = types.filter((t): t is string => typeof t === 'string' && t.trim() !== '');
+		if (list.length === 0) return '';
+
+		const levels = new Set(list.map((t) => t.split('/')[0]));
+		return levels.size === 1 ? `${[...levels][0]}/` : '';
+	});
 
 	function openPicker(fieldName: string) {
 		pickerField = fieldName;
@@ -250,8 +268,6 @@
 			rememberFile(item.id, item.filename, item.url ?? '', item.thumbs);
 			update(pickerField, item.id);
 		}
-
-		pickerOpen = false;
 	}
 
 	async function removeFile(fieldName: string, fileId: string) {
@@ -633,10 +649,11 @@
 </div>
 
 <!-- ═══ FILE LIBRARY PICKER (shared with the richtext editor) ═══ -->
-<MediaLibrary
+<MediaPicker
 	bind:open={pickerOpen}
 	title="Select file"
 	multiple={pickerField ? isMultiField(pickerField) : false}
+	mime={pickerMime}
 	onSelect={onPicked}
 />
 
