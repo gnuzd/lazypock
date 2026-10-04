@@ -80,6 +80,11 @@ defmodule Lazypock.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
+      # Bundled CA trust store for outbound TLS (Mint/Finch/Req — the S3/R2
+      # adapter, OAuth2 providers). A release image has no OS `ca-certificates`,
+      # so without this every HTTPS request raises "default CA trust store not
+      # available" (OTP ≥ 25). Mint picks castore up automatically.
+      {:castore, "~> 1.0"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:bcrypt_elixir, "~> 3.0"},
