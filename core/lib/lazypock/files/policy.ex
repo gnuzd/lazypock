@@ -241,51 +241,17 @@ defmodule Lazypock.Files.Policy do
 
   # ── Image dimensions (ImageMagick header read) ───────
 
+  # The engine owns the ImageMagick invocation details (including the IM6/IM7
+  # difference); this only adds the limiter and maps any failure to `:unknown`,
+  # so the dimension caps stay best-effort when the image cannot be read.
   defp dimensions(path) do
-    with {:ok, magick} <- find_magick() do
-      case Lazypock.Files.Limiter.run(fn -> identify(magick, path) end) do
-        {:ok, result} -> result
-        {:error, :overloaded} -> {:error, :overloaded}
-      end
-    else
-      :error -> :unknown
-    end
-  end
-
-  defp identify(magick, path) do
-    args = [
-      "identify",
-      "-limit",
-      "memory",
-      "128MiB",
-      "-limit",
-      "map",
-      "256MiB",
-      "-format",
-      "%w %h",
-      path
-    ]
-
-    case System.cmd(magick, args, stderr_to_stdout: true) do
-      {out, 0} ->
-        case Regex.run(~r/^(\d+)\s+(\d+)$/, String.trim(out)) do
-          [_, w, h] -> {:ok, String.to_integer(w), String.to_integer(h)}
-          _ -> :unknown
-        end
-
-      _ ->
-        :unknown
+    case Lazypock.Files.Limiter.run(fn -> Lazypock.Images.engine().dimensions(path) end) do
+      {:ok, {:ok, w, h}} -> {:ok, w, h}
+      {:ok, {:error, _reason}} -> :unknown
+      {:error, :overloaded} -> {:error, :overloaded}
+      _ -> :unknown
     end
   rescue
     _ -> :unknown
-  end
-
-  defp find_magick do
-    Enum.find_value(["magick", "convert"], :error, fn cmd ->
-      case System.find_executable(cmd) do
-        nil -> nil
-        path -> {:ok, path}
-      end
-    end)
   end
 end
