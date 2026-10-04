@@ -8,6 +8,7 @@ defmodule Lazypock.Files.Store do
 
   alias Lazypock.Repo
   alias Lazypock.Files.Reaper
+  alias Lazypock.Schemas.FilterCompiler
 
   @default_filename "file"
   @max_filename_length 255
@@ -38,6 +39,7 @@ defmodule Lazypock.Files.Store do
         height          INT,
         checksum        TEXT,
         origin          TEXT NOT NULL DEFAULT 'field',
+        uploaded_by     TEXT NOT NULL DEFAULT '',
         attached_at     TIMESTAMPTZ,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -71,7 +73,8 @@ defmodule Lazypock.Files.Store do
           "ALTER TABLE _files ADD COLUMN IF NOT EXISTS height INT",
           "ALTER TABLE _files ADD COLUMN IF NOT EXISTS checksum TEXT",
           "ALTER TABLE _files ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'field'",
-          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS attached_at TIMESTAMPTZ"
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS attached_at TIMESTAMPTZ",
+          "ALTER TABLE _files ADD COLUMN IF NOT EXISTS uploaded_by TEXT NOT NULL DEFAULT ''"
         ] do
       Ecto.Adapters.SQL.query!(Repo, statement, [])
     end
@@ -87,6 +90,13 @@ defmodule Lazypock.Files.Store do
     Ecto.Adapters.SQL.query!(
       Repo,
       "CREATE INDEX IF NOT EXISTS _files_created_idx ON _files (created_at DESC, id DESC)",
+      []
+    )
+
+    # File rules commonly filter by owner (`@request.auth.id = uploaded_by`).
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE INDEX IF NOT EXISTS _files_uploaded_by_idx ON _files (uploaded_by)",
       []
     )
 
@@ -161,6 +171,7 @@ defmodule Lazypock.Files.Store do
     * `:collection_name` — the collection this file belongs to (for cleanup on record delete)
     * `:record_id` — the record ID this file belongs to
     * `:field_name` — the field name on the record
+    * `:uploaded_by` — id of the uploading identity (auth user or superuser), for file rules
   """
   def store(%Plug.Upload{} = upload, opts \\ []) do
     do_store({:file, upload.path}, upload.filename, upload.content_type, opts)
@@ -211,12 +222,15 @@ defmodule Lazypock.Files.Store do
     * `:field_name` — only files for a field
     * `:mime` — only files whose mime_type starts with this prefix (e.g. `image/`)
     * `:q` — case-insensitive substring match on the filename
+    * `:rule` — `{sql, params}` WHERE fragment from an authorisation rule
+      (`Lazypock.Files.Rules.authorize_list/1`); merged as an extra AND clause
   """
   def list(opts \\ []) do
     page = max(opts[:page] || 1, 1)
     per_page = min(max(opts[:per_page] || 50, 1), 200)
 
     {clauses, args} = build_filters(opts)
+    {clauses, args} = merge_rule(opts[:rule], clauses, args)
     where_sql = if clauses == [], do: "", else: " WHERE " <> Enum.join(clauses, " AND ")
 
     {:ok, %{rows: [[total]]}} =
@@ -286,6 +300,18 @@ defmodule Lazypock.Files.Store do
 
     {clauses, Enum.reverse(args)}
   end
+
+  # Merge an authorisation rule's WHERE fragment after the caller's filters.
+  # The rule's placeholders are shifted past the existing ones (`$1..$k` →
+  # `$n+1..$n+k`) so Postgrex always sees a contiguous `$1..$n` range, and the
+  # fragment is parenthesised so a top-level `||` cannot leak out of the AND.
+  defp merge_rule({sql, params}, clauses, args)
+       when is_binary(sql) and sql != "" and is_list(params) do
+    shifted = FilterCompiler.shift_placeholders(sql, length(args))
+    {clauses ++ ["(#{shifted})"], args ++ params}
+  end
+
+  defp merge_rule(_rule, clauses, args), do: {clauses, args}
 
   # Accept a UUID as string ("…-…-…") or as Postgrex raw 16-byte binary, and
   # always hand the query the raw binary form Postgrex expects for uuid columns.
@@ -464,8 +490,8 @@ defmodule Lazypock.Files.Store do
           Ecto.Adapters.SQL.query(
             Repo,
             """
-            INSERT INTO _files (id, filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name, thumbs, variants, origin)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13)
+            INSERT INTO _files (id, filename, extension, mime_type, size, storage_path, storage_backend, collection_name, record_id, field_name, thumbs, variants, origin, uploaded_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14)
             RETURNING *
             """,
             [
@@ -481,7 +507,8 @@ defmodule Lazypock.Files.Store do
               opts[:field_name] || "",
               Jason.encode!(thumbs_map),
               Jason.encode!(variants_map),
-              opts[:origin] || "field"
+              opts[:origin] || "field",
+              opts[:uploaded_by] || ""
             ]
           )
 

@@ -18,7 +18,8 @@ Everything below is available **today** in the Studio, the REST API, the CLI and
 | Change the global upload size / allowed types / image caps | `PATCH /api/settings` with an `upload` key (or the same page) |
 | Limit one field differently | the field's options in the collection editor (`maxFileSize`, `mimeTypes`, `thumbs`) |
 | Add or change an image preset | `PATCH /api/settings` with an `image.presets` list |
-| Browse or delete uploaded files | Studio → **Media** |
+| Browse or delete uploaded files | Studio → **Settings → Media** |
+| Control who can list or delete files via the API | Studio → **Settings → Media** (File rules), or `PATCH /api/settings` with a `files.rules` key |
 | Insert an image into a richtext field | the 🖼 button in the editor toolbar |
 
 ---
@@ -223,6 +224,60 @@ The same picker powers **every** file input:
 
 ---
 
+## File access rules
+
+`GET /api/files` and `DELETE /api/files/:id` are governed by **file rules** stored at
+`_settings.data["files"]["rules"]`. Configure them in **Studio → Settings → Media** or with
+`PATCH /api/settings`:
+
+```json
+{ "files": { "rules": {
+  "listRule":   "uploaded_by = @request.auth.id || @request.auth.role = 'admin'",
+  "deleteRule": "uploaded_by = @request.auth.id || @request.auth.role = 'admin'"
+} } }
+```
+
+Rules use the same three states as collection rules:
+
+| Value | Meaning |
+| --- | --- |
+| `null` / absent | **Superusers only** — the default |
+| `""` | **Anyone** (public) |
+| filter string | **Conditional**, evaluated against each file row |
+
+Every upload records the uploading identity in `_files.uploaded_by`, so a single global rule such
+as `uploaded_by = @request.auth.id` gives per-file behaviour: users can list and delete the files
+**they** uploaded. This is what lets an app's own dashboard (for example a `users` collection with
+`admin` and `staff` roles) manage uploads with an end-user token, rather than requiring the Studio's
+superuser account.
+
+Available per-file fields:
+
+| Field | Type |
+| --- | --- |
+| `id` | UUID |
+| `filename`, `extension`, `mime_type` | text |
+| `size` | number |
+| `origin` | `field` / `editor` / `library` |
+| `status`, `collection_name`, `field_name`, `record_id` | text |
+| `uploaded_by` | the uploader's id |
+| `created_at` | date |
+
+`@request.auth.id`, `@request.auth.email` and `@request.auth.role` resolve to the authenticated
+user, exactly as in collection rules. Write the field on the **left** of the comparison
+(`uploaded_by = @request.auth.id`), matching the collection-rule convention.
+
+**Superusers always bypass file rules**, so the Studio media library keeps working unchanged. The
+`?force=true` flag that skips the "still referenced by records" guard is **superuser-only**: an
+authorised user can delete their own file, but cannot break a record that still embeds it.
+
+These rules cover the **library list and delete API only**. A file's direct URL
+(`GET /api/files/:id`, `/scale/…`, `/thumbs/…`) is still public — listing and deleting are what the
+rules protect. Enabling S3/R2's `public_base_url` makes `url`/`variants` point straight at the
+bucket, so those requests never reach the app at all.
+
+---
+
 ## References, deletion & cleanup
 
 Richtext content is plain Markdown, so Lazypock scans it for file ids and records them in
@@ -265,11 +320,11 @@ way to see whether cleanup is stuck or images are backing up.
 | --- | --- | --- |
 | `POST /api/files` | authenticated | Multipart upload (through the app) |
 | `POST /api/files/presign` · `POST /api/files/:id/complete` | authenticated | Direct upload (S3/R2) |
-| `GET /api/files` | superuser | Library list (`mime`, `q`, `page`, `perPage`) |
-| `GET /api/files/:id` | public / rules | Original file |
-| `GET /api/files/:id/scale/:preset_or_size` | public / rules | Preset variant or arbitrary size |
-| `GET /api/files/:id/thumbs/:size` | public / rules | Legacy thumbnail |
-| `DELETE /api/files/:id` | superuser | Delete (`409` if referenced; `?force=true`) |
+| `GET /api/files` | rules (superuser bypass) | Library list (`mime`, `q`, `page`, `perPage`) |
+| `GET /api/files/:id` | public | Original file |
+| `GET /api/files/:id/scale/:preset_or_size` | public | Preset variant or arbitrary size |
+| `GET /api/files/:id/thumbs/:size` | public | Legacy thumbnail |
+| `DELETE /api/files/:id` | rules (superuser bypass) | Delete (`409` if referenced; `?force=true` for superusers) |
 | `GET/PATCH /api/settings/storage` | superuser | S3/R2 configuration (secret is masked) |
 | `POST /api/settings/storage/test` | superuser | Real upload round-trip against the bucket |
 
@@ -282,6 +337,7 @@ A file record looks like this:
   "mimeType": "image/png",
   "size": 482913,
   "url": "/api/files/1f0c…",
+  "uploadedBy": "b7d2…",
   "thumbs": { "100x100": "/api/files/1f0c…/thumbs/100x100" },
   "variants": {
     "thumb": "/api/files/1f0c…/scale/thumb",

@@ -174,8 +174,8 @@ defmodule Lazypock.Rules.Enforcer do
   # previous `%{__struct__: _}` clause granted the bypass to *every* struct, so
   # any code path that passed an auth-collection user as an Ecto struct would
   # have silently escalated it to superuser.
-  defp superuser?(%Lazypock.Auth.SuperUser{}), do: true
-  defp superuser?(_), do: false
+  def superuser?(%Lazypock.Auth.SuperUser{}), do: true
+  def superuser?(_), do: false
 
   # Three-state rule classification plus a fail-closed bucket:
   #
@@ -232,14 +232,35 @@ defmodule Lazypock.Rules.Enforcer do
   # Resolves @request.auth.* tokens, compiles the rule with schema-aware casts
   # and returns the bound SQL clause + params.
   defp compile_rule(rule, user, collection_name) do
+    compile_for(rule, user, field_types(collection_name), collection_name)
+  end
+
+  @doc """
+  Classifies a rule value with the same three-state logic used throughout the
+  enforcer: `:superuser_only` (`nil`/absent), `:public` (`""`), `:filter`
+  (non-blank expression), `:invalid` (blank/whitespace/non-string).
+
+  Exposed so other rule surfaces (e.g. `Lazypock.Files.Rules`) share the exact
+  fail-closed classification instead of re-implementing it.
+  """
+  @spec classify(term()) :: :superuser_only | :public | :filter | :invalid
+  def classify(rule), do: classify_rule(rule)
+
+  @doc """
+  Compiles a rule string for `user` against an explicit field-type map.
+
+  Shared by collection rules and the file-library rules
+  (`Lazypock.Files.Rules`) so `@request.auth.*` resolution and schema-aware
+  casts behave identically in both. `source` is only used to resolve relation
+  dot-paths; a pseudo-source with no relations (e.g. `"_files"`) is fine and
+  fails closed on any dotted field.
+  """
+  @spec compile_for(String.t(), map() | nil, map(), String.t()) ::
+          {:ok, {String.t(), [term()]}} | {:error, String.t()}
+  def compile_for(rule, user, types, source) do
     case resolve_user_tokens(rule, user) do
       {:ok, resolved, token_values} ->
-        FilterCompiler.compile(
-          resolved,
-          token_values,
-          field_types(collection_name),
-          %{source: collection_name}
-        )
+        FilterCompiler.compile(resolved, token_values, types, %{source: source})
 
       {:error, _reason} = error ->
         error
