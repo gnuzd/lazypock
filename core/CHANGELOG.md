@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/gnuzd/lazypock/compare/v0.17.1...v0.18.0) (2026-10-04)
+
+
+### Features
+
+* **files:** list/delete access rules with uploader ownership ([e219b52](https://github.com/gnuzd/lazypock/commit/e219b528a030c77004fa502baed794cccb0d2b6f))
+
 ## [0.17.1](https://github.com/gnuzd/lazypock/compare/v0.17.0...v0.17.1) (2026-10-04)
 
 
