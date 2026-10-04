@@ -12,6 +12,7 @@
 </script>
 
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { client } from '$lib/client';
 	import Button from '$lib/components/Button.svelte';
 	import Modal from '$lib/components/Modal.svelte';
@@ -47,6 +48,7 @@
 	} = $props();
 
 	const PER_PAGE = 24;
+	const VIEW_KEY = 'lazypock-media-view';
 
 	let tab = $state<'Library' | 'Upload'>('Library');
 	let items = $state<MediaItem[]>([]);
@@ -63,10 +65,37 @@
 	let deleting = $state<string | null>(null);
 	let error = $state('');
 	let notice = $state('');
+	/** Grid vs list presentation (remembered across sessions). */
+	let viewMode = $state<'grid' | 'list'>('grid');
+	/** A file refused by the delete guard, awaiting an explicit decision. */
+	let forceItem = $state<MediaItem | null>(null);
+	let forceRefs = $state<string[]>([]);
+	let forceOpen = $state(false);
 
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 	let visible = $derived(inline || open);
 	let imageOnly = $derived(accept === 'image/*');
+
+	// Remember the last view mode, so the preference is shared by the Media page,
+	// the record file picker and the richtext image dialog.
+	onMount(() => {
+		try {
+			const stored = localStorage.getItem(VIEW_KEY);
+			if (stored === 'grid' || stored === 'list') viewMode = stored;
+		} catch {
+			// storage unavailable — keep the default
+		}
+	});
+
+	function setView(mode: 'grid' | 'list') {
+		viewMode = mode;
+
+		try {
+			localStorage.setItem(VIEW_KEY, mode);
+		} catch {
+			// ignore
+		}
+	}
 
 	function thumbOf(item: MediaItem): string | undefined {
 		if (item.variants?.thumb) return item.variants.thumb;
@@ -222,11 +251,12 @@
 		}
 	}
 
-	function usageOf(e: unknown): string {
+	/** `collection.field (recordId)` strings from a delete-guard 409 response. */
+	function usageList(e: unknown): string[] {
 		const body = (e as { data?: { data?: { usage?: Array<Record<string, unknown>> } } }).data;
 		const usage = body?.data?.usage ?? [];
 
-		return usage.map((u) => `${u.collection}.${u.field} (${u.recordId})`).join(', ');
+		return usage.map((u) => `${u.collection}.${u.field} (${u.recordId})`);
 	}
 
 	async function remove(item: MediaItem, force = false) {
@@ -253,23 +283,25 @@
 			const status = (e as { status?: number }).status;
 
 			if (status === 409 && !force) {
-				const usage = usageOf(e);
-				const question = usage
-					? `"${item.filename}" is still used by ${usage}. Delete it anyway?`
-					: `"${item.filename}" is still referenced by records. Delete it anyway?`;
-
-				if (confirm(question)) {
-					await remove(item, true);
-					return;
-				}
-
-				notice = 'File is still referenced and was not deleted.';
+				// Never a native `confirm()`: show what still points at the file in a
+				// proper dialog and let the user decide.
+				forceItem = item;
+				forceRefs = usageList(e);
+				forceOpen = true;
 			} else {
 				error = (e as Error).message || 'Delete failed';
 			}
 		} finally {
 			deleting = null;
 		}
+	}
+
+	async function confirmForceDelete() {
+		const item = forceItem;
+		forceOpen = false;
+		forceItem = null;
+
+		if (item) await remove(item, true);
 	}
 
 	function formatSize(bytes?: number): string {
@@ -323,6 +355,24 @@
 				Insert {selected.length > 0 ? selected.length : ''}
 			</Button>
 		{/if}
+		<div class="media-view-toggle" role="group" aria-label="View mode">
+			<button
+				type="button"
+				class="media-view-btn"
+				class:active={viewMode === 'grid'}
+				aria-pressed={viewMode === 'grid'}
+				title="Grid view"
+				onclick={() => setView('grid')}>▦</button
+			>
+			<button
+				type="button"
+				class="media-view-btn"
+				class:active={viewMode === 'list'}
+				aria-pressed={viewMode === 'list'}
+				title="List view"
+				onclick={() => setView('list')}>☰</button
+			>
+		</div>
 		<Button class="btn-sm" loading={loading} onclick={() => load(true)}>Refresh</Button>
 	</div>
 {/snippet}
@@ -334,7 +384,7 @@
 		<p class="media-empty">
 			No {imageOnly ? 'images' : 'files'} yet — upload one from the <strong>Upload</strong> tab.
 		</p>
-	{:else}
+	{:else if viewMode === 'grid'}
 		<div class="media-grid">
 			{#each items as item (item.id)}
 				{@const thumb = thumbOf(item)}
@@ -343,27 +393,69 @@
 					class:picked={selected.includes(item.id)}
 					class:active={preview?.id === item.id}
 				>
-					<button
-						type="button"
-						class="media-thumb"
-						title={item.filename}
-						onclick={() => toggle(item)}
-					>
-						{#if thumb}
-							<img src={thumb} alt={item.filename} loading="lazy" />
-						{:else}
-							<span class="media-no-thumb">{item.filename}</span>
-						{/if}
-					</button>
+					<div class="media-tile-wrap">
+						<button
+							type="button"
+							class="media-tile"
+							title={item.filename}
+							onclick={() => toggle(item)}
+						>
+							{#if thumb}
+								<img src={thumb} alt={item.filename} loading="lazy" />
+							{:else}
+								<span class="media-no-thumb">{item.filename}</span>
+							{/if}
+						</button>
+
+						<button
+							type="button"
+							class="media-delete"
+							title="Delete"
+							aria-label="Delete {item.filename}"
+							disabled={deleting === item.id}
+							onclick={() => remove(item)}
+						>
+							{deleting === item.id ? '…' : '🗑'}
+						</button>
+					</div>
 
 					<div class="media-meta">
 						<span class="media-name" title={item.filename}>{item.filename}</span>
 						<span class="media-size">{formatSize(item.size)}</span>
 					</div>
+				</div>
+			{/each}
+		</div>
+	{:else}
+		<div class="media-list">
+			{#each items as item (item.id)}
+				{@const thumb = thumbOf(item)}
+				<div
+					class="media-row"
+					class:picked={selected.includes(item.id)}
+					class:active={preview?.id === item.id}
+				>
+					<button
+						type="button"
+						class="media-row-main"
+						title={item.filename}
+						onclick={() => toggle(item)}
+					>
+						<span class="media-row-thumb">
+							{#if thumb}
+								<img src={thumb} alt={item.filename} loading="lazy" />
+							{:else}
+								<span class="media-no-thumb">—</span>
+							{/if}
+						</span>
+						<span class="media-row-name">{item.filename}</span>
+						<span class="media-row-type">{item.mimeType ?? ''}</span>
+						<span class="media-row-size">{formatSize(item.size)}</span>
+					</button>
 
 					<button
 						type="button"
-						class="media-delete"
+						class="media-row-delete"
 						title="Delete"
 						aria-label="Delete {item.filename}"
 						disabled={deleting === item.id}
@@ -459,6 +551,35 @@
 	{/if}
 </Modal>
 
+<!-- Delete guard: a file that records still reference needs an explicit
+     decision (replaces the native confirm() dialog). -->
+<Modal bind:show={forceOpen} size="sm" title="File is still in use">
+	{#if forceItem}
+		<p class="force-lead">
+			<strong>{forceItem.filename}</strong> is still referenced by
+			{forceRefs.length === 1 ? 'this record' : `${forceRefs.length} records`}:
+		</p>
+		<ul class="force-list">
+			{#each forceRefs as ref (ref)}
+				<li><code>{ref}</code></li>
+			{/each}
+		</ul>
+		<p class="force-warn">Deleting it leaves those records pointing at a missing file.</p>
+		<div class="force-actions">
+			<Button
+				class="btn-sm"
+				onclick={() => {
+					forceOpen = false;
+					forceItem = null;
+				}}>Cancel</Button
+			>
+			<Button class="btn-error btn-sm" onclick={() => void confirmForceDelete()}>
+				Delete anyway
+			</Button>
+		</div>
+	{/if}
+</Modal>
+
 <style>
 	.media-panel {
 		display: flex;
@@ -504,10 +625,11 @@
 		color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
 	}
 
+	/* ── Grid: square tiles with the name underneath (Drive-like) ── */
 	.media-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-		gap: 10px;
+		grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+		gap: 14px;
 		/* Grow into whatever height the modal/page gives us and scroll inside. */
 		flex: 1 1 auto;
 		min-height: 200px;
@@ -516,35 +638,41 @@
 	}
 
 	.media-cell {
-		position: relative;
 		display: flex;
 		flex-direction: column;
+		gap: 6px;
+		min-width: 0;
+	}
+
+	.media-tile-wrap {
+		position: relative;
+		aspect-ratio: 1;
 		border: 1px solid var(--color-base-300);
 		border-radius: 8px;
 		overflow: hidden;
-		background: var(--color-base-100);
+		background: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
 	}
 
-	.media-cell.picked,
-	.media-cell.active {
+	.media-cell.picked .media-tile-wrap,
+	.media-cell.active .media-tile-wrap {
 		border-color: var(--color-primary);
-		box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 30%, transparent);
+		box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 35%, transparent);
 	}
 
-	.media-thumb {
+	.media-tile {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		aspect-ratio: 1;
 		width: 100%;
+		height: 100%;
 		padding: 0;
 		border: none;
-		background: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
+		background: none;
 		cursor: pointer;
 		overflow: hidden;
 	}
 
-	.media-thumb img {
+	.media-tile img {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
@@ -560,7 +688,6 @@
 	.media-meta {
 		display: flex;
 		flex-direction: column;
-		padding: 5px 7px;
 		min-width: 0;
 	}
 
@@ -717,5 +844,177 @@
 	.media-hint {
 		font-size: 0.75rem;
 		color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+	}
+
+	/* ── List view: rows with a small square thumbnail ── */
+	.media-list {
+		display: flex;
+		flex-direction: column;
+		flex: 1 1 auto;
+		min-height: 200px;
+		overflow-y: auto;
+	}
+
+	.media-row {
+		display: flex;
+		align-items: center;
+		border-radius: 6px;
+	}
+
+	.media-row:hover {
+		background: color-mix(in oklab, var(--color-base-content) 5%, transparent);
+	}
+
+	.media-row.picked,
+	.media-row.active {
+		background: color-mix(in oklab, var(--color-primary) 12%, transparent);
+	}
+
+	.media-row-main {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		flex: 1;
+		min-width: 0;
+		padding: 6px 8px;
+		border: none;
+		background: none;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.media-row-thumb {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 40px;
+		height: 40px;
+		flex-shrink: 0;
+		border: 1px solid var(--color-base-300);
+		border-radius: 6px;
+		overflow: hidden;
+		background: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
+	}
+
+	.media-row-thumb img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+
+	.media-row-name {
+		flex: 1;
+		min-width: 0;
+		font-size: 0.8125rem;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.media-row-type,
+	.media-row-size {
+		flex-shrink: 0;
+		font-size: 0.75rem;
+		color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	}
+
+	.media-row-type {
+		width: 130px;
+	}
+
+	.media-row-size {
+		width: 72px;
+		text-align: right;
+	}
+
+	.media-row-delete {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		flex-shrink: 0;
+		margin-right: 4px;
+		padding: 0;
+		border: none;
+		border-radius: 6px;
+		background: none;
+		cursor: pointer;
+		font-size: 0.75rem;
+		opacity: 0;
+	}
+
+	.media-row:hover .media-row-delete,
+	.media-row:focus-within .media-row-delete {
+		opacity: 1;
+	}
+
+	@media (max-width: 640px) {
+		.media-row-type,
+		.media-row-size {
+			display: none;
+		}
+	}
+
+	/* ── View toggle ── */
+	.media-view-toggle {
+		display: inline-flex;
+		border: 1px solid var(--color-base-300);
+		border-radius: 6px;
+		overflow: hidden;
+	}
+
+	.media-view-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 30px;
+		height: 30px;
+		border: none;
+		background: none;
+		color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+		cursor: pointer;
+		font-size: 0.875rem;
+	}
+
+	.media-view-btn:hover {
+		background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+	}
+
+	.media-view-btn.active {
+		background: color-mix(in oklab, var(--color-primary) 18%, var(--color-base-100));
+		color: var(--color-primary);
+	}
+
+	/* ── Delete-guard confirmation ── */
+	.force-lead,
+	.force-warn {
+		margin: 0;
+		font-size: 0.8125rem;
+	}
+
+	.force-lead {
+		margin-bottom: 8px;
+	}
+
+	.force-list {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin: 0 0 10px;
+		padding-left: 1.1rem;
+		font-size: 0.75rem;
+		color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+	}
+
+	.force-warn {
+		margin-bottom: 14px;
+		color: var(--color-error, #dc2626);
+	}
+
+	.force-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
 	}
 </style>
