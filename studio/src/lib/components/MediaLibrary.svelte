@@ -67,6 +67,16 @@
 	let deleting = $state<string | null>(null);
 	let error = $state('');
 	let notice = $state('');
+	/** Per-item image load state (skeleton placeholders until the image loads). */
+	let loadedImages = $state<Record<string, boolean>>({});
+	/** Scroll containers — only one of the two is mounted at a time. */
+	let gridEl = $state<HTMLElement | null>(null);
+	let listEl = $state<HTMLElement | null>(null);
+
+	let totalPages = $derived(Math.max(1, Math.ceil(total / PER_PAGE)));
+	let rangeStart = $derived(total === 0 ? 0 : (page - 1) * PER_PAGE + 1);
+	let rangeEnd = $derived(Math.min(page * PER_PAGE, total));
+	let pageWindow = $derived(pageNumbers(page, totalPages));
 	/** Grid vs list presentation (remembered across sessions). */
 	let viewMode = $state<'grid' | 'list'>('grid');
 
@@ -121,11 +131,9 @@
 		return item.variants?.content ?? item.variants?.thumb ?? item.url ?? `/api/files/${item.id}`;
 	}
 
-	async function load(reset = false) {
+	async function load() {
 		loading = true;
 		error = '';
-
-		if (reset) page = 1;
 
 		try {
 			const params: Record<string, string> = {
@@ -138,9 +146,10 @@
 			const res = await client.http.get<{ items: MediaItem[]; total: number }>('/files', {
 				params
 			});
-			const fetched = res?.items ?? [];
-			items = reset ? fetched : [...items, ...fetched];
+			items = res?.items ?? [];
 			total = res?.total ?? items.length;
+			// Images that are no longer shown start from a skeleton again.
+			loadedImages = {};
 		} catch (e) {
 			error = (e as Error).message || 'Failed to load the library';
 		} finally {
@@ -148,11 +157,35 @@
 		}
 	}
 
-	// Load once per open, and reset when the panel is dismissed.
+	/** Fetch a page (1-based) and put the list back at the top. */
+	async function goToPage(target: number) {
+		page = Math.min(Math.max(1, target), totalPages);
+		await load();
+		(viewMode === 'grid' ? gridEl : listEl)?.scrollTo({ top: 0 });
+	}
+
+	/** Page numbers around the current page, with `…` gaps (1 … 4 5 6 … 20). */
+	function pageNumbers(current: number, count: number): Array<number | '…'> {
+		if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
+
+		const wanted = new Set([1, count, current - 1, current, current + 1]);
+		const sorted = [...wanted].filter((p) => p >= 1 && p <= count).sort((a, b) => a - b);
+		const out: Array<number | '…'> = [];
+
+		for (let i = 0; i < sorted.length; i++) {
+			if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.push('…');
+			out.push(sorted[i]);
+		}
+
+		return out;
+	}
+
+	// Load once per open (from the first page), and reset when dismissed.
 	$effect(() => {
 		if (visible && !loaded) {
 			loaded = true;
-			void load(true);
+			page = 1;
+			void load();
 		}
 
 		if (!visible && !inline && loaded) {
@@ -170,12 +203,10 @@
 
 	function onSearchInput() {
 		clearTimeout(searchTimer);
-		searchTimer = setTimeout(() => void load(true), 300);
-	}
-
-	async function loadMore() {
-		page += 1;
-		await load(false);
+		searchTimer = setTimeout(() => {
+			page = 1;
+			void load();
+		}, 300);
 	}
 
 	function choose(list: MediaItem[]) {
@@ -253,7 +284,7 @@
 				// "Upload a new file and use it" — insert straight away.
 				choose(uploaded);
 			} else {
-				await load(true);
+				await load();
 				tab = 'Library';
 				notice = `Uploaded ${uploaded.length} file${uploaded.length === 1 ? '' : 's'}.`;
 			}
@@ -304,6 +335,10 @@
 				detailOpen = false;
 			}
 			notice = `Deleted ${item.filename}.`;
+
+			// Keep the page full: step back if it emptied, otherwise refill it.
+			if (items.length === 0 && page > 1) await goToPage(page - 1);
+			else if (items.length < PER_PAGE && total > items.length) await load();
 		} catch (e) {
 			const status = (e as { status?: number }).status;
 
@@ -398,7 +433,7 @@
 				onclick={() => setView('list')}><List size={15} /></button
 			>
 		</div>
-		<Button class="btn-sm" loading={loading} onclick={() => load(true)}>Refresh</Button>
+		<Button class="btn-sm" loading={loading} onclick={() => void load()}>Refresh</Button>
 	</div>
 {/snippet}
 
@@ -410,7 +445,7 @@
 			No {imageOnly ? 'images' : 'files'} yet — upload one from the <strong>Upload</strong> tab.
 		</p>
 	{:else if viewMode === 'grid'}
-		<div class="media-grid">
+		<div class="media-grid" bind:this={gridEl}>
 			{#each items as item (item.id)}
 				{@const thumb = gridThumbOf(item)}
 				<div
@@ -419,6 +454,9 @@
 					class:active={preview?.id === item.id}
 				>
 					<div class="media-tile-wrap">
+						{#if thumb && !loadedImages[item.id]}
+							<span class="media-skeleton"></span>
+						{/if}
 						<button
 							type="button"
 							class="media-tile"
@@ -431,6 +469,8 @@
 									alt={item.filename}
 									loading="lazy"
 									decoding="async"
+									class:media-img-loaded={loadedImages[item.id]}
+									onload={() => (loadedImages[item.id] = true)}
 									onerror={(e) => {
 										// A variant that has not been generated yet (e.g. an old file on a
 										// CDN-backed bucket) must not leave an empty tile: step down to the
@@ -469,7 +509,7 @@
 			{/each}
 		</div>
 	{:else}
-		<div class="media-list">
+		<div class="media-list" bind:this={listEl}>
 			{#each items as item (item.id)}
 				{@const thumb = thumbOf(item) ?? item.url}
 				<div
@@ -485,7 +525,17 @@
 					>
 						<span class="media-row-thumb">
 							{#if thumb}
-								<img src={thumb} alt={item.filename} loading="lazy" decoding="async" />
+								{#if !loadedImages[item.id]}
+									<span class="media-skeleton"></span>
+								{/if}
+								<img
+									src={thumb}
+									alt={item.filename}
+									loading="lazy"
+									decoding="async"
+									class:media-img-loaded={loadedImages[item.id]}
+									onload={() => (loadedImages[item.id] = true)}
+								/>
 							{:else}
 								<span class="media-no-thumb">—</span>
 							{/if}
@@ -513,13 +563,49 @@
 			{/each}
 		</div>
 
-		{#if items.length < total}
-			<div class="media-more">
-				<Button class="btn-sm" loading={loading} onclick={loadMore}>
-					Load more ({items.length}/{total})
-				</Button>
-			</div>
-		{/if}
+	{/if}
+
+	{#if items.length > 0}
+		<div class="media-pager">
+			<span class="media-range">{rangeStart}–{rangeEnd} of {total}</span>
+
+			{#if totalPages > 1}
+				<div class="media-pages">
+					<button
+						type="button"
+						class="media-page-btn"
+						title="Previous page"
+						aria-label="Previous page"
+						disabled={page <= 1 || loading}
+						onclick={() => void goToPage(page - 1)}>‹</button
+					>
+
+					{#each pageWindow as entry (entry)}
+						{#if entry === '…'}
+							<span class="media-page-gap">…</span>
+						{:else}
+							<button
+								type="button"
+								class="media-page-btn"
+								class:active={entry === page}
+								aria-current={entry === page ? 'page' : undefined}
+								disabled={loading}
+								onclick={() => void goToPage(Number(entry))}>{entry}</button
+							>
+						{/if}
+					{/each}
+
+					<button
+						type="button"
+						class="media-page-btn"
+						title="Next page"
+						aria-label="Next page"
+						disabled={page >= totalPages || loading}
+						onclick={() => void goToPage(page + 1)}>›</button
+					>
+				</div>
+			{/if}
+		</div>
 	{/if}
 {/snippet}
 
@@ -750,10 +836,100 @@
 		background: color-mix(in oklab, var(--color-error) 20%, var(--color-base-100));
 	}
 
-	.media-more {
+	/* ── Pagination ── */
+	.media-pager {
 		display: flex;
-		justify-content: center;
-		padding-top: 4px;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		padding-top: 8px;
+		flex-shrink: 0;
+	}
+
+	.media-range {
+		font-size: 0.75rem;
+		color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+	}
+
+	.media-pages {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+	}
+
+	.media-page-btn {
+		min-width: 28px;
+		height: 28px;
+		padding: 0 6px;
+		border: 1px solid transparent;
+		border-radius: 6px;
+		background: none;
+		color: var(--color-base-content);
+		font-size: 0.75rem;
+		cursor: pointer;
+	}
+
+	.media-page-btn:hover:not(:disabled) {
+		background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+	}
+
+	.media-page-btn.active {
+		background: color-mix(in oklab, var(--color-primary) 18%, var(--color-base-100));
+		border-color: var(--color-primary);
+		color: var(--color-primary);
+		font-weight: 600;
+	}
+
+	.media-page-btn:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
+
+	.media-page-gap {
+		padding: 0 2px;
+		font-size: 0.75rem;
+		color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+	}
+
+	/* ── Image placeholder (skeleton) ── */
+	.media-skeleton {
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(
+			100deg,
+			color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100)) 30%,
+			color-mix(in oklab, var(--color-base-content) 15%, var(--color-base-100)) 50%,
+			color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100)) 70%
+		);
+		background-size: 200% 100%;
+		animation: media-shimmer 1.2s ease-in-out infinite;
+	}
+
+	@keyframes media-shimmer {
+		from {
+			background-position: 200% 0;
+		}
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.media-skeleton {
+			animation: none;
+		}
+	}
+
+	/* Images fade in over their skeleton. */
+	.media-tile img,
+	.media-row-thumb img {
+		opacity: 0;
+		transition: opacity 0.18s ease-out;
+	}
+
+	.media-tile img.media-img-loaded,
+	.media-row-thumb img.media-img-loaded {
+		opacity: 1;
 	}
 
 	/* ── Detail modal ── */
@@ -907,6 +1083,7 @@
 	}
 
 	.media-row-thumb {
+		position: relative;
 		display: flex;
 		align-items: center;
 		justify-content: center;
