@@ -259,8 +259,25 @@ defmodule Lazypock.Files.StoreTest do
     end
   end
 
-  defp uploads_dir do
-    Application.get_env(:lazypock, :file_storage)[:path] ||
-      Path.join(Application.app_dir(:lazypock, "priv"), "uploads")
+  describe "Adapters.Local.base_path/0" do
+    test "reads LAZYPOCK_STORAGE_PATH when no :file_storage config is set" do
+      original = Application.get_env(:lazypock, :file_storage)
+      original_env = System.get_env("LAZYPOCK_STORAGE_PATH")
+      Application.delete_env(:lazypock, :file_storage)
+      System.put_env("LAZYPOCK_STORAGE_PATH", "/tmp/lazypock-test-storage-path")
+
+      on_exit(fn ->
+        if original, do: Application.put_env(:lazypock, :file_storage, original)
+
+        case original_env do
+          nil -> System.delete_env("LAZYPOCK_STORAGE_PATH")
+          value -> System.put_env("LAZYPOCK_STORAGE_PATH", value)
+        end
+      end)
+
+      assert Lazypock.Files.Adapters.Local.base_path() == "/tmp/lazypock-test-storage-path"
+    end
   end
+
+  defp uploads_dir, do: Lazypock.Files.Adapters.Local.base_path()
 end

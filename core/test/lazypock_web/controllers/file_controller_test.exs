@@ -150,6 +150,20 @@ defmodule LazypockWeb.FileControllerTest do
       conn = auth_conn(build_conn()) |> get("/api/files/#{Ecto.UUID.generate()}")
       assert json_response(conn, 404)["message"] == "File not found"
     end
+
+    test "returns 404 when the stored object is missing" do
+      {:ok, file} = Lazypock.Files.Store.store("vanished", "gone.txt", [])
+
+      # Simulate a wiped container volume: the `_files` row survives (e.g. on a
+      # Neon database) while the local object is gone. The API must answer 404,
+      # not a 500 `:enoent`.
+      File.rm!(Path.join(Lazypock.Files.Adapters.Local.base_path(), file["storage_path"]))
+
+      conn = auth_conn(build_conn()) |> get("/api/files/#{file["id"]}")
+      assert json_response(conn, 404)["message"] == "File not found"
+
+      Lazypock.Files.Store.delete(file["id"])
+    end
   end
 
   describe "DELETE /api/files/:id" do
@@ -315,6 +329,19 @@ defmodule LazypockWeb.FileControllerTest do
 
       conn = auth_conn(build_conn()) |> get("/api/files/#{file["id"]}/scale/120x120")
       assert List.first(get_resp_header(conn, "content-type")) == "image/webp"
+
+      Lazypock.Files.Store.delete(file["id"])
+      Lazypock.Files.Reaper.drain()
+    end
+
+    test "GET /scale/:preset returns 404 when the source object is missing" do
+      {:ok, file} =
+        Lazypock.Files.Store.store(Lazypock.TestImage.tiny_png!(300, 180), "img.png", [])
+
+      File.rm!(Path.join(Lazypock.Files.Adapters.Local.base_path(), file["storage_path"]))
+
+      conn = auth_conn(build_conn()) |> get("/api/files/#{file["id"]}/scale/content")
+      assert json_response(conn, 404)["message"] == "File not found"
 
       Lazypock.Files.Store.delete(file["id"])
       Lazypock.Files.Reaper.drain()
