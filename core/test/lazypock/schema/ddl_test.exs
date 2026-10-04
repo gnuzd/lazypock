@@ -687,4 +687,151 @@ defmodule Lazypock.Schema.DDLTest do
       assert email.unique
     end
   end
+
+  describe "auth collection system fields" do
+    defp fields_of(name) do
+      collection = Repo.get_by(Lazypock.Collections.Collection, name: name)
+
+      Repo.all(
+        from(f in Lazypock.Collections.Field,
+          where: f.collection_id == ^collection.id,
+          order_by: f.sort_order
+        )
+      )
+    end
+
+    test "a new auth collection gets email/password/verified/... automatically" do
+      name = cname("auth_fields")
+
+      # Like the Studio: type auth, only a custom field, no system fields.
+      {:ok, _} =
+        DDL.create_collection(name,
+          type: "auth",
+          fields: [%{"name" => "nickname", "type" => "text"}]
+        )
+
+      fields = Map.new(fields_of(name), &{&1.name, &1})
+
+      assert Map.has_key?(fields, "email")
+      assert fields["email"].type == "email"
+      assert fields["email"].unique
+      assert fields["email"].system
+
+      assert fields["password_hash"].type == "password"
+      assert fields["password_hash"].hidden
+      refute fields["password_hash"].required
+      assert fields["password_hash"].system
+
+      assert fields["verified"].type == "bool"
+      assert fields["verificationToken"].type == "text"
+      assert fields["emailVisibility"].type == "bool"
+      assert Map.has_key?(fields, "nickname")
+    end
+
+    test "base collections do not get the auth fields" do
+      name = cname("base_fields")
+      {:ok, _} = DDL.create_collection(name, type: "base", fields: [])
+
+      names = Enum.map(fields_of(name), & &1.name)
+
+      refute "password_hash" in names
+      refute "emailVisibility" in names
+    end
+
+    test "switching a base collection to auth adds the missing fields" do
+      name = cname("promote_auth")
+      {:ok, _} = DDL.create_collection(name, type: "base", fields: [])
+
+      {:ok, _} = DDL.update_collection(name, type: "auth", fields: [])
+
+      names = Enum.map(fields_of(name), & &1.name)
+      assert "email" in names
+      assert "password_hash" in names
+    end
+
+    test "omitting an auth system field on update keeps it (and its data)" do
+      name = cname("auth_keep_sys")
+
+      {:ok, _} =
+        DDL.create_collection(name,
+          type: "auth",
+          fields: [%{"name" => "nickname", "type" => "text"}]
+        )
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "INSERT INTO \"#{name}\" (email, password_hash) VALUES ($1, $2)",
+        ["keep@test.com", "stored-hash"]
+      )
+
+      # What the Studio sends after the user marks the password field for
+      # deletion: the field list simply omits it.
+      {:ok, _} =
+        DDL.update_collection(name,
+          type: "auth",
+          fields: [%{"name" => "nickname", "type" => "text"}]
+        )
+
+      names = Enum.map(fields_of(name), & &1.name)
+      assert "password_hash" in names
+      assert "email" in names
+
+      {:ok, %{rows: [[email, hash]]}} =
+        Ecto.Adapters.SQL.query(Repo, "SELECT email, password_hash FROM \"#{name}\"", [])
+
+      assert email == "keep@test.com"
+      assert hash == "stored-hash"
+    end
+
+    test "drop_field/2 refuses to remove a system field" do
+      name = cname("auth_drop_sys")
+      {:ok, _} = DDL.create_collection(name, type: "auth", fields: [])
+
+      assert {:error, reason} = DDL.drop_field(name, "password_hash")
+      assert reason =~ "system field"
+
+      # Nothing was dropped: metadata and column are both intact.
+      assert "password_hash" in Enum.map(fields_of(name), & &1.name)
+      assert Enum.any?(table_columns(name), fn [col | _] -> col == "password_hash" end)
+    end
+
+    test "drop_field/2 still removes normal fields" do
+      name = cname("auth_drop_normal")
+
+      {:ok, _} =
+        DDL.create_collection(name,
+          type: "auth",
+          fields: [%{"name" => "nickname", "type" => "text"}]
+        )
+
+      assert :ok = DDL.drop_field(name, "nickname")
+      refute "nickname" in Enum.map(fields_of(name), & &1.name)
+    end
+
+    test "a manually removed auth field is restored on the next save" do
+      name = cname("auth_restore")
+      {:ok, _} = DDL.create_collection(name, type: "auth", fields: [])
+
+      # Simulate a collection created before the system fields existed (or a
+      # raw SQL drop): the column and its metadata are gone.
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "ALTER TABLE \"#{name}\" DROP COLUMN password_hash CASCADE",
+        []
+      )
+
+      Repo.delete_all(
+        from(f in Lazypock.Collections.Field,
+          join: c in assoc(f, :collection),
+          where: c.name == ^name and f.name == "password_hash"
+        )
+      )
+
+      # Re-saving the collection (what the Studio does on save) brings it back.
+      {:ok, _} = DDL.update_collection(name, type: "auth", fields: [])
+
+      assert "password_hash" in Enum.map(fields_of(name), & &1.name)
+      assert Enum.any?(table_columns(name), fn [col | _] -> col == "password_hash" end)
+    end
+  end
 end

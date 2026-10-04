@@ -358,4 +358,40 @@ defmodule LazypockWeb.AuthFlowTest do
       assert response(conn, 403)
     end
   end
+
+  describe "auth collections created without explicit system fields" do
+    test "get an email/password field and can create + authenticate a user" do
+      name = cname("auth_auto")
+
+      # Exactly what the Studio sends for a new auth collection: type auth and
+      # no system fields at all (the Studio does not offer a password field).
+      {:ok, _} = DDL.create_collection(name, type: "auth", fields: [])
+      Registry.reload!()
+
+      # Creating a user with `password` works: it is aliased to the hidden
+      # password column and bcrypt-hashed.
+      conn =
+        post(build_conn(), "/api/#{name}", %{
+          "email" => "auto@test.com",
+          "password" => "secret123"
+        })
+
+      body = json_response(conn, 201)
+      assert body["email"] == "auto@test.com"
+      assert body["collectionName"] == name
+      # Write-only: the hash is never returned.
+      refute Map.has_key?(body, "password_hash")
+
+      auth =
+        post(build_conn(), "/api/#{name}/auth-with-password", %{
+          "identity" => "auto@test.com",
+          "password" => "secret123"
+        })
+
+      auth_body = json_response(auth, 200)
+      assert auth_body["token"]
+      assert auth_body["record"]["email"] == "auto@test.com"
+      assert auth_body["record"]["collectionName"] == name
+    end
+  end
 end
