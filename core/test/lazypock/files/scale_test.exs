@@ -95,8 +95,9 @@ defmodule Lazypock.Files.ScaleTest do
     test "eager presets are generated on upload and recorded" do
       {:ok, file} = Store.store(tiny_png(), "demo.png", [])
 
-      assert file["variants"] |> Map.keys() |> Enum.sort() == ["content", "thumb"]
+      assert file["variants"] |> Map.keys() |> Enum.sort() == ["content", "small", "thumb"]
       assert File.exists?(Path.join(variant_dir(file), "thumb.webp"))
+      assert File.exists?(Path.join(variant_dir(file), "small.webp"))
       assert File.exists?(Path.join(variant_dir(file), "content.webp"))
 
       Store.delete(file["id"])

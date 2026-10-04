@@ -94,11 +94,26 @@
 		}
 	}
 
-	function thumbOf(item: MediaItem): string | undefined {
-		if (item.variants?.thumb) return item.variants.thumb;
+	/** Legacy `thumbs` map (files uploaded before presets existed). */
+	function legacyThumbOf(item: MediaItem): string | undefined {
 		if (!item.thumbs) return undefined;
 		const sizes = Object.keys(item.thumbs).sort((a, b) => a.length - b.length);
 		return sizes.length > 0 ? item.thumbs[sizes[0]] : undefined;
+	}
+
+	/** Small preview (list rows, record field previews): the 100px preset. */
+	function thumbOf(item: MediaItem): string | undefined {
+		return item.variants?.thumb ?? legacyThumbOf(item);
+	}
+
+	/**
+	 * Grid tile image: the 320px `small` preset is sharp at tile size (up to
+	 * ~360 device px on a retina screen, where the 100px `thumb` looked soft).
+	 * The chain falls back to the original so a tile is never blank — e.g. for
+	 * files uploaded before presets existed.
+	 */
+	function gridThumbOf(item: MediaItem): string | undefined {
+		return item.variants?.small ?? thumbOf(item) ?? item.url;
 	}
 
 	function bestUrl(item: MediaItem): string {
@@ -396,7 +411,7 @@
 	{:else if viewMode === 'grid'}
 		<div class="media-grid">
 			{#each items as item (item.id)}
-				{@const thumb = thumbOf(item)}
+				{@const thumb = gridThumbOf(item)}
 				<div
 					class="media-cell"
 					class:picked={selected.includes(item.id)}
@@ -410,7 +425,21 @@
 							onclick={() => toggle(item)}
 						>
 							{#if thumb}
-								<img src={thumb} alt={item.filename} loading="lazy" />
+								<img
+									src={thumb}
+									alt={item.filename}
+									loading="lazy"
+									decoding="async"
+									onerror={(e) => {
+										// A variant that has not been generated yet (e.g. an old file on a
+										// CDN-backed bucket) must not leave an empty tile: step down to the
+										// smaller preset, then the original.
+										const img = e.currentTarget as HTMLImageElement;
+										const fallback = item.variants?.thumb ?? item.url ?? '';
+
+										if (fallback && img.src !== fallback) img.src = fallback;
+									}}
+								/>
 							{:else}
 								<span class="media-no-thumb">{item.filename}</span>
 							{/if}
@@ -438,7 +467,7 @@
 	{:else}
 		<div class="media-list">
 			{#each items as item (item.id)}
-				{@const thumb = thumbOf(item)}
+				{@const thumb = thumbOf(item) ?? item.url}
 				<div
 					class="media-row"
 					class:picked={selected.includes(item.id)}
@@ -452,7 +481,7 @@
 					>
 						<span class="media-row-thumb">
 							{#if thumb}
-								<img src={thumb} alt={item.filename} loading="lazy" />
+								<img src={thumb} alt={item.filename} loading="lazy" decoding="async" />
 							{:else}
 								<span class="media-no-thumb">—</span>
 							{/if}
