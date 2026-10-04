@@ -52,6 +52,8 @@
 	let items = $state<MediaItem[]>([]);
 	let selected = $state<string[]>([]);
 	let preview = $state<MediaItem | null>(null);
+	/** Detail modal — opened by clicking a file in the library. */
+	let detailOpen = $state(false);
 	let q = $state('');
 	let page = $state(1);
 	let total = $state(0);
@@ -116,6 +118,7 @@
 			items = [];
 			selected = [];
 			preview = null;
+			detailOpen = false;
 			q = '';
 			tab = 'Library';
 			error = '';
@@ -139,9 +142,29 @@
 		close();
 	}
 
+	function openDetail(item: MediaItem) {
+		preview = item;
+		detailOpen = true;
+	}
+
+	async function copyUrl(item: MediaItem) {
+		const url = bestUrl(item);
+
+		try {
+			if (typeof navigator !== 'undefined' && navigator.clipboard) {
+				await navigator.clipboard.writeText(url);
+				notice = 'URL copied to the clipboard.';
+			} else {
+				notice = url;
+			}
+		} catch {
+			notice = url;
+		}
+	}
+
 	function toggle(item: MediaItem) {
 		if (mode === 'manage') {
-			preview = preview?.id === item.id ? null : item;
+			openDetail(item);
 			return;
 		}
 
@@ -221,7 +244,10 @@
 			items = items.filter((i) => i.id !== item.id);
 			total = Math.max(0, total - 1);
 			selected = selected.filter((id) => id !== item.id);
-			if (preview?.id === item.id) preview = null;
+			if (preview?.id === item.id) {
+				preview = null;
+				detailOpen = false;
+			}
 			notice = `Deleted ${item.filename}.`;
 		} catch (e) {
 			const status = (e as { status?: number }).status;
@@ -357,23 +383,6 @@
 			</div>
 		{/if}
 	{/if}
-
-	{#if preview}
-		<div class="media-preview">
-			<img src={thumbOf(preview) ?? bestUrl(preview)} alt={preview.filename} />
-			<div class="media-preview-meta">
-				<strong>{preview.filename}</strong>
-				<span>{preview.mimeType} · {formatSize(preview.size)}</span>
-				<code class="media-url">{bestUrl(preview)}</code>
-			</div>
-			<div class="media-preview-actions">
-				{#if mode === 'pick'}
-					<Button class="btn-primary btn-sm" onclick={() => choose([preview!])}>Use this file</Button>
-				{/if}
-				<Button class="btn-sm" onclick={() => remove(preview!)}>Delete</Button>
-			</div>
-		</div>
-	{/if}
 {/snippet}
 
 {#snippet uploader()}
@@ -411,17 +420,54 @@
 {#if inline}
 	{@render panel()}
 {:else}
-	<Modal bind:show={open} {title}>
+	<Modal
+		bind:show={open}
+		{title}
+		size="xl"
+		bodyClass="flex min-h-0 flex-col overflow-hidden"
+	>
 		{@render panel()}
 	</Modal>
 {/if}
+
+<!-- Detail view: clicking a file in the library opens this instead of an
+     inline panel at the bottom, so the whole file is visible in one place. -->
+<Modal bind:show={detailOpen} size="lg" title="File details" bodyClass="flex min-h-0 flex-col">
+	{#if preview}
+		<div class="detail">
+			<div class="detail-media">
+				<img src={bestUrl(preview)} alt={preview.filename} />
+			</div>
+			<div class="detail-meta">
+				<strong class="detail-name" title={preview.filename}>{preview.filename}</strong>
+				<span>
+					{preview.mimeType ?? 'unknown type'}{preview.size
+						? ` · ${formatSize(preview.size)}`
+						: ''}
+				</span>
+				<code class="detail-url" title={bestUrl(preview)}>{bestUrl(preview)}</code>
+				<span class="detail-id">id: {preview.id}</span>
+			</div>
+		</div>
+		<div class="detail-actions">
+			<Button class="btn-sm" onclick={() => void copyUrl(preview!)}>Copy URL</Button>
+			{#if mode === 'pick'}
+				<Button class="btn-primary btn-sm" onclick={() => choose([preview!])}>Use this file</Button>
+			{/if}
+			<Button class="btn-error btn-sm" onclick={() => remove(preview!)}>Delete</Button>
+		</div>
+	{/if}
+</Modal>
 
 <style>
 	.media-panel {
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		min-width: min(720px, 88vw);
+		/* Fill the modal body so the grid (not the dialog) scrolls. In the
+		   inline/page case the flex properties are inert and the page scrolls. */
+		flex: 1;
+		min-height: 0;
 	}
 
 	.media-toolbar {
@@ -462,7 +508,9 @@
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
 		gap: 10px;
-		max-height: min(420px, 52vh);
+		/* Grow into whatever height the modal/page gives us and scroll inside. */
+		flex: 1 1 auto;
+		min-height: 200px;
 		overflow-y: auto;
 		padding: 2px;
 	}
@@ -558,50 +606,89 @@
 		padding-top: 4px;
 	}
 
-	.media-preview {
+	/* ── Detail modal ── */
+	.detail {
 		display: flex;
-		gap: 12px;
+		gap: 16px;
+		flex: 1;
+		min-height: 0;
+	}
+
+	.detail-media {
+		display: flex;
 		align-items: center;
-		padding: 8px;
-		border: 1px solid var(--color-base-300);
+		justify-content: center;
+		flex: 1 1 auto;
+		min-width: 0;
 		border-radius: 8px;
+		overflow: hidden;
+		background: color-mix(in oklab, var(--color-base-content) 5%, var(--color-base-100));
 	}
 
-	.media-preview img {
-		width: 72px;
-		height: 72px;
-		object-fit: cover;
-		border-radius: 6px;
+	.detail-media img {
+		max-width: 100%;
+		max-height: min(62vh, 560px);
+		object-fit: contain;
 	}
 
-	.media-preview-meta {
+	.detail-meta {
 		display: flex;
 		flex-direction: column;
-		gap: 2px;
-		min-width: 0;
-		flex: 1;
-		font-size: 0.8125rem;
-	}
-
-	.media-url {
-		font-size: 0.6875rem;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
-	}
-
-	.media-preview-actions {
-		display: flex;
 		gap: 6px;
+		flex-shrink: 0;
+		width: 280px;
+		min-width: 0;
+		font-size: 0.8125rem;
+		color: color-mix(in oklab, var(--color-base-content) 75%, transparent);
+	}
+
+	.detail-name {
+		font-size: 0.9375rem;
+		color: var(--color-base-content);
+		word-break: break-all;
+	}
+
+	.detail-url {
+		padding: 6px 8px;
+		border-radius: 6px;
+		font-size: 0.6875rem;
+		background: color-mix(in oklab, var(--color-base-content) 6%, var(--color-base-100));
+		word-break: break-all;
+	}
+
+	.detail-id {
+		font-size: 0.6875rem;
+		color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+		word-break: break-all;
+	}
+
+	.detail-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+		padding-top: 14px;
+		flex-shrink: 0;
+	}
+
+	@media (max-width: 720px) {
+		.detail {
+			flex-direction: column;
+		}
+
+		.detail-meta {
+			width: auto;
+		}
 	}
 
 	.media-dropzone {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
+		justify-content: center;
 		gap: 6px;
 		padding: 36px 16px;
+		flex: 1 1 auto;
+		min-height: 200px;
 		text-align: center;
 		border: 2px dashed var(--color-base-300);
 		border-radius: 10px;

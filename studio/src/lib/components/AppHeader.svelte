@@ -76,7 +76,6 @@
 			>Collections</Button
 		>
 		<Button class={navClass('/logs')} onclick={() => _goto('/logs')}>Logs</Button>
-		<Button class={navClass('/media')} onclick={() => _goto('/media')}>Media</Button>
 		<Button class={navClass('/settings')} onclick={() => _goto('/settings')}>Settings</Button>
 	</nav>
 	<div class="ml-auto flex items-center gap-1">
