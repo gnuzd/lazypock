@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/gnuzd/lazypock/compare/v0.17.0...v0.17.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **images:** read image dimensions on ImageMagick 6; make CI fail loudly ([93cc801](https://github.com/gnuzd/lazypock/commit/93cc8012ff48578e64acc0c74ee101ff81dd8a31))
+
 ## [0.17.0](https://github.com/gnuzd/lazypock/compare/v0.16.0...v0.17.0) (2026-10-04)
 
 
