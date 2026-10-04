@@ -1,25 +1,31 @@
 <script lang="ts">
-	import { CircleAlert, ImageOff, Images, X } from '@lucide/svelte';
+	import { Check, CircleAlert, ImageOff, Images, X } from '@lucide/svelte';
 	import { client } from '$lib/client';
 	import type { MediaItem } from '$lib/components/MediaLibrary.svelte';
 
 	/**
-	 * Image-only picker modal.
+	 * Library picker modal: a clean grid of already-uploaded files with paging.
 	 *
-	 * A clean grid of already-uploaded images with paging — the counterpart to
-	 * the editor's "Upload image" action, which handles new files. Kept
-	 * separate from `MediaLibrary` (search / upload / delete / list view) so the
-	 * insert flow stays focused.
+	 * Used by the richtext editor ("Choose from library") and by `file` /
+	 * `multi_file` record fields. Read-only — uploading is a separate action at
+	 * the call site. Non-image files (when `mime` allows them) fall back to a
+	 * file icon tile.
 	 */
 	let {
 		open = $bindable(false),
 		title = 'Choose image',
+		/** Allow picking several files (tiles toggle; confirm with the button). */
+		multiple = false,
+		/** Server-side mime prefix (`'image/'`, `'application/'`, …); empty = all. */
+		mime = 'image/',
 		onSelect,
 		onClose = () => {}
 	}: {
 		open?: boolean;
 		title?: string;
-		onSelect?: (item: MediaItem) => void;
+		multiple?: boolean;
+		mime?: string;
+		onSelect?: (items: MediaItem[]) => void;
 		onClose?: () => void;
 	} = $props();
 
@@ -30,6 +36,8 @@
 	let total = $state(0);
 	let loading = $state(false);
 	let error = $state('');
+	/** Ids picked so far (only meaningful when `multiple`). */
+	let selected = $state<string[]>([]);
 	/** Per-item image load state (skeleton until the thumbnail loads). */
 	let loadedImages = $state<Record<string, boolean>>({});
 	/** Guards against an out-of-order response overwriting a newer one. */
@@ -39,6 +47,7 @@
 
 	let totalPages = $derived(Math.max(1, Math.ceil(total / PER_PAGE)));
 	let pageWindow = $derived(pageNumbers(page, totalPages));
+	let noun = $derived(mime === 'image/' ? 'image' : 'file');
 
 	function pageNumbers(current: number, count: number): Array<number | '…'> {
 		if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
@@ -62,7 +71,13 @@
 		return sizes.length > 0 ? item.thumbs[sizes[0]] : undefined;
 	}
 
+	function isImage(item: MediaItem): boolean {
+		if (item.mimeType) return item.mimeType.startsWith('image/');
+		return /\.(jpe?g|png|gif|webp|avif|svg)$/i.test(item.filename);
+	}
+
 	function thumbOf(item: MediaItem): string | undefined {
+		if (!isImage(item)) return undefined;
 		return item.variants?.small ?? item.variants?.thumb ?? legacyThumbOf(item) ?? item.url;
 	}
 
@@ -84,8 +99,14 @@
 		error = '';
 
 		try {
+			const params: Record<string, string> = {
+				page: String(page),
+				perPage: String(PER_PAGE)
+			};
+			if (mime) params.mime = mime;
+
 			const res = await client.http.get<{ items: MediaItem[]; total: number }>('/files', {
-				params: { page: String(page), perPage: String(PER_PAGE), mime: 'image/' }
+				params
 			});
 
 			if (req !== request) return;
@@ -94,7 +115,7 @@
 			loadedImages = {};
 		} catch (e) {
 			if (req !== request) return;
-			error = (e as Error).message || 'Could not load the media library.';
+			error = (e as Error).message || 'Could not load the library.';
 			items = [];
 			total = 0;
 		} finally {
@@ -108,8 +129,21 @@
 		await load();
 	}
 
-	function choose(item: MediaItem) {
-		onSelect?.(item);
+	function pick(item: MediaItem) {
+		if (multiple) {
+			selected = selected.includes(item.id)
+				? selected.filter((id) => id !== item.id)
+				: [...selected, item.id];
+			return;
+		}
+
+		onSelect?.([item]);
+		close();
+	}
+
+	function confirm() {
+		if (selected.length === 0) return;
+		onSelect?.(items.filter((item) => selected.includes(item.id)));
 		close();
 	}
 
@@ -123,6 +157,7 @@
 		if (open && !fetched) {
 			fetched = true;
 			page = 1;
+			selected = [];
 			void load();
 		}
 
@@ -132,6 +167,7 @@
 			total = 0;
 			error = '';
 			page = 1;
+			selected = [];
 		}
 	});
 
@@ -171,7 +207,7 @@
 				<div>
 					<h2 class="text-sm font-bold text-base-content">{title}</h2>
 					<p class="mt-0.5 text-xs text-base-content/50">
-						{loading ? 'Loading…' : `${total} image${total === 1 ? '' : 's'} uploaded.`}
+						{loading ? 'Loading…' : `${total} ${noun}${total === 1 ? '' : 's'} available.`}
 					</p>
 				</div>
 				<button
@@ -205,17 +241,21 @@
 				{:else if items.length === 0}
 					<div class="py-16 text-center">
 						<Images size={30} class="mx-auto mb-3 text-base-content/20" />
-						<p class="text-sm text-base-content/50">No images in the library yet.</p>
+						<p class="text-sm text-base-content/50">No {noun}s in the library yet.</p>
 					</div>
 				{:else}
 					<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
 						{#each items as item (item.id)}
 							{@const thumb = thumbOf(item)}
+							{@const picked = selected.includes(item.id)}
 							<button
 								type="button"
-								onclick={() => choose(item)}
+								onclick={() => pick(item)}
 								title={item.filename}
-								class="group overflow-hidden rounded-xl border border-base-300 bg-base-200 text-left transition hover:border-primary focus:border-primary focus:ring-2 focus:ring-primary/30 focus:outline-none"
+								aria-pressed={multiple ? picked : undefined}
+								class="group relative overflow-hidden rounded-xl border bg-base-200 text-left transition focus:ring-2 focus:ring-primary/30 focus:outline-none {picked
+									? 'border-primary ring-2 ring-primary/40'
+									: 'border-base-300 hover:border-primary'}"
 							>
 								<span class="relative block aspect-video overflow-hidden bg-base-300/50">
 									{#if thumb}
@@ -239,8 +279,21 @@
 											}}
 										/>
 									{:else}
-										<span class="flex h-full items-center justify-center text-base-content/30">
-											<ImageOff size={20} />
+										<span
+											class="flex h-full flex-col items-center justify-center gap-1 px-2 text-base-content/40"
+										>
+											<ImageOff size={22} />
+											<span class="text-[10px] font-semibold tracking-wide"
+												>{fileTypeLabel(item)}</span
+											>
+										</span>
+									{/if}
+
+									{#if multiple && picked}
+										<span
+											class="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-content shadow"
+										>
+											<Check size={14} />
 										</span>
 									{/if}
 								</span>
@@ -258,40 +311,55 @@
 				{/if}
 			</div>
 
-			{#if !loading && !error && totalPages > 1}
-				<div class="border-t border-base-300 px-5 py-3">
-					<div class="flex items-center justify-between gap-2">
-						<button
-							type="button"
-							class="rounded-lg px-3 py-1.5 text-xs font-medium text-base-content/70 transition hover:bg-base-200 disabled:opacity-40"
-							disabled={page <= 1 || loading}
-							onclick={() => void goToPage(page - 1)}>Previous</button
-						>
+			{#if !loading && !error && (totalPages > 1 || multiple)}
+				<div class="flex items-center justify-between gap-3 border-t border-base-300 px-5 py-3">
+					{#if totalPages > 1}
+						<div class="flex flex-1 items-center justify-between gap-2">
+							<button
+								type="button"
+								class="rounded-lg px-3 py-1.5 text-xs font-medium text-base-content/70 transition hover:bg-base-200 disabled:opacity-40"
+								disabled={page <= 1 || loading}
+								onclick={() => void goToPage(page - 1)}>Previous</button
+							>
 
-						<div class="flex items-center gap-1">
-							{#each pageWindow as entry (entry)}
-								{#if entry === '…'}
-									<span class="px-1 text-xs text-base-content/40">…</span>
-								{:else}
-									<button
-										type="button"
-										class="min-w-7 rounded-lg px-2 py-1.5 text-xs transition {entry === page
-											? 'bg-primary font-semibold text-primary-content'
-											: 'text-base-content/70 hover:bg-base-200'}"
-										disabled={loading}
-										onclick={() => void goToPage(Number(entry))}>{entry}</button
-									>
-								{/if}
-							{/each}
+							<div class="flex items-center gap-1">
+								{#each pageWindow as entry (entry)}
+									{#if entry === '…'}
+										<span class="px-1 text-xs text-base-content/40">…</span>
+									{:else}
+										<button
+											type="button"
+											class="min-w-7 rounded-lg px-2 py-1.5 text-xs transition {entry === page
+												? 'bg-primary font-semibold text-primary-content'
+												: 'text-base-content/70 hover:bg-base-200'}"
+											disabled={loading}
+											onclick={() => void goToPage(Number(entry))}>{entry}</button
+										>
+									{/if}
+								{/each}
+							</div>
+
+							<button
+								type="button"
+								class="rounded-lg px-3 py-1.5 text-xs font-medium text-base-content/70 transition hover:bg-base-200 disabled:opacity-40"
+								disabled={page >= totalPages || loading}
+								onclick={() => void goToPage(page + 1)}>Next</button
+							>
 						</div>
+					{:else}
+						<span class="flex-1"></span>
+					{/if}
 
+					{#if multiple}
 						<button
 							type="button"
-							class="rounded-lg px-3 py-1.5 text-xs font-medium text-base-content/70 transition hover:bg-base-200 disabled:opacity-40"
-							disabled={page >= totalPages || loading}
-							onclick={() => void goToPage(page + 1)}>Next</button
+							class="shrink-0 rounded-lg bg-primary px-4 py-1.5 text-xs font-semibold text-primary-content transition disabled:opacity-40"
+							disabled={selected.length === 0}
+							onclick={confirm}
 						>
-					</div>
+							Select{selected.length > 0 ? ` ${selected.length}` : ''}
+						</button>
+					{/if}
 				</div>
 			{/if}
 		</div>

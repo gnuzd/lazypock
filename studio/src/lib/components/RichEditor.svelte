@@ -460,7 +460,13 @@
 	<p class="upload-error">{uploadError}</p>
 {/if}
 
-<MediaPicker bind:open={pickerOpen} title="Choose image" onSelect={insertImage} />
+<MediaPicker
+	bind:open={pickerOpen}
+	title="Choose image"
+	onSelect={(items) => {
+		if (items[0]) insertImage(items[0]);
+	}}
+/>
 
 <style>
 	.rich-editor {
