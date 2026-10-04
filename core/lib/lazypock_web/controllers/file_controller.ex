@@ -320,6 +320,14 @@ defmodule LazypockWeb.FileController do
                 )
                 |> send_resp(200, binary)
 
+              # The row exists but the stored object does not (a wiped container
+              # volume, an out-of-band deletion, a stale `storage_path`). That is
+              # a 404, not a 500.
+              {:error, reason} when reason in [:enoent, :not_found] ->
+                conn
+                |> put_status(404)
+                |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
+
               {:error, reason} ->
                 conn
                 |> put_status(500)
@@ -360,6 +368,11 @@ defmodule LazypockWeb.FileController do
                     conn
                     |> put_resp_header("content-type", thumb["mime_type"] || "image/webp")
                     |> send_resp(200, binary)
+
+                  {:error, reason} when reason in [:enoent, :not_found] ->
+                    conn
+                    |> put_status(404)
+                    |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
 
                   {:error, reason} ->
                     conn
@@ -518,6 +531,14 @@ defmodule LazypockWeb.FileController do
               "message" => "Image queue is busy, retry shortly.",
               "data" => %{}
             })
+
+          # Missing source object — the same DB-row-without-bytes case as
+          # `show/2`. Report 404 rather than 400 so clients can tell a bad
+          # request from a vanished object.
+          {:error, reason} when reason in [:enoent, :not_found] ->
+            conn
+            |> put_status(404)
+            |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
 
           {:error, reason} ->
             conn

@@ -2,8 +2,9 @@ defmodule Lazypock.Files.Adapters.Local do
   @moduledoc """
   Local filesystem adapter.
 
-  Stores files in `priv/uploads/` organized by date:
-    priv/uploads/YYYY/MM/DD/{uuid}.{ext}
+  Stores files under `base_path/0` (`priv/uploads/` by default, or
+  `LAZYPOCK_STORAGE_PATH`) organized by date:
+    <base>/YYYY/MM/DD/{uuid}.{ext}
 
   Image resizing (thumbnails and on-demand scaling) uses ImageMagick
   (`magick` or `convert`) through `Lazypock.Files.Limiter`, so at most
@@ -429,9 +430,34 @@ defmodule Lazypock.Files.Adapters.Local do
     Path.join(System.tmp_dir!(), "#{prefix}-#{Ecto.UUID.generate()}#{suffix}")
   end
 
-  defp base_path do
+  @doc """
+  Root directory for local storage.
+
+  Resolved in order:
+
+    1. `config :lazypock, :file_storage, path: "..."` (tests, embedded use)
+    2. `LAZYPOCK_STORAGE_PATH` env var (containerized deployments)
+    3. `<app_dir>/priv/uploads` (default)
+
+  A release ships under a version-stamped directory
+  (`.../lib/lazypock-<vsn>/priv/uploads`), so the default is wiped whenever the
+  container is recreated or lazypock/ERTS is upgraded — the database rows
+  survive (e.g. on Neon) while the bytes disappear. Point
+  `LAZYPOCK_STORAGE_PATH` at a mounted volume (or use S3/R2) to keep uploads.
+  """
+  @spec base_path() :: String.t()
+  def base_path do
     Application.get_env(:lazypock, :file_storage)[:path] ||
+      env_storage_path() ||
       Path.join(Application.app_dir(:lazypock, "priv"), "uploads")
+  end
+
+  defp env_storage_path do
+    case System.get_env("LAZYPOCK_STORAGE_PATH") do
+      nil -> nil
+      "" -> nil
+      path -> path
+    end
   end
 
   defp date_based_path do

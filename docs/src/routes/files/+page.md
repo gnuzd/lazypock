@@ -146,6 +146,19 @@ server:
 Files live under the app's `priv/uploads/YYYY/MM/DD/`, variants under `priv/uploads/_variants/:file_id/`,
 and the ad-hoc `/scale/:size` cache under `priv/uploads/_cache/scale/`. Zero configuration.
 
+> **Persist this directory in containers.** The default root is *inside the release*, e.g.
+> `/root/.local/share/.burrito/lazypock_erts-*/lib/lazypock-*/priv/uploads`, so it is recreated when
+> the container is replaced and moves when lazypock/ERTS is upgraded. The database rows survive (a
+> hosted Postgres like Neon is persistent) while the bytes disappear, and every old file URL then
+> answers `404`. Point the storage at a mounted volume instead:
+>
+> ```bash
+> LAZYPOCK_STORAGE_PATH=/data/uploads   # e.g. a docker named volume mounted at /data/uploads
+> ```
+>
+> `:file_storage` config wins over `LAZYPOCK_STORAGE_PATH`, which wins over the release default.
+> For anything long-lived, prefer S3/R2 below — it has no such coupling.
+
 ### S3 / R2
 
 Open **Settings → Files Storage**, fill in the endpoint, bucket and keys, then press **Test
@@ -360,3 +373,5 @@ A file record looks like this:
 | Images 404 after switching to S3 | the bucket keys/prefix or public URL are wrong — run **Test connection** |
 | An image does not appear in the editor | it is still generating (lazy preset) — the URL works on the next request |
 | `409` when deleting from the library | the file is referenced by a record; the response lists where |
+| File URL `404` (or `500` `:enoent`) while the row still exists | the stored object is gone: a non-persistent local volume (container recreated/upgraded), or a delete outside the app. Mount `LAZYPOCK_STORAGE_PATH` or move to S3/R2, then re-upload. |
+| File URL works locally but `404`s in production | dev writes to `priv/uploads`, production runs a release whose default root is wiped on redeploy — the same local-storage coupling. |

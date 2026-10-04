@@ -146,10 +146,7 @@ defmodule Lazypock.Files.Commands do
     end
   end
 
-  defp lazypock_upload_dir do
-    Application.get_env(:lazypock, :file_storage)[:path] ||
-      Path.join(Application.app_dir(:lazypock, "priv"), "uploads")
-  end
+  defp lazypock_upload_dir, do: Lazypock.Files.Adapters.Local.base_path()
 
   # ── Migrate local → S3 ───────────────────────────────
 
