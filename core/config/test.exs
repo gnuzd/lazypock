@@ -10,6 +10,10 @@ config :lazypock, start_cron_scheduler: false
 # `Lazypock.Files.Reaper.drain/1`.
 config :lazypock, Lazypock.Files.Reaper, async: false
 
+# The request-log cleaner has the same sandbox/timer concern; tests call
+# `Lazypock.Logs.Cleaner.run/0` (or `Lazypock.Logs.clean_old/0`) directly.
+config :lazypock, Lazypock.Logs.Cleaner, async: false
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

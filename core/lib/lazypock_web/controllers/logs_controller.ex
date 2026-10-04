@@ -1,6 +1,7 @@
 defmodule LazypockWeb.LogsController do
   use LazypockWeb, :controller
 
+  alias Lazypock.Logs
   alias Lazypock.Repo
 
   defp require_superuser!(conn) do
@@ -34,6 +35,24 @@ defmodule LazypockWeb.LogsController do
     if conn.halted, do: conn, else: do_collections(conn)
   end
 
+  def retention(conn, _params) do
+    conn = require_superuser!(conn)
+    if conn.halted, do: conn, else: json(conn, %{days: Logs.retention_days()})
+  end
+
+  def update_retention(conn, params) do
+    conn = require_superuser!(conn)
+
+    if conn.halted do
+      conn
+    else
+      case Logs.put_retention_days(params["days"]) do
+        {:ok, days} -> json(conn, %{days: days})
+        {:error, message} -> conn |> put_status(400) |> json(%{error: message})
+      end
+    end
+  end
+
   def stats(conn, params) do
     conn = require_superuser!(conn)
     if conn.halted, do: conn, else: do_stats(conn, params)
@@ -46,53 +65,81 @@ defmodule LazypockWeb.LogsController do
 
   # ── Superuser-guarded implementations ──
 
+  # WHERE fragments for the list query: collection first, then status, so the
+  # `$N` placeholders stay in order.
+  defp list_conditions(params) do
+    {conds, args} =
+      case params["collection"] do
+        collection when is_binary(collection) and collection != "" ->
+          {["collection = $1"], [collection]}
+
+        _ ->
+          {[], []}
+      end
+
+    case status_condition(params["status"]) do
+      nil ->
+        {conds, args}
+
+      {:eq, code} ->
+        {conds ++ ["status = $#{length(args) + 1}"], args ++ [code]}
+
+      {:range, lo, hi} ->
+        {conds ++ ["status >= $#{length(args) + 1} AND status < $#{length(args) + 2}"],
+         args ++ [lo, hi]}
+    end
+  end
+
+  # Accepts a status class (`4xx`) or an exact code (`500`); anything else
+  # means "all".
+  defp status_condition(nil), do: nil
+  defp status_condition(""), do: nil
+
+  defp status_condition(status) when is_binary(status) do
+    cond do
+      Regex.match?(~r/^[1-5]xx$/i, status) ->
+        n = status |> String.first() |> String.to_integer()
+        {:range, n * 100, (n + 1) * 100}
+
+      Regex.match?(~r/^\d{3}$/, status) ->
+        {:eq, String.to_integer(status)}
+
+      true ->
+        nil
+    end
+  end
+
+  defp status_condition(_), do: nil
+
   defp do_list(conn, params) do
     page = max(1, (params["page"] || "1") |> String.to_integer())
     per_page = min(200, max(1, (params["perPage"] || "50") |> String.to_integer()))
     offset = (page - 1) * per_page
-    collection_filter = params["collection"]
 
-    where_clause =
-      if collection_filter && collection_filter != "" do
-        "WHERE collection = $1"
-      else
-        ""
-      end
-
-    count_params = if collection_filter, do: [collection_filter], else: []
-    total_params = count_params
+    {conditions, filter_params} = list_conditions(params)
+    where_clause = if conditions == [], do: "", else: "WHERE " <> Enum.join(conditions, " AND ")
 
     total =
       case Ecto.Adapters.SQL.query(
              Repo,
              "SELECT COUNT(*) FROM _request_logs #{where_clause}",
-             total_params
+             filter_params
            ) do
         {:ok, %{rows: [[count]]}} -> count
         _ -> 0
       end
 
-    select_params =
-      if collection_filter do
-        [collection_filter, per_page, offset]
-      else
-        [per_page, offset]
-      end
-
     order_dir = if params["order"] == "asc", do: "ASC", else: "DESC"
 
     select_where =
-      if collection_filter && collection_filter != "" do
-        "WHERE collection = $1 ORDER BY created_at #{order_dir} LIMIT $2 OFFSET $3"
-      else
-        "ORDER BY created_at #{order_dir} LIMIT $1 OFFSET $2"
-      end
+      "#{where_clause} ORDER BY created_at #{order_dir} " <>
+        "LIMIT $#{length(filter_params) + 1} OFFSET $#{length(filter_params) + 2}"
 
     items =
       case Ecto.Adapters.SQL.query(
              Repo,
              "SELECT id, method, path, status, duration, ip, user_agent, referer, collection, error, body, created_at FROM _request_logs #{select_where}",
-             select_params
+             filter_params ++ [per_page, offset]
            ) do
         {:ok, result} ->
           Enum.map(result.rows, fn row ->
@@ -311,17 +358,32 @@ defmodule LazypockWeb.LogsController do
 
   defp do_delete_logs(conn, params) do
     if params["all"] == "true" do
-      Ecto.Adapters.SQL.query!(Repo, "TRUNCATE _request_logs", [])
-      json(conn, %{ok: true})
+      Logs.clear_all()
+      json(conn, %{ok: true, all: true})
     else
-      # Delete entries older than 7 days by default
-      Ecto.Adapters.SQL.query!(
-        Repo,
-        "DELETE FROM _request_logs WHERE created_at < now() - interval '7 days'",
-        []
-      )
+      case delete_days(params) do
+        days when is_integer(days) ->
+          json(conn, %{ok: true, days: days, deleted: Logs.delete_older_than(days)})
 
-      json(conn, %{ok: true})
+        nil ->
+          json(conn, %{ok: true, days: nil, deleted: 0})
+      end
+    end
+  end
+
+  # `?days=N` wins; otherwise the configured retention; otherwise 7 (the old
+  # hard-coded default) so the manual cleanup keeps working when auto-clean is
+  # off. `?days=0` deletes nothing.
+  defp delete_days(params) do
+    case params["days"] do
+      nil ->
+        Logs.retention_days() || 7
+
+      value ->
+        case Integer.parse(to_string(value)) do
+          {n, _} when n > 0 -> n
+          _ -> nil
+        end
     end
   end
 

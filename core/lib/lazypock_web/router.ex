@@ -87,6 +87,10 @@ defmodule LazypockWeb.Router do
     get("/logs", LogsController, :list)
     get("/logs/stats", LogsController, :stats)
     get("/logs/collections", LogsController, :collections)
+    # Retention must precede the dynamic /logs/:id route.
+    get("/logs/retention", LogsController, :retention)
+    put("/logs/retention", LogsController, :update_retention)
+    patch("/logs/retention", LogsController, :update_retention)
     get("/logs/:id", LogsController, :show)
     delete("/logs", LogsController, :delete_logs)
 

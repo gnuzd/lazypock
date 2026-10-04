@@ -6,6 +6,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
 	import Select from '$lib/components/Select.svelte';
+	import { toast } from 'svelte-sonner';
 
 	let logs = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
@@ -14,7 +15,10 @@
 	let totalItems = $state(0);
 	let perPage = $state(50);
 	let collectionFilter = $state('');
+	let statusFilter = $state('');
 	let collections = $state<string[]>([]);
+	/** Auto-clean retention as a Select value: '' (off) / '7' / '30' / '90'. */
+	let retention = $state('');
 	// ── Inline row detail (accordion) ──
 	let expandedId = $state<string | null>(null);
 
@@ -52,6 +56,7 @@
 
 		await loadChart(Chart);
 		loadCollections();
+		loadRetention();
 		loadLogs();
 		ChartRef = Chart;
 	});
@@ -238,11 +243,38 @@
 		}
 	}
 
+	async function loadRetention() {
+		try {
+			const res = (await client.http.get('/logs/retention')) as { days: number | null } | null;
+			retention = res?.days != null ? String(res.days) : '';
+		} catch {
+			retention = '';
+		}
+	}
+
+	async function saveRetention(value: string) {
+		const days = value === '' ? 0 : Number(value);
+
+		try {
+			const res = (await client.http.patch('/logs/retention', { days })) as {
+				days: number | null;
+			} | null;
+			retention = res?.days != null ? String(res.days) : '';
+			toast.success(
+				days > 0 ? `Auto-clean set to ${days} day${days === 1 ? '' : 's'}` : 'Auto-clean disabled'
+			);
+		} catch (e) {
+			toast.error(`Could not update auto-clean: ${(e as Error).message}`);
+			await loadRetention();
+		}
+	}
+
 	async function loadLogs() {
 		loading = true;
 		try {
 			let qs = `page=${page}&perPage=${perPage}`;
 			if (collectionFilter) qs += `&collection=${encodeURIComponent(collectionFilter)}`;
+			if (statusFilter) qs += `&status=${encodeURIComponent(statusFilter)}`;
 			const res = (await client.http.get(`/logs?${qs}`)) as Record<string, unknown> | null;
 			logs = (res?.items as Record<string, unknown>[]) ?? [];
 			totalItems = (res?.totalItems as number) ?? 0;
@@ -337,12 +369,26 @@
 	}
 
 	async function clearOldLogs() {
+		const days = retention === '' ? 7 : Number(retention);
+
+		const ok = await confirmDialog({
+			title: 'Clean old logs',
+			message: `Delete request logs older than ${days} day${days === 1 ? '' : 's'}? This cannot be undone.`,
+			confirmLabel: 'Clean',
+			variant: 'error'
+		});
+
+		if (!ok) return;
+
 		try {
-			await client.http.delete('/logs');
+			const res = (await client.http.delete(`/logs?days=${days}`)) as { deleted?: number } | null;
+			const deleted = res?.deleted ?? 0;
+			toast.success(`Deleted ${deleted} log${deleted === 1 ? '' : 's'}`);
+			page = 1;
 			loadLogs();
 			if (ChartRef) loadChart(ChartRef);
-		} catch {
-			// ignore
+		} catch (e) {
+			toast.error(`Could not clean logs: ${(e as Error).message}`);
 		}
 	}
 </script>
@@ -378,6 +424,20 @@
 					bind:value={range}
 					onchange={onRangeChange}
 				/>
+				<Select
+					options={[
+						{ value: '', label: 'All statuses' },
+						{ value: '2xx', label: '2xx Success' },
+						{ value: '3xx', label: '3xx Redirect' },
+						{ value: '4xx', label: '4xx Client error' },
+						{ value: '5xx', label: '5xx Server error' }
+					]}
+					bind:value={statusFilter}
+					onchange={() => {
+						page = 1;
+						loadLogs();
+					}}
+				/>
 				{#if collections.length > 0}
 					<Select
 						options={[
@@ -391,7 +451,24 @@
 						}}
 					/>
 				{/if}
-				<Button class="btn-ghost" onclick={clearOldLogs}>Clean old (7d+)</Button>
+				<Select
+					options={[
+						{ value: '', label: 'Auto-clean: off' },
+						{ value: '7', label: 'Auto-clean: 7 days' },
+						{ value: '30', label: 'Auto-clean: 30 days' },
+						{ value: '90', label: 'Auto-clean: 90 days' }
+					]}
+					bind:value={retention}
+					onchange={(value) => void saveRetention(String(value ?? ''))}
+				/>
+				<Button
+					class="btn-ghost"
+					disabled={retention === ''}
+					title={retention === ''
+						? 'Pick an auto-clean retention to enable this'
+						: `Delete logs older than ${retention} days`}
+					onclick={clearOldLogs}>Clean now</Button
+				>
 				<Button class="btn-primary" onclick={clearLogs}>Clear all</Button>
 			</div>
 		</div>
