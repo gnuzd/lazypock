@@ -2,6 +2,7 @@ defmodule LazypockWeb.FileController do
   use LazypockWeb, :controller
 
   alias Lazypock.Files.Policy
+  alias Lazypock.Files.Rules
   alias Lazypock.Files.Store
   alias Lazypock.Files.Validation
   alias Lazypock.Collections.Registry
@@ -18,11 +19,13 @@ defmodule LazypockWeb.FileController do
     * `q` — case-insensitive filename search
   """
   def index(conn, params) do
-    conn = require_superuser!(conn)
-    if conn.halted, do: conn, else: do_index(conn, params)
+    case Rules.authorize_list(current_identity(conn)) do
+      {:ok, rule} -> do_index(conn, params, rule)
+      {:error, message} -> deny(conn, message)
+    end
   end
 
-  defp do_index(conn, params) do
+  defp do_index(conn, params, rule) do
     page = parse_int(params["page"], 1)
     per_page = parse_int(params["perPage"], 50)
 
@@ -32,7 +35,8 @@ defmodule LazypockWeb.FileController do
       collection_name: blank_to_nil(params["collectionName"]),
       field_name: blank_to_nil(params["fieldName"]),
       mime: blank_to_nil(params["mime"]),
-      q: blank_to_nil(params["q"])
+      q: blank_to_nil(params["q"]),
+      rule: rule
     ]
 
     {:ok, %{items: items, page: page, per_page: per_page, total: total}} = Store.list(opts)
@@ -166,7 +170,8 @@ defmodule LazypockWeb.FileController do
       thumb_sizes: resolve_thumb_sizes(field_options),
       variants: resolve_variants(conn.params),
       origin: Store.normalize_origin(conn.params["origin"]),
-      mime_type: mime
+      mime_type: mime,
+      uploaded_by: actor_id(conn)
     ]
 
     # Stream from the temp file; the persisted MIME type is the
@@ -208,8 +213,9 @@ defmodule LazypockWeb.FileController do
       conn
     else
       policy = Policy.resolve(file_field_options(conn.params))
+      params = Map.put(conn.params, "uploaded_by", actor_id(conn))
 
-      case Lazypock.Files.DirectUpload.presign(conn.params, policy) do
+      case Lazypock.Files.DirectUpload.presign(params, policy) do
         {:ok, info} ->
           conn |> put_status(200) |> json(info)
 
@@ -380,13 +386,34 @@ defmodule LazypockWeb.FileController do
   Delete a file.
   """
   def delete(conn, %{"id" => id} = params) do
-    conn = require_superuser!(conn)
-    if conn.halted, do: conn, else: do_delete(conn, id, params)
+    user = current_identity(conn)
+
+    case Store.get(id) do
+      {:ok, file_record} ->
+        case Rules.authorize_delete(user, file_record) do
+          :ok -> do_delete(conn, file_record, params, user)
+          {:error, message} -> deny(conn, message)
+        end
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(404)
+        |> json(%{"code" => 404, "message" => "File not found", "data" => %{}})
+
+      {:error, reason} ->
+        conn
+        |> put_status(400)
+        |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
+    end
   end
 
-  defp do_delete(conn, id, params) do
-    usage = Lazypock.Files.Refs.usage(id)
-    force? = params["force"] in ["true", "1", true]
+  defp do_delete(conn, file_record, params, user) do
+    usage = Lazypock.Files.Refs.usage(file_record["id"])
+
+    # `force` bypasses the reference guard and stays superuser-only: an
+    # authorised non-superuser may delete their own file, but not break a
+    # record that still embeds it.
+    force? = params["force"] in ["true", "1", true] and Rules.superuser?(user)
 
     cond do
       usage != [] and not force? ->
@@ -400,7 +427,7 @@ defmodule LazypockWeb.FileController do
         })
 
       true ->
-        case Store.delete(id) do
+        case Store.delete(file_record["id"]) do
           :ok ->
             conn |> put_status(204) |> json(nil)
 
@@ -410,6 +437,36 @@ defmodule LazypockWeb.FileController do
             |> json(%{"code" => 400, "message" => inspect(reason), "data" => %{}})
         end
     end
+  end
+
+  # The identity used for file-rule evaluation: the auth-collection user when
+  # present, otherwise the superuser (which bypasses all file rules).
+  defp current_identity(conn) do
+    conn.assigns[:current_superuser] || conn.assigns[:current_user]
+  end
+
+  # Id recorded as `_files.uploaded_by` — matches what `@request.auth.id`
+  # resolves to for the same identity, so `uploaded_by = @request.auth.id`
+  # works for both auth users and superusers. API-key requests have neither
+  # identity and store an empty string.
+  defp actor_id(conn) do
+    cond do
+      user = conn.assigns[:current_user] ->
+        to_string(Map.get(user, "id") || Map.get(user, :id) || "")
+
+      superuser = conn.assigns[:current_superuser] ->
+        to_string(Map.get(superuser, :id) || Map.get(superuser, "id") || "")
+
+      true ->
+        ""
+    end
+  end
+
+  defp deny(conn, message) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(403, Jason.encode!(%{code: 403, message: message, data: %{}}))
+    |> halt()
   end
 
   # Upload is allowed for ANY authenticated identity (superuser or auth-collection
@@ -432,22 +489,6 @@ defmodule LazypockWeb.FileController do
         |> halt()
 
       _ ->
-        conn
-    end
-  end
-
-  defp require_superuser!(conn) do
-    case conn.assigns[:current_superuser] do
-      nil ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(
-          403,
-          Jason.encode!(%{code: 403, message: "Access denied. Superuser required.", data: %{}})
-        )
-        |> halt()
-
-      _user ->
         conn
     end
   end
@@ -578,6 +619,7 @@ defmodule LazypockWeb.FileController do
       "mimeType" => file_record["mime_type"],
       "size" => file_record["size"],
       "url" => Store.url(file_record),
+      "uploadedBy" => file_record["uploaded_by"],
       "thumbs" => normalize_thumbs(file_record["thumbs"], file_record["id"]),
       "variants" => variant_urls(file_record)
     }

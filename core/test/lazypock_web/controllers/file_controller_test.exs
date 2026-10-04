@@ -345,4 +345,231 @@ defmodule LazypockWeb.FileControllerTest do
       assert is_integer(body["files"]["deletionQueue"]["pending"])
     end
   end
+
+  describe "file access rules" do
+    defp create_users_collection! do
+      name = "file_rules_users_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Lazypock.Schema.DDL.create_collection(name,
+          type: "auth",
+          fields: [
+            %{"name" => "email", "type" => "email", "required" => true},
+            %{"name" => "password_hash", "type" => "password", "required" => true},
+            %{"name" => "role", "type" => "text", "required" => false}
+          ]
+        )
+
+      Lazypock.Collections.Registry.reload!()
+      name
+    end
+
+    defp create_user!(collection, email, role) do
+      {:ok, user} =
+        Lazypock.Schemas.GenericRecord.insert(collection, %{
+          "email" => email,
+          "password_hash" => "x",
+          "role" => role
+        })
+
+      {:ok, token} = Token.generate_user_token(user, collection)
+      {user, token}
+    end
+
+    defp user_conn(token), do: put_req_header(build_conn(), "authorization", "Bearer #{token}")
+
+    # Sets `_settings.files.rules` and restores the previous settings afterwards.
+    defp set_file_rules!(rules) do
+      original = Lazypock.Settings.get()
+      files = Map.get(original, "files", %{}) || %{}
+      Lazypock.Settings.put(Map.put(original, "files", Map.put(files, "rules", rules)))
+
+      on_exit(fn -> Lazypock.Settings.put(original) end)
+    end
+
+    setup do
+      collection = create_users_collection!()
+      {alice, alice_token} = create_user!(collection, "alice@test.com", "user")
+      {admin, admin_token} = create_user!(collection, "admin@test.com", "admin")
+
+      {:ok,
+       collection: collection,
+       alice: alice,
+       alice_token: alice_token,
+       admin: admin,
+       admin_token: admin_token}
+    end
+
+    test "records the uploading user as uploaded_by", %{collection: collection} do
+      {user, token} = create_user!(collection, "uploader@test.com", "user")
+
+      conn =
+        user_conn(token)
+        |> put_req_header("content-type", "multipart/form-data")
+        |> post("/api/files", %{"file" => upload_body("mine", "mine.txt")})
+
+      body = json_response(conn, 201)
+      assert {:ok, record} = Lazypock.Files.Store.get(body["id"])
+      assert record["uploaded_by"] == user["id"]
+      Lazypock.Files.Store.delete(body["id"])
+    end
+
+    test "defaults keep list and delete superuser-only", %{alice_token: alice_token} do
+      set_file_rules!(%{})
+      {:ok, file} = Lazypock.Files.Store.store("x", "x.txt", uploaded_by: "someone")
+
+      assert response(user_conn(alice_token) |> get("/api/files"), 403)
+      assert response(user_conn(alice_token) |> delete("/api/files/#{file["id"]}"), 403)
+
+      Lazypock.Files.Store.delete(file["id"])
+    end
+
+    test "listRule composes with query filters (placeholder shift)", %{
+      alice: alice,
+      alice_token: alice_token
+    } do
+      set_file_rules!(%{"listRule" => "uploaded_by = @request.auth.id"})
+
+      {:ok, mine} = Lazypock.Files.Store.store("mine", "mine.txt", uploaded_by: alice["id"])
+
+      {:ok, other} =
+        Lazypock.Files.Store.store("theirs", "t.txt", uploaded_by: Ecto.UUID.generate())
+
+      # `q=mine` adds its own bound parameter, so the rule's placeholder
+      # must shift past it — a mismatch here silently returns nothing or errors.
+      body =
+        user_conn(alice_token)
+        |> get("/api/files?q=mine")
+        |> json_response(200)
+
+      ids = Enum.map(body["items"], & &1["id"])
+      assert mine["id"] in ids
+      refute other["id"] in ids
+      assert body["total"] == 1
+
+      Lazypock.Files.Store.delete(mine["id"])
+      Lazypock.Files.Store.delete(other["id"])
+    end
+
+    test "owner listRule shows only the caller's uploads", %{
+      alice: alice,
+      alice_token: alice_token,
+      admin_token: admin_token
+    } do
+      set_file_rules!(%{"listRule" => "uploaded_by = @request.auth.id"})
+
+      {:ok, mine} = Lazypock.Files.Store.store("mine", "mine.txt", uploaded_by: alice["id"])
+
+      {:ok, other} =
+        Lazypock.Files.Store.store("theirs", "t.txt", uploaded_by: Ecto.UUID.generate())
+
+      alice_ids =
+        user_conn(alice_token) |> get("/api/files") |> json_response(200) |> Map.fetch!("items")
+
+      assert Enum.any?(alice_ids, &(&1["id"] == mine["id"]))
+      refute Enum.any?(alice_ids, &(&1["id"] == other["id"]))
+
+      admin_items =
+        user_conn(admin_token) |> get("/api/files") |> json_response(200) |> Map.fetch!("items")
+
+      # The owner-only rule has no role clause, so an admin is not the owner.
+      refute Enum.any?(admin_items, &(&1["id"] == mine["id"]))
+
+      Lazypock.Files.Store.delete(mine["id"])
+      Lazypock.Files.Store.delete(other["id"])
+    end
+
+    test "a role clause lets an app admin list everything", %{
+      alice: alice,
+      alice_token: alice_token,
+      admin_token: admin_token
+    } do
+      set_file_rules!(%{
+        "listRule" => "uploaded_by = @request.auth.id || @request.auth.role = 'admin'"
+      })
+
+      {:ok, mine} = Lazypock.Files.Store.store("mine", "mine.txt", uploaded_by: alice["id"])
+
+      {:ok, other} =
+        Lazypock.Files.Store.store("theirs", "t.txt", uploaded_by: Ecto.UUID.generate())
+
+      admin_items =
+        user_conn(admin_token) |> get("/api/files") |> json_response(200) |> Map.fetch!("items")
+
+      assert Enum.any?(admin_items, &(&1["id"] == mine["id"]))
+      assert Enum.any?(admin_items, &(&1["id"] == other["id"]))
+
+      alice_items =
+        user_conn(alice_token) |> get("/api/files") |> json_response(200) |> Map.fetch!("items")
+
+      assert Enum.any?(alice_items, &(&1["id"] == mine["id"]))
+      refute Enum.any?(alice_items, &(&1["id"] == other["id"]))
+
+      Lazypock.Files.Store.delete(mine["id"])
+      Lazypock.Files.Store.delete(other["id"])
+    end
+
+    test "owner deleteRule allows the uploader and denies others", %{
+      alice: alice,
+      alice_token: alice_token,
+      admin_token: admin_token
+    } do
+      set_file_rules!(%{"deleteRule" => "uploaded_by = @request.auth.id"})
+
+      {:ok, mine} = Lazypock.Files.Store.store("mine", "mine.txt", uploaded_by: alice["id"])
+
+      {:ok, other} =
+        Lazypock.Files.Store.store("theirs", "t.txt", uploaded_by: Ecto.UUID.generate())
+
+      assert response(user_conn(admin_token) |> delete("/api/files/#{mine["id"]}"), 403)
+      assert response(user_conn(alice_token) |> delete("/api/files/#{mine["id"]}"), 204)
+      assert {:error, :not_found} = Lazypock.Files.Store.get(mine["id"])
+
+      Lazypock.Files.Store.delete(other["id"])
+    end
+
+    test "superusers bypass file rules", %{alice: alice} do
+      set_file_rules!(%{
+        "listRule" => "@request.auth.id = 'nobody'",
+        "deleteRule" => "@request.auth.id = 'nobody'"
+      })
+
+      {:ok, file} = Lazypock.Files.Store.store("x", "x.txt", uploaded_by: alice["id"])
+
+      items =
+        auth_conn(build_conn()) |> get("/api/files") |> json_response(200) |> Map.fetch!("items")
+
+      assert Enum.any?(items, &(&1["id"] == file["id"]))
+      assert response(auth_conn(build_conn()) |> delete("/api/files/#{file["id"]}"), 204)
+    end
+
+    test "force-delete stays superuser-only", %{alice: alice, alice_token: alice_token} do
+      set_file_rules!(%{"deleteRule" => "uploaded_by = @request.auth.id"})
+
+      {:ok, file} = Lazypock.Files.Store.store("x", "x.txt", uploaded_by: alice["id"])
+
+      # Simulate a record that still embeds the file.
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "INSERT INTO _file_refs (file_id, collection, record_id, field) VALUES ($1, 'posts', 'r1', 'body')",
+        [Ecto.UUID.dump!(file["id"])]
+      )
+
+      # The owner cannot force past the reference guard...
+      assert response(
+               user_conn(alice_token) |> delete("/api/files/#{file["id"]}?force=true"),
+               409
+             )
+
+      # ...but a superuser can.
+      assert response(
+               auth_conn(build_conn()) |> delete("/api/files/#{file["id"]}?force=true"),
+               204
+             )
+
+      Ecto.Adapters.SQL.query!(Repo, "DELETE FROM _file_refs WHERE file_id = $1", [
+        Ecto.UUID.dump!(file["id"])
+      ])
+    end
+  end
 end

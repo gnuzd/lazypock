@@ -63,8 +63,8 @@ defmodule Lazypock.Files.DirectUpload do
       Ecto.Adapters.SQL.query!(
         Repo,
         """
-        INSERT INTO _files (id, filename, extension, mime_type, size, storage_path, storage_backend, status, original_name, origin, collection_name, record_id, field_name)
-        VALUES ($1, $2, $3, $4, $5, $6, 's3', 'pending', $7, $8, $9, $10, $11)
+        INSERT INTO _files (id, filename, extension, mime_type, size, storage_path, storage_backend, status, original_name, origin, collection_name, record_id, field_name, uploaded_by)
+        VALUES ($1, $2, $3, $4, $5, $6, 's3', 'pending', $7, $8, $9, $10, $11, $12)
         """,
         [
           Ecto.UUID.dump!(id),
@@ -77,7 +77,8 @@ defmodule Lazypock.Files.DirectUpload do
           origin,
           params["collection_name"] || "",
           to_string(params["record_id"] || ""),
-          params["field_name"] || ""
+          params["field_name"] || "",
+          params["uploaded_by"] || ""
         ]
       )
 
