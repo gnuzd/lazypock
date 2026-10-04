@@ -31,12 +31,13 @@
 	} from '@lucide/svelte';
 	import { client } from '$lib/client';
 	import { promptDialog } from '$lib/dialog.svelte';
-	import MediaLibrary, { type MediaItem } from '$lib/components/MediaLibrary.svelte';
+	import type { MediaItem } from '$lib/components/MediaLibrary.svelte';
+	import MediaPicker from '$lib/components/MediaPicker.svelte';
 
 	let { value = $bindable(), disabled = false }: { value?: unknown; disabled?: boolean } = $props();
 
 	let editor = $state<Editor | null>(null);
-	let mediaOpen = $state(false);
+	let pickerOpen = $state(false);
 	let uploadError = $state('');
 	/** Insert-image dropdown: upload a new file or pick one from the library. */
 	let imageMenuOpen = $state(false);
@@ -102,7 +103,7 @@
 	/** Dropdown → pick an existing image from the media library. */
 	function openLibraryPicker() {
 		imageMenuOpen = false;
-		mediaOpen = true;
+		pickerOpen = true;
 	}
 
 	onMount(() => {
@@ -459,13 +460,7 @@
 	<p class="upload-error">{uploadError}</p>
 {/if}
 
-<MediaLibrary
-	bind:open={mediaOpen}
-	title="Insert image"
-	onSelect={(items) => {
-		if (items[0]) insertImage(items[0]);
-	}}
-/>
+<MediaPicker bind:open={pickerOpen} title="Choose image" onSelect={insertImage} />
 
 <style>
 	.rich-editor {
@@ -479,6 +474,9 @@
 	}
 
 	.toolbar {
+		/* Positioned ancestor for the insert-image dropdown, so the menu can
+		   anchor to the toolbar's right edge instead of the button (see below). */
+		position: relative;
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
@@ -531,15 +529,18 @@
 		color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
 	}
 
-	/* Insert-image dropdown (upload vs. library) */
+	/* Insert-image dropdown (upload vs. library). The menu is anchored to the
+	   toolbar's right edge (not the button): the field wrapper clips with
+	   `overflow: hidden`, so a menu under the button is cut off when the button
+	   sits near the right edge, and off the left edge when the toolbar wraps. */
 	.toolbar-menu {
-		position: relative;
+		position: static;
 	}
 
 	.toolbar-dropdown {
 		position: absolute;
 		top: calc(100% + 4px);
-		left: 0;
+		right: 4px;
 		z-index: 20;
 		min-width: 12rem;
 		padding: 4px;
