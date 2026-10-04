@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.17.0](https://github.com/gnuzd/lazypock/compare/v0.16.0...v0.17.0) (2026-10-04)
+
+
+### Features
+
+* **files:** sharper grid thumbnails (320px `small` preset) ([f949aeb](https://github.com/gnuzd/lazypock/commit/f949aeb42ba7063d0f50fad6f58d4fb160f41210))
+* **studio:** grid/list views + in-app delete confirmation ([561a992](https://github.com/gnuzd/lazypock/commit/561a992cce038d067fc1057403e35d331621b846))
+* **studio:** media library pagination + image skeletons ([32c5cf0](https://github.com/gnuzd/lazypock/commit/32c5cf012f2ea925420da4eb10b8c1192ff17214))
+* **studio:** media library under Settings, bigger modals, detail view ([df538f1](https://github.com/gnuzd/lazypock/commit/df538f154560ea77d67a10e8b470c248d69205e3))
+
+
+### Bug Fixes
+
+* **auth:** give auth collections their system fields ([dfcecd7](https://github.com/gnuzd/lazypock/commit/dfcecd74bb146a16be123a570e4eb96cf5d14222))
+* **auth:** include collectionName/collectionId in auth responses ([b7b228d](https://github.com/gnuzd/lazypock/commit/b7b228d0d4f62f6549cb6345fb95dcce0612e970))
+* **schema:** system fields cannot be dropped ([f109490](https://github.com/gnuzd/lazypock/commit/f109490309df4f0720028d5ff70b8640ad8b9c62))
+
 ## [0.16.0](https://github.com/gnuzd/lazypock/compare/v0.15.2...v0.16.0) (2026-10-03)
 
 
