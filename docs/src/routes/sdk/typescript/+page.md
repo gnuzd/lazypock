@@ -834,17 +834,48 @@ Handles token persistence and auto-refresh.
 - `model` — Current auth model (user record or null)
 - `isValid` — Whether a token exists
 - `isExpired` — Whether the current token has expired (with 30s buffer)
-- `collectionName` — Name of the auth collection used for token refresh
+- `collectionName` — Name of the auth collection for this session (`null` for superuser sessions)
 - `set(token, model)` — Update token and model
 - `setCollectionName(name)` — Set the auth collection name for token refresh
 - `clear()` — Clear all auth state
 - `onChange(callback)` — Listen for auth changes (returns unsubscribe function)
 - `init()` — Restore persisted auth from storage
 
+`collectionName` is **persisted with the token and model**, so it survives a page reload: signing in
+with an auth collection, calling `client.authStore.init()` on startup and reading
+`client.authStore.collectionName` always gives the collection (e.g. `"users"`). It is derived from
+`record.collectionName` when the server includes it, so sessions stored by older versions recover it
+too. Superuser sessions have `collectionName === null` by design.
+
+#### Changing the current user's password
+
+```typescript
+// Which collection is this session for? (`null` for superuser sessions)
+const collection = client.authStore.collectionName;
+const userId = client.authStore.model?.id;
+
+if (!collection || !userId) throw new Error('Not signed in with an auth collection');
+
+await client.collection(collection).update(userId, {
+  password: 'new-secret',
+  passwordConfirm: 'new-secret'
+});
+```
+
+The record-update rule of the collection must allow the user to update their own record (or the
+caller must be a superuser). For the emailed-token flow use
+`client.collection(name).requestPasswordReset(email)` and
+`confirmPasswordReset(token, password, passwordConfirm)`.
+
+> **Note:** the server does not currently require `oldPassword` for a self-service password change
+> (PocketBase does). Until that is enforced server-side, ask for the current password in your UI and
+> re-authenticate (`authWithPassword`) before updating if you need that guarantee.
+
 #### Auto token refresh
 
 The SDK automatically refreshes expired auth tokens. When a token expires, the next API call triggers
-a transparent refresh via the `auth-refresh` endpoint. No manual intervention needed.
+a transparent refresh via the `auth-refresh` endpoint. No manual intervention needed. This relies on
+`authStore.collectionName`, which is why it is persisted with the session.
 
 ---
 

@@ -97,28 +97,44 @@ Also available:
 - `GET /api/files/:id/thumbs/:size` — legacy thumbnail route (kept for compatibility).
 - Upload accepts `?variants=content,thumb` to force specific presets before the response.
 
-### Image engine & resources
+### Image engine & requirements
+
+Every resize shells out to the **ImageMagick CLI**. That is a **host dependency**: a prebuilt
+single-binary release does **not** bundle it, so install it on the machine (or in the container
+image) that runs the app — see the [Server Guide](/server#images) for the install/verify steps.
+
+| Command | Used for |
+| --- | --- |
+| `identify` | Reading image dimensions (the megapixel/dimension caps, and direct uploads) |
+| `magick` / `convert` | The actual resize (thumbnails, presets, `/scale/:size`) |
+
+**ImageMagick 6** (what Debian/Ubuntu install: `identify` + `convert`) and **ImageMagick 7**
+(`magick`) are both supported:
+
+```bash
+sudo apt install imagemagick      # Debian / Ubuntu (IM6)
+brew install imagemagick          # macOS (IM7)
+identify -version                 # verify
+```
+
+If ImageMagick is not installed, uploads still work and originals are served unchanged, but no
+variants are produced:
+
+- `GET /api/files/:id/thumbs/:size` → `404`
+- `GET /api/files/:id/scale/:preset` → `400`
+- a one-time warning is logged on the first upload; set `LAZYPOCK_THUMBNAILS=0` to disable resizing
+deliberately
 
 Image work always runs through a per-instance **limiter**, so a burst of uploads cannot exhaust the
 server:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `LAZYPOCK_IMAGE_CONCURRENCY` | `1` | Concurrent image jobs per instance |
+| `LAZYPOCK_IMAGE_CONCURRENCY` | `1` | Concurrent image jobs per instance (overload → `503`) |
 | `LAZYPOCK_MAGICK_MEMORY_LIMIT` | `256MiB` | Per-process ImageMagick memory cap |
 | `LAZYPOCK_THUMBNAILS` | — | Set to `0` to disable all resizing |
 | `LAZYPOCK_IMAGE_ENGINE` | `magick` | Image engine (selecting an unavailable engine fails loudly) |
 | `LAZYPOCK_VARIANT_CACHE_MAX` | `5GB` | Local variant cache cap (oldest evicted first) |
-
-Resizing needs the **ImageMagick** CLI (`magick` or `convert`) on the server:
-
-```bash
-brew install imagemagick          # macOS
-sudo apt install imagemagick      # Debian/Ubuntu
-```
-
-Without it, uploads still work — they are stored as-is and no variants are generated (a one-time
-warning is logged).
 
 ---
 

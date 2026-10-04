@@ -533,21 +533,31 @@ source format.
 - The TypeScript SDK exposes `getThumbUrl(baseUrl, fileId, size)` and
   `FileRecord.thumbs`
 
-**Dependency:** all image resizing (thumbnails **and** on-demand scaling) requires
-the **ImageMagick** CLI (`magick`/`convert`). Install it on the server:
+**Dependency:** all image resizing (thumbnails, presets **and** on-demand
+scaling) shells out to the **ImageMagick CLI**, which is a **host dependency** —
+the prebuilt single-binary release does **not** bundle it. Both **ImageMagick 6**
+(Debian/Ubuntu: `identify` + `convert`) and **ImageMagick 7** (`magick`) work;
+LazyPock uses `identify` to read dimensions and `magick`/`convert` to resize.
 
 ```bash
-# macOS
+# macOS (ImageMagick 7)
 brew install imagemagick
 
-# Debian/Ubuntu
+# Debian/Ubuntu (ImageMagick 6)
 sudo apt install imagemagick
+
+identify -version   # verify
 ```
 
+Running the prebuilt binary (or a container image) does not change this:
+install ImageMagick on the host (or in the base image). See the
+[Server Guide → Image processing](https://lazypock.gnuzd.dev/server#images).
+
 If ImageMagick is **not** installed, uploads still work — the file is stored
-normally, but no thumbnails/scaling are available and a one-time warning is
-logged. Set `LAZYPOCK_THUMBNAILS=0` to disable image resizing entirely (and
-silence the warning).
+normally, but no variants are generated: `/thumbs/:size` returns `404`,
+`/scale/…` returns `400`, and a one-time warning is logged. Set
+`LAZYPOCK_THUMBNAILS=0` to disable image resizing entirely (and silence the
+warning).
 
 **Resource limits:** at most `LAZYPOCK_IMAGE_CONCURRENCY` (default `1`) resizes
 run at once per instance. Requests that arrive while every slot is busy wait for
@@ -614,13 +624,16 @@ dimension/megapixel caps `422`.
 ### Presets & variants
 
 Named variants are configured under the `image` key of `_settings.data` and
-serve `GET /api/files/:id/scale/:preset`. Defaults: `thumb` (100×100 cover) and
-`content` (1280w contain), both generated during upload so their URLs are valid
-immediately; add `"eager": false` for lazy generation on first request.
+serve `GET /api/files/:id/scale/:preset`. Defaults: `thumb` (100×100 cover, for
+avatars and small previews), `small` (320×320 cover, for grid tiles) and
+`content` (1280w contain, for detail views and richtext embeds) — all generated
+during upload so their URLs are valid immediately; add `"eager": false` for lazy
+generation on first request.
 
 ```json
 { "image": { "presets": [
-  { "name": "thumb", "width": 100, "height": 100, "fit": "cover", "eager": true },
+  { "name": "thumb",   "width": 100,  "height": 100, "fit": "cover",   "eager": true },
+  { "name": "small",   "width": 320,  "height": 320, "fit": "cover",   "eager": true },
   { "name": "content", "width": 1280, "height": null, "fit": "contain", "eager": true }
 ] } }
 ```

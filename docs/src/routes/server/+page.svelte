@@ -40,11 +40,11 @@
         <strong>Node.js 20+</strong> (only for the Studio dev server and the SDKs)
       </li>
       <li>
-        <strong>ImageMagick 7+</strong> (<code class="doc-inline px-1 py-0.5"
-          >magick</code
-        >/<code class="doc-inline px-1 py-0.5">convert</code>) — required for
-        image thumbnails and on-demand scaling; uploads still work without it,
-        thumbnails just won't be generated
+        <strong>ImageMagick 6 or 7</strong> — required for image thumbnails,
+        presets and on-demand scaling. It is a <em>host</em> dependency and is
+        not bundled in the prebuilt binary; see
+        <a class="text-primary underline" href="#images">Image processing</a>.
+        Uploads still work without it, but no resized variants are produced.
       </li>
       <li>
         <code class="doc-inline px-1 py-0.5">zig</code> and
@@ -178,6 +178,14 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
         rel="noreferrer">Releases</a
       >
       for available platforms and checksums.
+    </p>
+    <p class="mt-3 text-sm text-base-content/70">
+      The binary bundles the app, <strong>not its system dependencies</strong>.
+      In particular <strong>ImageMagick is not included</strong>: install it on
+      the host (or in your container image) if you want thumbnails and image
+      scaling — see <a class="text-primary underline" href="#images"
+        >Image processing</a
+      >.
     </p>
   </section>
 
@@ -451,6 +459,128 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
         >RUNTIME_CONFIG=false</code
       >, so config is baked in at build time; environment variables are still
       read at boot via the Elixir config provider.
+    </p>
+  </section>
+
+  <!-- IMAGE PROCESSING -->
+  <section id="images" class="scroll-mt-20 mb-10">
+    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
+      Image processing (ImageMagick)
+    </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      Every resize goes through the <strong>ImageMagick CLI</strong>: upload
+      thumbnails, the named presets (<code class="doc-inline px-1 py-0.5">thumb</code>,
+      <code class="doc-inline px-1 py-0.5">small</code>,
+      <code class="doc-inline px-1 py-0.5">content</code>) and on-demand
+      <code class="doc-inline px-1 py-0.5">GET /api/files/:id/scale/:preset</code>
+      requests. It is a <strong>host dependency</strong> — a prebuilt binary
+      does not bundle it, and an OS upgrade does not remove the need for it.
+    </p>
+
+    <h3 class="mt-5 font-semibold">Install</h3>
+    <CodeBlock
+      lang="bash"
+      code={`# Debian / Ubuntu — ImageMagick 6 (identify + convert)
+sudo apt install imagemagick
+
+# RHEL / Fedora
+sudo dnf install ImageMagick
+
+# Alpine (containers)
+apk add imagemagick
+
+# macOS — ImageMagick 7 (magick)
+brew install imagemagick`}
+    />
+
+    <h3 class="mt-5 font-semibold">Verify</h3>
+    <CodeBlock
+      lang="bash"
+      code={`identify -version      # ImageMagick 6 and 7
+magick -version        # ImageMagick 7 only
+
+# the two binaries LazyPock shells out to:
+command -v identify    # reads dimensions
+command -v convert || command -v magick   # performs the resize`}
+    />
+    <p class="mt-3 text-sm text-base-content/70">
+      Both <strong>ImageMagick 6</strong> (what Debian/Ubuntu ship, providing
+      <code class="doc-inline px-1 py-0.5">identify</code> and
+      <code class="doc-inline px-1 py-0.5">convert</code>) and
+      <strong>ImageMagick 7</strong>
+      (<code class="doc-inline px-1 py-0.5">magick</code>) are supported.
+    </p>
+
+    <h3 class="mt-5 font-semibold">If it is missing</h3>
+    <ul class="mt-2 space-y-2 text-base-content/80 list-disc list-inside">
+      <li>Uploads still succeed, and originals are served unchanged.</li>
+      <li>
+        No thumbnails or presets are generated:
+        <code class="doc-inline px-1 py-0.5">GET /api/files/:id/thumbs/:size</code>
+        answers <code class="doc-inline px-1 py-0.5">404</code> and
+        <code class="doc-inline px-1 py-0.5">/scale/…</code> answers
+        <code class="doc-inline px-1 py-0.5">400</code>.
+      </li>
+      <li>A one-time warning is logged on the first upload.</li>
+      <li>
+        Set
+        <code class="doc-inline px-1 py-0.5">LAZYPOCK_THUMBNAILS=0</code> to
+        disable resizing deliberately (and silence the warning).
+      </li>
+    </ul>
+
+    <h3 class="mt-5 font-semibold">Resource limits</h3>
+    <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
+      <table class="w-full text-sm">
+        <thead class="bg-base-200">
+          <tr>
+            <th class="px-3 py-2 text-left">Variable</th>
+            <th class="px-3 py-2 text-left">Purpose</th>
+            <th class="px-3 py-2 text-left">Default</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-base-300">
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_CONCURRENCY</code></td
+            >
+            <td class="px-3 py-2"
+              >Resizes running at once per instance — requests wait briefly, then
+              get a <code class="doc-inline px-1 py-0.5">503</code></td
+            >
+            <td class="px-3 py-2 font-mono text-xs">1</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_MAGICK_MEMORY_LIMIT</code
+              ></td
+            >
+            <td class="px-3 py-2">Per-process ImageMagick memory cap</td>
+            <td class="px-3 py-2 font-mono text-xs">256MiB</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_VARIANT_CACHE_MAX</code></td
+            >
+            <td class="px-3 py-2">Local variant cache cap, oldest evicted first</td>
+            <td class="px-3 py-2 font-mono text-xs">5GB</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_ENGINE</code></td
+            >
+            <td class="px-3 py-2">Image engine (an unavailable engine fails loudly)</td>
+            <td class="px-3 py-2 font-mono text-xs">magick</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="mt-3 text-sm text-base-content/70">
+      Which variants exist, their sizes, and whether they are generated during
+      upload (eager) or on first request (lazy) is configured with
+      <code class="doc-inline px-1 py-0.5">image.presets</code> — see
+      <a class="text-primary underline" href="/files">File storage &amp; images</a>.
     </p>
   </section>
 
