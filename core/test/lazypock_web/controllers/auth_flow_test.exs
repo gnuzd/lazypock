@@ -60,6 +60,12 @@ defmodule LazypockWeb.AuthFlowTest do
       assert body["record"]["email"] == "alice@test.com"
       # Password hash never leaks
       refute Map.has_key?(body["record"], "password_hash")
+      # PocketBase-shaped record: clients derive the auth collection from it
+      # (the TypeScript authStore persists `collectionName` across reloads).
+      assert body["record"]["collectionName"] == name
+      assert body["record"]["collectionId"] != nil
+      assert Map.has_key?(body["record"], "created")
+      assert Map.has_key?(body["record"], "updated")
     end
 
     test "supports identity param as the login key" do
@@ -266,6 +272,7 @@ defmodule LazypockWeb.AuthFlowTest do
       body = json_response(conn, 200)
       assert body["token"] != nil
       assert body["record"]["email"] == "carol@test.com"
+      assert body["record"]["collectionName"] == name
     end
 
     test "returns 401 without a token", %{name: name} do

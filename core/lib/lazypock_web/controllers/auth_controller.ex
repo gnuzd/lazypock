@@ -13,6 +13,7 @@ defmodule LazypockWeb.AuthController do
   alias Lazypock.Schemas.GenericRecord
   alias Lazypock.Auth.Token
   alias Lazypock.Auth.RateLimiter
+  alias LazypockWeb.DynamicView
 
   @doc """
   POST /api/:collection/auth-with-password
@@ -102,8 +103,10 @@ defmodule LazypockWeb.AuthController do
                user
              ) do
           {:ok, _event} ->
-            password_field = find_password_field(collection)
-            safe_user = Map.drop(user, [password_field])
+            # Format like every other record (adds `collectionId`/`collectionName`,
+            # renames timestamps, strips password fields) so clients can derive the
+            # auth collection from the response — PocketBase does the same.
+            safe_user = DynamicView.format_item(user, collection_name)
             {:ok, token} = Token.generate_user_token(user, collection_name)
 
             conn
@@ -388,8 +391,7 @@ defmodule LazypockWeb.AuthController do
            create_data
          ) do
       {:ok, %{record: record, is_new: is_new}} ->
-        password_field = find_password_field(collection)
-        safe_user = Map.drop(record, [password_field])
+        safe_user = DynamicView.format_item(record, collection_name)
         {:ok, token} = Token.generate_user_token(record, collection_name)
 
         meta = %{
@@ -516,7 +518,7 @@ defmodule LazypockWeb.AuthController do
 
       Bcrypt.verify_pass(password, password_hash) ->
         RateLimiter.record_attempt(ip, collection_name, email, :success)
-        handle_successful_login(conn, collection_name, user, password_field)
+        handle_successful_login(conn, collection_name, user)
 
       true ->
         RateLimiter.record_attempt(ip, collection_name, email, :failure)
@@ -623,11 +625,12 @@ defmodule LazypockWeb.AuthController do
     |> send_resp(status, html)
   end
 
-  defp handle_successful_login(conn, collection_name, user, password_field) do
+  defp handle_successful_login(conn, collection_name, user) do
     {:ok, token} = Token.generate_user_token(user, collection_name)
 
-    # Strip password field(s) from response
-    safe_user = Map.drop(user, [password_field])
+    # Same record shape as every other endpoint: password fields are stripped
+    # from the collection schema and `collectionId`/`collectionName` are added.
+    safe_user = DynamicView.format_item(user, collection_name)
 
     conn
     |> put_status(200)
