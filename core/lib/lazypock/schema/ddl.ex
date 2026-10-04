@@ -519,6 +519,11 @@ defmodule Lazypock.Schema.DDL do
 
   @doc """
   Removes a field (column) from an existing collection table.
+
+  System fields (the timestamps and the auth system fields) cannot be dropped:
+  they back behaviour the app relies on — dropping the password field silently
+  breaks password auth, and a `password` field cannot be re-added from the
+  Studio. Returns `{:error, message}` instead.
   """
   @spec drop_field(String.t(), String.t()) :: :ok | {:error, term()}
   def drop_field(collection_name, field_name) do
@@ -526,22 +531,24 @@ defmodule Lazypock.Schema.DDL do
       Repo.transaction(fn ->
         {:ok, collection} = get_collection(collection_name)
 
-        Ecto.Adapters.SQL.query!(
-          Repo,
-          "ALTER TABLE #{TypeMapper.quote_ident(collection_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(field_name)} CASCADE",
-          []
-        )
-
-        Repo.delete_all(
-          from(f in Lazypock.Collections.Field,
-            join: c in assoc(f, :collection),
-            where: c.name == ^collection_name and f.name == ^field_name
+        with :ok <- ensure_droppable(collection, field_name) do
+          Ecto.Adapters.SQL.query!(
+            Repo,
+            "ALTER TABLE #{TypeMapper.quote_ident(collection_name)} DROP COLUMN IF EXISTS #{TypeMapper.quote_ident(field_name)} CASCADE",
+            []
           )
-        )
 
-        update_collection_schema!(collection)
+          Repo.delete_all(
+            from(f in Lazypock.Collections.Field,
+              join: c in assoc(f, :collection),
+              where: c.name == ^collection_name and f.name == ^field_name
+            )
+          )
 
-        :ok
+          update_collection_schema!(collection)
+
+          :ok
+        end
       end)
 
     case result do
@@ -1401,6 +1408,22 @@ defmodule Lazypock.Schema.DDL do
     case Repo.get_by(Lazypock.Collections.Collection, name: name) do
       nil -> {:error, :not_found}
       collection -> {:ok, collection}
+    end
+  end
+
+  # `get_collection/1` does not preload fields, so the metadata is queried here.
+  defp ensure_droppable(collection, field_name) do
+    field =
+      Repo.one(
+        from(f in Lazypock.Collections.Field,
+          where: f.collection_id == ^collection.id and f.name == ^field_name
+        )
+      )
+
+    if field && field.system do
+      {:error, "cannot drop system field #{inspect(field_name)}"}
+    else
+      :ok
     end
   end
 end
