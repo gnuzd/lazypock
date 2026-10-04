@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.19.0](https://github.com/gnuzd/lazypock/compare/v0.18.0...v0.19.0) (2026-10-04)
+
+
+### Features
+
+* **studio:** dedicated image picker + keep the insert menu in view ([840ace6](https://github.com/gnuzd/lazypock/commit/840ace6382b44dac5bd2f276c8ba04d44a9b9e91))
+* **studio:** image insert dropdown (upload or pick from library) ([e17fe1b](https://github.com/gnuzd/lazypock/commit/e17fe1bab85574e2760d3901251261ea0a99047d))
+* **studio:** refresh the richtext editor toolbar ([b2ff107](https://github.com/gnuzd/lazypock/commit/b2ff107eecd10ae3197e3b128aa5827e67fc809b))
+* **studio:** richtext toolbar + shared image/file picker ([4cf837a](https://github.com/gnuzd/lazypock/commit/4cf837a157bbc018c4f266d8602659f4c8d30058))
+* **studio:** use the image picker for file fields too ([4538b76](https://github.com/gnuzd/lazypock/commit/4538b769229ae05af3471f1258280c96ecc57b52))
+
+
+### Bug Fixes
+
+* **files:** configurable local storage path + 404 for missing objects ([f36919e](https://github.com/gnuzd/lazypock/commit/f36919e70d6e46ce85a4e23a9b1afc8277fc2f3b))
+* **files:** configurable local storage path + 404 for missing objects ([837a512](https://github.com/gnuzd/lazypock/commit/837a512ebfccc84a748c0640729af2da8ffdb690))
+
 ## [0.18.0](https://github.com/gnuzd/lazypock/compare/v0.17.1...v0.18.0) (2026-10-04)
 
 
