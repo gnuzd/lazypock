@@ -732,16 +732,22 @@
 		padding: 0;
 		border: none;
 		border-radius: 6px;
-		font-size: 0.75rem;
 		cursor: pointer;
+		color: var(--color-error, #dc2626);
 		background: color-mix(in oklab, var(--color-base-100) 85%, transparent);
 		opacity: 0;
-		transition: opacity 0.12s;
+		transition:
+			opacity 0.12s,
+			background 0.12s;
 	}
 
 	.media-cell:hover .media-delete,
 	.media-cell:focus-within .media-delete {
 		opacity: 1;
+	}
+
+	.media-delete:hover {
+		background: color-mix(in oklab, var(--color-error) 20%, var(--color-base-100));
 	}
 
 	.media-more {
@@ -957,13 +963,20 @@
 		border-radius: 6px;
 		background: none;
 		cursor: pointer;
-		font-size: 0.75rem;
+		color: var(--color-error, #dc2626);
 		opacity: 0;
+		transition:
+			opacity 0.12s,
+			background 0.12s;
 	}
 
 	.media-row:hover .media-row-delete,
 	.media-row:focus-within .media-row-delete {
 		opacity: 1;
+	}
+
+	.media-row-delete:hover {
+		background: color-mix(in oklab, var(--color-error) 18%, transparent);
 	}
 
 	@media (max-width: 640px) {
