@@ -359,7 +359,8 @@ defmodule Lazypock.Application do
         Lazypock.Collections.Registry,
         Lazypock.Auth.OAuth2.SessionStore,
         Lazypock.Files.Limiter,
-        Lazypock.Files.Reaper
+        Lazypock.Files.Reaper,
+        Lazypock.Logs.Cleaner
       ] ++
         cron_scheduler_children() ++
         [LazypockWeb.Endpoint]
