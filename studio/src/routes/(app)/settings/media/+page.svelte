@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { slide } from 'svelte/transition';
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
 	import { ShieldCheck } from '@lucide/svelte';
@@ -139,6 +140,7 @@
 
 			{#if showFields}
 				<div
+					transition:slide
 					class="mt-2 rounded-field border border-base-300 bg-base-200/50 p-3 text-xs text-base-content/80"
 				>
 					<p class="mb-2">
