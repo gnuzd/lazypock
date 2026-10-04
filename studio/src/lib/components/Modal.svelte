@@ -7,6 +7,7 @@
 		title = '',
 		size = 'md' as 'sm' | 'md' | 'lg' | 'xl',
 		bodyClass = '',
+		onDismiss,
 		children
 	}: {
 		show?: boolean;
@@ -15,11 +16,18 @@
 		size?: 'sm' | 'md' | 'lg' | 'xl';
 		/** Extra classes for the body (e.g. `flex min-h-0 flex-col` so inner areas scroll). */
 		bodyClass?: string;
+		/**
+		 * Called when the dialog closes *itself* (overlay click, Escape, ✕) so
+		 * callers can react — e.g. settling a pending promise. Not called when a
+		 * caller sets `show` to false.
+		 */
+		onDismiss?: () => void;
 		children?: import('svelte').Snippet;
 	} = $props();
 
 	function close() {
 		show = false;
+		onDismiss?.();
 	}
 </script>
 

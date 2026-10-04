@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { client } from '$lib/client';
+	import { confirmDialog } from '$lib/dialog.svelte';
 	import { onMount } from 'svelte';
 	import type { Chart as ChartType } from 'chart.js';
 	import Button from '$lib/components/Button.svelte';
@@ -317,7 +318,15 @@
 	}
 
 	async function clearLogs() {
-		if (!confirm('Delete all request logs? This cannot be undone.')) return;
+		if (
+			!(await confirmDialog({
+				title: 'Delete logs',
+				message: 'Delete all request logs? This cannot be undone.',
+				confirmLabel: 'Delete',
+				variant: 'error'
+			}))
+		)
+			return;
 		try {
 			await client.http.delete('/logs?all=true');
 			loadLogs();

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { client } from '$lib/client';
+	import { alertDialog, confirmDialog } from '$lib/dialog.svelte';
 
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
@@ -400,10 +401,16 @@
 
 	async function deleteSelected() {
 		if (!collection || selectedIds.length === 0 || deletingSelected) return;
+
+		const count = selectedIds.length;
+
 		if (
-			!confirm(
-				`Delete ${selectedIds.length} selected record${selectedIds.length > 1 ? 's' : ''}? This action cannot be undone.`
-			)
+			!(await confirmDialog({
+				title: 'Delete records',
+				message: `Delete ${count} selected record${count > 1 ? 's' : ''}? This action cannot be undone.`,
+				confirmLabel: 'Delete',
+				variant: 'error'
+			}))
 		)
 			return;
 		deletingSelected = true;
@@ -416,7 +423,11 @@
 			reload();
 		} catch (e) {
 			console.error('delete selected:', e);
-			alert('Failed to delete some records: ' + ((e as Error).message ?? String(e)));
+			void alertDialog({
+				title: 'Delete failed',
+				message: 'Failed to delete some records: ' + ((e as Error).message ?? String(e)),
+				variant: 'error'
+			});
 		} finally {
 			deletingSelected = false;
 		}

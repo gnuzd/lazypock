@@ -14,6 +14,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { client } from '$lib/client';
+	import { confirmDialog } from '$lib/dialog.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
@@ -67,10 +68,6 @@
 	let notice = $state('');
 	/** Grid vs list presentation (remembered across sessions). */
 	let viewMode = $state<'grid' | 'list'>('grid');
-	/** A file refused by the delete guard, awaiting an explicit decision. */
-	let forceItem = $state<MediaItem | null>(null);
-	let forceRefs = $state<string[]>([]);
-	let forceOpen = $state(false);
 
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 	let visible = $derived(inline || open);
@@ -259,6 +256,18 @@
 		return usage.map((u) => `${u.collection}.${u.field} (${u.recordId})`);
 	}
 
+	/** Ask first, then delete — the confirmation is always a modal. */
+	async function askDelete(item: MediaItem) {
+		const ok = await confirmDialog({
+			title: 'Delete file',
+			message: `Delete "${item.filename}"? This removes the file and all of its variants from storage.`,
+			confirmLabel: 'Delete',
+			variant: 'error'
+		});
+
+		if (ok) await remove(item);
+	}
+
 	async function remove(item: MediaItem, force = false) {
 		deleting = item.id;
 		error = '';
@@ -283,25 +292,25 @@
 			const status = (e as { status?: number }).status;
 
 			if (status === 409 && !force) {
-				// Never a native `confirm()`: show what still points at the file in a
-				// proper dialog and let the user decide.
-				forceItem = item;
-				forceRefs = usageList(e);
-				forceOpen = true;
+				// The delete guard: show exactly what still points at the file and let
+				// the user decide — always a modal, never window.confirm().
+				const refs = usageList(e);
+
+				const forceIt = await confirmDialog({
+					title: 'File is still in use',
+					message: `"${item.filename}" is still referenced by ${refs.length === 1 ? 'this record' : `${refs.length} records`}. Deleting it leaves those records pointing at a missing file.`,
+					details: refs,
+					confirmLabel: 'Delete anyway',
+					variant: 'error'
+				});
+
+				if (forceIt) await remove(item, true);
 			} else {
 				error = (e as Error).message || 'Delete failed';
 			}
 		} finally {
 			deleting = null;
 		}
-	}
-
-	async function confirmForceDelete() {
-		const item = forceItem;
-		forceOpen = false;
-		forceItem = null;
-
-		if (item) await remove(item, true);
 	}
 
 	function formatSize(bytes?: number): string {
@@ -413,7 +422,7 @@
 							title="Delete"
 							aria-label="Delete {item.filename}"
 							disabled={deleting === item.id}
-							onclick={() => remove(item)}
+							onclick={() => void askDelete(item)}
 						>
 							{deleting === item.id ? '…' : '🗑'}
 						</button>
@@ -459,7 +468,7 @@
 						title="Delete"
 						aria-label="Delete {item.filename}"
 						disabled={deleting === item.id}
-						onclick={() => remove(item)}
+						onclick={() => void askDelete(item)}
 					>
 						{deleting === item.id ? '…' : '🗑'}
 					</button>
@@ -546,36 +555,7 @@
 			{#if mode === 'pick'}
 				<Button class="btn-primary btn-sm" onclick={() => choose([preview!])}>Use this file</Button>
 			{/if}
-			<Button class="btn-error btn-sm" onclick={() => remove(preview!)}>Delete</Button>
-		</div>
-	{/if}
-</Modal>
-
-<!-- Delete guard: a file that records still reference needs an explicit
-     decision (replaces the native confirm() dialog). -->
-<Modal bind:show={forceOpen} size="sm" title="File is still in use">
-	{#if forceItem}
-		<p class="force-lead">
-			<strong>{forceItem.filename}</strong> is still referenced by
-			{forceRefs.length === 1 ? 'this record' : `${forceRefs.length} records`}:
-		</p>
-		<ul class="force-list">
-			{#each forceRefs as ref (ref)}
-				<li><code>{ref}</code></li>
-			{/each}
-		</ul>
-		<p class="force-warn">Deleting it leaves those records pointing at a missing file.</p>
-		<div class="force-actions">
-			<Button
-				class="btn-sm"
-				onclick={() => {
-					forceOpen = false;
-					forceItem = null;
-				}}>Cancel</Button
-			>
-			<Button class="btn-error btn-sm" onclick={() => void confirmForceDelete()}>
-				Delete anyway
-			</Button>
+			<Button class="btn-error btn-sm" onclick={() => void askDelete(preview!)}>Delete</Button>
 		</div>
 	{/if}
 </Modal>
@@ -984,37 +964,5 @@
 	.media-view-btn.active {
 		background: color-mix(in oklab, var(--color-primary) 18%, var(--color-base-100));
 		color: var(--color-primary);
-	}
-
-	/* ── Delete-guard confirmation ── */
-	.force-lead,
-	.force-warn {
-		margin: 0;
-		font-size: 0.8125rem;
-	}
-
-	.force-lead {
-		margin-bottom: 8px;
-	}
-
-	.force-list {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		margin: 0 0 10px;
-		padding-left: 1.1rem;
-		font-size: 0.75rem;
-		color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
-	}
-
-	.force-warn {
-		margin-bottom: 14px;
-		color: var(--color-error, #dc2626);
-	}
-
-	.force-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
 	}
 </style>

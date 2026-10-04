@@ -9,6 +9,7 @@
 	import { EditorContent, createEditor } from 'svelte-tiptap';
 	import type { Editor } from 'svelte-tiptap';
 	import { client } from '$lib/client';
+	import { promptDialog } from '$lib/dialog.svelte';
 	import MediaLibrary, { type MediaItem } from '$lib/components/MediaLibrary.svelte';
 
 	let { value = $bindable(), disabled = false }: { value?: unknown; disabled?: boolean } = $props();
@@ -101,6 +102,17 @@
 			editor = null;
 		};
 	});
+
+	async function insertLink() {
+		const url = await promptDialog({
+			title: 'Insert link',
+			message: 'Link URL',
+			placeholder: 'https://example.com',
+			confirmLabel: 'Apply'
+		});
+
+		if (url) exec('setLink', { href: url });
+	}
 
 	function exec(cmd: string, attrs?: Record<string, unknown>) {
 		const chain = editor?.chain().focus();
@@ -211,7 +223,7 @@
 			<button
 				type="button"
 				class="toolbar-btn"
-				onclick={() => exec('setLink', { href: prompt('Link URL:') })}
+				onclick={() => void insertLink()}
 				title="Link">🔗</button
 			>
 			<button
