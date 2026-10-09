@@ -19,27 +19,47 @@ LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoeni
 
 ## Try it in 60 seconds
 
-No Elixir, Erlang, or source checkout needed — just Docker (for Postgres) and a prebuilt binary.
+No Elixir, Erlang, or source checkout needed — just Docker and the published image
+(`gnuzd/lazypock`, built from the released Linux binary). Save this as `compose.yml`
+and run `docker compose up -d`:
 
-```bash
-# 1. Start Postgres (the repo's docker-compose.yml runs Postgres 16:
-#    postgres/postgres@localhost:5432, database lazypock_dev)
-docker compose up -d
-
-# 2. Grab the prebuilt binary for your platform from Releases:
-#    https://github.com/gnuzd/lazypock/releases
-#    (macOS arm64 + Linux x86_64; checksums included)
-
-# 3. Run it — the superuser is auto-created on first boot
-DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev" \
-SECRET_KEY_BASE="$(openssl rand -base64 48)" \
-LAZYPOCK_SUPERUSER_EMAIL=admin@lazypock.app \
-LAZYPOCK_SUPERUSER_PASSWORD=admin123 \
-  ./lazypock
+```yaml
+services:
+  lazypock:
+    image: gnuzd/lazypock:latest
+    ports: ["4000:4000"]
+    environment:
+      DATABASE_URL: ecto://postgres:postgres@postgres:5432/lazypock
+      # generate one with: openssl rand -base64 48
+      SECRET_KEY_BASE: change-me
+      LAZYPOCK_SUPERUSER_EMAIL: admin@lazypock.app
+      LAZYPOCK_SUPERUSER_PASSWORD: admin123
+    volumes: ["uploads:/data/uploads"]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+volumes:
+  uploads:
+  pgdata:
 ```
 
-- Server + Studio admin UI: **<http://localhost:4000>** (login at `/_/` with the superuser above)
+Already have a PostgreSQL 15+? One container is enough:
+
+```bash
+docker run -d -p 4000:4000 \
+  -e DATABASE_URL="ecto://user:pass@host:5432/db" \
+  -e SECRET_KEY_BASE="$(openssl rand -base64 48)" \
+  -v lazypock-uploads:/data/uploads \
+  gnuzd/lazypock:latest
+```
+
+- Server + Studio admin UI: **<http://localhost:4000>** (login at `/_/`; add
+  `-e LAZYPOCK_SUPERUSER_EMAIL=... -e LAZYPOCK_SUPERUSER_PASSWORD=...` on first boot to
+  have the superuser created)
 - REST API: `http://localhost:4000/api/...`
+- The image bundles ImageMagick, so thumbnails and on-demand resizing work as-is
 
 Reset everything (including the database):
 
@@ -47,7 +67,9 @@ Reset everything (including the database):
 docker compose down -v
 ```
 
-Prefer no Docker at all? Any PostgreSQL 15+ works — just point `DATABASE_URL` at it. Or run from source: see [Development](#development).
+Pin a version (`gnuzd/lazypock:0.20.0`) instead of `latest` in production. Prefer no
+Docker at all? Any PostgreSQL 15+ works — just point `DATABASE_URL` at it. Or run from
+source: see [Development](#development).
 
 ### Talk to it from TypeScript
 
@@ -123,7 +145,7 @@ LazyPock/
 │   └── package.json
 │
 ├── PLAN.md                # Full architecture & development plan
-├── docker-compose.yml     # Postgres 16 for local dev (the app is not containerized)
+├── Dockerfile             # Image for the released Linux binary (Docker Hub: gnuzd/lazypock)
 └── README.md
 ```
 
@@ -136,7 +158,7 @@ LazyPock/
 ### Prerequisites
 
 - **Elixir 1.17+** + **Erlang/OTP 27+**
-- **PostgreSQL 15+** (no Postgres handy? the repo's `docker-compose.yml` starts one — see [Development](#development))
+- **PostgreSQL 15+** (no Postgres handy? `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine` starts one — see [Development](#development))
 - **Node.js 20+** (for Studio admin UI)
 - **ImageMagick 7+** (`magick`/`convert`) — required for image thumbnails and on-demand scaling (see [File Storage & Thumbnails](#file-storage--thumbnails)); uploads work without it but no resizing is available
 - `zig` and `xz` (for Burrito release builds)
@@ -157,7 +179,7 @@ mix setup          # Install deps, create DB, run migrations, seed
 mix phx.server     # Starts Phoenix on http://localhost:4000
 ```
 
-No Postgres handy? `docker compose up -d` at the repo root starts a Postgres 16 (user/password `postgres`/`postgres`, database `lazypock_dev`, port 5432) that matches the `DATABASE_URL` above.
+No Postgres handy? `docker run -d --name lazypock-postgres -p 5432:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=lazypock_dev postgres:16-alpine` starts a Postgres 16 that matches the `DATABASE_URL` above.
 
 #### 2. Studio (SvelteKit Admin UI)
 

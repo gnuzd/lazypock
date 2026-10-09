@@ -10,7 +10,9 @@
 ```bash
 # 1. Start PostgreSQL
 cd lazyPock
-docker compose up -d
+docker run -d --name lazypock-postgres -p 5432:5432 \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=lazypock_dev postgres:16-alpine
 
 # 2. Start the Phoenix server
 cd core
@@ -198,7 +200,6 @@ lazyPock/
 │   │       └── views/            # DynamicView (response formatting)
 │   ├── priv/repo/migrations/     # Database migrations
 │   └── mix.exs
-├── docker-compose.yml            # PostgreSQL
 ├── PLAN.md                       # Full architecture plan
 └── README.md
 ```
