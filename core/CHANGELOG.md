@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.0](https://github.com/gnuzd/lazypock/compare/v0.20.0...v0.21.0) (2026-10-09)
+
+
+### Features
+
+* **ci:** publish the release as a Docker Hub image ([1bc9f74](https://github.com/gnuzd/lazypock/commit/1bc9f74c343511bf583346024f861e9ebc806181))
+* **ci:** publish the release as a Docker Hub image ([08d1019](https://github.com/gnuzd/lazypock/commit/08d1019176cf84df779f06a531f0e393a85ca8ed))
+
 ## [0.20.0](https://github.com/gnuzd/lazypock/compare/v0.19.0...v0.20.0) (2026-10-04)
 
 
