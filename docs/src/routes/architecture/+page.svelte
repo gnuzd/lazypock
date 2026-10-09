@@ -1,6 +1,11 @@
 <script lang="ts">
 	import ArchDiagram from '$lib/components/ArchDiagram.svelte';
 	import FlowSteps, { type FlowStep } from '$lib/components/FlowSteps.svelte';
+	import Seo from '$lib/components/Seo.svelte';
+
+	const title = 'Architecture — Lazypock Docs';
+	const description =
+		'How Lazypock works: the schema/DDL engine, dynamic REST controller, filter compiler, realtime channels, hooks and cron.';
 
 	const lifecycleSteps: FlowStep[] = [
 		{
@@ -111,9 +116,7 @@
 	// Keep step.code and step.text in sync with the line counts the diagram shows.
 </script>
 
-<svelte:head>
-	<title>Architecture — Lazypock Docs</title>
-</svelte:head>
+<Seo {title} {description} />
 
 <div class="prose-doc max-w-4xl">
 	<!-- INTRO -->

@@ -1,5 +1,10 @@
 <script lang="ts">
+	import Seo from '$lib/components/Seo.svelte';
 	import { sdkNav } from '$lib/sdk-nav.generated';
+
+	const title = 'SDKs — Lazypock Docs';
+	const description =
+		'Client SDKs for the Lazypock backend: the TypeScript SDK plus Swift, Android and Godot clients — install, codegen, queries, realtime, files and auth.';
 
 	const comingSoon = [
 		{ name: 'Swift', href: '/sdk/swift' },
@@ -8,9 +13,7 @@
 	];
 </script>
 
-<svelte:head>
-	<title>SDKs — Lazypock Docs</title>
-</svelte:head>
+<Seo {title} {description} />
 
 <h1>Lazypock SDKs</h1>
 
