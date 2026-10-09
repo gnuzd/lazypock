@@ -1,11 +1,18 @@
 name: Test
 
-# Runs the backend test suite on every push and pull request, so the
+# Runs the backend test suite on `main` and on every pull request, so the
 # README's "tests" badge reflects the current state of `main` and every
 # PR is gated on a green suite. (Release-time testing + binary builds
 # live in release.yml.)
+#
+# `push` is pinned to `main`: a bare `push` also fires for every branch that
+# has a PR open (branches live in this repo, not a fork), running the whole
+# suite twice for the same commit. The `pull_request` run is the gate; the
+# post-merge run keeps the badge fresh.
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:

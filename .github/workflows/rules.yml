@@ -7,8 +7,14 @@ name: Rule Engine
 # These are security-sensitive modules, so they get their own signal instead of
 # only being covered by the full suite. The nightly schedule re-runs the
 # property-based fuzzing with far more iterations than a PR run.
+#
+# `push` is pinned to `main`: a bare `push` also fires for every branch with an
+# open PR, running the same suite twice for one commit (the `pull_request` run
+# is the gate).
 on:
   push:
+    branches:
+      - main
     paths:
       - "core/lib/lazypock/rules/**"
       - "core/lib/lazypock/schemas/filter_compiler.ex"
