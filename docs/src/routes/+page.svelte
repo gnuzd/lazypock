@@ -1,11 +1,20 @@
 <script lang="ts">
 	import CodeBlock from '$lib/components/CodeBlock.svelte';
+	import Seo from '$lib/components/Seo.svelte';
 	import { sdkNav } from '$lib/sdk-nav.generated';
+	import { softwareApplicationJsonLd, websiteJsonLd } from '$lib/json-ld';
+
+	const title = 'Lazypock — Open-source, PocketBase-compatible backend';
+	const description =
+		'An open-source, PocketBase-compatible backend on PostgreSQL: define collections in the Studio and get a REST API, realtime, auth, files, rules and cron.';
 </script>
 
-<svelte:head>
-	<title>Lazypock — Open-source, PocketBase-compatible backend</title>
-</svelte:head>
+<Seo
+	kind="website"
+	{title}
+	{description}
+	jsonLd={[websiteJsonLd(description), softwareApplicationJsonLd(description)]}
+/>
 
 <div class="prose-doc max-w-3xl">
 	<!-- HERO -->

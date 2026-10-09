@@ -1,10 +1,16 @@
 <script lang="ts">
+	import Seo from '$lib/components/Seo.svelte';
+	import { docTitle } from '$lib/seo';
+
 	let { name }: { name: string } = $props();
+
+	const title = $derived(docTitle(`${name} SDK`));
+	const description = $derived(
+		`The ${name} SDK for Lazypock is coming soon. Until then, the REST API and the TypeScript SDK cover every Lazypock feature.`,
+	);
 </script>
 
-<svelte:head>
-	<title>{name} SDK — Lazypock Docs</title>
-</svelte:head>
+<Seo {title} {description} />
 
 <h1>{name} SDK</h1>
 

@@ -35,3 +35,6 @@ Allow: /
 
 # Plain-text index of the docs for LLMs:
 # https://lazypock.gnuzd.dev/llms.txt
+
+# XML sitemap for search engines:
+Sitemap: https://lazypock.gnuzd.dev/sitemap.xml

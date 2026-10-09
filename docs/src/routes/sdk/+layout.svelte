@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { page } from '$app/state';
+	import Seo from '$lib/components/Seo.svelte';
 	import { sdkNav } from '$lib/sdk-nav.generated';
+	import { docTitle, sdkDescription } from '$lib/seo';
 
 	let { children } = $props();
 
@@ -15,12 +16,17 @@
 		return parts;
 	});
 
-	// Markdown pages can't set <title> from frontmatter, so derive one from the h1.
-	onMount(() => {
-		const h1 = document.querySelector('main h1');
-		if (h1?.textContent) document.title = `${h1.textContent.trim()} — Lazypock Docs`;
-	});
+	// Markdown pages can't set <title> from frontmatter, so the title/description
+	// come from `sdkNav` (generated) plus the prose map in $lib/seo — rendered
+	// server-side, so crawlers and link previews see them. Pages not in `sdkNav`
+	// (the "coming soon" SDKs) set their own metadata.
+	const title = $derived(sdk ? docTitle(`${sdk.name} SDK`) : '');
+	const description = $derived(sdk ? sdkDescription(sdk.slug, sdk.name) : '');
 </script>
+
+{#if sdk}
+	<Seo {title} {description} />
+{/if}
 
 <div class="max-w-3xl">
 	{#if crumbs.length > 1}

@@ -1,10 +1,13 @@
 <script lang="ts">
   import CodeBlock from "$lib/components/CodeBlock.svelte";
+  import Seo from '$lib/components/Seo.svelte';
+
+  const title = 'Server Guide — Lazypock Docs';
+  const description =
+    'Run and operate a Lazypock server: Docker image or prebuilt binary, first-time setup, filters, production checklist, ImageMagick and every environment variable.';
 </script>
 
-<svelte:head>
-  <title>Server Guide — Lazypock Docs</title>
-</svelte:head>
+<Seo {title} {description} />
 
 <div class="prose-doc max-w-3xl">
   <!-- INTRO -->
