@@ -41,8 +41,8 @@
       </li>
       <li>
         <strong>ImageMagick 6 or 7</strong> — required for image thumbnails,
-        presets and on-demand scaling. It is a <em>host</em> dependency and is
-        not bundled in the prebuilt binary; see
+        presets and on-demand scaling. It is a <em>host</em> dependency when you
+        run the binary or from source (the Docker image bundles it); see
         <a class="text-primary underline" href="#images">Image processing</a>.
         Uploads still work without it, but no resized variants are produced.
       </li>
@@ -54,59 +54,55 @@
     </ul>
     <p class="mt-3 text-sm text-base-content/70">
       The Docker quick start below skips the Elixir/Node prerequisites entirely
-      — just Docker and a prebuilt binary.
+      — just Docker and the published image.
     </p>
   </section>
 
   <!-- QUICK START (DOCKER) -->
   <section id="quick-start" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
-      Quick start — Docker Compose
+      Quick start — Docker image
     </h2>
     <p class="mt-3 text-base-content/80 leading-relaxed">
-      No Elixir, Erlang, or source checkout needed — just Docker (for Postgres)
-      and a prebuilt binary. Clone the repo and start Postgres with its <code
-        class="doc-inline px-1 py-0.5">docker-compose.yml</code
-      >
-      (Postgres 16:
-      <code class="doc-inline px-1 py-0.5"
-        >postgres/postgres@localhost:5432</code
-      >, database
-      <code class="doc-inline px-1 py-0.5">lazypock_dev</code>):
+      No Elixir, Erlang, or source checkout needed — just Docker and the
+      published image (<code class="doc-inline px-1 py-0.5">gnuzd/lazypock</code
+      >, built from the released Linux binary). Save this as
+      <code class="doc-inline px-1 py-0.5">compose.yml</code> and run
+      <code class="doc-inline px-1 py-0.5">docker compose up -d</code>:
     </p>
     <CodeBlock
-      lang="bash"
-      code={`# 1. Start Postgres (the repo's docker-compose.yml runs Postgres 16:
-#    postgres/postgres@localhost:5432, database lazypock_dev)
-docker compose up -d`}
+      lang="yaml"
+      code={`services:
+  lazypock:
+    image: gnuzd/lazypock:latest
+    ports: ["4000:4000"]
+    environment:
+      DATABASE_URL: ecto://postgres:postgres@postgres:5432/lazypock
+      # generate one with: openssl rand -base64 48
+      SECRET_KEY_BASE: change-me
+      LAZYPOCK_SUPERUSER_EMAIL: admin@lazypock.app
+      LAZYPOCK_SUPERUSER_PASSWORD: admin123
+    volumes: ["uploads:/data/uploads"]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+volumes:
+  uploads:
+  pgdata:`}
     />
     <p class="mt-3 text-base-content/80 leading-relaxed">
-      2. Grab the prebuilt binary for your platform from
-      <a
-        class="text-primary underline"
-        href="https://github.com/gnuzd/lazypock/releases"
-        target="_blank"
-        rel="noreferrer">Releases</a
-      >
-      (macOS arm64 + Linux x86_64; checksums included) — or see
-      <a class="text-primary underline" href="#binary">Option B</a> below:
+      Already run a PostgreSQL 15+? One container is enough — just point
+      <code class="doc-inline px-1 py-0.5">DATABASE_URL</code> at it:
     </p>
     <CodeBlock
       lang="bash"
-      code={`# 2. Grab the prebuilt binary for your platform from Releases:
-#    https://github.com/gnuzd/lazypock/releases
-#    (macOS arm64 + Linux x86_64; checksums included)`}
-    />
-    <p class="mt-3 text-base-content/80 leading-relaxed">
-      3. Run it — the superuser is auto-created on first boot:
-    </p>
-    <CodeBlock
-      lang="bash"
-      code={`DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev" \\
-SECRET_KEY_BASE="$(openssl rand -base64 48)" \\
-LAZYPOCK_SUPERUSER_EMAIL=admin@lazypock.app \\
-LAZYPOCK_SUPERUSER_PASSWORD=admin123 \\
-  ./lazypock`}
+      code={`docker run -d -p 4000:4000 \\
+  -e DATABASE_URL="ecto://user:pass@host:5432/db" \\
+  -e SECRET_KEY_BASE="$(openssl rand -base64 48)" \\
+  -v lazypock-uploads:/data/uploads \\
+  gnuzd/lazypock:latest`}
     />
     <div
       class="rounded-box border border-base-300 bg-base-200/60 p-4 my-4 text-sm leading-relaxed"
@@ -116,13 +112,25 @@ LAZYPOCK_SUPERUSER_PASSWORD=admin123 \\
           Server + Studio admin UI: <code class="doc-inline px-1 py-0.5"
             >http://localhost:4000</code
           >
-          (login at <code class="doc-inline px-1 py-0.5">/_/</code> with the superuser
-          above)
+          (login at <code class="doc-inline px-1 py-0.5">/_/</code> — the superuser is
+          created on first boot from <code class="doc-inline px-1 py-0.5"
+            >LAZYPOCK_SUPERUSER_EMAIL</code
+          >/<code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_PASSWORD</code>)
         </li>
         <li>
           REST API: <code class="doc-inline px-1 py-0.5"
             >http://localhost:4000/api/...</code
           >
+        </li>
+        <li>
+          The image bundles ImageMagick, so thumbnails and on-demand scaling work
+          out of the box.
+        </li>
+        <li>
+          Pin a version (<code class="doc-inline px-1 py-0.5"
+            >gnuzd/lazypock:0.20.0</code
+          >) rather than <code class="doc-inline px-1 py-0.5">latest</code> in
+          production.
         </li>
       </ul>
     </div>
@@ -130,6 +138,10 @@ LAZYPOCK_SUPERUSER_PASSWORD=admin123 \\
       To reset everything (including the database):
     </p>
     <CodeBlock lang="bash" code={`docker compose down -v`} />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      Prefer a single binary over a container? See
+      <a class="text-primary underline" href="#binary">Prebuilt binary</a> below.
+    </p>
     <p class="mt-3 text-base-content/80 leading-relaxed">
       Prefer no Docker at all? Any PostgreSQL 15+ works — just point
       <code class="doc-inline px-1 py-0.5">DATABASE_URL</code> at it. Or run

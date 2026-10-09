@@ -14,6 +14,11 @@ name: Release
 #      creates the GitHub Release + `vX.Y.Z` tag, and the build job in this
 #      same run runs the test suite, builds the Burrito binaries (macOS +
 #      Linux), and attaches them to the release.
+#   3. The `docker` job then publishes that release as a Docker Hub image
+#      (`gnuzd/lazypock:X.Y.Z`, `X.Y`, `latest`) built from the Linux asset
+#      that was just attached — downloaded back from the release and checked
+#      against `checksums-sha256.txt`, then booted against a real Postgres and
+#      probed on `/api/health` before anything is pushed.
 #
 # Commit messages on `main` should follow conventional commits
 # (e.g. `fix(core): ...`, `fix(studio): ...`, `feat(studio): ...`, `chore: ...`)
@@ -154,3 +159,154 @@ jobs:
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Publishes the released Linux binary as a Docker Hub image. Runs after
+  #    `build`, so the release asset exists. Building the image from that asset
+  #    (rather than compiling inside Docker) keeps it byte-identical to the
+  #    binary users download straight from the release, and keeps this job
+  #    toolchain-free (~1 min). ──
+  docker:
+    name: Publish Docker image
+    needs: [release-please, build]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: gnuzd/lazypock
+      # OCI `source` label (kept as a variable to stay within 80 columns).
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+    services:
+      # Real database for the smoke test below — the app migrates on boot, so
+      # booting against Postgres is what proves the image actually works.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lazypock_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Docker Hub convention is bare semver: git tag `v1.2.3` publishes as
+      # `1.2.3`, plus the rolling `1.2` and `latest`.
+      - name: Resolve image tags
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          version="${TAG_NAME#v}"
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+          echo "MINOR=${version%.*}" >> "$GITHUB_ENV"
+
+      # Downloading the asset back from the release (instead of reusing the
+      # build job's workspace) exercises the exact public download path users
+      # follow, and the checksum check catches a corrupt/partial upload.
+      - name: Download & verify the released Linux binary
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          base="$url/releases/download/${TAG_NAME}"
+          asset="lazypock-${VERSION}-linux-x86_64"
+          curl -fsSL -o "$asset" "$base/$asset"
+          curl -fsSL -o checksums-sha256.txt "$base/checksums-sha256.txt"
+          # Assert the line exists first: an unmatched name would feed
+          # `sha256sum -c` an empty stream, and that exits 0 on some platforms.
+          line="$(grep -F "  ${asset}" checksums-sha256.txt || true)"
+          if [ -z "$line" ]; then
+            echo "::error::no checksum for ${asset} in the release"
+            exit 1
+          fi
+          # Only the Linux asset is verified; the macOS line is left be.
+          echo "$line" | sha256sum -c -
+          mv "$asset" lazypock
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build and load only — nothing is pushed until the smoke test has
+      # passed, so a broken image never reaches Docker Hub.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          labels: |
+            org.opencontainers.image.title=LazyPock
+            org.opencontainers.image.description=PocketBase-compatible backend
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ env.REPO_URL }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Smoke test image (boot, health, Studio, graceful stop)
+        run: |
+          set -euo pipefail
+          container=lazypock-smoke
+          # Dump the container's logs if any assertion below fails.
+          trap 'docker logs "$container" 2>/dev/null | tail -n 40 || true' EXIT
+
+          # --network host: the app reaches the job's Postgres on 127.0.0.1.
+          db="ecto://postgres:postgres@127.0.0.1:5432/lazypock_smoke"
+          docker run -d --name "$container" --network host \
+            -e DATABASE_URL="$db" \
+            -e SECRET_KEY_BASE="$(openssl rand -base64 48)" \
+            -e LAZYPOCK_STORAGE_PATH=/tmp/uploads \
+            "${IMAGE}:${VERSION}"
+
+          # First boot extracts the release, creates the schema and seeds the
+          # superuser, so allow it up to a minute; bail out early if it dies.
+          base="http://127.0.0.1:4000"
+          health=""
+          for _ in $(seq 1 30); do
+            if health="$(curl -fsS "$base/api/health")"; then
+              break
+            fi
+            running="$(docker inspect -f '{{.State.Running}}' "$container")"
+            if [ "$running" != "true" ]; then
+              echo "::error::the container exited during boot"
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ -z "$health" ]; then
+            echo "::error::/api/health never answered"
+            exit 1
+          fi
+          echo "$health"
+
+          # The bundled Studio SPA must be served as well.
+          curl -fsS -o /dev/null "$base/_/"
+
+          # The entrypoint forwards SIGTERM to the BEAM, so stopping must be
+          # quick; exit code 137 means it was SIGKILLed (forwarding broke).
+          docker stop --timeout 30 "$container" >/dev/null
+          code="$(docker inspect -f '{{.State.ExitCode}}' "$container")"
+          if [ "$code" = "137" ]; then
+            echo "::error::the container was SIGKILLed, not stopped"
+            exit 1
+          fi
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push tags
+        run: |
+          set -euo pipefail
+          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:${MINOR}"
+          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:latest"
+          for tag in "$VERSION" "$MINOR" latest; do
+            docker push "${IMAGE}:${tag}"
+          done
