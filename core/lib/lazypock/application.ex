@@ -358,6 +358,7 @@ defmodule Lazypock.Application do
         {Phoenix.PubSub, name: Lazypock.PubSub},
         Lazypock.Collections.Registry,
         Lazypock.Auth.OAuth2.SessionStore,
+        Lazypock.Schemas.FilterCompiler.Cache,
         Lazypock.Files.Limiter,
         Lazypock.Files.Reaper,
         Lazypock.Logs.Cleaner
