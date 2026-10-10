@@ -14,11 +14,11 @@ name: Release
 #      creates the GitHub Release + `vX.Y.Z` tag, and the build job in this
 #      same run runs the test suite, builds the Burrito binaries (macOS +
 #      Linux), and attaches them to the release.
-#   3. The `docker` job then publishes that release as a Docker Hub image
-#      (`gnuzd/lazypock:X.Y.Z`, `X.Y`, `latest`) built from the Linux asset
-#      that was just attached — downloaded back from the release and checked
-#      against `checksums-sha256.txt`, then booted against a real Postgres and
-#      probed on `/api/health` before anything is pushed.
+#   3. The `docker` job builds and smoke-tests that release for linux/amd64 and
+#      linux/arm64 on native runners, and `docker-push` publishes one
+#      multi-arch image (`gnuzd/lazypock:X.Y.Z`, `X.Y`, `latest`). Each variant
+#      wraps the Linux asset built for its architecture — downloaded back from
+#      the release and checked against `checksums-sha256.txt` first.
 #
 # Commit messages on `main` should follow conventional commits
 # (e.g. `fix(core): ...`, `fix(studio): ...`, `feat(studio): ...`, `chore: ...`)
@@ -145,6 +145,8 @@ jobs:
             "dist/lazypock-${VERSION}-darwin-arm64"
           cp core/burrito_out/lazypock_linux \
             "dist/lazypock-${VERSION}-linux-x86_64"
+          cp core/burrito_out/lazypock_linux_arm64 \
+            "dist/lazypock-${VERSION}-linux-arm64"
           chmod +x dist/*
           cd dist && sha256sum * > checksums-sha256.txt
 
@@ -160,20 +162,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Publishes the released Linux binary as a Docker Hub image. Runs after
-  #    `build`, so the release asset exists. Building the image from that asset
-  #    (rather than compiling inside Docker) keeps it byte-identical to the
-  #    binary users download straight from the release, and keeps this job
-  #    toolchain-free (~1 min). ──
+
+  # ── Builds and smoke-tests the image for each architecture on its own
+  #    runner, so both are verified natively (no emulation) before anything
+  #    is published. `docker-push` then assembles the multi-arch manifest
+  #    from those cached layers and applies the release tags. ──
   docker:
-    name: Publish Docker image
+    name: Smoke test image (${{ matrix.arch }})
     needs: [release-please, build]
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-    env:
-      IMAGE: gnuzd/lazypock
-      # OCI `source` label (kept as a variable to stay within 80 columns).
-      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `arch` is buildx's TARGETARCH, which the Dockerfile uses to pick the
+          # binary; `asset` is the matching suffix of the release asset.
+          - arch: amd64
+            runner: ubuntu-latest
+            asset: x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            asset: arm64
+    runs-on: ${{ matrix.runner }}
     services:
       # Real database for the smoke test below — the app migrates on boot, so
       # booting against Postgres is what proves the image actually works.
@@ -210,11 +220,12 @@ jobs:
       - name: Download & verify the released Linux binary
         env:
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          ASSET_ARCH: ${{ matrix.asset }}
         run: |
           set -euo pipefail
           url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           base="$url/releases/download/${TAG_NAME}"
-          asset="lazypock-${VERSION}-linux-x86_64"
+          asset="lazypock-${VERSION}-linux-${ASSET_ARCH}"
           curl -fsSL -o "$asset" "$base/$asset"
           curl -fsSL -o checksums-sha256.txt "$base/checksums-sha256.txt"
           # Assert the line exists first: an unmatched name would feed
@@ -224,29 +235,26 @@ jobs:
             echo "::error::no checksum for ${asset} in the release"
             exit 1
           fi
-          # Only the Linux asset is verified; the macOS line is left be.
+          # Only this architecture's line is verified; the other is left be.
           echo "$line" | sha256sum -c -
-          mv "$asset" lazypock
+          # The Dockerfile picks its binary by buildx's TARGETARCH.
+          mv "$asset" "lazypock-linux-${{ matrix.arch }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build and load only — nothing is pushed until the smoke test has
+      # Build and load only — nothing is pushed until every smoke test has
       # passed, so a broken image never reaches Docker Hub.
-      - name: Build image
+      - name: Build image (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           load: true
-          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
-          labels: |
-            org.opencontainers.image.title=LazyPock
-            org.opencontainers.image.description=PocketBase-compatible backend
-            org.opencontainers.image.version=${{ env.VERSION }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=${{ env.REPO_URL }}
-            org.opencontainers.image.licenses=MIT
+          tags: lazypock:smoke
+          # `docker-push` reuses these layers for the multi-arch manifest
+          # instead of rebuilding arm64 under emulation.
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       - name: Smoke test image (boot, health, Studio, graceful stop)
         run: |
@@ -261,7 +269,7 @@ jobs:
             -e DATABASE_URL="$db" \
             -e SECRET_KEY_BASE="$(openssl rand -base64 48)" \
             -e LAZYPOCK_STORAGE_PATH=/tmp/uploads \
-            "${IMAGE}:${VERSION}"
+            lazypock:smoke
 
           # First boot extracts the release, creates the schema and seeds the
           # superuser, so allow it up to a minute; bail out early if it dies.
@@ -296,17 +304,82 @@ jobs:
             exit 1
           fi
 
+  # ── Publishes the release as one multi-arch manifest (linux/amd64 +
+  #    linux/arm64). Both platforms were smoke-tested above, so this job only
+  #    re-assembles their cached layers; a cache miss for arm64 would fall back
+  #    to emulation, hence the emulator setup. ──
+  docker-push:
+    name: Publish multi-arch image
+    needs: [release-please, build, docker]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: gnuzd/lazypock
+      # OCI `source` label (kept as a variable to stay within 80 columns).
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tags
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          version="${TAG_NAME#v}"
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+          echo "MINOR=${version%.*}" >> "$GITHUB_ENV"
+
+      - name: Download & verify both Linux binaries
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          base="$url/releases/download/${TAG_NAME}"
+          curl -fsSL -o checksums-sha256.txt "$base/checksums-sha256.txt"
+          # `arch` is buildx's TARGETARCH; the pair's right side is the release
+          # asset suffix (amd64 is published as x86_64).
+          for pair in amd64=x86_64 arm64=arm64; do
+            arch="${pair%%=*}"
+            asset="lazypock-${VERSION}-linux-${pair##*=}"
+            curl -fsSL -o "$asset" "$base/$asset"
+            line="$(grep -F "  ${asset}" checksums-sha256.txt || true)"
+            if [ -z "$line" ]; then
+              echo "::error::no checksum for ${asset} in the release"
+              exit 1
+            fi
+            echo "$line" | sha256sum -c -
+            mv "$asset" "lazypock-linux-${arch}"
+          done
+
+      - name: Set up QEMU (fallback if the arm64 cache misses)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Push tags
-        run: |
-          set -euo pipefail
-          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:${MINOR}"
-          docker tag "${IMAGE}:${VERSION}" "${IMAGE}:latest"
-          for tag in "$VERSION" "$MINOR" latest; do
-            docker push "${IMAGE}:${tag}"
-          done
+      - name: Build & push multi-arch manifest
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:${{ env.MINOR }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.title=LazyPock
+            org.opencontainers.image.description=PocketBase-compatible backend
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ env.REPO_URL }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: |
+            type=gha,scope=amd64
+            type=gha,scope=arm64

@@ -250,7 +250,8 @@ Releases are fully automatic via [release-please](https://github.com/googleapis/
 2. **Merge the release PR** (review it first — it's the human gate). That
    merge creates the `vX.Y.Z` GitHub Release + tag, then the same workflow
    run runs the test suite, builds the Burrito binaries (`darwin-arm64` +
-   `linux-x86_64`), and attaches them (with checksums) to the release.
+   `linux-x86_64` + `linux-arm64`), and attaches them (with checksums) to the
+   release.
 
 There is no manual `workflow_dispatch` step.
 

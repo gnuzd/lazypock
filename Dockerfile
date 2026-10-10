@@ -1,11 +1,16 @@
 # syntax=docker/dockerfile:1
 
 # LazyPock ships the prebuilt Linux binary from the GitHub Release unchanged, so
-# the image is byte-identical to the `lazypock-<version>-linux-x86_64` asset
-# users download themselves. The `docker` job in .github/workflows/release.yml
-# downloads that asset, verifies it against the release checksums and only then
-# builds (and smoke-tests) this image.
+# each variant of the image is byte-identical to the `lazypock-<version>-linux-*`
+# asset users download. The `docker` job in .github/workflows/release.yml
+# downloads them, verifies them against the release checksums and only
+# then builds (and smoke-tests) this image.
 FROM debian:bookworm-slim
+
+# Buildx sets TARGETARCH (amd64 / arm64) for the platform being built, so each
+# variant of the image gets the matching release binary. Declared here because
+# `COPY` below expands it.
+ARG TARGETARCH
 
 # No Elixir/Erlang runtime is needed here — the binary bundles its own ERTS.
 #  * imagemagick      -> image resizing/thumbnails (Lazypock.Images shells
@@ -35,7 +40,8 @@ ENV HOME=/home/lazypock \
 
 WORKDIR /home/lazypock
 
-COPY --chown=lazypock:lazypock lazypock /usr/local/bin/lazypock
+COPY --chown=lazypock:lazypock \
+    lazypock-linux-${TARGETARCH} /usr/local/bin/lazypock
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN install -d -o lazypock -g lazypock /data/uploads \
