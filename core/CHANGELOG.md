@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.0](https://github.com/gnuzd/lazypock/compare/v0.21.0...v0.22.0) (2026-10-10)
+
+
+### Features
+
+* **ci:** publish the Docker image for amd64 and arm64 ([8cd2b4d](https://github.com/gnuzd/lazypock/commit/8cd2b4de73f023f91ddd4718998c9ef41d25f73c))
+* **ci:** publish the Docker image for amd64 and arm64 ([298481c](https://github.com/gnuzd/lazypock/commit/298481c1ac46d3ccdb391b99b12939fc2aacf4f9))
+
 ## [0.21.0](https://github.com/gnuzd/lazypock/compare/v0.20.0...v0.21.0) (2026-10-09)
 
 
