@@ -289,7 +289,7 @@ defmodule Lazypock.MigrationsTest do
       assert {:ok, rec} = Lazypock.Schemas.GenericRecord.insert(name, %{"title" => "hello"})
       assert rec["title"] == "hello"
 
-      assert %{"title" => "updated"} =
+      assert {:ok, %{"title" => "updated"}} =
                Lazypock.Schemas.GenericRecord.update(
                  name,
                  rec["id"],

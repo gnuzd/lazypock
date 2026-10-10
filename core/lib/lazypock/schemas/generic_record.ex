@@ -16,6 +16,8 @@ defmodule Lazypock.Schemas.GenericRecord do
   alias Lazypock.Repo
   alias Lazypock.Schema.TypeMapper
 
+  require Logger
+
   # Postgres binds an Int16 parameter count, so a single statement can carry at
   # most 65 535 parameters. Batches are capped by `rows x columns + rows(id)`.
   @max_params 65_535
@@ -106,6 +108,10 @@ defmodule Lazypock.Schemas.GenericRecord do
   `opts[:plain_id]` (used for view collections, whose `id` column is always
   text) passes the id through without the UUID->binary dump that regular
   uuid-backed tables need.
+
+  A malformed id (or a row that cannot be decoded) is logged and reported as
+  `nil` so callers answer 404 -- the same fail-closed rule the rule enforcer
+  applies to malformed record ids.
   """
   @spec get(String.t(), String.t()) :: map() | nil
   def get(collection_name, id) when is_binary(collection_name) do
@@ -116,66 +122,105 @@ defmodule Lazypock.Schemas.GenericRecord do
     sql = "SELECT * FROM #{TypeMapper.quote_ident(collection_name)} WHERE id = $1"
     id_bin = if Keyword.get(opts, :plain_id, false), do: id, else: maybe_uuid_to_bin(id)
 
-    single_row_query(sql, [id_bin])
+    case single_row_query(sql, [id_bin]) do
+      {:ok, record} ->
+        record
+
+      {:error, reason} ->
+        log_single_row_error("get", collection_name, sql, reason)
+        nil
+    end
   end
 
-  # Runs a query for a single-record operation, returning nil when the query
-  # fails *or* when an argument cannot be encoded against its column type.
+  # Runs a query that must return exactly one row.
   #
-  # A malformed record id from the URL (e.g. "not-a-uuid" against a uuid
-  # column) reaches Postgrex as an un-encodable parameter, which raises
-  # `DBConnection.EncodeError` *outside* the `{:error, _}` tuple path. That
-  # used to surface as a 500; callers expect nil so they can answer 404 -- the
-  # same fail-closed rule the rule enforcer applies to malformed record ids.
+  # Returns `{:ok, record}` or `{:error, reason}`. The reason is never
+  # discarded: an earlier revision collapsed every outcome to `nil`, which made
+  # a genuine database/encoding error indistinguishable from "not found" and
+  # surfaced to API callers as a bare 400 with nothing in the logs.
   defp single_row_query(sql, values) do
     case Ecto.Adapters.SQL.query(Repo, sql, values) do
-      {:ok, %{rows: [row], columns: cols}} -> row_to_map(cols, row)
-      {:ok, _} -> nil
-      {:error, _} -> nil
+      {:ok, %{rows: [row], columns: cols}} -> {:ok, row_to_map(cols, row)}
+      {:ok, %{num_rows: 0}} -> {:error, :not_found}
+      {:ok, %{num_rows: count}} -> {:error, {:unexpected_row_count, count}}
+      {:error, err} -> {:error, err}
     end
   rescue
-    DBConnection.EncodeError -> nil
-    ArgumentError -> nil
+    # A malformed record id from the URL (e.g. "not-a-uuid" against a uuid
+    # column) reaches Postgrex as an un-encodable parameter, which raises
+    # `DBConnection.EncodeError` *outside* the `{:error, _}` tuple path.
+    e in [DBConnection.EncodeError, ArgumentError] -> {:error, e}
   end
 
+  # A missing row is routine (a 404), so it stays out of the error log;
+  # anything else is a real failure and is reported with the failing SQL.
+  defp log_single_row_error(op, collection_name, _sql, :not_found) do
+    Logger.debug(fn -> "[GenericRecord] #{op} on #{collection_name}: no matching row" end)
+  end
+
+  defp log_single_row_error(op, collection_name, sql, reason) do
+    Logger.error(
+      "[GenericRecord] #{op} on #{collection_name} failed: #{describe_error(reason)}\n" <>
+        "  SQL: #{String.replace(String.trim(sql), ~r/\s+/, " ")}"
+    )
+  end
+
+  defp describe_error(%{__struct__: _} = exception), do: Exception.message(exception)
+  defp describe_error(reason), do: inspect(reason)
+
   @doc """
-  Updates a record by ID. Returns updated record as map or nil.
+  Updates a record by ID, returning `{:ok, updated_record}` or `{:error, reason}`.
+
+  `updated_at` is always stamped and is never taken from `attrs`. It is also
+  dropped after the autodate pass, so a collection that exposes `updated_at` as
+  a user-defined autodate field cannot bind it twice and fail with
+  `multiple assignments to same column`.
+
+  The SET clause and the bound parameters come from one ordered list, so a
+  column can never be paired with a different column's value.
   """
-  @spec update(String.t(), String.t(), map()) :: map() | nil
+  @spec update(String.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def update(collection_name, id, attrs) when is_binary(collection_name) and is_map(attrs) do
     now = DateTime.utc_now()
 
-    # `updated_at` is always bumped by this function (see below) — drop it
-    # from the incoming attrs so it can never appear twice in the SET list.
     data =
       attrs
       |> Enum.map(fn {k, v} -> {to_string(k), v} end)
       |> Map.new()
       |> Map.drop(["updated_at"])
       |> put_autodate_now(collection_name, :on_update, now)
+      |> Map.drop(["updated_at"])
       |> coerce_values_for_db()
 
-    set_clauses =
-      data
-      |> Enum.with_index(1)
-      |> Enum.map(fn {{col, _val}, idx} ->
-        "#{TypeMapper.quote_ident(col)} = $#{idx}"
-      end)
-      |> Enum.join(", ")
+    pairs = Enum.sort_by(data, fn {col, _value} -> col end)
+    columns = Enum.map(pairs, fn {col, _value} -> TypeMapper.quote_ident(col) end)
+    values = Enum.map(pairs, fn {_col, value} -> value end)
 
-    id_param = map_size(data) + 1
+    updated_at_param = length(values) + 1
+    id_param = updated_at_param + 1
+
+    set_clauses =
+      columns
+      |> Enum.with_index(1)
+      |> Enum.map(fn {col, idx} -> "#{col} = $#{idx}" end)
+      |> Kernel.++([~s("updated_at" = $#{updated_at_param})])
+      |> Enum.join(", ")
 
     sql = """
     UPDATE #{TypeMapper.quote_ident(collection_name)}
-    SET #{set_clauses}, "updated_at" = $#{id_param + 1}
+    SET #{set_clauses}
     WHERE id = $#{id_param}
     RETURNING *
     """
 
-    id_bin = maybe_uuid_to_bin(id)
-    values = Map.values(data) ++ [id_bin, now]
+    case single_row_query(sql, values ++ [now, maybe_uuid_to_bin(id)]) do
+      {:ok, record} ->
+        {:ok, record}
 
-    single_row_query(sql, values)
+      {:error, reason} ->
+        log_single_row_error("update", collection_name, sql, reason)
+        {:error, reason}
+    end
   end
 
   @doc """
