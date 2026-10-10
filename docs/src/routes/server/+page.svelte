@@ -69,7 +69,9 @@
     <p class="mt-3 text-base-content/80 leading-relaxed">
       No Elixir, Erlang, or source checkout needed — just Docker and the
       published image (<code class="doc-inline px-1 py-0.5">gnuzd/lazypock</code
-      >, built from the released Linux binary). Save this as
+      >, built from the released Linux binary for both
+      <code class="doc-inline px-1 py-0.5">amd64</code> and
+      <code class="doc-inline px-1 py-0.5">arm64</code>). Save this as
       <code class="doc-inline px-1 py-0.5">compose.yml</code> and run
       <code class="doc-inline px-1 py-0.5">docker compose up -d</code>:
     </p>
@@ -166,7 +168,8 @@ volumes:
     </h2>
     <p class="mt-2 text-base-content/80 leading-relaxed">
       No Docker, no Elixir toolchain — grab a prebuilt single-binary release
-      (built with Burrito) straight from GitHub Releases and run it directly:
+      (built with Burrito — macOS arm64, Linux x86_64 and Linux arm64) straight
+      from GitHub Releases and run it directly:
     </p>
     <CodeBlock
       lang="bash"

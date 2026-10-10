@@ -20,8 +20,8 @@ LazyPock is a PocketBase-compatible backend framework built on **Elixir + Phoeni
 ## Try it in 60 seconds
 
 No Elixir, Erlang, or source checkout needed — just Docker and the published image
-(`gnuzd/lazypock`, built from the released Linux binary). Save this as `compose.yml`
-and run `docker compose up -d`:
+(`gnuzd/lazypock`, built from the released Linux binary for both `amd64` and
+`arm64`). Save this as `compose.yml` and run `docker compose up -d`:
 
 ```yaml
 services:
@@ -269,7 +269,7 @@ MIX_ENV=prod mix release
 # Binary: core/burrito_out/lazypock_macos_silicon
 ```
 
-Prebuilt binaries for macOS (arm64) and Linux (x86_64) are also published on [Releases](https://github.com/gnuzd/lazypock/releases) — no build toolchain needed.
+Prebuilt binaries for macOS (arm64), Linux (x86_64) and Linux (arm64) are also published on [Releases](https://github.com/gnuzd/lazypock/releases) — no build toolchain needed.
 
 Env vars, the minimal production run, and release notes: **[Server Guide → Production](https://lazypock.gnuzd.dev/server#production)**.
 
