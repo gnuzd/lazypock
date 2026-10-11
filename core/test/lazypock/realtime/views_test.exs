@@ -62,7 +62,7 @@ defmodule Lazypock.Realtime.ViewsTest do
 
       Phoenix.PubSub.subscribe(Lazypock.PubSub, "collection:#{view}")
 
-      updated = GenericRecord.update(src, record["id"], %{"title" => "after"})
+      {:ok, updated} = GenericRecord.update(src, record["id"], %{"title" => "after"})
       Views.after_mutation(src)
 
       assert_receive %Phoenix.Socket.Broadcast{

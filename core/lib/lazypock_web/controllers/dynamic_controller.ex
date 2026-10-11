@@ -234,30 +234,36 @@ defmodule LazypockWeb.DynamicController do
       # Request hook + model update pipeline
       case Hooks.dispatch_update(record, attrs, context) do
         {:ok, enriched_attrs, after_funs} ->
-          updated_record =
-            GenericRecord.update(
-              name,
-              id,
-              Map.drop(enriched_attrs, ["id", "created_at", "updated_at", "collectionName"])
-            )
+          case GenericRecord.update(
+                 name,
+                 id,
+                 Map.drop(enriched_attrs, ["id", "created_at", "updated_at", "collectionName"])
+               ) do
+            {:ok, updated_record} ->
+              Hooks.run_after_funs(after_funs, %Lazypock.Hooks.Event{
+                event: :on_record_update,
+                data: %{record: updated_record}
+              })
 
-          if updated_record do
-            Hooks.run_after_funs(after_funs, %Lazypock.Hooks.Event{
-              event: :on_record_update,
-              data: %{record: updated_record}
-            })
+              Hooks.dispatch_after_update(updated_record, context)
+              Lazypock.Files.Refs.sync_record(name, updated_record["id"], updated_record)
+              Broadcaster.broadcast_update(name, updated_record, conn.assigns[:connection_id])
+              Lazypock.Realtime.Views.after_mutation(name)
+              conn |> json(DynamicView.format_item(updated_record, name))
 
-            Hooks.dispatch_after_update(updated_record, context)
-            Lazypock.Files.Refs.sync_record(name, updated_record["id"], updated_record)
-            Broadcaster.broadcast_update(name, updated_record, conn.assigns[:connection_id])
-            Lazypock.Realtime.Views.after_mutation(name)
-            conn |> json(DynamicView.format_item(updated_record, name))
-          else
-            Hooks.dispatch_after_update_error(attrs, :update_failed, context)
+            {:error, :not_found} ->
+              conn
+              |> put_status(404)
+              |> json(error_response(404, "The requested resource wasn't found."))
 
-            conn
-            |> put_status(400)
-            |> json(error_response(400, "Update failed"))
+            {:error, reason} ->
+              # The specific cause is logged by GenericRecord with the failing
+              # SQL; keep the client response free of schema internals.
+              Hooks.dispatch_after_update_error(attrs, reason, context)
+
+              conn
+              |> put_status(400)
+              |> json(error_response(400, "Update failed"))
           end
 
         {:error, reason} ->
