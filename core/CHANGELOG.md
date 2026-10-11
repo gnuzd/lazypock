@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.1](https://github.com/gnuzd/lazypock/compare/v0.22.0...v0.22.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **filters:** own the parsed-AST cache table in the supervision tree ([aa1481c](https://github.com/gnuzd/lazypock/commit/aa1481cabcb91049603f10e48321b3babe6b4112)), closes [#176](https://github.com/gnuzd/lazypock/issues/176)
+* **records:** bind update columns to their own values ([f088c5f](https://github.com/gnuzd/lazypock/commit/f088c5f5a9f4b13a5d20d0f4c68343d38bba1e75))
+
 ## [0.22.0](https://github.com/gnuzd/lazypock/compare/v0.21.0...v0.22.0) (2026-10-10)
 
 
