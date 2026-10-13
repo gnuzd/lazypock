@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 lazypock-core.workspace = true
+lazypock-db.workspace = true
 lazypock-api.workspace = true
 clap = { version = "4.6.7", features = ["derive", "env"] }
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "signal", "time", "io-util"] }

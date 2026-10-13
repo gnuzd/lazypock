@@ -137,6 +137,12 @@ pub struct Config {
     pub pool_size: u32,
     /// Maximum accepted upload size in bytes.
     pub upload_max_bytes: u64,
+    /// Whether Postgres prepared statements are enabled.
+    ///
+    /// Must be turned off behind PgBouncer in transaction mode (and Neon's
+    /// pooled endpoint), which cannot keep named statements across a pooled
+    /// server connection. See PLAN.md 18.1.
+    pub pg_prepared_statements: bool,
     /// Public base URL of this deployment, when it differs from the request.
     pub public_url: Option<String>,
 }
@@ -237,6 +243,15 @@ impl Config {
             }
         }
 
+        let pg_prepared_statements = match optional(&get, "LAZYPOCK_PG_PREPARED_STATEMENTS") {
+            Some(raw) => parse_bool(&raw).ok_or_else(|| {
+                Error::config(format!(
+                    "LAZYPOCK_PG_PREPARED_STATEMENTS must be a boolean (true/false), got {raw:?}"
+                ))
+            })?,
+            None => true,
+        };
+
         Ok(Self {
             env,
             listen_addr,
@@ -247,6 +262,7 @@ impl Config {
             log_format,
             pool_size,
             upload_max_bytes,
+            pg_prepared_statements,
             public_url,
         })
     }
@@ -285,6 +301,10 @@ impl Config {
             ("pool_size", self.pool_size.to_string()),
             ("upload_max_bytes", self.upload_max_bytes.to_string()),
             (
+                "pg_prepared_statements",
+                self.pg_prepared_statements.to_string(),
+            ),
+            (
                 "public_url",
                 self.public_url
                     .clone()
@@ -301,6 +321,14 @@ where
     get(key)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 fn parse_value<F>(get: &F, key: &str, default: &str) -> String
@@ -389,6 +417,7 @@ mod tests {
         assert_eq!(config.log_format, LogFormat::Text);
         assert_eq!(config.pool_size, DEFAULT_POOL_SIZE);
         assert_eq!(config.upload_max_bytes, DEFAULT_UPLOAD_MAX_BYTES);
+        assert!(config.pg_prepared_statements);
         assert_eq!(config.public_url, None);
     }
 
@@ -454,6 +483,11 @@ mod tests {
                 "ftp://example.com",
                 "LAZYPOCK_PUBLIC_URL",
             ),
+            (
+                "LAZYPOCK_PG_PREPARED_STATEMENTS",
+                "maybe",
+                "LAZYPOCK_PG_PREPARED_STATEMENTS",
+            ),
         ];
         for (key, value, expected) in cases {
             let mut pairs = minimal();
@@ -483,6 +517,7 @@ mod tests {
             ("LAZYPOCK_UPLOAD_MAX_BYTES", "1048576"),
             ("LAZYPOCK_PUBLIC_URL", "https://api.example.com"),
             ("LAZYPOCK_DATA_DIR", "/tmp/lazypock-data"),
+            ("LAZYPOCK_PG_PREPARED_STATEMENTS", "off"),
         ]);
         let config = config(&pairs).unwrap();
         assert_eq!(config.env, Env::Test);
@@ -496,6 +531,7 @@ mod tests {
             Some("https://api.example.com")
         );
         assert_eq!(config.data_dir, PathBuf::from("/tmp/lazypock-data"));
+        assert!(!config.pg_prepared_statements);
     }
 
     #[test]

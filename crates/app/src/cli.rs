@@ -17,7 +17,11 @@ pub enum Command {
     /// Start the HTTP API server (default when no command is given).
     Serve,
     /// Apply pending database migrations.
-    Migrate,
+    Migrate {
+        /// Only report migration state; apply nothing.
+        #[arg(long)]
+        status: bool,
+    },
     /// Manage superuser accounts.
     Superuser {
         /// Superuser subcommand.

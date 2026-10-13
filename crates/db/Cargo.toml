@@ -1,0 +1,21 @@
+[package]
+name = "lazypock-db"
+description = "lazypock database layer: connection pool and migration runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+deadpool = "0.13.1"
+deadpool-postgres = "0.14.2"
+lazypock-core.workspace = true
+sha2 = "0.11.0"
+tokio-postgres = "0.7.18"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "time"] }

@@ -61,6 +61,8 @@ The `lazypock` (npm) and GitHub repo names, and the MIT license, are preserved.
 | Public API | **PocketBase-canonical paths** (`/api/collections/{c}/records`, `/api/realtime`, `/api/files/...`) — section 5 |
 | Tokens | **JWT (EdDSA)** access token + refresh sessions in the DB (section 7.2) |
 | SDK | Rebuilt from scratch as `lazypock-ts` in its own repo (section 3) |
+| Panic strategy | `unwind` — in-process recovery and a clean SSE drain beat the few hundred KB `abort` would save (section 18.6) |
+| Versioning | Rust line starts at `0.1.0`; repo and npm names preserved |
 
 ### Decisions taken from the review (confirm or correct)
 
@@ -69,16 +71,17 @@ stated reference. They are cheap to change now and expensive later:
 
 1. **PocketBase-canonical routes.** The Elixir version called records at `/api/:collection`,
    which broke its own "PocketBase-compatible" claim. The rewrite uses the real PocketBase
-   shape so upstream SDKs/tools work.
-2. **SSE, not Phoenix Channels.** Rebuild the SDK against SSE.
+   shape so upstream SDKs/tools work. **Confirmed.**
+2. **SSE, not Phoenix Channels.** Rebuild the SDK against SSE. **Confirmed.**
 3. **Postgres RLS from the start** rather than porting the app-level rule enforcer. With no
-   data to migrate, the secure design is cheaper now than retrofitting later.
+   data to migrate, the secure design is cheaper now than retrofitting later. **Confirmed.**
 4. **`_`-prefixed table names, no `_sys` schema.** Matches the existing convention and keeps
-   unqualified DDL simple.
+   unqualified DDL simple. **Confirmed.**
 5. **Redis is not a hard dependency.** See section 8.8 for the analysis and the seam that
-   keeps the door open.
-
-Still open: see section 19.
+   keeps the door open. **Confirmed: Postgres-first with an `EventBus` seam, Redis deferred.**
+6. **EdDSA JWT + JWKS** for access tokens. **Confirmed.**
+7. **`panic = "unwind"`.** **Confirmed.**
+8. **Rust line starts at `0.1.0`**, repo and npm names preserved. **Confirmed.**
 
 ---
 
@@ -287,8 +290,9 @@ for big tables. `GET .../records` accepts `filter`, `sort`, `fields`, `expand`.
 
 ### 5.3 Hot-path latency
 
-1. **Prepared-statement cache** keyed by (collection, query shape) — **only when the Postgres
-   endpoint supports it** (see 18.1; disabled by default on PgBouncer transaction pools).
+1. **Prepared-statement cache** keyed by (collection, query shape). `tokio-postgres` names
+   every prepared statement and `deadpool-postgres` keeps it across checkouts, so lazypock
+   **requires a direct (non-transaction-pooled) Postgres connection** — see 18.1.
 2. **JSON built by Postgres**; Rust only pipes bytes.
 3. Small pool (5-10 per instance); one short transaction per request.
 4. Response compression (`zstd`/`br`/`gzip`) for large payloads, skipped for small ones.
@@ -778,9 +782,14 @@ Independent tracks, so progress and estimates do not entangle:
 
 ## 18. Risks & things to verify
 
-1. **Prepared statements vs PgBouncer transaction pooling (highest technical risk).** The pooled
-   endpoint breaks SQL-level (named) prepared statements, so §5.3's statement cache must be
-   disabled on pooled endpoints. Resolve in Spike 1 before finalizing the `db` crate.
+1. **Prepared statements vs PgBouncer transaction pooling — RESOLVED (spike 1).**
+   `tokio-postgres` names every prepared statement (`s{N}`, see
+   `tokio-postgres/src/prepare.rs`) and `deadpool-postgres` caches those names across
+   checkouts. A pooled endpoint that reassigns the server connection per transaction cannot
+   honour either. lazypock therefore requires a **direct** Postgres connection (session
+   pooling or the direct endpoint); this is consistent with realtime, which needs the direct
+   endpoint for `LISTEN` anyway. `LAZYPOCK_PG_PREPARED_STATEMENTS=off` lets the query layer
+   bypass the cross-checkout cache — it does not make transaction pooling safe.
 2. **RLS + realtime**: permission checks get expensive with many subscribers; needs batching and
    claims grouping (8.4). Measure early in Phase 3.
 3. **RLS superuser/`manageRule` mapping** (6.2) must be tested exhaustively — it is the
@@ -796,21 +805,19 @@ Independent tracks, so progress and estimates do not entangle:
 9. **Binary size with embedded Studio + oxc + rquickjs**: measure in CI.
 10. **Safe schema changes on large tables**: avoid long locks; document expand/contract.
 11. **Redis sidecar** (if ever adopted) is a packaging/deployment dependency (8.8).
+12. **TLS is not implemented yet.** The pool refuses `sslmode=require`/`verify-*` rather than
+    silently downgrading (`crates/db/src/pool.rs`), so a Postgres reachable only over TLS (for
+    example Neon's direct endpoint) is blocked until the rustls connector lands. Tracked as its
+    own task; it does not block local/self-hosted development or Phase 1.
 
 ---
 
 ## 19. Open decisions
 
-Only decisions that affect architecture and are not yet confirmed:
+**All decisions are now confirmed** (section 1). Anything not listed here is considered decided
+and can be implemented without further input. New decisions will be added to section 1 as they
+are taken.
 
-1. **API contract** — confirm PocketBase-canonical paths (§5) since the Studio/SDK are rebuilt.
-2. **Realtime transport** — confirm SSE-only for v0.1 (WebSocket later), which is what the SDK
-   rebuild targets.
-3. **Redis** — confirm "Postgres-first with an `EventBus` seam, Redis deferred" (§8.8).
-4. **`panic` policy** — `abort` (smaller binary) vs `unwind` (in-process recovery / clean SSE
-   drain) (§18.6).
-5. **Token format** — EdDSA JWT + JWKS (recommended) vs HS256 for exact PocketBase parity (§7.2).
-6. **Versioning** — start the Rust line at `0.1.0` on `feat/rust-rewrite`, keeping the repo and
-   npm names.
-
-Everything else in this plan is considered decided and can be implemented without further input.
+Resolved: PocketBase-canonical API paths, SSE realtime, RLS from the start, `_`-prefixed table
+names, Postgres-first `EventBus` with Redis deferred, EdDSA JWT + JWKS, `panic = "unwind"`,
+version `0.1.0`.

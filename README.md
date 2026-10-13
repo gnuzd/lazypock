@@ -54,6 +54,7 @@ Requires Rust 1.85+ and a Postgres 15+ instance (Docker is fine).
 
 ```bash
 cp .env.example .env         # then point DATABASE_URL at your Postgres
+cargo run -- migrate          # create the system tables
 cargo run -- config           # show the resolved config (credentials redacted)
 cargo run -- serve            # start the API on http://localhost:4000
 curl http://localhost:4000/api/health
@@ -69,7 +70,8 @@ curl http://localhost:4000/api/health
 lazypock serve        # start the API server (default)
 lazypock config       # print resolved configuration, secrets redacted
 lazypock healthcheck  # exit 0 when a running server reports healthy
-lazypock migrate      # apply migrations (planned)
+lazypock migrate      # apply pending database migrations
+lazypock migrate --status   # show which migrations are applied
 lazypock superuser create --email you@example.com   # (planned)
 ```
 

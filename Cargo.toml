@@ -14,6 +14,7 @@ description = "lazypock — a PocketBase-style backend-as-a-service in Rust + Po
 
 [workspace.dependencies]
 lazypock-core = { path = "crates/core" }
+lazypock-db = { path = "crates/db" }
 lazypock-api = { path = "crates/api" }
 
 # Release profile: small binary, no debug noise.

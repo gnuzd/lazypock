@@ -1,0 +1,24 @@
+# Disposable Postgres for integration tests (`cargo test`) and local smoke runs.
+#
+#   docker compose -f deploy/docker-compose.test.yml up -d --wait
+#   TEST_DATABASE_URL="postgres://postgres:postgres@localhost:55432/lazypock_test?sslmode=disable"
+#   cargo test
+#   docker compose -f deploy/docker-compose.test.yml down -v
+#
+# Port 55432 avoids clashing with a developer's own Postgres on 5432.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: lazypock_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lazypock_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data

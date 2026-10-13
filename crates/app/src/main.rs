@@ -14,6 +14,8 @@ use lazypock_core::{
     telemetry,
 };
 
+use lazypock_db::{migrate, pool::Db};
+
 use cli::{Cli, Command, SuperuserCommand};
 
 /// Timeout for a single `healthcheck` probe.
@@ -52,15 +54,48 @@ async fn run() -> Result<()> {
             Ok(())
         }
         Command::Healthcheck => healthcheck(&config).await,
-        Command::Migrate => Err(Error::unsupported(
-            "`migrate` is not implemented yet (PLAN.md Phase 1, Track B)",
-        )),
+        Command::Migrate { status } => migrate_command(&config, status).await,
         Command::Superuser { command } => match command {
             SuperuserCommand::Create { .. } => Err(Error::unsupported(
                 "`superuser create` is not implemented yet (PLAN.md Phase 2, Track E)",
             )),
         },
     }
+}
+
+/// `lazypock migrate [--status]`.
+async fn migrate_command(config: &Config, status_only: bool) -> Result<()> {
+    telemetry::init(config.log_level, config.log_format)?;
+
+    let db = Db::from_config(config).await?;
+    let mut client = db.client().await?;
+
+    if status_only {
+        for status in migrate::status(&client).await? {
+            let state = match (status.applied, status.checksum_matches) {
+                (false, _) => "pending",
+                (true, true) => "applied",
+                (true, false) => "applied (CHECKSUM CHANGED)",
+            };
+            println!("{:>6}  {:<24} {state}", status.version, status.name);
+        }
+        return Ok(());
+    }
+
+    let report = migrate::run(&mut client).await?;
+    if report.applied.is_empty() {
+        println!(
+            "no pending migrations ({} already applied)",
+            report.already_applied.len()
+        );
+    } else {
+        println!(
+            "applied {} migration(s): {:?}",
+            report.applied.len(),
+            report.applied
+        );
+    }
+    Ok(())
 }
 
 async fn serve(config: Config) -> Result<()> {
