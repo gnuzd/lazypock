@@ -1,30 +1,15 @@
-//! Integration tests for the pool and the migration runner against a real
-//! Postgres.
+//! Integration tests for the connection pool and the migration runner.
 //!
-//! Bring one up with:
-//!
-//! ```text
-//! docker compose -f deploy/docker-compose.test.yml up -d --wait
-//! cargo test -p lazypock-db
-//! ```
-//!
-//! `TEST_DATABASE_URL` overrides the default. When it is *not* set and Postgres
-//! is unreachable the tests skip with a message; when it *is* set (or
-//! `LAZYPOCK_REQUIRE_DB_TESTS=1`) an unreachable database is a hard failure, so
-//! CI can never silently skip them.
-//!
-//! Every test runs in its own randomly named schema, so tests are isolated and
-//! can run in parallel.
+//! Requires a Postgres; see `tests/support/mod.rs`.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+mod support;
 
-use lazypock_db::deadpool_postgres::Client;
+use std::time::Duration;
+
 use lazypock_db::migrate::{self, SYSTEM_MIGRATIONS};
 use lazypock_db::pool::{Db, DbOptions};
-use lazypock_db::tokio_postgres::{self, NoTls};
 
-const DEFAULT_TEST_URL: &str = "postgres://postgres:postgres@localhost:55432/lazypock_test";
+use support::test_db;
 
 /// System tables that must exist after migration 1.
 const EXPECTED_TABLES: &[&str] = &[
@@ -41,115 +26,6 @@ const EXPECTED_TABLES: &[&str] = &[
     "_sessions",
     "_settings",
 ];
-
-static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-struct TestDb {
-    db: Db,
-    admin_url: String,
-    schema: String,
-}
-
-impl TestDb {
-    async fn client(&self) -> Client {
-        self.db.client().await.expect("pooled client")
-    }
-
-    fn db_options(&self) -> DbOptions {
-        DbOptions {
-            options: Some(format!("-c search_path={}", self.schema)),
-            ..Default::default()
-        }
-    }
-
-    /// Best-effort cleanup; a leftover schema in a disposable test database is
-    /// harmless, so this never fails a test.
-    async fn cleanup(&self) {
-        if let Ok(admin) = admin_connect(&self.admin_url).await {
-            let _ = admin
-                .batch_execute(&format!(
-                    "drop schema if exists \"{}\" cascade",
-                    self.schema
-                ))
-                .await;
-        }
-    }
-
-    async fn tables(&self) -> Vec<String> {
-        let client = self.client().await;
-        let rows = client
-            .query(
-                "select table_name from information_schema.tables \
-                 where table_schema = current_schema()",
-                &[],
-            )
-            .await
-            .expect("list tables");
-        rows.iter().map(|row| row.get::<_, String>(0)).collect()
-    }
-}
-
-async fn admin_connect(url: &str) -> Result<tokio_postgres::Client, tokio_postgres::Error> {
-    let (client, connection) = tokio_postgres::connect(url, NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    Ok(client)
-}
-
-async fn test_db(label: &str) -> Option<TestDb> {
-    let explicit = std::env::var("TEST_DATABASE_URL").ok();
-    let required = std::env::var("LAZYPOCK_REQUIRE_DB_TESTS").is_ok();
-    let url = explicit
-        .clone()
-        .unwrap_or_else(|| DEFAULT_TEST_URL.to_string());
-
-    let admin = match admin_connect(&url).await {
-        Ok(admin) => admin,
-        Err(err) => {
-            if explicit.is_some() || required {
-                panic!("Postgres is configured but unreachable: {err}");
-            }
-            eprintln!(
-                "skipping {label}: Postgres unreachable ({err}). \
-                 Start deploy/docker-compose.test.yml or set TEST_DATABASE_URL."
-            );
-            return None;
-        }
-    };
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let schema = format!(
-        "t_{}_{}_{}",
-        std::process::id(),
-        nanos,
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    );
-
-    admin
-        .batch_execute(&format!("create schema \"{schema}\""))
-        .await
-        .expect("create test schema");
-
-    let test = TestDb {
-        db: Db::connect(
-            &url,
-            &DbOptions {
-                options: Some(format!("-c search_path={schema}")),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("connect the pooled database handle"),
-        admin_url: url,
-        schema,
-    };
-
-    Some(test)
-}
 
 #[tokio::test]
 async fn applies_every_system_migration_from_scratch() {

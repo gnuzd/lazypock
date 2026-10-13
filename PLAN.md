@@ -210,6 +210,11 @@ existing npm package name `lazypock`.
 | `_logs` | request logs |
 | `_audit` | admin action audit log |
 
+Identifiers are strict: collection and field names must match `^[a-z][a-z0-9_]*$`, be at most 63
+bytes, and must not start with `_` (reserved for system tables). They are validated *before* being
+quoted into DDL, and are never silently normalised — `create("Posts")` is an error, not a
+collection quietly named `posts`.
+
 - User data lives in the `public` schema (or `app`; never hard-coded — section 14).
 
 ### 4.2 Field types (PocketBase parity)
@@ -752,6 +757,25 @@ Independent tracks, so progress and estimates do not entangle:
 | **K. SDK** | rebuild `lazypock-ts` | D, E, F |
 | **L. Deploy** | Docker, compose, CI, docs, release | all |
 | **M. Cloud** | control plane, tenants, scale-to-zero | all |
+
+### Implementation status
+
+| Track | State |
+|---|---|
+| A. Foundations | done — workspace, config (fail-loud, secrets redacted), errors, ids, telemetry, CLI, `/api/health` |
+| B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
+| C. Query plane | next |
+| D. Records API | not started |
+| E. Access control | not started |
+| F. Realtime | not started |
+| G–I. Files, hooks, jobs | not started |
+| J–K. Studio, SDK | not started |
+| L. Deploy | not started |
+| M. Cloud | not started |
+
+Deleting a collection can keep its data (`drop_data = false`); re-declaring it with
+`adoptExistingTable: true` attaches to the kept table, and the adoption is refused when the table's
+columns do not match the declaration — so metadata can never misdescribe the real schema.
 
 ### Roadmap
 
