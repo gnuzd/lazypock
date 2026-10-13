@@ -781,7 +781,7 @@ Independent tracks, so progress and estimates do not entangle:
 | A. Foundations | done — workspace, config (fail-loud, secrets redacted), errors, ids, telemetry, CLI, `/api/health` |
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
-| D. Records API | not started |
+| D. Records API | partly — per-field validation/encoding and the record create/update/delete/fetch path are done; the HTTP endpoints, `batch` and ETag remain. |
 | E. Access control | not started |
 | F. Realtime | not started |
 | G–I. Files, hooks, jobs | not started |
@@ -792,6 +792,10 @@ Independent tracks, so progress and estimates do not entangle:
 Deleting a collection can keep its data (`drop_data = false`); re-declaring it with
 `adoptExistingTable: true` attaches to the kept table, and the adoption is refused when the table's
 columns do not match the declaration — so metadata can never misdescribe the real schema.
+
+A configured constraint that cannot yet be enforced is refused rather than stored: a text field
+with a `pattern` option is rejected at collection creation, so no collection can carry a rule that
+is silently not applied.
 
 ### Roadmap
 

@@ -259,6 +259,21 @@ pub fn option_u64(options: &Value, key: &str) -> Option<u64> {
     options.get(key).and_then(Value::as_u64)
 }
 
+/// Read an option as a list of strings, defaulting to empty.
+pub fn option_str_list(options: &Value, key: &str) -> Vec<String> {
+    options
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Whether the field holds multiple values (`maxSelect > 1`).
 pub fn is_multiple(options: &Value) -> bool {
     option_u64(options, "maxSelect").unwrap_or(1) > 1
@@ -315,6 +330,14 @@ pub fn validate_options(field_type: FieldType, options: &Value) -> Result<()> {
     if field_type == FieldType::Relation && options.get("collectionId").is_none() {
         return Err(Error::invalid(
             "a relation field needs a `collectionId` option",
+        ));
+    }
+
+    // A configured constraint that is not enforced is worse than no constraint,
+    // so refuse to store one that cannot be applied yet.
+    if options.get("pattern").is_some_and(|value| !value.is_null()) {
+        return Err(Error::unsupported(
+            "text `pattern` validation is not implemented yet; remove the `pattern` option",
         ));
     }
 

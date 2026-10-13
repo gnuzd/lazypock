@@ -10,8 +10,10 @@ pub mod ddl;
 pub mod migrate;
 pub mod pool;
 pub mod query;
+pub mod records;
 pub mod schema;
 pub mod types;
+pub mod validation;
 
 /// Re-exported so downstream crates and integration tests use the exact same
 /// driver and pool versions without pinning them again.

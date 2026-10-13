@@ -139,6 +139,22 @@ pub fn build_count(
     })
 }
 
+/// Build the JSON document expression for one record.
+///
+/// `root` is the already-quoted reference (table name or alias) the document
+/// should be built from. Used for both `SELECT ... FROM <table> <alias>` and
+/// `INSERT ... RETURNING`, so the caller must supply whatever the statement
+/// actually makes available.
+pub fn record_document(
+    context: &FilterContext,
+    root: &str,
+    selection: &FieldSelection,
+    expand: &ExpandSpec,
+) -> Result<String> {
+    let mut alias_counter = 0;
+    object_expression(context, root, selection, expand, &mut alias_counter, 0)
+}
+
 /// Build the JSON document expression for one level of a record.
 fn object_expression(
     context: &FilterContext,
