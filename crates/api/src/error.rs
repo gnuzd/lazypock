@@ -55,6 +55,14 @@ impl ApiError {
             data,
         }
     }
+
+    /// Prefix the message, keeping the status and any per-field details.
+    pub fn context(self, context: impl std::fmt::Display) -> Self {
+        Self {
+            error: self.error.context(context),
+            data: self.data,
+        }
+    }
 }
 
 impl From<Error> for ApiError {

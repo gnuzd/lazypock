@@ -11,9 +11,11 @@ pub mod migrate;
 pub mod pool;
 pub mod query;
 pub mod records;
+pub mod runner;
 pub mod schema;
 pub mod types;
 pub mod validation;
+pub mod watch;
 
 /// Re-exported so downstream crates and integration tests use the exact same
 /// driver and pool versions without pinning them again.

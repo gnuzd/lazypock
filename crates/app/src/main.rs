@@ -15,7 +15,7 @@ use lazypock_core::{
     error::{Error, Result},
     telemetry,
 };
-use lazypock_db::{migrate, pool::Db, schema::SchemaCache};
+use lazypock_db::{migrate, pool::Db, schema::SchemaCache, watch::watch_schema};
 
 use cli::{Cli, Command, SuperuserCommand};
 
@@ -115,6 +115,11 @@ async fn serve(config: Config) -> Result<()> {
             .map_err(|err| Error::config(format!("cannot load the schema: {err}")))?;
     }
     tracing::info!(collections = schema.snapshot().len(), "schema loaded");
+
+    // Keep the cache fresh while the node runs: every schema mutation emits
+    // NOTIFY lazypock_schema_changed at commit. The watcher holds its own
+    // dedicated connection and reconnects on its own if it drops.
+    let _watcher = watch_schema(schema.clone(), db.clone(), config.database_url.clone());
 
     let app = router(AppState::new(config, db, schema));
 

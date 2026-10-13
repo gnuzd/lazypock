@@ -74,6 +74,25 @@ impl Error {
         Self::Internal(message.into())
     }
 
+    /// Return the same error with its message prefixed.
+    ///
+    /// The variant — and so the status code — is preserved, which is what lets
+    /// the batch endpoint say *which* sub-request failed without changing how
+    /// the failure is reported.
+    pub fn context(self, context: impl fmt::Display) -> Self {
+        let prefix = context.to_string();
+        match self {
+            Self::Config(message) => Self::Config(format!("{prefix}: {message}")),
+            Self::Unsupported(message) => Self::Unsupported(format!("{prefix}: {message}")),
+            Self::Invalid(message) => Self::Invalid(format!("{prefix}: {message}")),
+            Self::NotFound(message) => Self::NotFound(format!("{prefix}: {message}")),
+            Self::Conflict(message) => Self::Conflict(format!("{prefix}: {message}")),
+            Self::Unauthorized(message) => Self::Unauthorized(format!("{prefix}: {message}")),
+            Self::Forbidden(message) => Self::Forbidden(format!("{prefix}: {message}")),
+            Self::Internal(message) => Self::Internal(format!("{prefix}: {message}")),
+        }
+    }
+
     /// HTTP status code this error maps to.
     pub fn status(&self) -> u16 {
         match self {
@@ -146,5 +165,13 @@ mod tests {
             Error::invalid("bad field").to_string(),
             "invalid_request: bad field"
         );
+    }
+
+    #[test]
+    fn context_prefixes_the_message_and_keeps_the_variant() {
+        let error = Error::not_found("no record").context("batch request 2");
+        assert_eq!(error.status(), 404);
+        assert_eq!(error.code(), "not_found");
+        assert_eq!(error.message(), "batch request 2: no record");
     }
 }

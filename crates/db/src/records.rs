@@ -7,7 +7,6 @@
 
 use serde_json::{Map, Value};
 use tokio_postgres::types::ToSql;
-use tokio_postgres::Client;
 
 use lazypock_core::error::{Error, Result};
 
@@ -17,6 +16,7 @@ use crate::pool::db_error;
 use crate::query::compile::FilterContext;
 use crate::query::projection::{ExpandSpec, FieldSelection};
 use crate::query::read;
+use crate::runner::QueryRunner;
 use crate::types::FieldType;
 use crate::validation::{self, ValidationErrors};
 
@@ -79,7 +79,7 @@ impl std::error::Error for RecordWriteError {}
 
 /// Insert a record and return it.
 pub async fn create(
-    client: &Client,
+    runner: &dyn QueryRunner,
     collection: &Collection,
     context: &FilterContext,
     input: Value,
@@ -115,8 +115,8 @@ pub async fn create(
         placeholders.join(", "),
     );
 
-    let row = client
-        .query_one(&sql, &bound(&params))
+    let row = runner
+        .run_query_one(&sql, &bound(&params))
         .await
         .map_err(|err| map_write_error(err, &collection.name))?;
     Ok(row.get("record"))
@@ -124,7 +124,7 @@ pub async fn create(
 
 /// Update a record, returning the stored row, or `None` when it does not exist.
 pub async fn update(
-    client: &Client,
+    runner: &dyn QueryRunner,
     collection: &Collection,
     context: &FilterContext,
     id: &str,
@@ -160,8 +160,8 @@ pub async fn update(
         assignments.join(", "),
     );
 
-    let row = client
-        .query_opt(&sql, &bound(&params))
+    let row = runner
+        .run_query_opt(&sql, &bound(&params))
         .await
         .map_err(|err| map_write_error(err, &collection.name))?;
     Ok(row.map(|row| row.get("record")))
@@ -169,7 +169,7 @@ pub async fn update(
 
 /// Delete a record. Returns whether a row was removed.
 pub async fn delete(
-    client: &Client,
+    runner: &dyn QueryRunner,
     collection: &Collection,
     id: &str,
 ) -> std::result::Result<bool, RecordWriteError> {
@@ -178,8 +178,8 @@ pub async fn delete(
         quote_ident(&collection.name)
     );
     let params = [id.to_string()];
-    let removed = client
-        .execute(&sql, &bound(&params))
+    let removed = runner
+        .run_execute(&sql, &bound(&params))
         .await
         .map_err(|err| map_write_error(err, &collection.name))?;
     Ok(removed > 0)
@@ -187,7 +187,7 @@ pub async fn delete(
 
 /// Fetch one record, or `None` when it does not exist.
 pub async fn get_one(
-    client: &Client,
+    runner: &dyn QueryRunner,
     collection: &Collection,
     context: &FilterContext,
     id: &str,
@@ -201,8 +201,8 @@ pub async fn get_one(
         quote_ident(&collection.name)
     );
     let params = [id.to_string()];
-    let row = client
-        .query_opt(&sql, &bound(&params))
+    let row = runner
+        .run_query_opt(&sql, &bound(&params))
         .await
         .map_err(db_error)?;
     Ok(row.map(|row| row.get("record")))

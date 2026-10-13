@@ -4,15 +4,14 @@
 mod support;
 
 use axum::body::{to_bytes, Body};
-use axum::http::{header, HeaderMap, Method, Request, StatusCode};
-use axum::Router;
+use axum::http::{header, Method, Request, StatusCode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use lazypock_db::collections::{self, CreateCollection, CreateField};
 use lazypock_db::types::{CollectionType, FieldType};
 
-use support::{test_app, TestApp};
+use support::{call, get, post, test_app, TestApp};
 
 fn field(name: &str, field_type: FieldType, options: Value) -> CreateField {
     CreateField {
@@ -75,50 +74,6 @@ async fn seed(app: &TestApp) {
     .expect("posts");
 
     app.reload_schema().await;
-}
-
-struct Reply {
-    status: StatusCode,
-    headers: HeaderMap,
-    body: Option<Value>,
-}
-
-async fn call(app: &Router, method: Method, uri: &str, body: Option<Value>) -> Reply {
-    let builder = Request::builder().method(method).uri(uri);
-
-    let request = match body {
-        Some(value) => builder
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(serde_json::to_vec(&value).expect("encode")))
-            .expect("request"),
-        None => builder.body(Body::empty()).expect("request"),
-    };
-
-    let response = app.clone().oneshot(request).await.expect("response");
-    let status = response.status();
-    let headers = response.headers().clone();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .expect("body");
-    let body = if bytes.is_empty() {
-        None
-    } else {
-        serde_json::from_slice(&bytes).ok()
-    };
-
-    Reply {
-        status,
-        headers,
-        body,
-    }
-}
-
-async fn get(app: &Router, uri: &str) -> Reply {
-    call(app, Method::GET, uri, None).await
-}
-
-async fn post(app: &Router, uri: &str, body: Value) -> Reply {
-    call(app, Method::POST, uri, Some(body)).await
 }
 
 #[tokio::test]

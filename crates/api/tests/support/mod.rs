@@ -11,10 +11,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use axum::body::{to_bytes, Body};
+use axum::http::{header, HeaderMap, Method, Request, StatusCode};
+use axum::Router;
 use lazypock_core::config::Config;
 use lazypock_db::pool::{Db, DbOptions};
 use lazypock_db::schema::SchemaCache;
 use lazypock_db::tokio_postgres::{self, NoTls};
+use serde_json::Value;
+use tower::ServiceExt;
 
 /// Default connection, matching `deploy/docker-compose.test.yml`.
 pub const DEFAULT_TEST_URL: &str = "postgres://postgres:postgres@localhost:55432/lazypock_test";
@@ -148,4 +153,57 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
         admin_url: url,
         schema,
     })
+}
+
+// --------------------------------------------------------------- HTTP helpers
+
+/// One decoded response.
+pub struct Reply {
+    /// Status code.
+    pub status: StatusCode,
+    /// Response headers.
+    pub headers: HeaderMap,
+    /// Decoded JSON body; `None` when the response carried no body.
+    pub body: Option<Value>,
+}
+
+/// Drive the router with a single request.
+pub async fn call(app: &Router, method: Method, uri: &str, body: Option<Value>) -> Reply {
+    let builder = Request::builder().method(method).uri(uri);
+
+    let request = match body {
+        Some(value) => builder
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&value).expect("encode")))
+            .expect("request"),
+        None => builder.body(Body::empty()).expect("request"),
+    };
+
+    let response = app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body");
+    let body = if bytes.is_empty() {
+        None
+    } else {
+        serde_json::from_slice(&bytes).ok()
+    };
+
+    Reply {
+        status,
+        headers,
+        body,
+    }
+}
+
+/// `GET` without a body.
+pub async fn get(app: &Router, uri: &str) -> Reply {
+    call(app, Method::GET, uri, None).await
+}
+
+/// `POST` with a JSON body.
+pub async fn post(app: &Router, uri: &str, body: Value) -> Reply {
+    call(app, Method::POST, uri, Some(body)).await
 }

@@ -1,9 +1,13 @@
 //! The lazypock axum routers.
 
-use axum::{routing::get, Json, Router};
+use axum::{
+    routing::{get, post},
+    Json, Router,
+};
 use lazypock_core::error::Error;
 use serde_json::{json, Value};
 
+use crate::batch;
 use crate::error::ApiError;
 use crate::records;
 use crate::state::AppState;
@@ -12,6 +16,7 @@ use crate::state::AppState;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/batch", post(batch::batch))
         .route(
             "/api/collections/{collection}/records",
             get(records::list_records).post(records::create_record),
@@ -30,7 +35,16 @@ pub fn router(state: AppState) -> Router {
 pub fn health_router() -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/batch", post(batch_requires_state))
         .fallback(not_found)
+}
+
+/// A batch without application state cannot do anything useful; saying so is
+/// better than a confusing 404.
+async fn batch_requires_state() -> ApiError {
+    ApiError::new(Error::unsupported(
+        "the batch endpoint needs the database-backed router",
+    ))
 }
 
 /// `GET /api/health` — PocketBase-compatible health probe.
