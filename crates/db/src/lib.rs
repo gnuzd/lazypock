@@ -9,6 +9,7 @@ pub mod collections;
 pub mod ddl;
 pub mod migrate;
 pub mod pool;
+pub mod query;
 pub mod schema;
 pub mod types;
 

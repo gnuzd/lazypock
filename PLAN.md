@@ -283,11 +283,21 @@ for big tables. `GET .../records` accepts `filter`, `sort`, `fields`, `expand`.
 
 - `filter`: PocketBase expressions:
   `title ~ "abc" && (status = "a" || views > 10) && author.name = "x"`
-  - Hand-written Pratt parser → AST → **fully parameterized SQL** (never string-concatenate
-    user input).
-  - Column names whitelisted from the schema cache.
-  - Operators: `= != > >= < <= ~ !~ ?= ?!=` (any-of for multi), `@now`, `@request.auth.id`, ...
-- `sort`: `-created,title`.
+  - Hand-written lexer + precedence-climbing parser → AST → **fully parameterized SQL**. Values
+    are never interpolated; field names are resolved against a schema-derived whitelist, so an
+    unknown field is an error rather than a raw column reference.
+  - Operators: `= != > >= < <= ~ !~ ?= ?!=`, plus `@now` and `@request.auth.*`.
+  - `~` / `!~` are **case-insensitive** contains (`ILIKE`), matching PocketBase; `%` and `_` in
+    the value are escaped so they stay literal.
+  - `?=` / `?!=` target `text[]` columns and are *required* for them — comparing an array with `=`
+    is refused with a pointer to `?=`.
+  - Parameters are sent as text and cast (`$n::text::bigint`): one homogeneous parameter type,
+    while the comparison still gets the type it needs.
+  - Dotted paths (`author.name`) become `exists (...)` subqueries, including multi-relations via
+    `any(...)`. Sorting through a relation is not supported yet.
+  - Filters are bounded: token count, nesting depth and path depth.
+- `sort`: `-created,title`. Only real columns are accepted; a dotted sort path is refused loudly
+  until joins land with `expand`.
 - `fields`: column selection, nested with expand.
 - `expand`: `expand=author,comments.user` → `LEFT JOIN LATERAL` + `jsonb_build_object`/`json_agg`;
   depth capped (≤ 6) and row counts capped.
@@ -764,7 +774,7 @@ Independent tracks, so progress and estimates do not entangle:
 |---|---|
 | A. Foundations | done — workspace, config (fail-loud, secrets redacted), errors, ids, telemetry, CLI, `/api/health` |
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
-| C. Query plane | next |
+| C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`. `fields` projection, pagination and `expand` still to come. |
 | D. Records API | not started |
 | E. Access control | not started |
 | F. Realtime | not started |
