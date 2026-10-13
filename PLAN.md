@@ -811,6 +811,28 @@ Two security notes for the auth layer:
   therefore takes effect at the next refresh; the 15-minute token lifetime is the backstop. Pinned by
   a test so the behaviour cannot drift silently.
 
+### Kept-out-of-tree code and the Rust server
+
+`studio/` and `lazypock-ts/` are preserved as reference, and neither works against the Rust server
+until it is rebuilt (tracks J and K). They both address records as `/api/{collection}`, which was
+the Elixir shape; the Rust server serves `/api/collections/{collection}/records`. Verified against a
+running node:
+
+| Request | Result |
+|---|---|
+| `GET /api/posts` (studio/SDK path) | `404` |
+| `POST /api/posts` (studio/SDK path) | `404` |
+| `GET /api/collections` (SDK's collection listing) | `404` — the collections meta API is not built yet |
+| `GET /api/collections/posts/records` | `200` |
+| `POST /api/collections/posts/records` | `201` |
+| `GET /api/collections/_superusers/auth-methods` | `200` |
+
+Both still build on their own (`bun run build` for the Studio, `bun run build && bun run typecheck`
+for the SDK), so they remain usable as references. The Studio's `adapter-static` output path was
+still pointed at the deleted Elixir tree (`../core/priv/static/studio`), which recreated `core/` on
+every build; it now writes to `build/studio` and moves to `crates/studio-embed/dist` when that crate
+lands.
+
 ### Roadmap
 
 - **Phase 0 — Foundations** (Track A): workspace, config, errors, logging, CLI, health, CI,

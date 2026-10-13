@@ -16,8 +16,11 @@ const config = {
 		// environment, switch out the adapter.
 		// See https://svelte.dev/docs/kit/adapters for more information about adapters.
 		adapter: adapter({
-			pages: '../core/priv/static/studio',
-			assets: '../core/priv/static/studio',
+			// Build inside the Studio's own tree rather than the deleted Elixir
+			// layout. When `crates/studio-embed` lands (PLAN.md track J) this moves
+			// to its `dist/`, which is what gets embedded in the binary.
+			pages: 'build/studio',
+			assets: 'build/studio',
 			fallback: 'index.html',
 			precompress: false,
 			strict: true
