@@ -576,8 +576,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "lazypock-core",
+ "lazypock-db",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "tokio",
  "tower",
  "tracing",

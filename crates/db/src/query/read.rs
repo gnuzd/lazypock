@@ -107,8 +107,12 @@ pub fn build_list(
     let offset_index = params.len();
 
     Ok(BuiltQuery {
+        // `keyset_created` / `keyset_id` accompany the document so the caller can
+        // mint the next page's cursor without re-reading the row. They are not
+        // part of the response body.
         sql: format!(
-            "select {document} as record from {table} p \
+            "select {document} as record, p.\"created\" as keyset_created, p.\"id\" as keyset_id \
+             from {table} p \
              where {where_clause} order by {order_by} \
              limit ${limit_index}::text::bigint offset ${offset_index}::text::bigint"
         ),

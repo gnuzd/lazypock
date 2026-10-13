@@ -1,41 +1,36 @@
-//! The lazypock axum router.
-
-use std::sync::Arc;
+//! The lazypock axum routers.
 
 use axum::{routing::get, Json, Router};
-use lazypock_core::{config::Config, error::Error};
+use lazypock_core::error::Error;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
+use crate::records;
+use crate::state::AppState;
 
-/// Shared application state handed to every handler.
-#[derive(Clone)]
-pub struct AppState {
-    /// Resolved runtime configuration.
-    pub config: Arc<Config>,
-}
-
-impl AppState {
-    /// Wrap a [`Config`] into shared state.
-    pub fn new(config: Config) -> Self {
-        Self {
-            config: Arc::new(config),
-        }
-    }
-}
-
-impl std::fmt::Debug for AppState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AppState").finish_non_exhaustive()
-    }
-}
-
-/// Build the application router.
+/// The full application router.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route(
+            "/api/collections/{collection}/records",
+            get(records::list_records).post(records::create_record),
+        )
+        .route(
+            "/api/collections/{collection}/records/{id}",
+            get(records::view_record)
+                .patch(records::update_record)
+                .delete(records::delete_record),
+        )
         .fallback(not_found)
         .with_state(state)
+}
+
+/// Routes that need no database, useful on their own for probes and tests.
+pub fn health_router() -> Router {
+    Router::new()
+        .route("/api/health", get(health))
+        .fallback(not_found)
 }
 
 /// `GET /api/health` — PocketBase-compatible health probe.

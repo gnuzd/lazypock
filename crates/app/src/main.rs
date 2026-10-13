@@ -4,17 +4,18 @@ mod cli;
 mod shutdown;
 
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use lazypock_api::router::{router, AppState};
+use lazypock_api::router::router;
+use lazypock_api::AppState;
 use lazypock_core::{
     config::Config,
     error::{Error, Result},
     telemetry,
 };
-
-use lazypock_db::{migrate, pool::Db};
+use lazypock_db::{migrate, pool::Db, schema::SchemaCache};
 
 use cli::{Cli, Command, SuperuserCommand};
 
@@ -100,7 +101,22 @@ async fn migrate_command(config: &Config, status_only: bool) -> Result<()> {
 
 async fn serve(config: Config) -> Result<()> {
     let addr = config.listen_addr;
-    let app = router(AppState::new(config));
+
+    // Connect and load the schema up front: a node that cannot reach its
+    // database, or whose system tables are missing, must fail at boot rather
+    // than on the first request.
+    let db = Db::from_config(&config).await?;
+    let schema = Arc::new(SchemaCache::new());
+    {
+        let client = db.client().await?;
+        schema
+            .reload(&client)
+            .await
+            .map_err(|err| Error::config(format!("cannot load the schema: {err}")))?;
+    }
+    tracing::info!(collections = schema.snapshot().len(), "schema loaded");
+
+    let app = router(AppState::new(config, db, schema));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

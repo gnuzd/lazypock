@@ -1,29 +1,16 @@
-//! End-to-end tests for the HTTP surface, driving the real router in-process.
+//! Tests for the database-free routes, driven in-process.
 
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
     Router,
 };
-use lazypock_api::router::{router, AppState};
-use lazypock_core::config::Config;
+use lazypock_api::router::health_router;
 use serde_json::Value;
 use tower::ServiceExt;
 
-fn test_config() -> Config {
-    Config::from_source(|key| match key {
-        "DATABASE_URL" => Some("postgres://user:pass@localhost:5432/lazypock".to_string()),
-        _ => None,
-    })
-    .expect("test configuration should be valid")
-}
-
-fn app() -> Router {
-    router(AppState::new(test_config()))
-}
-
 async fn get(uri: &str) -> (StatusCode, Value) {
-    let response = app()
+    let response = health_router()
         .oneshot(
             Request::builder()
                 .uri(uri)
@@ -39,6 +26,10 @@ async fn get(uri: &str) -> (StatusCode, Value) {
         .expect("body");
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, body)
+}
+
+fn router() -> Router {
+    health_router()
 }
 
 #[tokio::test]
@@ -57,4 +48,10 @@ async fn unknown_route_returns_the_error_envelope() {
     assert_eq!(body["status"], 404);
     assert_eq!(body["message"], "The requested resource was not found.");
     assert!(body["data"].is_object());
+}
+
+#[tokio::test]
+async fn the_health_router_has_no_state() {
+    // Constructing it needs no database, which keeps these tests hermetic.
+    let _: Router = router();
 }
