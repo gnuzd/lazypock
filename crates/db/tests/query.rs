@@ -9,6 +9,9 @@ mod support;
 use lazypock_db::collections::{self, CreateCollection, CreateField};
 use lazypock_db::ddl::quote_ident;
 use lazypock_db::query::compile::{self, AuthContext, FilterContext};
+use lazypock_db::query::pagination::{Cursor, Page};
+use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
+use lazypock_db::query::read::{self, BuiltQuery, ReadQuery};
 use lazypock_db::query::{filter, sort};
 use lazypock_db::tokio_postgres::types::ToSql;
 use lazypock_db::tokio_postgres::Client;
@@ -416,6 +419,321 @@ async fn filters_combine_with_sort_and_stay_parameterized() {
 
     let ids = select_ids(&client, "posts", &compiled.sql, &compiled.params, &order_by).await;
     assert_eq!(ids, vec!["p1", "p3"]);
+
+    test.cleanup().await;
+}
+
+// ------------------------------------------------------------- read builder
+
+/// Run a built statement and return the JSON documents it produced.
+async fn records(client: &Client, built: &BuiltQuery) -> Vec<serde_json::Value> {
+    let bound: Vec<&(dyn ToSql + Sync)> = built
+        .params
+        .iter()
+        .map(|param| param as &(dyn ToSql + Sync))
+        .collect();
+    client
+        .query(&built.sql, &bound)
+        .await
+        .unwrap_or_else(|err| panic!("read query failed: {err}\n{}", built.sql))
+        .iter()
+        .map(|row| row.get::<_, serde_json::Value>(0))
+        .collect()
+}
+
+fn read_query(
+    context: &FilterContext,
+    fields: &str,
+    expand: Option<&str>,
+    filter_input: Option<&str>,
+    sort_input: &str,
+    page: Page,
+) -> ReadQuery {
+    ReadQuery {
+        selection: FieldSelection::parse(Some(fields), context).expect("fields"),
+        expand: ExpandSpec::parse(expand, context).expect("expand"),
+        filter: filter_input.map(|input| filter::parse(input).expect("filter")),
+        sort: sort::parse(sort_input).expect("sort"),
+        page,
+    }
+}
+
+fn first_page() -> Page {
+    Page::from_params(None, None, false, None).expect("page")
+}
+
+#[tokio::test]
+async fn the_read_builder_projects_only_the_requested_fields() {
+    let Some(test) = migrated_test_db("read_projection").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    let context = filter_context(&client, "posts").await;
+    let query = read_query(&context, "id,title", None, None, "id", first_page());
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+
+    assert_eq!(rows.len(), 3);
+    let first = rows[0].as_object().expect("object");
+    assert_eq!(first.len(), 2, "only the selected keys: {first:?}");
+    assert_eq!(rows[0]["id"], json!("p1"));
+    assert_eq!(rows[0]["title"], json!("Hello World"));
+    assert!(rows[0].get("views").is_none());
+
+    // The default projection carries every column, with real JSON types.
+    let query = read_query(&context, "*", None, None, "id", first_page());
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+    assert_eq!(rows[0]["views"], json!(10));
+    assert_eq!(rows[0]["published"], json!(true));
+    assert_eq!(rows[0]["rating"], json!(1.5));
+    assert_eq!(rows[0]["tags"], json!(["a", "b"]));
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn expanding_a_single_relation_nests_its_document() {
+    let Some(test) = migrated_test_db("read_expand_single").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    let context = filter_context(&client, "posts").await;
+    let query = read_query(
+        &context,
+        "id,author.name",
+        Some("author"),
+        None,
+        "id",
+        first_page(),
+    );
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+
+    assert_eq!(rows[0]["author"]["name"], json!("Alice"));
+    assert_eq!(rows[1]["author"]["name"], json!("Bob"));
+    // The nested `fields` entry narrows the expanded record to one key.
+    assert_eq!(rows[0]["author"].as_object().unwrap().len(), 1);
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn expanding_a_multi_relation_produces_an_array() {
+    let Some(test) = migrated_test_db("read_expand_multi").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    let context = filter_context(&client, "posts").await;
+    let query = read_query(
+        &context,
+        "id,reviewers.name",
+        Some("reviewers"),
+        None,
+        "id",
+        first_page(),
+    );
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+
+    assert_eq!(rows[0]["reviewers"], json!([{ "name": "Bob" }]));
+    assert_eq!(rows[1]["reviewers"].as_array().unwrap().len(), 2);
+    // No related rows is an empty array, never null.
+    assert_eq!(rows[2]["reviewers"], json!([]));
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn expanding_everything_covers_the_relations_one_level_deep() {
+    let Some(test) = migrated_test_db("read_expand_all").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    let context = filter_context(&client, "posts").await;
+    let query = read_query(&context, "id", Some("*"), None, "id", first_page());
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+
+    assert_eq!(rows[0]["author"]["name"], json!("Alice"));
+    assert!(rows[0]["reviewers"].is_array());
+    // Only the selected top-level key plus the expanded relations.
+    assert!(rows[0].get("title").is_none());
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_read_builder_combines_filter_sort_and_projection() {
+    let Some(test) = migrated_test_db("read_filter_sort").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    let context = filter_context(&client, "posts").await;
+    let query = read_query(
+        &context,
+        "id,views",
+        None,
+        Some("published = true && views > 5"),
+        "-views",
+        first_page(),
+    );
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], json!("p1"));
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn count_matches_the_filtered_rows() {
+    let Some(test) = migrated_test_db("read_count").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    let context = filter_context(&client, "posts").await;
+
+    for (input, expected) in [
+        (None, 3_i64),
+        (Some("published = true"), 2),
+        (Some("views > 100"), 0),
+    ] {
+        let expr = input.map(|raw| filter::parse(raw).expect("filter"));
+        let built =
+            read::build_count(expr.as_ref(), &context, &AuthContext::default()).expect("build");
+        let bound: Vec<&(dyn ToSql + Sync)> = built
+            .params
+            .iter()
+            .map(|param| param as &(dyn ToSql + Sync))
+            .collect();
+        let count: i64 = client
+            .query_one(&built.sql, &bound)
+            .await
+            .expect("count")
+            .get(0);
+        assert_eq!(count, expected, "filter {input:?}");
+    }
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn offset_paging_walks_the_result_set() {
+    let Some(test) = migrated_test_db("read_offset_paging").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    let context = filter_context(&client, "posts").await;
+
+    let page = Page::from_params(Some(1), Some(2), false, None).expect("page 1");
+    let query = read_query(&context, "id", None, None, "id", page);
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["id"], json!("p1"));
+    assert_eq!(rows[1]["id"], json!("p2"));
+
+    let page = Page::from_params(Some(2), Some(2), false, None).expect("page 2");
+    let query = read_query(&context, "id", None, None, "id", page);
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], json!("p3"));
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn keyset_paging_continues_without_repeating_or_skipping() {
+    let Some(test) = migrated_test_db("read_keyset_paging").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    // Distinct, known timestamps so the ordering is deterministic.
+    client
+        .batch_execute(
+            r#"
+            update "posts" set "created" = '2026-01-01T00:00:00Z'::timestamptz where "id" = 'p1';
+            update "posts" set "created" = '2026-01-02T00:00:00Z'::timestamptz where "id" = 'p2';
+            update "posts" set "created" = '2026-01-03T00:00:00Z'::timestamptz where "id" = 'p3';
+            "#,
+        )
+        .await
+        .expect("set timestamps");
+
+    let context = filter_context(&client, "posts").await;
+
+    // Newest first: p3, p2, p1.
+    let page = Page::from_params(None, Some(2), false, Some("")).expect("first keyset page");
+    let query = read_query(&context, "id", None, None, "-created", page);
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+    let ids: Vec<&serde_json::Value> = rows.iter().map(|row| &row["id"]).collect();
+    assert_eq!(ids, vec![&json!("p3"), &json!("p2")]);
+
+    // Build the cursor from the last row of the page, exactly as a client would.
+    let last_id = "p2";
+    let created: std::time::SystemTime = client
+        .query_one(
+            "select \"created\" from \"posts\" where \"id\" = $1",
+            &[&last_id],
+        )
+        .await
+        .expect("created")
+        .get(0);
+    let cursor = Cursor::from_time(created, last_id).expect("cursor");
+
+    let page = Page::from_params(None, Some(2), false, Some(&cursor.encode())).expect("keyset");
+    let query = read_query(&context, "id", None, None, "-created", page);
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+    assert_eq!(
+        rows.iter().map(|row| row["id"].clone()).collect::<Vec<_>>(),
+        vec![json!("p1")],
+        "second page must continue, not repeat or skip"
+    );
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_read_builder_stays_parameterized() {
+    let Some(test) = migrated_test_db("read_parameterized").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    seed(&mut client).await;
+
+    let context = filter_context(&client, "posts").await;
+    let query = read_query(
+        &context,
+        "id",
+        None,
+        Some("title = \"' or 1=1 --\""),
+        "id",
+        first_page(),
+    );
+    let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
+    let rows = records(&client, &built).await;
+    assert!(rows.is_empty(), "injection payload matched rows: {rows:?}");
 
     test.cleanup().await;
 }

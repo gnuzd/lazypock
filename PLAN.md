@@ -298,9 +298,15 @@ for big tables. `GET .../records` accepts `filter`, `sort`, `fields`, `expand`.
   - Filters are bounded: token count, nesting depth and path depth.
 - `sort`: `-created,title`. Only real columns are accepted; a dotted sort path is refused loudly
   until joins land with `expand`.
-- `fields`: column selection, nested with expand.
-- `expand`: `expand=author,comments.user` → `LEFT JOIN LATERAL` + `jsonb_build_object`/`json_agg`;
-  depth capped (≤ 6) and row counts capped.
+- `fields`: column selection; a dotted entry (`author.name`) narrows the document of an expanded
+  record. An unknown field, or a path that does not go through a relation, is an error.
+- `expand`: `expand=author,comments.user`, or `*` for one level. Relations are expanded with
+  **correlated subqueries** rather than `LEFT JOIN LATERAL`: one row per record, no row
+  multiplication for multi-relations, and `jsonb_agg(... order by ...)` keeps arrays ordered.
+  Depth is capped (≤ 6) and the rows inside one expanded multi-relation are capped.
+- Paging: `page`/`perPage`/`skipTotal` (PocketBase), plus an opt-in keyset cursor
+  (`after=<opaque token>`) over `(created, id)` for large tables. The two cannot be mixed, and a
+  cursor is only valid with the default ordering.
 - Full-text: `tsvector` + GIN.
 
 ### 5.3 Hot-path latency
@@ -774,7 +780,7 @@ Independent tracks, so progress and estimates do not entangle:
 |---|---|
 | A. Foundations | done — workspace, config (fail-loud, secrets redacted), errors, ids, telemetry, CLI, `/api/health` |
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
-| C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`. `fields` projection, pagination and `expand` still to come. |
+| C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | not started |
 | E. Access control | not started |
 | F. Realtime | not started |

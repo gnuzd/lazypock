@@ -155,8 +155,24 @@ pub struct CompiledFilter {
 
 /// Compile a filter expression.
 pub fn compile(expr: &Expr, context: &FilterContext, auth: &AuthContext) -> Result<CompiledFilter> {
+    compile_with_root(expr, context, auth, &quote_ident(&context.table))
+}
+
+/// Compile a filter expression against an explicit root table reference.
+///
+/// `root` is the already-quoted SQL reference for the collection's row: either
+/// the table name, or — for callers that alias the table, such as the record
+/// reader — the alias. Postgres rejects the table name once an alias is in
+/// effect, so the two must agree.
+///
+pub fn compile_with_root(
+    expr: &Expr,
+    context: &FilterContext,
+    auth: &AuthContext,
+    root: &str,
+) -> Result<CompiledFilter> {
     let mut params = Vec::new();
-    let sql = compile_expr(expr, context, auth, &mut params)?;
+    let sql = compile_expr(expr, context, auth, root, &mut params)?;
     Ok(CompiledFilter { sql, params })
 }
 
@@ -164,18 +180,19 @@ fn compile_expr(
     expr: &Expr,
     context: &FilterContext,
     auth: &AuthContext,
+    root: &str,
     params: &mut Vec<String>,
 ) -> Result<String> {
     match expr {
         Expr::And(left, right) => Ok(format!(
             "({} and {})",
-            compile_expr(left, context, auth, params)?,
-            compile_expr(right, context, auth, params)?
+            compile_expr(left, context, auth, root, params)?,
+            compile_expr(right, context, auth, root, params)?
         )),
         Expr::Or(left, right) => Ok(format!(
             "({} or {})",
-            compile_expr(left, context, auth, params)?,
-            compile_expr(right, context, auth, params)?
+            compile_expr(left, context, auth, root, params)?,
+            compile_expr(right, context, auth, root, params)?
         )),
         Expr::Compare { path, op, operand } => {
             if path.len() > MAX_PATH_DEPTH {
@@ -185,11 +202,10 @@ fn compile_expr(
                 )));
             }
             let (column, hops) = path.split_last().expect("a comparison always has a path");
-            let root = quote_ident(&context.table).to_string();
             let mut alias_counter = 0;
             compile_at(
                 context,
-                &root,
+                root,
                 hops,
                 column,
                 *op,
