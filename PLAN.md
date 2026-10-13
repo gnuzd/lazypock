@@ -782,7 +782,7 @@ Independent tracks, so progress and estimates do not entangle:
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
-| E. Access control | partly — argon2id passwords, EdDSA access tokens with a published JWKS, refresh sessions with rotation and replay detection, superusers and the `superuser create` CLI are done. The auth HTTP endpoints, the request middleware and Postgres RLS remain. |
+| E. Access control | partly — argon2id passwords, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the `superuser create` CLI, and the auth HTTP endpoints (`auth-with-password`, `auth-refresh`, `auth-methods`) behind a bearer middleware are done. Creating records in an *auth* collection (the `email`/`password` columns are not writable through the records path yet) and Postgres RLS remain. |
 | F. Realtime | not started |
 | G–I. Files, hooks, jobs | not started |
 | J–K. Studio, SDK | not started |

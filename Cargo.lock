@@ -892,6 +892,7 @@ name = "lazypock-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "lazypock-auth",
  "lazypock-core",
  "lazypock-db",
  "serde",

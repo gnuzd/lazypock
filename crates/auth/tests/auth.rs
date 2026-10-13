@@ -167,7 +167,7 @@ async fn signing_keys_are_shared_between_nodes() {
     );
 
     let token = service
-        .sign(Subject::Superuser, "u1", "", "", "tk")
+        .sign(Subject::Superuser, "u1", "a@example.com", "", "", "tk")
         .expect("sign");
     assert!(
         other.verify(&token).is_ok(),

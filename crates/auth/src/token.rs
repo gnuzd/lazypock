@@ -43,6 +43,8 @@ pub struct Claims {
     pub col: String,
     /// Collection name, empty for a superuser.
     pub name: String,
+    /// The account's email, so rules can compare against `@request.auth.email`.
+    pub email: String,
     /// What the token is for.
     pub typ: Subject,
     /// Issued at, unix seconds.
@@ -162,6 +164,7 @@ impl SigningKeys {
         &self,
         subject: Subject,
         id: &str,
+        email: &str,
         collection_id: &str,
         collection_name: &str,
         token_key: &str,
@@ -174,6 +177,7 @@ impl SigningKeys {
             sub: id.to_string(),
             col: collection_id.to_string(),
             name: collection_name.to_string(),
+            email: email.to_string(),
             typ: subject,
             iat: issued as i64,
             exp: (issued + ACCESS_TOKEN_TTL.as_secs()) as i64,
@@ -197,8 +201,15 @@ mod tests {
     use super::*;
 
     fn claims(keys: &SigningKeys) -> Claims {
-        keys.claims_for(Subject::Auth, "user1", "col1", "users", "tk1")
-            .expect("claims")
+        keys.claims_for(
+            Subject::Auth,
+            "user1",
+            "a@example.com",
+            "col1",
+            "users",
+            "tk1",
+        )
+        .expect("claims")
     }
 
     #[test]
@@ -308,10 +319,11 @@ mod tests {
     fn claims_carry_the_subject_and_expiry() {
         let keys = SigningKeys::generate().expect("generate");
         let claims = keys
-            .claims_for(Subject::Superuser, "su1", "", "", "tk")
+            .claims_for(Subject::Superuser, "su1", "a@example.com", "", "", "tk")
             .unwrap();
         assert!(claims.typ.is_superuser());
         assert_eq!(claims.sub, "su1");
+        assert_eq!(claims.email, "a@example.com");
         assert_eq!(claims.exp - claims.iat, ACCESS_TOKEN_TTL.as_secs() as i64);
     }
 }

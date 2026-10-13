@@ -1,12 +1,14 @@
 //! The lazypock axum routers.
 
 use axum::{
+    middleware,
     routing::{get, post},
     Json, Router,
 };
 use lazypock_core::error::Error;
 use serde_json::{json, Value};
 
+use crate::auth;
 use crate::batch;
 use crate::error::ApiError;
 use crate::records;
@@ -17,6 +19,23 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/batch", post(batch::batch))
+        // The public half of the token signing key, for other services.
+        .route("/api/jwks", get(auth::jwks))
+        .route("/.well-known/jwks.json", get(auth::jwks))
+        // `_superusers` is handled inside the same handler, so there is no route
+        // ordering to get wrong.
+        .route(
+            "/api/collections/{collection}/auth-with-password",
+            post(auth::auth_with_password),
+        )
+        .route(
+            "/api/collections/{collection}/auth-refresh",
+            post(auth::auth_refresh),
+        )
+        .route(
+            "/api/collections/{collection}/auth-methods",
+            get(auth::auth_methods),
+        )
         .route(
             "/api/collections/{collection}/records",
             get(records::list_records).post(records::create_record),
@@ -28,6 +47,11 @@ pub fn router(state: AppState) -> Router {
                 .delete(records::delete_record),
         )
         .fallback(not_found)
+        // Authentication wraps every route, so any handler can read the caller.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::authenticate,
+        ))
         .with_state(state)
 }
 

@@ -133,7 +133,14 @@ async fn serve(config: Config) -> Result<()> {
     // dedicated connection and reconnects on its own if it drops.
     let _watcher = watch_schema(schema.clone(), db.clone(), config.database_url.clone());
 
-    let app = router(AppState::new(config, db, schema));
+    // Load the token signing key before serving: a node whose key is missing
+    // would reject every token, so it must fail at boot instead.
+    let auth = Arc::new(lazypock_auth::AuthService::new(db.clone()));
+    auth.load()
+        .await
+        .map_err(|err| Error::config(format!("cannot load the token signing key: {err}")))?;
+
+    let app = router(AppState::new(config, db, schema, auth));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

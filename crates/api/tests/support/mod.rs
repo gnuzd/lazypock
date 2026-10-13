@@ -147,8 +147,11 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
     })
     .expect("test configuration");
 
+    let auth = Arc::new(lazypock_auth::AuthService::new(db.clone()));
+    auth.load().await.expect("load the token signing key");
+
     Some(TestApp {
-        state: lazypock_api::AppState::new(config, db.clone(), cache),
+        state: lazypock_api::AppState::new(config, db.clone(), cache, auth),
         db,
         admin_url: url,
         schema,

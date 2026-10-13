@@ -1,0 +1,372 @@
+//! Authentication endpoints and the request middleware.
+//!
+//! A missing bearer token means an anonymous request. A token that is *present*
+//! but invalid — wrong signature, expired, malformed — is a `401` rather than a
+//! silent downgrade to anonymous, so a client with a dead token finds out
+//! instead of quietly losing access.
+
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{Path, Request, State};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use lazypock_auth::token::Claims;
+use lazypock_auth::AuthOutcome;
+use lazypock_core::error::Error;
+use lazypock_db::query::compile::AuthContext;
+use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
+use lazypock_db::records;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::error::ApiError;
+use crate::records::resolve;
+use crate::state::AppState;
+
+/// PocketBase's slug for superuser auth.
+///
+/// It can never collide with a real collection: identifiers may not start with
+/// an underscore.
+pub const SUPERUSERS: &str = "_superusers";
+
+/// The authenticated caller, attached to every request.
+#[derive(Debug, Clone, Default)]
+pub struct Principal {
+    claims: Option<Claims>,
+}
+
+impl Principal {
+    /// Nobody is authenticated.
+    pub fn anonymous() -> Self {
+        Self { claims: None }
+    }
+
+    /// A caller with verified claims.
+    pub fn from_claims(claims: Claims) -> Self {
+        Self {
+            claims: Some(claims),
+        }
+    }
+
+    /// The verified claims, when there are any.
+    pub fn claims(&self) -> Option<&Claims> {
+        self.claims.as_ref()
+    }
+
+    /// Whether this caller bypasses access rules.
+    pub fn is_superuser(&self) -> bool {
+        self.claims
+            .as_ref()
+            .is_some_and(|claims| claims.typ.is_superuser())
+    }
+
+    /// The authenticated account id.
+    pub fn user_id(&self) -> Option<&str> {
+        self.claims.as_ref().map(|claims| claims.sub.as_str())
+    }
+
+    /// The claims the query layer understands.
+    ///
+    /// An anonymous caller becomes an empty context, so `@request.auth.*`
+    /// resolves to nothing and filters match nothing rather than everything.
+    pub fn auth_context(&self) -> AuthContext {
+        match &self.claims {
+            Some(claims) => AuthContext {
+                id: Some(claims.sub.clone()),
+                email: Some(claims.email.clone()),
+                collection_id: non_empty(&claims.col),
+                collection_name: non_empty(&claims.name),
+                claims: Default::default(),
+            },
+            None => AuthContext::default(),
+        }
+    }
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+/// Attach the caller to the request.
+pub async fn authenticate(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    // `auth-refresh` carries the *refresh* token as a bearer — that is how
+    // PocketBase's SDK sends it — and a refresh token is deliberately not a
+    // valid access token. Verifying it belongs to that handler, so the
+    // middleware only marks the request anonymous here.
+    if request.uri().path().ends_with("/auth-refresh") {
+        request.extensions_mut().insert(Principal::anonymous());
+        return next.run(request).await;
+    }
+
+    let principal = match bearer_token(request.headers()) {
+        None => Principal::anonymous(),
+        Some(token) => match state.auth.verify(token) {
+            Ok(claims) => Principal::from_claims(claims),
+            Err(err) => return ApiError::new(err).into_response(),
+        },
+    };
+
+    request.extensions_mut().insert(principal);
+    next.run(request).await
+}
+
+/// Pull the bearer token out of the `Authorization` header.
+pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    let token = token.trim();
+    if scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+/// Body for the password login endpoints.
+#[derive(Debug, Deserialize)]
+pub struct PasswordAuth {
+    /// Email address (PocketBase also accepts a username here).
+    pub identity: String,
+    /// The password.
+    pub password: String,
+}
+
+/// Body for `auth-refresh`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshAuth {
+    /// The refresh token, when it is sent in the body rather than as a bearer.
+    pub refresh_token: Option<String>,
+}
+
+/// `POST /api/collections/{collection}/auth-with-password`
+///
+/// Also serves `POST /api/collections/_superusers/auth-with-password`, which is
+/// how PocketBase spells superuser login.
+pub async fn auth_with_password(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    body: Result<Json<PasswordAuth>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = json_body(body)?;
+
+    if collection == SUPERUSERS {
+        let outcome = state
+            .auth
+            .authenticate_superuser(&request.identity, &request.password)
+            .await?;
+        let client = state.db.client().await.map_err(ApiError::new)?;
+        let account = lazypock_auth::superuser::find_by_id(&client, &outcome.user_id)
+            .await
+            .map_err(ApiError::new)?
+            .ok_or_else(|| {
+                ApiError::new(Error::internal("the authenticated superuser vanished"))
+            })?;
+        // The hash never leaves the server.
+        let record = json!({
+            "id": account.id,
+            "email": account.email,
+            "collectionName": SUPERUSERS,
+        });
+        return Ok((StatusCode::OK, Json(auth_body(&outcome, record))).into_response());
+    }
+
+    let (schema, resolved) = resolve(&state, &collection)?;
+    if !resolved.collection.collection_type.is_auth() {
+        return Err(ApiError::new(Error::not_found(format!(
+            "no auth collection named {collection:?}"
+        ))));
+    }
+
+    let outcome = state
+        .auth
+        .authenticate_record(&resolved.collection, &request.identity, &request.password)
+        .await?;
+
+    // Return the record the client just authenticated as.
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let record = records::get_one(
+        &client,
+        &resolved.collection,
+        &resolved.context,
+        &outcome.user_id,
+        &FieldSelection::all(),
+        &ExpandSpec::none(),
+    )
+    .await
+    .map_err(ApiError::new)?
+    .ok_or_else(|| ApiError::new(Error::internal("the authenticated record vanished")))?;
+
+    // Touch the schema snapshot so a reload during login is not lost.
+    drop(schema);
+    Ok((StatusCode::OK, Json(auth_body(&outcome, record))).into_response())
+}
+
+/// `POST /api/collections/{collection}/auth-refresh`
+///
+/// The refresh token may be sent in the body or as a bearer token; PocketBase's
+/// SDK sends it as a bearer.
+pub async fn auth_refresh(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<RefreshAuth>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let request = body.map(|Json(request)| request).unwrap_or_default();
+    let token = request
+        .refresh_token
+        .or_else(|| bearer_token(&headers).map(str::to_string))
+        .ok_or_else(|| {
+            ApiError::new(Error::invalid(
+                "a refresh token is required, in the body or as a bearer token",
+            ))
+        })?;
+
+    let schema = state.schema.snapshot();
+    let outcome = state.auth.refresh(&token, schema.collections()).await?;
+
+    // A token issued for one collection must not be usable against another.
+    if !outcome.collection_id.is_empty() && outcome.collection_name != collection {
+        return Err(ApiError::new(Error::unauthorized(
+            "the refresh token belongs to a different collection",
+        )));
+    }
+
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let record = if outcome.collection_id.is_empty() {
+        let account = lazypock_auth::superuser::find_by_id(&client, &outcome.user_id)
+            .await
+            .map_err(ApiError::new)?
+            .ok_or_else(|| ApiError::new(Error::internal("the account vanished")))?;
+        json!({ "id": account.id, "email": account.email, "collectionName": SUPERUSERS })
+    } else {
+        let resolved_collection = schema
+            .get(&outcome.collection_id)
+            .cloned()
+            .ok_or_else(|| ApiError::new(Error::unauthorized("the collection no longer exists")))?;
+        let context = lazypock_db::query::compile::FilterContext::for_collection(
+            &resolved_collection,
+            schema.collections(),
+        )
+        .map_err(ApiError::new)?;
+        records::get_one(
+            &client,
+            &resolved_collection,
+            &context,
+            &outcome.user_id,
+            &FieldSelection::all(),
+            &ExpandSpec::none(),
+        )
+        .await
+        .map_err(ApiError::new)?
+        .ok_or_else(|| ApiError::new(Error::internal("the account vanished")))?
+    };
+
+    Ok((StatusCode::OK, Json(auth_body(&outcome, record))).into_response())
+}
+
+/// `GET /api/collections/{collection}/auth-methods`
+pub async fn auth_methods(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+) -> Result<Response, ApiError> {
+    if collection != SUPERUSERS {
+        let (_schema, resolved) = resolve(&state, &collection)?;
+        if !resolved.collection.collection_type.is_auth() {
+            return Err(ApiError::new(Error::not_found(format!(
+                "no auth collection named {collection:?}"
+            ))));
+        }
+    }
+
+    // Only password auth exists so far; the others are reported as disabled
+    // rather than omitted, so a client can tell "off" from "unknown".
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "password": { "enabled": true },
+            "oauth2": { "enabled": false, "providers": [] },
+            "otp": { "enabled": false },
+            "mfa": { "enabled": false },
+        })),
+    )
+        .into_response())
+}
+
+/// `GET /api/jwks` and `GET /.well-known/jwks.json`
+pub async fn jwks(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let jwks = state.auth.jwks().map_err(ApiError::new)?;
+    Ok((StatusCode::OK, Json(jwks)).into_response())
+}
+
+fn auth_body(outcome: &AuthOutcome, record: Value) -> Value {
+    json!({
+        "token": outcome.access_token,
+        "refreshToken": outcome.refresh_token,
+        "expiresIn": outcome.expires_in,
+        "record": record,
+    })
+}
+
+fn json_body(
+    body: Result<Json<PasswordAuth>, JsonRejection>,
+) -> Result<Json<PasswordAuth>, ApiError> {
+    body.map_err(|rejection| {
+        ApiError::new(Error::invalid(format!(
+            "invalid JSON body: {}",
+            rejection.body_text()
+        )))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn bearer_tokens_are_extracted_case_insensitively() {
+        let mut headers = HeaderMap::new();
+        assert!(bearer_token(&headers).is_none());
+
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer abc123"),
+        );
+        assert_eq!(bearer_token(&headers), Some("abc123"));
+
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("bearer   spaced  "),
+        );
+        assert_eq!(bearer_token(&headers), Some("spaced"));
+
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic abc123"),
+        );
+        assert!(bearer_token(&headers).is_none());
+
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer   "));
+        assert!(bearer_token(&headers).is_none());
+    }
+
+    #[test]
+    fn an_anonymous_principal_has_no_claims() {
+        let principal = Principal::anonymous();
+        assert!(!principal.is_superuser());
+        assert!(principal.user_id().is_none());
+        let context = principal.auth_context();
+        assert_eq!(context.id, None);
+        assert_eq!(context.email, None);
+    }
+}

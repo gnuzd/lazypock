@@ -11,6 +11,7 @@ homepage.workspace = true
 
 [dependencies]
 axum = "0.8.9"
+lazypock-auth = { version = "0.1.0", path = "../auth" }
 lazypock-core.workspace = true
 lazypock-db = { version = "0.1.0", path = "../db" }
 serde = { version = "1.0.229", features = ["derive"] }

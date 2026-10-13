@@ -59,12 +59,12 @@ pub struct ListParams {
     pub after: Option<String>,
 }
 
-struct Resolved {
-    collection: Collection,
-    context: FilterContext,
+pub(crate) struct Resolved {
+    pub collection: Collection,
+    pub context: FilterContext,
 }
 
-fn resolve(state: &AppState, name: &str) -> Result<(Arc<Schema>, Resolved), ApiError> {
+pub(crate) fn resolve(state: &AppState, name: &str) -> Result<(Arc<Schema>, Resolved), ApiError> {
     let schema = state.schema.snapshot();
     let collection = schema
         .get(name)

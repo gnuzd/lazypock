@@ -46,6 +46,7 @@ pub struct AuthOutcome {
 struct Account {
     subject: Subject,
     id: String,
+    email: String,
     collection_id: String,
     collection_name: String,
     token_key: String,
@@ -129,8 +130,15 @@ impl AuthService {
             return Err(Error::unauthorized("invalid email or password"));
         };
 
-        self.issue(Subject::Superuser, &account.id, "", "", &account.token_key)
-            .await
+        self.issue(
+            Subject::Superuser,
+            &account.id,
+            &account.email,
+            "",
+            "",
+            &account.token_key,
+        )
+        .await
     }
 
     /// Authenticate a record in an auth collection.
@@ -152,7 +160,7 @@ impl AuthService {
         let row = client
             .run_query_opt(
                 &format!(
-                    "select \"id\", \"password_hash\", \"token_key\" from {table} \
+                    "select \"id\", \"email\", \"password_hash\", \"token_key\" from {table} \
                      where lower(\"email\") = lower($1::text)"
                 ),
                 &[&email.trim().to_string()],
@@ -175,12 +183,14 @@ impl AuthService {
         };
 
         let id: String = row.get("id");
+        let email: String = row.get::<_, Option<String>>("email").unwrap_or_default();
         let token_key: String = row
             .get::<_, Option<String>>("token_key")
             .unwrap_or_default();
         self.issue(
             Subject::Auth,
             &id,
+            &email,
             &collection.id,
             &collection.name,
             &token_key,
@@ -210,6 +220,7 @@ impl AuthService {
             access_token: self.sign(
                 account.subject,
                 &account.id,
+                &account.email,
                 &account.collection_id,
                 &account.collection_name,
                 &account.token_key,
@@ -240,6 +251,7 @@ impl AuthService {
             return Ok(Account {
                 subject: Subject::Superuser,
                 id: account.id,
+                email: account.email,
                 collection_id: String::new(),
                 collection_name: String::new(),
                 token_key: account.token_key,
@@ -253,7 +265,7 @@ impl AuthService {
         let table = quote_ident(&collection.name);
         let row = client
             .run_query_opt(
-                &format!("select \"token_key\" from {table} where \"id\" = $1::text"),
+                &format!("select \"email\", \"token_key\" from {table} where \"id\" = $1::text"),
                 &[&session.user_id],
             )
             .await
@@ -263,6 +275,7 @@ impl AuthService {
         Ok(Account {
             subject: Subject::Auth,
             id: session.user_id.clone(),
+            email: row.get::<_, Option<String>>("email").unwrap_or_default(),
             collection_id: collection.id.clone(),
             collection_name: collection.name.clone(),
             token_key: row
@@ -276,12 +289,20 @@ impl AuthService {
         &self,
         subject: Subject,
         id: &str,
+        email: &str,
         collection_id: &str,
         collection_name: &str,
         token_key: &str,
     ) -> Result<String> {
         let keys = self.keys()?;
-        let claims = keys.claims_for(subject, id, collection_id, collection_name, token_key)?;
+        let claims = keys.claims_for(
+            subject,
+            id,
+            email,
+            collection_id,
+            collection_name,
+            token_key,
+        )?;
         keys.sign(&claims)
     }
 
@@ -289,6 +310,7 @@ impl AuthService {
         &self,
         subject: Subject,
         id: &str,
+        email: &str,
         collection_id: &str,
         collection_name: &str,
         token_key: &str,
@@ -298,7 +320,14 @@ impl AuthService {
             sessions::issue(&client, collection_id, id, None, None).await?;
 
         Ok(AuthOutcome {
-            access_token: self.sign(subject, id, collection_id, collection_name, token_key)?,
+            access_token: self.sign(
+                subject,
+                id,
+                email,
+                collection_id,
+                collection_name,
+                token_key,
+            )?,
             refresh_token,
             expires_in: ACCESS_TOKEN_TTL.as_secs() as i64,
             subject,

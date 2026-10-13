@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use lazypock_auth::AuthService;
 use lazypock_core::config::Config;
 use lazypock_db::pool::Db;
 use lazypock_db::schema::SchemaCache;
@@ -18,15 +19,18 @@ pub struct AppState {
     pub db: Db,
     /// Schema snapshot cache.
     pub schema: Arc<SchemaCache>,
+    /// Signing keys and the login/refresh flows.
+    pub auth: Arc<AuthService>,
 }
 
 impl AppState {
     /// Build the state.
-    pub fn new(config: Config, db: Db, schema: Arc<SchemaCache>) -> Self {
+    pub fn new(config: Config, db: Db, schema: Arc<SchemaCache>, auth: Arc<AuthService>) -> Self {
         Self {
             config: Arc::new(config),
             db,
             schema,
+            auth,
         }
     }
 }
