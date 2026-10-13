@@ -63,6 +63,11 @@ impl CollectionType {
     pub fn is_table(self) -> bool {
         !matches!(self, Self::View)
     }
+
+    /// Whether this collection holds login records.
+    pub fn is_auth(self) -> bool {
+        matches!(self, Self::Auth)
+    }
 }
 
 impl fmt::Display for CollectionType {

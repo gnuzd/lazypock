@@ -782,7 +782,7 @@ Independent tracks, so progress and estimates do not entangle:
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
-| E. Access control | not started |
+| E. Access control | partly — argon2id passwords, EdDSA access tokens with a published JWKS, refresh sessions with rotation and replay detection, superusers and the `superuser create` CLI are done. The auth HTTP endpoints, the request middleware and Postgres RLS remain. |
 | F. Realtime | not started |
 | G–I. Files, hooks, jobs | not started |
 | J–K. Studio, SDK | not started |
@@ -802,6 +802,14 @@ The schema cache is loaded at boot and refreshed live: every schema mutation emi
 The watcher also reloads once immediately after `LISTEN`, which closes the window between the
 boot-time load and the watch starting. A schema change made by hand in SQL does not emit that
 notification, so a direct DDL change still needs an explicit reload or a restart.
+
+Two security notes for the auth layer:
+
+* The access-token signing key is generated once and stored in `_settings` **in plaintext**.
+  Encrypting it at rest, or supplying it through `LAZYPOCK_SIGNING_KEY`, is a tracked follow-up.
+* Access tokens are verified from the signature alone, with no database round trip. Revocation
+  therefore takes effect at the next refresh; the 15-minute token lifetime is the backstop. Pinned by
+  a test so the behaviour cannot drift silently.
 
 ### Roadmap
 

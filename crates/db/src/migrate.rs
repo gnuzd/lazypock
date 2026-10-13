@@ -45,11 +45,18 @@ pub struct Migration {
 }
 
 /// Every known system migration, in application order.
-pub static SYSTEM_MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "system_tables",
-    sql: include_str!("../../../migrations/0001_system_tables.sql"),
-}];
+pub static SYSTEM_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "system_tables",
+        sql: include_str!("../../../migrations/0001_system_tables.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "superusers",
+        sql: include_str!("../../../migrations/0002_superusers.sql"),
+    },
+];
 
 /// Outcome of a migration run.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

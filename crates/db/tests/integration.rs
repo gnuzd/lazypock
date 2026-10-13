@@ -25,7 +25,13 @@ const EXPECTED_TABLES: &[&str] = &[
     "_rt_log",
     "_sessions",
     "_settings",
+    "_superusers",
 ];
+
+/// Every migration version compiled into this binary.
+fn all_versions() -> Vec<i64> {
+    SYSTEM_MIGRATIONS.iter().map(|m| m.version).collect()
+}
 
 #[tokio::test]
 async fn applies_every_system_migration_from_scratch() {
@@ -36,7 +42,11 @@ async fn applies_every_system_migration_from_scratch() {
     let mut client = test.client().await;
     let report = migrate::run(&mut client).await.expect("migrate");
 
-    assert_eq!(report.applied, vec![1], "migration 1 should apply");
+    assert_eq!(
+        report.applied,
+        all_versions(),
+        "every system migration should apply"
+    );
     assert!(report.already_applied.is_empty());
 
     let tables = test.tables().await;
@@ -61,7 +71,7 @@ async fn migrating_twice_is_a_no_op() {
 
     let second = migrate::run(&mut client).await.expect("second run");
     assert!(second.applied.is_empty(), "nothing should re-apply");
-    assert_eq!(second.already_applied, vec![1]);
+    assert_eq!(second.already_applied, all_versions());
 
     let count: i64 = client
         .query_one("select count(*) from _migrations", &[])
@@ -88,8 +98,8 @@ async fn concurrent_runs_apply_each_migration_exactly_once() {
 
     assert_eq!(
         a.applied.len() + b.applied.len(),
-        1,
-        "exactly one run must apply migration 1: {a:?} {b:?}"
+        SYSTEM_MIGRATIONS.len(),
+        "every migration must be applied exactly once across both runs: {a:?} {b:?}"
     );
 
     let count: i64 = first

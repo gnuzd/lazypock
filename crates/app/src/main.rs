@@ -57,9 +57,9 @@ async fn run() -> Result<()> {
         Command::Healthcheck => healthcheck(&config).await,
         Command::Migrate { status } => migrate_command(&config, status).await,
         Command::Superuser { command } => match command {
-            SuperuserCommand::Create { .. } => Err(Error::unsupported(
-                "`superuser create` is not implemented yet (PLAN.md Phase 2, Track E)",
-            )),
+            SuperuserCommand::Create { email, password } => {
+                superuser_create(&config, &email, &password).await
+            }
         },
     }
 }
@@ -96,6 +96,18 @@ async fn migrate_command(config: &Config, status_only: bool) -> Result<()> {
             report.applied
         );
     }
+    Ok(())
+}
+
+/// `lazypock superuser create --email ... --password ...`
+async fn superuser_create(config: &Config, email: &str, password: &str) -> Result<()> {
+    telemetry::init(config.log_level, config.log_format)?;
+
+    let db = Db::from_config(config).await?;
+    let client = db.client().await?;
+    let account = lazypock_auth::superuser::create(&client, email, password).await?;
+
+    println!("created superuser {} ({})", account.email, account.id);
     Ok(())
 }
 
