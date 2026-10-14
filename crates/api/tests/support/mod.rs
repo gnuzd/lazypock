@@ -99,7 +99,7 @@ fn init_logging() {
 
 pub async fn test_app(label: &str) -> Option<TestApp> {
     init_logging();
-    let explicit = std::env::var("TEST_DATABASE_URL").ok();
+    let explicit = std::env::var("LAZYPOCK_TEST_DATABASE_URL").ok();
     let required = std::env::var("LAZYPOCK_REQUIRE_DB_TESTS").is_ok();
     let url = explicit
         .clone()
@@ -159,7 +159,7 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
     }
 
     let config = Config::from_source(|key| match key {
-        "DATABASE_URL" => Some(url.clone()),
+        "LAZYPOCK_DATABASE_URL" => Some(url.clone()),
         _ => None,
     })
     .expect("test configuration");

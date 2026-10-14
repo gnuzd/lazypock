@@ -255,12 +255,12 @@ mod tests {
     #[test]
     fn options_follow_the_configuration() {
         let config = Config::from_source(|key| match key {
-            "DATABASE_URL" => Some("postgres://u:p@h:5432/db".to_string()),
+            "LAZYPOCK_DATABASE_URL" => Some("postgres://u:p@h:5432/db".to_string()),
             "LAZYPOCK_POOL_SIZE" => Some("9".to_string()),
             "LAZYPOCK_PG_PREPARED_STATEMENTS" => Some("off".to_string()),
             _ => None,
         })
-        .unwrap();
+        .expect("a valid configuration");
         let options = DbOptions::from_config(&config);
         assert_eq!(options.pool_size, 9);
         assert!(!options.prepared_statements);

@@ -774,7 +774,17 @@ Independent tracks, so progress and estimates do not entangle:
 | **L. Deploy** | Docker, compose, CI, docs, release | all |
 | **M. Cloud** | control plane, tenants, scale-to-zero | all |
 
-### Implementation status
+#### Configuration convention
+
+**Every environment variable lazypock reads is prefixed `LAZYPOCK_`.** The one
+deliberate exception is `RUST_LOG`, which belongs to the `tracing` ecosystem and is
+read through `EnvFilter::try_from_default_env`; `LAZYPOCK_LOG_LEVEL` is the
+supported knob and takes the same values. A bare `DATABASE_URL` used to be
+accepted as a fallback and no longer is: that name is set by plenty of other
+tooling in the same environment, and honouring it could quietly connect lazypock to
+somebody else's database.
+
+## Implementation status
 
 | Track | State |
 |---|---|

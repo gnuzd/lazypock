@@ -115,7 +115,7 @@ pub async fn admin_connect(url: &str) -> Result<tokio_postgres::Client, tokio_po
 
 /// Prepare an isolated schema, or `None` when Postgres is not available.
 pub async fn test_db(label: &str) -> Option<TestDb> {
-    let explicit = std::env::var("TEST_DATABASE_URL").ok();
+    let explicit = std::env::var("LAZYPOCK_TEST_DATABASE_URL").ok();
     let required = std::env::var("LAZYPOCK_REQUIRE_DB_TESTS").is_ok();
     let url = explicit
         .clone()

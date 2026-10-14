@@ -167,9 +167,11 @@ impl Config {
             None => Env::Development,
         };
 
+        // Only the prefixed name. A bare `DATABASE_URL` is set by plenty of other
+        // tooling in the same environment, and honouring it could quietly connect
+        // lazypock to somebody else's database.
         let database_url = optional(&get, "LAZYPOCK_DATABASE_URL")
-            .or_else(|| optional(&get, "DATABASE_URL"))
-            .ok_or_else(|| Error::config("DATABASE_URL (or LAZYPOCK_DATABASE_URL) is required"))?;
+            .ok_or_else(|| Error::config("LAZYPOCK_DATABASE_URL is required"))?;
         validate_database_url(&database_url)?;
 
         let listen_addr = parse_value(&get, "LAZYPOCK_LISTEN_ADDR", DEFAULT_LISTEN_ADDR)
@@ -401,7 +403,7 @@ mod tests {
 
     fn minimal() -> Vec<(&'static str, &'static str)> {
         vec![(
-            "DATABASE_URL",
+            "LAZYPOCK_DATABASE_URL",
             "postgres://user:pass@localhost:5432/lazypock",
         )]
     }
@@ -432,7 +434,7 @@ mod tests {
     fn missing_database_url_is_an_error() {
         let err = config(&[]).expect_err("must fail without a database url");
         assert!(matches!(err, Error::Config(_)));
-        assert!(err.message().contains("DATABASE_URL"));
+        assert!(err.message().contains("LAZYPOCK_DATABASE_URL"));
     }
 
     #[test]
@@ -443,14 +445,15 @@ mod tests {
 
     #[test]
     fn non_postgres_database_url_is_rejected() {
-        let err = config(&[("DATABASE_URL", "mysql://user:pass@localhost/db")])
+        let err = config(&[("LAZYPOCK_DATABASE_URL", "mysql://user:pass@localhost/db")])
             .expect_err("must reject non-postgres url");
         assert!(err.message().contains("postgres"));
     }
 
     #[test]
     fn hostless_database_url_is_rejected() {
-        let err = config(&[("DATABASE_URL", "postgres:///lazypock")]).expect_err("no host");
+        let err =
+            config(&[("LAZYPOCK_DATABASE_URL", "postgres:///lazypock")]).expect_err("no host");
         assert!(err.message().contains("host"));
     }
 

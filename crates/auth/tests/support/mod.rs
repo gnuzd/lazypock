@@ -54,7 +54,7 @@ impl TestDb {
 
 /// Prepare an isolated schema with the system migrations applied.
 pub async fn migrated_test_db(label: &str) -> Option<TestDb> {
-    let explicit = std::env::var("TEST_DATABASE_URL").ok();
+    let explicit = std::env::var("LAZYPOCK_TEST_DATABASE_URL").ok();
     let required = std::env::var("LAZYPOCK_REQUIRE_DB_TESTS").is_ok();
     let url = explicit
         .clone()

@@ -56,7 +56,7 @@ pub async fn fixture(label: &str, rules: Value) -> Option<Fixture> {
         .with_env_filter("warn")
         .with_test_writer()
         .try_init();
-    let explicit = std::env::var("TEST_DATABASE_URL").ok();
+    let explicit = std::env::var("LAZYPOCK_TEST_DATABASE_URL").ok();
     let required = std::env::var("LAZYPOCK_REQUIRE_DB_TESTS").is_ok();
     let url = explicit
         .clone()
