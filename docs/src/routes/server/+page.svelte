@@ -82,7 +82,7 @@
     image: gnuzd/lazypock:latest
     ports: ["4000:4000"]
     environment:
-      DATABASE_URL: ecto://postgres:postgres@postgres:5432/lazypock
+      LAZYPOCK_DATABASE_URL: ecto://postgres:postgres@postgres:5432/lazypock
       # generate one with: openssl rand -base64 48
       SECRET_KEY_BASE: change-me
       LAZYPOCK_SUPERUSER_EMAIL: admin@lazypock.app
@@ -99,12 +99,12 @@ volumes:
     />
     <p class="mt-3 text-base-content/80 leading-relaxed">
       Already run a PostgreSQL 15+? One container is enough — just point
-      <code class="doc-inline px-1 py-0.5">DATABASE_URL</code> at it:
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code> at it:
     </p>
     <CodeBlock
       lang="bash"
       code={`docker run -d -p 4000:4000 \\
-  -e DATABASE_URL="ecto://user:pass@host:5432/db" \\
+  -e LAZYPOCK_DATABASE_URL="ecto://user:pass@host:5432/db" \\
   -e SECRET_KEY_BASE="$(openssl rand -base64 48)" \\
   -v lazypock-uploads:/data/uploads \\
   gnuzd/lazypock:latest`}
@@ -149,7 +149,7 @@ volumes:
     </p>
     <p class="mt-3 text-base-content/80 leading-relaxed">
       Prefer no Docker at all? Any PostgreSQL 15+ works — just point
-      <code class="doc-inline px-1 py-0.5">DATABASE_URL</code> at it. Or run
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code> at it. Or run
       from source — see
       <a class="text-primary underline" href="#manual">Manual setup</a> below.
     </p>
@@ -178,7 +178,7 @@ volumes:
 
 chmod +x lazypock_macos_silicon   # or the binary matching your OS/arch
 
-export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
+export LAZYPOCK_DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
 export SECRET_KEY_BASE="$(openssl rand -base64 48)"
 LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \\
   ./lazypock_macos_silicon`}
@@ -219,7 +219,7 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
       code={`git clone git@github.com:gnuzd/lazypock.git
 cd lazypock/core
 
-export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev"
+export LAZYPOCK_DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev"
 mix setup          # install deps, create DB, run migrations, seed
 mix phx.server      # starts Phoenix on http://localhost:4000`}
     />
@@ -374,12 +374,12 @@ GET /api/posts?filter=deleted_at = null`}
       LazyPock is designed to run on top of a database you already have —
       point it at an existing Postgres (15+) instance and its tables show up
       in the Studio automatically. Just set
-      <code class="doc-inline px-1 py-0.5">DATABASE_URL</code> to your
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code> to your
       database:
     </p>
     <CodeBlock
       lang="bash"
-      code={`export DATABASE_URL="ecto://user:password@db-host:5432/my_existing_db"
+      code={`export LAZYPOCK_DATABASE_URL="ecto://user:password@db-host:5432/my_existing_db"
 export SECRET_KEY_BASE="$(openssl rand -base64 48)"
 LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \
   ./lazypock_macos_silicon`}
@@ -460,7 +460,7 @@ MIX_ENV=prod mix release
     </p>
     <CodeBlock
       lang="bash"
-      code={`export DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
+      code={`export LAZYPOCK_DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
 export SECRET_KEY_BASE="$(mix phx.gen.secret)"
 export PHX_HOST="localhost"
 LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \\
@@ -619,7 +619,7 @@ command -v convert || command -v magick   # performs the resize`}
         <tbody class="divide-y divide-base-300">
           <tr>
             <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">DATABASE_URL</code></td
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code></td
             >
             <td class="px-3 py-2">PostgreSQL connection string</td>
             <td class="px-3 py-2 font-mono text-xs"

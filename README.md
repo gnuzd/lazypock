@@ -53,7 +53,7 @@ More crates (`db`, `query`, `auth`, `rls`, `realtime`, `files`, `hooks`, `jobs`,
 Requires Rust 1.85+ and a Postgres 15+ instance (Docker is fine).
 
 ```bash
-cp .env.example .env         # then point DATABASE_URL at your Postgres
+cp .env.example .env         # then point LAZYPOCK_DATABASE_URL at your Postgres
 cargo run -- migrate          # create the system tables
 cargo run -- config           # show the resolved config (credentials redacted)
 cargo run -- serve            # start the API on http://localhost:4000
