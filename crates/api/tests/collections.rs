@@ -389,3 +389,293 @@ async fn a_reflected_table_shows_up_in_the_api_which_is_what_studio_needs() {
 
     app.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_patch_applies_the_fields_it_is_given() {
+    // The gap that made collection editing useless: the whole definition was sent,
+    // a 200 came back, and the fields in it were ignored — so a relation field could
+    // not be created or changed through the editor at all.
+    let Some(app) = test_app("collections_patch_fields").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // A target for the relation.
+    call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(definition("authors")),
+        &token,
+    )
+    .await;
+    call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(definition("posts")),
+        &token,
+    )
+    .await;
+
+    // Authenticated: every collection endpoint is superuser-only.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/collections/authors",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let authors_id = reply.body.expect("authors")["id"]
+        .as_str()
+        .expect("an id")
+        .to_string();
+
+    // Add a relation field through PATCH.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({
+            "fields": [{
+                "name": "author",
+                "type": "relation",
+                "required": false,
+                "unique": false,
+                "options": { "collectionId": authors_id, "maxSelect": 1 }
+            }]
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let fields = reply.body.expect("posts")["fields"].clone();
+    let names: Vec<&str> = fields
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| field["name"].as_str().expect("a name"))
+        .collect();
+    assert!(
+        names.contains(&"author"),
+        "the field was not added: {names:?}"
+    );
+
+    // The column is real, which is what makes the field usable.
+    let client = app.client().await;
+    let column = client
+        .query_opt(
+            "select 1 from information_schema.columns \
+              where table_name = 'posts' and column_name = 'author' \
+                and table_schema = current_schema()",
+            &[],
+        )
+        .await
+        .expect("columns");
+    assert!(column.is_some(), "the column must exist");
+
+    // Updating an existing field's metadata applies.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({
+            "fields": [{
+                "name": "author",
+                "type": "relation",
+                "required": true,
+                "unique": false,
+                "options": { "collectionId": authors_id, "maxSelect": 1 }
+            }]
+        })),
+        &token,
+    )
+    .await;
+    let fields = reply.body.expect("posts")["fields"].clone();
+    let author = fields
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["name"] == json!("author"))
+        .cloned()
+        .expect("author");
+    assert_eq!(author["required"], json!(true), "metadata was not applied");
+
+    // A field the payload omits is left alone rather than dropped: an editor that
+    // sends a partial list must not silently take a column with it.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({
+            "fields": [{
+                "name": "another",
+                "type": "text",
+                "required": false,
+                "unique": false,
+                "options": {}
+            }]
+        })),
+        &token,
+    )
+    .await;
+    let fields = reply.body.expect("posts")["fields"].clone();
+    let names: Vec<&str> = fields
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| field["name"].as_str().expect("a name"))
+        .collect();
+    assert!(
+        names.contains(&"author") && names.contains(&"title"),
+        "nothing may be dropped by omission: {names:?}"
+    );
+    assert!(names.contains(&"another"), "{names:?}");
+
+    // And a type change is refused by name rather than ignored, because it is a column
+    // migration rather than an edit.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({
+            "fields": [{
+                "name": "author",
+                "type": "text",
+                "required": false,
+                "unique": false,
+                "options": {}
+            }]
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+    let message = reply.body.expect("an error")["message"]
+        .as_str()
+        .expect("a message")
+        .to_string();
+    assert!(message.contains("author"), "{message}");
+    assert!(message.contains("relation"), "{message}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_camel_case_field_works_end_to_end() {
+    // Mixed case is what PocketBase and its clients use (`emailVisibility`), and it
+    // was being refused. Allowing it is only safe if every column reference is
+    // quoted, so this asserts the whole path rather than just that the name is
+    // accepted: create, read, filter and sort.
+    let Some(app) = test_app("collections_camel_case").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(json!({
+            "name": "profiles",
+            "type": "base",
+            "fields": [
+                { "name": "firstName", "type": "text", "required": false, "unique": false },
+                { "name": "lastLoginAt", "type": "text", "required": false, "unique": false }
+            ],
+            "rules": {
+                "listRule": "", "viewRule": "", "createRule": "",
+                "updateRule": "", "deleteRule": ""
+            },
+            "options": {}
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let fields = reply.body.expect("a collection")["fields"].clone();
+    let names: Vec<&str> = fields
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| field["name"].as_str().expect("a name"))
+        .collect();
+    assert!(names.contains(&"firstName"), "{names:?}");
+
+    // A collection created over HTTP reaches this node's schema cache through the
+    // NOTIFY watcher, which is asynchronous — that is what keeps every node in step,
+    // so a script has to wait for it rather than assume it is instant.
+    app.reload_schema().await;
+
+    // A record carrying the camelCase columns.
+    let reply = support::post(
+        &router(&app).await,
+        "/api/collections/profiles/records",
+        json!({ "firstName": "Ada", "lastLoginAt": "2026-01-01" }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    assert_eq!(
+        reply.body.expect("a record")["firstName"],
+        json!("Ada"),
+        "the value must come back under its own name, not a folded one"
+    );
+
+    // A second record, so sorting has something to do.
+    support::post(
+        &router(&app).await,
+        "/api/collections/profiles/records",
+        json!({ "firstName": "Zoe", "lastLoginAt": "2026-02-01" }),
+    )
+    .await;
+
+    // Filtering by a camelCase field — the filter compiler has to quote it.
+    let reply = support::get(
+        &router(&app).await,
+        "/api/collections/profiles/records?filter=firstName%3D%22Ada%22",
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let items = reply.body.expect("a list")["items"].clone();
+    assert_eq!(
+        items.as_array().expect("items").len(),
+        1,
+        "filtering on a camelCase field must work: {items}"
+    );
+
+    // Sorting by it, which quotes the column in the ORDER BY.
+    let reply = support::get(
+        &router(&app).await,
+        "/api/collections/profiles/records?sort=firstName",
+    )
+    .await;
+    let items = reply.body.expect("a list")["items"].clone();
+    let first = items.as_array().expect("items").first().expect("a record")["firstName"].clone();
+    assert_eq!(first, json!("Ada"), "sorted by the camelCase column");
+
+    // And a name that is genuinely not an identifier is still refused.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(json!({
+            "name": "bad_name",
+            "type": "base",
+            "fields": [{ "name": "has space", "type": "text" }],
+            "rules": {},
+            "options": {}
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::BAD_REQUEST,
+        "a name with a space must still be refused: {:?}",
+        reply.body
+    );
+
+    app.cleanup().await;
+}

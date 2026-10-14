@@ -152,23 +152,70 @@ pub struct CreateCollection {
 }
 
 /// Input for creating or adding a field.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Deserialisation is hand-written below, because a field arrives in one of two
+/// shapes; the `serde` attributes would belong to a derive that is no longer there.
+#[derive(Debug, Clone)]
 pub struct CreateField {
     /// Field name.
     pub name: String,
-    /// Field type.
-    #[serde(rename = "type")]
+    /// Field type, `type` on the wire.
     pub field_type: FieldType,
     /// Whether the column is required.
-    #[serde(default)]
     pub required: bool,
     /// Whether the column is unique.
-    #[serde(default)]
     pub unique: bool,
-    /// Type-specific settings.
-    #[serde(default = "empty_object")]
+    /// Type-specific settings, also accepted at the field's top level.
     pub options: Value,
+}
+
+/// Accept a field in **either** shape.
+///
+/// PocketBase — and therefore Studio — puts a field type's settings at the field's
+/// top level: `{ "name": "author", "type": "relation", "collectionId": "…" }`. This
+/// server's own format nests them under `options`. Serde drops unknown keys, so
+/// before this the flat shape arrived with its settings silently discarded and
+/// validation then reported the option missing — "a relation field needs a
+/// `collectionId` option" — which named the symptom and hid the cause. Both shapes are now merged, with the
+/// nested `options` winning where they overlap, and it applies to every field type's
+/// settings — `values` for a select, presets for a file — not only relations.
+impl<'de> Deserialize<'de> for CreateField {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Flat {
+            name: String,
+            #[serde(rename = "type")]
+            field_type: FieldType,
+            #[serde(default)]
+            required: bool,
+            #[serde(default)]
+            unique: bool,
+            #[serde(default)]
+            options: Option<serde_json::Map<String, Value>>,
+            /// Everything else, which is the type's settings in PocketBase's shape.
+            #[serde(flatten)]
+            settings: serde_json::Map<String, Value>,
+        }
+
+        let flat = Flat::deserialize(deserializer)?;
+
+        // Flattened first, so an explicit `options` entry wins over a top-level one.
+        let mut merged = flat.settings;
+        if let Some(options) = flat.options {
+            for (key, value) in options {
+                merged.insert(key, value);
+            }
+        }
+
+        Ok(CreateField {
+            name: flat.name,
+            field_type: flat.field_type,
+            required: flat.required,
+            unique: flat.unique,
+            options: Value::Object(merged),
+        })
+    }
 }
 
 fn default_collection_type() -> CollectionType {
@@ -449,6 +496,66 @@ async fn verify_adoptable(client: &Client, collection: &Collection) -> Result<()
 ///
 /// Keeping the data (`drop_data = false`) is useful for recovering from an
 /// accidental metadata delete, and is what an undo flow would use.
+/// Update one existing field's metadata.
+///
+/// The **type is not changed**: altering a column's type is a migration, not an
+/// edit, and doing it silently would either fail or lose data. A changed type is
+/// refused by name so the caller learns why instead of finding the field unchanged.
+/// Everything else — required, unique, options — is applied, including the unique
+/// index that `unique` implies.
+async fn update_field(
+    client: &mut Client,
+    table: &str,
+    current: &Field,
+    wanted: &CreateField,
+) -> Result<()> {
+    if current.field_type != wanted.field_type {
+        return Err(Error::invalid(format!(
+            "the field {:?} is a {} and cannot become a {} in place; remove it and add \
+             it again if the type must change",
+            wanted.name,
+            current.field_type.as_str(),
+            wanted.field_type.as_str()
+        )));
+    }
+
+    let transaction = client.transaction().await.map_err(db_error)?;
+
+    // A unique index is real DDL, so it has to follow the flag.
+    if wanted.unique && !current.is_unique {
+        transaction
+            .batch_execute(&crate::ddl::create_unique_index_statement(
+                table,
+                &wanted.name,
+            ))
+            .await
+            .map_err(db_error)?;
+    } else if !wanted.unique && current.is_unique {
+        transaction
+            .batch_execute(&crate::ddl::drop_index_statement(table, &wanted.name))
+            .await
+            .map_err(db_error)?;
+    }
+
+    transaction
+        .execute(
+            "update _fields set required = $2, is_unique = $3, options = $4, \
+             updated = now() where id = $1",
+            &[
+                &current.id,
+                &wanted.required,
+                &wanted.unique,
+                &wanted.options,
+            ],
+        )
+        .await
+        .map_err(db_error)?;
+
+    notify_schema_changed(&transaction).await?;
+    transaction.commit().await.map_err(db_error)?;
+    Ok(())
+}
+
 /// Input for updating a collection's metadata.
 ///
 /// Only rules and options: changing a table's shape is a field operation, which
@@ -460,6 +567,11 @@ pub struct UpdateCollection {
     pub rules: Option<Value>,
     /// Replacement type-specific settings, when given.
     pub options: Option<Value>,
+    /// Fields to add or update. Fields **absent** from this list are left alone, so
+    /// a payload that omits one does not drop its column; removing a field stays an
+    /// explicit `delete_field`.
+    #[serde(default)]
+    pub fields: Option<Vec<CreateField>>,
 }
 
 /// Update a collection's rules and options.
@@ -475,6 +587,29 @@ pub async fn update(
 
     let rules = input.rules.unwrap_or(existing.rules.clone());
     let options = input.options.unwrap_or(existing.options.clone());
+
+    // Fields first, and outside the transaction below: adding one runs DDL, and
+    // `add_field` manages its own transaction.
+    //
+    // Ignoring them was the first version of this, and it was the worst possible
+    // behaviour: a collection editor sent the whole definition, got a 200, and its
+    // field changes — a relation field most visibly — silently did nothing.
+    if let Some(fields) = input.fields {
+        for field in fields {
+            match existing
+                .fields
+                .iter()
+                .find(|current| current.name == field.name)
+            {
+                None => {
+                    add_field(client, &existing.name, field).await?;
+                }
+                Some(current) => {
+                    update_field(client, &existing.name, current, &field).await?;
+                }
+            }
+        }
+    }
 
     // In a transaction with the notification, so subscribers are told only once
     // the change is actually visible — the same pattern the other mutations use.
@@ -676,4 +811,69 @@ pub async fn table_exists(client: &Client, name: &str) -> Result<bool> {
         .await
         .map_err(db_error)?;
     Ok(row.get(0))
+}
+
+#[cfg(test)]
+mod field_shape_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_field_accepts_both_shapes_for_its_settings() {
+        // PocketBase, and therefore Studio, puts a field type's settings at the
+        // field's top level; this server's own format nests them under `options`.
+        // Serde drops unknown keys, so before this the flat shape arrived with its
+        // settings silently discarded and validation then reported the option
+        // missing — "a relation field needs a `collectionId` option" — which named
+        // the symptom and hid the cause.
+        let flat: CreateField = serde_json::from_value(json!({
+            "name": "author",
+            "type": "relation",
+            "required": false,
+            "unique": false,
+            "collectionId": "abc123",
+            "maxSelect": 1
+        }))
+        .expect("the PocketBase shape");
+        assert_eq!(flat.options["collectionId"], json!("abc123"));
+        assert_eq!(flat.options["maxSelect"], json!(1));
+
+        let nested: CreateField = serde_json::from_value(json!({
+            "name": "author",
+            "type": "relation",
+            "options": { "collectionId": "abc123", "maxSelect": 1 }
+        }))
+        .expect("this server's shape");
+        assert_eq!(nested.options["collectionId"], json!("abc123"));
+
+        // Both at once: the explicit container wins, so a caller can override.
+        let both: CreateField = serde_json::from_value(json!({
+            "name": "author",
+            "type": "relation",
+            "collectionId": "loses",
+            "options": { "collectionId": "wins" }
+        }))
+        .expect("both");
+        assert_eq!(both.options["collectionId"], json!("wins"));
+
+        // The field's own attributes are not mistaken for settings.
+        assert_eq!(flat.name, "author");
+        assert!(!flat.required);
+        assert!(!flat.unique);
+        assert_eq!(flat.field_type, FieldType::Relation);
+    }
+
+    #[test]
+    fn a_select_field_takes_its_values_from_either_shape() {
+        // The same mechanism, for another field type: it was never specific to
+        // relations, which is why the fix belongs in the parsing rather than in the
+        // relation branch.
+        let flat: CreateField = serde_json::from_value(json!({
+            "name": "state",
+            "type": "select",
+            "values": ["draft", "live"]
+        }))
+        .expect("the PocketBase shape");
+        assert_eq!(flat.options["values"], json!(["draft", "live"]));
+    }
 }

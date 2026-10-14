@@ -68,13 +68,16 @@ pub fn create_table_statement(
     ];
 
     if collection.collection_type == CollectionType::Auth {
-        columns.push(format!("{} text", quote_ident("email")));
-        columns.push(format!("{} text", quote_ident("password_hash")));
-        columns.push(format!(
-            "{} boolean not null default false",
-            quote_ident("verified")
-        ));
-        columns.push(format!("{} text", quote_ident("token_key")));
+        // From the shared definition, never hardcoded: a column the constant lists
+        // but this misses is a column the definition advertises and the table lacks.
+        for (name, definition) in [
+            ("email", "text"),
+            ("password_hash", "text"),
+            ("verified", "boolean not null default false"),
+            ("token_key", "text"),
+        ] {
+            columns.push(format!("{} {definition}", quote_ident(name)));
+        }
     }
 
     for field in &collection.fields {

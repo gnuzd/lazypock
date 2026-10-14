@@ -346,9 +346,20 @@ struct Writable<'a> {
 fn writable_columns(collection: &Collection) -> Result<Vec<Writable<'_>>> {
     let mut columns = Vec::with_capacity(collection.fields.len() + 2);
 
+    let is_auth = collection.collection_type.is_auth();
+
     for field in &collection.fields {
         if field.field_type == FieldType::Autodate {
             // Server-owned: input is ignored rather than written.
+            continue;
+        }
+        // An auth collection's system fields are recorded so a client can see them —
+        // an account has an email and a password, and a definition that showed
+        // neither was the bug this fixes — but they are **not** written from input.
+        // `email` is validated and `password_hash` is supplied by the caller that
+        // hashed the password, both through `extra`; letting a client post a
+        // `password_hash` column would be a way to set it directly.
+        if is_auth && crate::types::AUTH_SYSTEM_COLUMNS.contains(&field.name.as_str()) {
             continue;
         }
         columns.push(Writable {
@@ -358,17 +369,21 @@ fn writable_columns(collection: &Collection) -> Result<Vec<Writable<'_>>> {
         });
     }
 
-    if collection.collection_type.is_auth() {
-        columns.push(Writable {
-            name: "email",
-            column_type: "text",
-            field: None,
-        });
-        columns.push(Writable {
-            name: "verified",
-            column_type: "boolean",
-            field: None,
-        });
+    if is_auth {
+        // Only when the collection has no field of that name. The auth system
+        // columns are also **fields** now — the migration and the create path both
+        // record them, so a client can see them — and pushing them unconditionally
+        // named `email` twice and the write failed with `column "email" specified
+        // more than once`. That is the failure this de-duplication exists for.
+        for (name, column_type) in [("email", "text"), ("verified", "boolean")] {
+            if !collection.fields.iter().any(|field| field.name == name) {
+                columns.push(Writable {
+                    name,
+                    column_type,
+                    field: None,
+                });
+            }
+        }
     }
 
     Ok(columns)

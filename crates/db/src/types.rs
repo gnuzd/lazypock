@@ -217,12 +217,24 @@ pub fn validate_identifier(kind: &str, name: &str) -> Result<()> {
             "{kind} {name:?} must start with a lowercase letter"
         )));
     }
+    // Mixed case is allowed after the first letter, so `firstName` works — which is
+    // what PocketBase and its clients use, and what the user asked for.
+    //
+    // The original rule was lowercase throughout, on the reasoning that Postgres
+    // folds unquoted identifiers to lowercase. That reasoning holds only if column
+    // references are left unquoted, and this codebase quotes every one of them —
+    // `quote_ident` is applied to the table and to each column in the filter
+    // compiler, the read builder and the DDL. So the constraint was buying nothing
+    // and costing camelCase.
+    //
+    // A lowercase first letter is still required: it keeps generated names
+    // predictable, and nothing in the reference semantics needs a leading capital.
     if let Some(bad) = name
         .chars()
-        .find(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_'))
+        .find(|c| !(c.is_ascii_alphanumeric() || *c == '_'))
     {
         return Err(Error::invalid(format!(
-            "{kind} {name:?} contains {bad:?}; only lowercase letters, digits and \"_\" are allowed"
+            "{kind} {name:?} contains {bad:?}; only letters, digits and \"_\" are allowed"
         )));
     }
     Ok(())
