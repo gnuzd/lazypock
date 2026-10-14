@@ -115,13 +115,6 @@ async fn a_hook_decides_what_a_created_record_stores() {
     app.cleanup().await;
 }
 
-// KNOWN FAILURE, not a passing test. The hook stops running after a *second*
-// reload in the same test: the write is refused for a missing `slug`, which means
-// the hook did not execute. It passes when the only reload happens before the
-// first request, so the lead is either the worker's throttled auto-reload or the
-// test harness sharing a hooks directory between tests. Not yet isolated, so it is
-// ignored rather than deleted: the failure is reproducible here on purpose.
-#[ignore = "hook stops running after a second reload; see the comment above"]
 #[tokio::test]
 async fn a_hook_that_supplies_a_required_field_makes_the_write_possible() {
     let Some(app) = test_app("http_hooks_required").await else {
@@ -196,13 +189,6 @@ async fn a_hook_cannot_write_something_the_collection_rejects() {
     app.cleanup().await;
 }
 
-// KNOWN FAILURE, not a passing test. The hook stops running after a *second*
-// reload in the same test: the write is refused for a missing `slug`, which means
-// the hook did not execute. It passes when the only reload happens before the
-// first request, so the lead is either the worker's throttled auto-reload or the
-// test harness sharing a hooks directory between tests. Not yet isolated, so it is
-// ignored rather than deleted: the failure is reproducible here on purpose.
-#[ignore = "hook stops running after a second reload; see the comment above"]
 #[tokio::test]
 async fn a_broken_hook_file_is_reported_and_the_previous_hooks_keep_serving() {
     let Some(app) = test_app("http_hooks_broken").await else {

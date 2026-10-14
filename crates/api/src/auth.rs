@@ -369,6 +369,12 @@ fn auth_body(outcome: &AuthOutcome, record: Value) -> Value {
 /// The hasher rejects a short password with a generic failure; running the field
 /// validation first means the client still gets the usual per-field detail. The
 /// record layer validates again, which is harmless.
+/// Validate a request body before a transaction is opened.
+///
+/// `partial` skips the required-field check, and a caller passing `true` is saying
+/// "something may fill an absent field in later" — true for an update, and true
+/// for a create with hooks. The authoritative check always runs in the record
+/// layer, so this is an early, cheaper report rather than the only guard.
 pub fn validate_first(
     collection: &Collection,
     input: &Value,

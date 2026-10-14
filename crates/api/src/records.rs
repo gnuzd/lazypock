@@ -232,7 +232,17 @@ pub async fn create_record(
     let Json(body) = json_body(body)?;
     let (_schema, resolved) = resolve(&state, &collection)?;
 
-    crate::auth::validate_first(&resolved.collection, &body, false)?;
+    // One validation, in the record layer, *after* the before-hook. That is what
+    // lets a hook supply a field the caller did not send — a generated slug is the
+    // case this exists for — and it keeps every field's error in one aggregated
+    // response. A pre-pass here would instead fail fast on the first bad field and
+    // report only that one, which is worse for a client building a form.
+    //
+    // An auth collection is the exception: `auth_columns` hashes the password here,
+    // before any hook runs, so an auth write still needs its early pass.
+    if resolved.collection.collection_type.is_auth() {
+        crate::auth::validate_first(&resolved.collection, &body, false)?;
+    }
     let extra = crate::auth::auth_columns(&resolved.collection, &body)?;
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
