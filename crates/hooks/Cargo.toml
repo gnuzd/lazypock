@@ -1,0 +1,17 @@
+[package]
+name = "lazypock-hooks"
+description = "lazypock TypeScript hooks: a QuickJS runtime with type stripping"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+lazypock-core.workspace = true
+rquickjs = "0.14"
+serde_json = "1.0.154"
+
+[dev-dependencies]
