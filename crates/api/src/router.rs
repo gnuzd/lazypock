@@ -13,6 +13,7 @@ use crate::backup;
 use crate::batch;
 use crate::collections as admin;
 use crate::cors;
+use crate::crons;
 use crate::error::ApiError;
 use crate::files;
 use crate::logs;
@@ -73,6 +74,16 @@ pub fn router(state: AppState) -> Router {
             get(logs::get_retention).patch(logs::set_retention),
         )
         .route("/api/logs/{id}", get(logs::show))
+        // Cron jobs. Superuser-only: running one executes SQL or an HTTP request.
+        .route("/api/crons", get(crons::list).post(crons::create))
+        .route("/api/crons/validate", post(crons::validate))
+        .route(
+            "/api/crons/{id}",
+            get(crons::get)
+                .patch(crons::update)
+                .delete(crons::delete)
+                .post(crons::run_now),
+        )
         // Reading the available sizes is public: a client needs them to build a
         // thumbnail URL. Changing them is a superuser action, enforced in the
         // handlers.
