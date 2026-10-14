@@ -73,11 +73,14 @@ impl FilterContext {
         columns.insert("id".into(), "text".into());
         columns.insert("created".into(), "timestamptz".into());
         columns.insert("updated".into(), "timestamptz".into());
+        // `email` and `verified` are ordinary columns. `password_hash` and
+        // `token_key` are deliberately *absent*: everything in this map is both
+        // filterable and, with `fields=*`, returned in the record document — and
+        // a credential hash must never leave the server. Keeping them out also
+        // means a filter naming them is rejected as an unknown field.
         if collection.collection_type == CollectionType::Auth {
             columns.insert("email".into(), "text".into());
-            columns.insert("password_hash".into(), "text".into());
             columns.insert("verified".into(), "boolean".into());
-            columns.insert("token_key".into(), "text".into());
         }
 
         let mut relations = HashMap::new();

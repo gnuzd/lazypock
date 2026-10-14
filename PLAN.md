@@ -782,7 +782,7 @@ Independent tracks, so progress and estimates do not entangle:
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
-| E. Access control | partly — argon2id passwords, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the `superuser create` CLI, and the auth HTTP endpoints (`auth-with-password`, `auth-refresh`, `auth-methods`) behind a bearer middleware are done. Creating records in an *auth* collection (the `email`/`password` columns are not writable through the records path yet) and Postgres RLS remain. |
+| E. Access control | done for password auth — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, **and accounts in auth collections** (register/login/change password). Postgres RLS remains. |
 | F. Realtime | not started |
 | G–I. Files, hooks, jobs | not started |
 | J–K. Studio, SDK | not started |
@@ -810,6 +810,10 @@ Two security notes for the auth layer:
 * Access tokens are verified from the signature alone, with no database round trip. Revocation
   therefore takes effect at the next refresh; the 15-minute token lifetime is the backstop. Pinned by
   a test so the behaviour cannot drift silently.
+* `password_hash` and `token_key` are deliberately **absent from the filter context**. Everything in
+  that map is both filterable and returned by `fields=*`, so having them there returned the password
+  hash to the client on every auth-collection read — a real leak that is now pinned by a test, along
+  with a check that naming either column in `fields` or `filter` is refused.
 
 ### Kept-out-of-tree code and the Rust server
 

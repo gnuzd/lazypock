@@ -368,6 +368,17 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
         }
     }
 
+    // An auth collection needs case-insensitive unique emails: login looks the
+    // account up by `lower(email)`, so a duplicate would be ambiguous.
+    if collection.collection_type.is_auth() && !existing_table {
+        transaction
+            .batch_execute(&ddl::create_auth_email_index_statement(&collection.name))
+            .await
+            .map_err(|err| {
+                Error::invalid(format!("failed to make emails unique in {name:?}: {err}"))
+            })?;
+    }
+
     notify_schema_changed(&transaction).await?;
     transaction.commit().await.map_err(db_error)?;
 

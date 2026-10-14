@@ -11,10 +11,21 @@ use lazypock_core::error::{Error, Result};
 use serde_json::{Map, Value};
 
 use crate::collections::{Collection, Field};
-use crate::types::{self, FieldType};
+use crate::types::{self, CollectionType, FieldType};
 
 /// Keys a client may send that the server owns and ignores on write.
 pub const SERVER_MANAGED_KEYS: &[&str] = &["created", "updated", "collectionId", "collectionName"];
+
+/// Keys an **auth** collection accepts that are columns rather than
+/// user-defined fields.
+///
+/// `password` is deliberately not a column: it is hashed into `password_hash` by
+/// the caller, which owns the hashing. `password_hash` and `token_key` are never
+/// accepted from a client.
+pub const AUTH_INPUT_KEYS: &[&str] = &["email", "verified", "password", "passwordConfirm"];
+
+/// Shortest password accepted for an auth-collection account.
+pub const MIN_PASSWORD_LEN: usize = 8;
 
 /// One field's validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,8 +98,14 @@ pub fn validate(
 ) -> std::result::Result<(), ValidationErrors> {
     let mut errors = ValidationErrors::default();
 
+    let is_auth = collection.collection_type == CollectionType::Auth;
+
     for key in input.keys() {
         if key == "id" || SERVER_MANAGED_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        // An auth collection has writable columns that are not user fields.
+        if is_auth && AUTH_INPUT_KEYS.contains(&key.as_str()) {
             continue;
         }
         if collection.field(key).is_none() {
@@ -142,10 +159,95 @@ pub fn validate(
         }
     }
 
+    if is_auth {
+        validate_auth_keys(input, partial, &mut errors);
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+/// Validate the built-in keys of an auth collection.
+///
+/// These are columns rather than user-defined fields, so the field loop above
+/// never sees them.
+fn validate_auth_keys(input: &Map<String, Value>, partial: bool, errors: &mut ValidationErrors) {
+    match input.get("email") {
+        None if partial => {}
+        None | Some(Value::Null) => {
+            errors.insert("email", "validation_required", "An email is required.");
+        }
+        Some(value) => match value.as_str() {
+            Some(text) if looks_like_email(text) => {}
+            Some(_) => {
+                errors.insert(
+                    "email",
+                    "validation_invalid_email",
+                    "The email must be a valid address.",
+                );
+            }
+            None => {
+                errors.insert(
+                    "email",
+                    "validation_invalid_value",
+                    "The email must be a string.",
+                );
+            }
+        },
+    }
+
+    if let Some(value) = input.get("verified") {
+        if !value.is_null() && parse_bool(value).is_none() {
+            errors.insert(
+                "verified",
+                "validation_invalid_value",
+                "verified must be a boolean.",
+            );
+        }
+    }
+
+    let password = input.get("password");
+    match password {
+        // Omitting the password on an update leaves it alone.
+        None if partial => {}
+        None | Some(Value::Null) => {
+            errors.insert(
+                "password",
+                "validation_required",
+                "A password is required when creating an account.",
+            );
+        }
+        Some(value) => match value.as_str() {
+            Some(text) if text.chars().count() >= MIN_PASSWORD_LEN => {}
+            Some(_) => {
+                errors.insert(
+                    "password",
+                    "validation_min_text",
+                    format!("The password must be at least {MIN_PASSWORD_LEN} characters."),
+                );
+            }
+            None => {
+                errors.insert(
+                    "password",
+                    "validation_invalid_value",
+                    "The password must be a string.",
+                );
+            }
+        },
+    }
+
+    // PocketBase's confirmation field: when it is sent, it must match.
+    if let Some(Value::String(confirmation)) = input.get("passwordConfirm") {
+        if password.and_then(Value::as_str) != Some(confirmation.as_str()) {
+            errors.insert(
+                "passwordConfirm",
+                "validation_mismatch",
+                "The passwords do not match.",
+            );
+        }
     }
 }
 

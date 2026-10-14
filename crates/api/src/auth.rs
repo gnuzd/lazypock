@@ -14,6 +14,7 @@ use axum::Json;
 use lazypock_auth::token::Claims;
 use lazypock_auth::AuthOutcome;
 use lazypock_core::error::Error;
+use lazypock_db::collections::Collection;
 use lazypock_db::query::compile::AuthContext;
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
 use lazypock_db::records;
@@ -315,6 +316,57 @@ fn auth_body(outcome: &AuthOutcome, record: Value) -> Value {
         "expiresIn": outcome.expires_in,
         "record": record,
     })
+}
+
+/// Validate before hashing.
+///
+/// The hasher rejects a short password with a generic failure; running the field
+/// validation first means the client still gets the usual per-field detail. The
+/// record layer validates again, which is harmless.
+pub fn validate_first(
+    collection: &Collection,
+    input: &Value,
+    partial: bool,
+) -> Result<(), ApiError> {
+    let Some(object) = input.as_object() else {
+        // A non-object body is reported by the record layer.
+        return Ok(());
+    };
+    lazypock_db::validation::validate(collection, object, partial).map_err(|errors| {
+        ApiError::from(lazypock_db::records::RecordWriteError::Validation(errors))
+    })
+}
+
+/// The server-managed columns an auth-collection write needs.
+///
+/// `password` is not a column: it is hashed *here*, which is why the record layer
+/// is handed the result rather than doing the hashing itself — hashing lives in
+/// the auth crate, and that crate depends on the database layer, so the inverse
+/// would be a cycle.
+///
+/// A new password also rotates the account's token key, so every access token
+/// issued before it stops being valid at the next refresh.
+pub fn auth_columns(
+    collection: &Collection,
+    input: &Value,
+) -> Result<Vec<(String, Option<String>)>, ApiError> {
+    if !collection.collection_type.is_auth() {
+        return Ok(Vec::new());
+    }
+    let Some(password) = input.get("password").and_then(Value::as_str) else {
+        return Ok(Vec::new());
+    };
+
+    Ok(vec![
+        (
+            "password_hash".to_string(),
+            Some(lazypock_auth::password::hash(password).map_err(ApiError::new)?),
+        ),
+        (
+            "token_key".to_string(),
+            Some(lazypock_auth::sessions::generate_token().map_err(ApiError::new)?),
+        ),
+    ])
 }
 
 fn json_body(

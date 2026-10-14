@@ -204,15 +204,18 @@ async fn execute(runner: &dyn QueryRunner, step: &Step) -> Result<(u16, Value), 
     match step.method.as_str() {
         "POST" => {
             let input = step.input.clone().expect("planned");
-            let record = records::create(runner, &step.collection, &step.context, input)
-                .await
-                .map_err(ApiError::from)?;
+            let extra = crate::auth::auth_columns(&step.collection, &input)?;
+            let record =
+                records::create_with(runner, &step.collection, &step.context, input, &extra)
+                    .await
+                    .map_err(ApiError::from)?;
             Ok((201, record))
         }
         "PATCH" => {
             let input = step.input.clone().expect("planned");
             let id = step.id.clone().expect("planned");
-            match records::update(runner, &step.collection, &step.context, &id, input)
+            let extra = crate::auth::auth_columns(&step.collection, &input)?;
+            match records::update_with(runner, &step.collection, &step.context, &id, input, &extra)
                 .await
                 .map_err(ApiError::from)?
             {

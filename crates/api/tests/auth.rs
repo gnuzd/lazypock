@@ -9,10 +9,12 @@ mod support;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use axum::Router;
-use serde_json::json;
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use lazypock_auth::superuser;
+use lazypock_db::collections::{self, CreateCollection, CreateField};
+use lazypock_db::types::{CollectionType, FieldType};
 
 use support::{get, post, test_app, TestApp};
 
@@ -302,6 +304,289 @@ async fn an_unknown_value_is_reported_once_without_leaking_internals() {
         !body.to_string().contains("select "),
         "the response leaked SQL: {body}"
     );
+
+    app.cleanup().await;
+}
+
+// ------------------------------------------------- auth collection accounts
+
+/// Create a `users` auth collection.
+async fn seed_auth_collection(app: &TestApp) {
+    let mut client = app.client().await;
+    collections::create(
+        &mut client,
+        CreateCollection {
+            name: "users".into(),
+            collection_type: CollectionType::Auth,
+            fields: vec![CreateField {
+                name: "name".into(),
+                field_type: FieldType::Text,
+                required: false,
+                unique: false,
+                options: json!({}),
+            }],
+            rules: json!({}),
+            options: json!({}),
+            adopt_existing_table: false,
+        },
+    )
+    .await
+    .expect("create the users collection");
+    app.reload_schema().await;
+}
+
+async fn register(app: &TestApp, body: Value) -> support::Reply {
+    post(&router(app).await, "/api/collections/users/records", body).await
+}
+
+#[tokio::test]
+async fn an_account_can_be_registered_and_used_to_log_in() {
+    let Some(app) = test_app("http_auth_register").await else {
+        return;
+    };
+    seed_auth_collection(&app).await;
+
+    let reply = register(
+        &app,
+        json!({
+            "email": "Alice@Example.com",
+            "password": "correct-horse",
+            "passwordConfirm": "correct-horse",
+            "name": "Alice",
+        }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let record = reply.body.expect("body");
+    assert_eq!(record["name"], json!("Alice"));
+    assert_eq!(record["email"], json!("Alice@Example.com"));
+    assert_eq!(record["verified"], json!(false));
+
+    // The password never comes back, in any form.
+    let serialized = record.to_string();
+    for secret in ["correct-horse", "argon2", "password_hash", "token_key"] {
+        assert!(
+            !serialized.contains(secret),
+            "the created record leaked {secret}: {serialized}"
+        );
+    }
+
+    // Log in with it, case-insensitively on the email.
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/users/auth-with-password",
+        json!({ "identity": "alice@example.com", "password": "correct-horse" }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("body");
+    assert_eq!(body["record"]["id"], record["id"]);
+    assert_eq!(body["record"]["email"], json!("Alice@Example.com"));
+
+    let token = body["token"].as_str().expect("token").to_string();
+    assert_eq!(
+        with_bearer(&app, "/api/health", &token).await,
+        StatusCode::OK
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn registration_is_validated() {
+    let Some(app) = test_app("http_auth_register_validation").await else {
+        return;
+    };
+    seed_auth_collection(&app).await;
+
+    let cases: &[(Value, &str, &str)] = &[
+        (
+            json!({"email": "a@example.com"}),
+            "password",
+            "validation_required",
+        ),
+        (
+            json!({"email": "a@example.com", "password": "short"}),
+            "password",
+            "validation_min_text",
+        ),
+        (
+            json!({"email": "nope", "password": "correct-horse"}),
+            "email",
+            "validation_invalid_email",
+        ),
+        (
+            json!({"password": "correct-horse"}),
+            "email",
+            "validation_required",
+        ),
+        (
+            json!({"email": "a@example.com", "password": "correct-horse", "passwordConfirm": "different"}),
+            "passwordConfirm",
+            "validation_mismatch",
+        ),
+        (
+            json!({"email": "a@example.com", "password": "correct-horse", "nope": 1}),
+            "nope",
+            "validation_unknown_field",
+        ),
+    ];
+
+    for (body, field, code) in cases {
+        let reply = register(&app, body.clone()).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "for {body}");
+        let response = reply.body.expect("body");
+        assert_eq!(
+            response["data"][field]["code"],
+            json!(code),
+            "for {body}: {response}"
+        );
+    }
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn emails_are_unique_across_accounts() {
+    let Some(app) = test_app("http_auth_register_unique").await else {
+        return;
+    };
+    seed_auth_collection(&app).await;
+
+    let first = register(
+        &app,
+        json!({"email": "a@example.com", "password": "correct-horse"}),
+    )
+    .await;
+    assert_eq!(first.status, StatusCode::CREATED);
+
+    // Case-insensitively too: login looks the account up by lower(email), so two
+    // accounts sharing an address would make that lookup ambiguous.
+    let duplicate = register(
+        &app,
+        json!({"email": "A@Example.com", "password": "another-one"}),
+    )
+    .await;
+    assert_eq!(
+        duplicate.status,
+        StatusCode::CONFLICT,
+        "{:?}",
+        duplicate.body
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn changing_a_password_ends_existing_sessions() {
+    let Some(app) = test_app("http_auth_register_password").await else {
+        return;
+    };
+    seed_auth_collection(&app).await;
+    let router = router(&app).await;
+
+    let record = register(
+        &app,
+        json!({"email": "a@example.com", "password": "correct-horse"}),
+    )
+    .await
+    .body
+    .expect("body");
+    let id = record["id"].as_str().expect("id").to_string();
+
+    let session = post(
+        &router,
+        "/api/collections/users/auth-with-password",
+        json!({ "identity": "a@example.com", "password": "correct-horse" }),
+    )
+    .await
+    .body
+    .expect("body");
+    let refresh = session["refreshToken"]
+        .as_str()
+        .expect("refresh")
+        .to_string();
+
+    // Change the password through the ordinary records API.
+    let request = Request::builder()
+        .method(Method::PATCH)
+        .uri(format!("/api/collections/users/records/{id}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({ "password": "a-new-password" }).to_string(),
+        ))
+        .expect("request");
+    let response = router.clone().oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The old password stops working and the new one starts.
+    let old = post(
+        &router,
+        "/api/collections/users/auth-with-password",
+        json!({ "identity": "a@example.com", "password": "correct-horse" }),
+    )
+    .await;
+    assert_eq!(old.status, StatusCode::UNAUTHORIZED);
+    let new = post(
+        &router,
+        "/api/collections/users/auth-with-password",
+        json!({ "identity": "a@example.com", "password": "a-new-password" }),
+    )
+    .await;
+    assert_eq!(new.status, StatusCode::OK, "{:?}", new.body);
+
+    // The session opened before the change is gone, not merely stale.
+    let replay = post(
+        &router,
+        "/api/collections/users/auth-refresh",
+        json!({ "refreshToken": refresh }),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::UNAUTHORIZED, "{:?}", replay.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn credential_columns_are_neither_returned_nor_filterable() {
+    let Some(app) = test_app("http_auth_credentials_hidden").await else {
+        return;
+    };
+    seed_auth_collection(&app).await;
+    let router = router(&app).await;
+
+    register(
+        &app,
+        json!({"email": "a@example.com", "password": "correct-horse"}),
+    )
+    .await;
+
+    // The default projection must not carry credentials. This was a real leak:
+    // the columns were in the filter context, so `fields=*` returned them.
+    let reply = get(&router, "/api/collections/users/records").await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let serialized = reply.body.expect("body").to_string();
+    for secret in ["password_hash", "token_key", "argon2", "correct-horse"] {
+        assert!(
+            !serialized.contains(secret),
+            "the listing leaked {secret}: {serialized}"
+        );
+    }
+
+    // ... and neither may be requested or filtered on: they are unknown fields.
+    for uri in [
+        "/api/collections/users/records?fields=password_hash",
+        "/api/collections/users/records?fields=id,password_hash",
+        "/api/collections/users/records?filter=password_hash%3D%22x%22",
+        "/api/collections/users/records?filter=token_key%3D%22x%22",
+    ] {
+        let reply = get(&router, uri).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::BAD_REQUEST,
+            "{uri} should have been refused"
+        );
+    }
 
     app.cleanup().await;
 }

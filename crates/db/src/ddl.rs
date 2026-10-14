@@ -223,6 +223,20 @@ pub fn create_unique_index_statement(table: &str, column: &str) -> String {
     )
 }
 
+/// The case-insensitive unique email index every auth collection needs.
+///
+/// Login looks an account up by `lower(email)`, so a duplicate would make that
+/// lookup ambiguous — and would let two accounts share one address. The index is
+/// partial so several accounts may have no email at all, which is what an
+/// OAuth-only account looks like.
+pub fn create_auth_email_index_statement(table: &str) -> String {
+    format!(
+        "create unique index {} on {} (lower(\"email\")) where \"email\" is not null",
+        quote_ident(&index_name(table, "email")),
+        quote_ident(table)
+    )
+}
+
 /// `drop index if exists`.
 pub fn drop_index_statement(table: &str, column: &str) -> String {
     format!(
@@ -423,6 +437,20 @@ mod tests {
             "drop table if exists \"posts\""
         );
         assert!(drop_table_statement("Posts").is_err());
+    }
+
+    #[test]
+    fn auth_collections_get_a_case_insensitive_unique_email_index() {
+        let statement = create_auth_email_index_statement("users");
+        assert!(
+            statement.starts_with("create unique index \"idx_users_email\" on \"users\""),
+            "{statement}"
+        );
+        assert!(statement.contains("(lower(\"email\"))"), "{statement}");
+        assert!(
+            statement.contains("where \"email\" is not null"),
+            "{statement}"
+        );
     }
 
     #[test]

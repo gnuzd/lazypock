@@ -210,9 +210,17 @@ pub async fn create_record(
     let (_schema, resolved) = resolve(&state, &collection)?;
 
     let client = state.db.client().await.map_err(ApiError::new)?;
-    let record = records::create(&client, &resolved.collection, &resolved.context, body)
-        .await
-        .map_err(ApiError::from)?;
+    crate::auth::validate_first(&resolved.collection, &body, false)?;
+    let extra = crate::auth::auth_columns(&resolved.collection, &body)?;
+    let record = records::create_with(
+        &client,
+        &resolved.collection,
+        &resolved.context,
+        body,
+        &extra,
+    )
+    .await
+    .map_err(ApiError::from)?;
 
     Ok((StatusCode::CREATED, Json(record)).into_response())
 }
@@ -226,10 +234,41 @@ pub async fn update_record(
     let Json(body) = json_body(body)?;
     let (_schema, resolved) = resolve(&state, &collection)?;
 
-    let client = state.db.client().await.map_err(ApiError::new)?;
-    let record = records::update(&client, &resolved.collection, &resolved.context, &id, body)
+    // One transaction, so a password change and the session revocation that must
+    // accompany it either both happen or neither does.
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let transaction = client
+        .transaction()
         .await
-        .map_err(ApiError::from)?;
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
+    crate::auth::validate_first(&resolved.collection, &body, true)?;
+    let extra = crate::auth::auth_columns(&resolved.collection, &body)?;
+    let changed_password = extra.iter().any(|(name, _)| name == "password_hash");
+
+    let record = records::update_with(
+        &transaction,
+        &resolved.collection,
+        &resolved.context,
+        &id,
+        body,
+        &extra,
+    )
+    .await
+    .map_err(ApiError::from)?;
+
+    if changed_password {
+        // A password change ends outstanding sessions, exactly as it does for a
+        // superuser: it is usually a response to a suspected compromise.
+        lazypock_auth::sessions::revoke_for_user(&transaction, &resolved.collection.id, &id)
+            .await
+            .map_err(ApiError::new)?;
+    }
+
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
 
     match record {
         Some(record) => Ok((StatusCode::OK, Json(record)).into_response()),

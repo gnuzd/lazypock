@@ -10,7 +10,7 @@ use tokio_postgres::types::ToSql;
 
 use lazypock_core::error::{Error, Result};
 
-use crate::collections::Collection;
+use crate::collections::{Collection, Field};
 use crate::ddl::quote_ident;
 use crate::pool::db_error;
 use crate::query::compile::FilterContext;
@@ -84,6 +84,20 @@ pub async fn create(
     context: &FilterContext,
     input: Value,
 ) -> std::result::Result<Value, RecordWriteError> {
+    create_with(runner, collection, context, input, &[]).await
+}
+
+/// Insert a record, adding server-managed columns the caller has computed.
+///
+/// `extra` carries values such as an auth account's password hash and token key,
+/// which the record layer cannot derive itself.
+pub async fn create_with(
+    runner: &dyn QueryRunner,
+    collection: &Collection,
+    context: &FilterContext,
+    input: Value,
+    extra: &[(String, Option<String>)],
+) -> std::result::Result<Value, RecordWriteError> {
     let object = expect_object(&input)?;
     validation::validate(collection, object, false).map_err(RecordWriteError::Validation)?;
 
@@ -92,15 +106,17 @@ pub async fn create(
     let mut placeholders: Vec<String> = vec!["$1::text".to_string()];
     let mut params: Vec<String> = vec![id];
 
-    for field in &collection.fields {
-        if field.field_type == FieldType::Autodate {
-            continue;
-        }
-        let Some(value) = object.get(&field.name) else {
+    for writable in writable_columns(collection).map_err(RecordWriteError::Other)? {
+        let Some(value) = object.get(writable.name) else {
             continue;
         };
-        columns.push(field.name.clone());
-        placeholders.push(placeholder(field, value, &mut params)?);
+        columns.push(writable.name.to_string());
+        placeholders.push(writable_placeholder(&writable, value, &mut params)?);
+    }
+
+    for (name, value) in extra {
+        columns.push(name.clone());
+        placeholders.push(text_placeholder(value, &mut params));
     }
 
     let document = record_document(collection, context)?;
@@ -130,21 +146,35 @@ pub async fn update(
     id: &str,
     input: Value,
 ) -> std::result::Result<Option<Value>, RecordWriteError> {
+    update_with(runner, collection, context, id, input, &[]).await
+}
+
+/// Update a record, adding server-managed columns the caller has computed.
+pub async fn update_with(
+    runner: &dyn QueryRunner,
+    collection: &Collection,
+    context: &FilterContext,
+    id: &str,
+    input: Value,
+    extra: &[(String, Option<String>)],
+) -> std::result::Result<Option<Value>, RecordWriteError> {
     let object = expect_object(&input)?;
     validation::validate(collection, object, true).map_err(RecordWriteError::Validation)?;
 
     let mut assignments: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
-    for field in &collection.fields {
-        if field.field_type == FieldType::Autodate {
-            continue;
-        }
-        let Some(value) = object.get(&field.name) else {
+    for writable in writable_columns(collection).map_err(RecordWriteError::Other)? {
+        let Some(value) = object.get(writable.name) else {
             continue;
         };
-        let placeholder = placeholder(field, value, &mut params)?;
-        assignments.push(format!("{} = {placeholder}", quote_ident(&field.name)));
+        let placeholder = writable_placeholder(&writable, value, &mut params)?;
+        assignments.push(format!("{} = {placeholder}", quote_ident(writable.name)));
+    }
+
+    for (name, value) in extra {
+        let placeholder = text_placeholder(value, &mut params);
+        assignments.push(format!("{} = {placeholder}", quote_ident(name)));
     }
 
     // A write happened, so the row's `updated` moves even if nothing else did.
@@ -248,9 +278,90 @@ fn record_document(
     .map_err(RecordWriteError::Other)
 }
 
+/// A column a client may write.
+struct Writable<'a> {
+    name: &'a str,
+    /// The Postgres column type, used as the parameter cast.
+    column_type: &'static str,
+    /// The user field backing the column; `None` for an auth system column.
+    field: Option<&'a Field>,
+}
+
+/// The columns a client may write.
+///
+/// That is the collection's own fields, plus the auth system columns for an auth
+/// collection — those are columns rather than user-defined fields, so without
+/// this an account could never be given an email.
+fn writable_columns(collection: &Collection) -> Result<Vec<Writable<'_>>> {
+    let mut columns = Vec::with_capacity(collection.fields.len() + 2);
+
+    for field in &collection.fields {
+        if field.field_type == FieldType::Autodate {
+            // Server-owned: input is ignored rather than written.
+            continue;
+        }
+        columns.push(Writable {
+            name: field.name.as_str(),
+            column_type: field.column_type()?,
+            field: Some(field),
+        });
+    }
+
+    if collection.collection_type.is_auth() {
+        columns.push(Writable {
+            name: "email",
+            column_type: "text",
+            field: None,
+        });
+        columns.push(Writable {
+            name: "verified",
+            column_type: "boolean",
+            field: None,
+        });
+    }
+
+    Ok(columns)
+}
+
+/// Render the bind placeholder for a writable column, appending to `params`.
+fn writable_placeholder(
+    writable: &Writable<'_>,
+    value: &Value,
+    params: &mut Vec<String>,
+) -> std::result::Result<String, RecordWriteError> {
+    let Some(field) = writable.field else {
+        // An auth system column: plain text or boolean, already validated.
+        let encoded = if value.is_null() {
+            None
+        } else if writable.column_type == "boolean" {
+            Some(if value.as_bool().unwrap_or(false) {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            })
+        } else {
+            Some(value.as_str().unwrap_or_default().to_string())
+        };
+        return Ok(text_placeholder(&encoded, params));
+    };
+
+    placeholder(field, value, params)
+}
+
+/// A placeholder for a raw text value, or SQL `null` when there is none.
+fn text_placeholder(value: &Option<String>, params: &mut Vec<String>) -> String {
+    match value {
+        None => "null".to_string(),
+        Some(text) => {
+            params.push(text.clone());
+            format!("${}::text", params.len())
+        }
+    }
+}
+
 /// Render the bind placeholder for a field's value, appending to `params`.
 fn placeholder(
-    field: &crate::collections::Field,
+    field: &Field,
     value: &Value,
     params: &mut Vec<String>,
 ) -> std::result::Result<String, RecordWriteError> {
