@@ -128,6 +128,15 @@ async fn superuser_create(config: &Config, email: &str, password: &str) -> Resul
     telemetry::init(config.log_level, config.log_format)?;
 
     let db = Db::from_config(config).await?;
+
+    // Bring the database up to date first. Creating the very first superuser is
+    // exactly the moment the schema may not exist yet, so this command cannot
+    // assume migrations have run.
+    {
+        let mut client = db.client().await?;
+        migrate::run(&mut client).await?;
+    }
+
     let client = db.client().await?;
     let account = lazypock_auth::superuser::create(&client, email, password).await?;
 
