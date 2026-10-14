@@ -6,6 +6,25 @@ mod shutdown;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+/// Whether to adopt tables lazypock did not create, from
+/// `LAZYPOCK_REFLECT_EXISTING`. On by default: pointing lazypock at an existing
+/// database is meant to work, and a table nobody can see is not working.
+///
+/// An unrecognised value is an error rather than a silent default, because the
+/// wrong reading of "off" is a schema nobody can see.
+fn reflect_existing() -> Result<bool> {
+    match std::env::var("LAZYPOCK_REFLECT_EXISTING") {
+        Err(_) => Ok(true),
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "on" | "true" | "yes" => Ok(true),
+            "0" | "off" | "false" | "no" => Ok(false),
+            other => Err(Error::config(format!(
+                "LAZYPOCK_REFLECT_EXISTING must be on or off, got {other:?}"
+            ))),
+        },
+    }
+}
+
 /// Where hook files live, from `LAZYPOCK_HOOKS_DIR`.
 fn hooks_directory() -> String {
     std::env::var("LAZYPOCK_HOOKS_DIR").unwrap_or_else(|_| "hooks".to_string())
@@ -124,6 +143,38 @@ async fn serve(config: Config) -> Result<()> {
     // than on the first request.
     let db = Db::from_config(&config).await?;
     let schema = Arc::new(SchemaCache::new());
+
+    // Bring the database up to date before anything reads it. On a first run
+    // against an empty database this is the whole installation step, and there is
+    // no separate command to remember; against an existing database the runner
+    // skips what is already applied.
+    {
+        let mut client = db.client().await?;
+        let report = migrate::run(&mut client).await?;
+        if !report.applied.is_empty() {
+            tracing::info!(applied = ?report.applied, "migrations applied");
+        }
+
+        // A database that already holds somebody's tables should *work* when
+        // lazypock is pointed at it, rather than showing an empty installation.
+        // Adopting them is what makes that true: every table becomes a collection
+        // and every column a field. Nothing here alters the existing tables.
+        if reflect_existing()? {
+            let reflected = lazypock_db::reflect::reflect(&client).await?;
+            if !reflected.adopted.is_empty() {
+                tracing::info!(
+                    adopted = ?reflected.adopted,
+                    fields = reflected.fields,
+                    "adopted existing tables as collections"
+                );
+            }
+            tracing::info!(
+                skipped = reflected.skipped.len(),
+                "tables left alone (internal, or already a collection)"
+            );
+        }
+    }
+
     {
         let client = db.client().await?;
         schema

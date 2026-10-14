@@ -169,7 +169,11 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
 
     let hub = lazypock_realtime::Hub::new(db.clone(), cache.clone());
     // Each test gets its own storage directory, so uploads cannot leak between them.
-    let files_directory = std::env::temp_dir().join(format!("lazypock-api-files-{nanos}"));
+    // Named after the schema, which is already unique (pid + clock + counter).
+    // A clock value alone is not: two tests can read the same nanosecond, and
+    // then they would share a store — or a hooks directory, which makes one
+    // test's hook fire for another test's request.
+    let files_directory = std::env::temp_dir().join(format!("lazypock-api-files-{schema}"));
     let files = Arc::new(
         lazypock_files::Files::from_config(&lazypock_files::FilesConfig {
             adapter: lazypock_files::StorageAdapter::Local,
@@ -184,7 +188,7 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
         .expect("files"),
     );
 
-    let hooks_directory = std::env::temp_dir().join(format!("lazypock-api-hooks-{nanos}"));
+    let hooks_directory = std::env::temp_dir().join(format!("lazypock-api-hooks-{schema}"));
     std::fs::create_dir_all(&hooks_directory).expect("hooks directory");
     let hooks = Arc::new(lazypock_hooks::HookService::start(
         &hooks_directory,

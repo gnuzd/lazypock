@@ -12,6 +12,7 @@ pub mod migrate;
 pub mod pool;
 pub mod query;
 pub mod records;
+pub mod reflect;
 pub mod rls;
 pub mod runner;
 pub mod schema;

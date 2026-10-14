@@ -788,7 +788,7 @@ Independent tracks, so progress and estimates do not entangle:
 | H. Hooks | **partly, and reachable** — the thread-owned worker (QuickJS is not `Send`, so it lives on its own thread behind a channel), the six events, TypeScript stripping, the loader with hot reload, the `RecordHooks` seam and the `AppState`/create/after wiring are in, and **a hook file genuinely changes what a created record stores, proven end to end**. Remaining: after-hooks on update/delete, and the `$db`/`$http`/`$app` bindings. |
 | I. Jobs & ops | not started |
 | J–K. Studio, SDK | not started |
-| L. Deploy | not started |
+| L. Deploy | **partly** — boot-time auto-migration works on an empty database and on one that already holds tables, and an existing ordinary database is **reflected**: every table becomes a collection and every column a field, verified against a real database. Remaining: the GitHub Action that builds and publishes the image, and the compose/release docs. |
 | M. Cloud | not started |
 
 Deleting a collection can keep its data (`drop_data = false`); re-declaring it with
