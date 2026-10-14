@@ -810,8 +810,8 @@ somebody else's database.
 | F. Realtime | done — the change-event trigger plus `_rt_log`, the `EventBus` seam with a Postgres `LISTEN` implementation, RLS-filtered fan-out with connection-id echo suppression, and SSE at `/api/realtime` with `lastEventId` resume. The Redis backend, event batching and logical replication are deliberately deferred (section 8.8). |
 | G. Files & images | **done** — upload validation, the key layout, local and S3 backends, the delete outbox, the HTTP upload/serve/delete routes, image presets with cached thumbnails, a superuser-gated CRUD API for them, and an orphan sweeper (**resized in-process, so no `imgproxy` sidecar and no extra artifact to ship — a deliberate change from section 10**). Two known limits: AVIF output is refused loudly because the schema allows it and the encoder cannot write it, and the S3 path has **not** been exercised against a live bucket (signing and listing are unit-tested; a live round-trip needs credentials and a bucket). |
 | H. Hooks | **partly** — the thread-owned worker, the six events, TypeScript stripping, the loader with hot reload and the `RecordHooks` seam are in, and **create, update and delete all run their before-hooks and after-hooks** (before runs before validation so a hook can supply a field; after runs post-commit; a before-delete hook can refuse by throwing). Remaining: the `$db`/`$http`/`$app` bindings — see the note below on why `$db` is not a small change. |
-| I. Jobs & ops | not started |
-| J–K. Studio, SDK | **done except Studio's own import-page default.** The SDK is ported and its live integration test passes; the collection admin API exists; `GET /api/files` backs the media library; and backup/restore is complete end to end — `GET /api/export/archive`, `POST /api/import`, `GET /api/import/preflight` — with the documented archive format and both safety invariants enforced server-side (an import never deletes; never writes a `_`-prefixed system collection). Remaining: Studio's import page still defaults `deleteMissing` to **true**; the server refuses to delete regardless, so it can no longer cause loss, but the UI default should be flipped. |
+| I. Jobs & ops | **partly** — request logs are in end to end: `_logs` aligned by migration 0007, a recorder middleware that redacts credential keys and captures error messages, and `GET /api/logs`, `/logs/stats`, `/logs/collections`, `/logs/retention`, `PATCH /logs/retention`, and `DELETE /logs?all=true` and `DELETE /logs?days=n`. The cron **admin API** is in too (`GET/POST/PATCH/DELETE /api/crons`, `POST /crons/validate`, and `POST /crons/{id}` run-now for `sql`/`http`; a `hook` job refuses loudly). Remaining: the cron **scheduler** that fires on `next_run_at`, the job queue, mailer and rate limits. |
+| J–K. Studio, SDK | **done except Studio's own import-page default and the JSON import body.** The SDK is ported and its live integration test passes; the collection admin API exists; `_superusers` is listed as a locked system collection; `GET /api/export` serves the single-document JSON; logs, crons, API keys (`GET/POST/DELETE /api/settings/api-keys`, hashed, scoped, shown once) and `GET /api/import/status` / `POST /api/import/rollback` exist; and backup/restore is complete end to end — `GET /api/export/archive`, `POST /api/import`, `GET /api/import/preflight` — with the documented archive format and both safety invariants enforced server-side (an import never deletes; never writes a `_`-prefixed system collection). Remaining: Studio's import page still defaults `deleteMissing` to **true** (the server refuses to delete regardless, so it cannot cause loss, but the UI default should be flipped), and `POST /api/import` does not yet accept the JSON body a downloaded JSON backup is restored with. |
 | L. Deploy | **partly** — boot-time auto-migration works on an empty database and on one that already holds tables, and an existing ordinary database is **reflected**: every table becomes a collection and every column a field, verified against a real database. Remaining: the GitHub Action that builds and publishes the image, and the compose/release docs. |
 | M. Cloud | not started |
 
@@ -836,6 +836,23 @@ Two security notes for the auth layer:
 * Access tokens are verified from the signature alone, with no database round trip. Revocation
   therefore takes effect at the next refresh; the 15-minute token lifetime is the backstop. Pinned by
   a test so the behaviour cannot drift silently.
+
+Notes from the admin-endpoint pass, recorded so the tradeoffs are not rediscovered:
+
+* **API keys** are stored only as SHA-256 digests under `_settings["auth.api_keys"]` (the `auth.`
+  prefix keeps the store out of `GET /api/settings`), returned raw exactly once, verified in
+  constant time with revocation and expiry honoured, and **scoped**: an API key reaches the
+  collection reads (what codegen needs) and nothing superuser-only. It is accepted as a bearer or
+  as `?api_key=`, which the middleware strips before a strict query parser sees it.
+* **Cron validation** uses `croner` + `chrono-tz`, which brings the IANA timezone database into
+  the binary — a Track L size item, not a free dependency. The cron **scheduler** is still Track I,
+  so `next_run_at` is written but nothing fires on it yet.
+* **Import rollback** is destructive by design (undoing an import means removing what it added) and
+  requires the acting superuser's password. It drops a collection the snapshot lacks with a
+  non-CASCADE drop, so one still referenced by a kept collection would refuse, and its
+  collection-drop and row-replace phases are not one transaction. Stated rather than hidden.
+* The import snapshot is the whole database as **jsonb** in `_import_snapshots`, latest only. That
+  is the reference's tradeoff too; a large database pays for it in row size.
 
 ### Row-level security: what was decided, and why
 
@@ -870,25 +887,13 @@ change so a removed rule stops applying.
 
 ### Kept-out-of-tree code and the Rust server
 
-`studio/` and `lazypock-ts/` are preserved as reference, and neither works against the Rust server
-until it is rebuilt (tracks J and K). They both address records as `/api/{collection}`, which was
-the Elixir shape; the Rust server serves `/api/collections/{collection}/records`. Verified against a
-running node:
-
-| Request | Result |
-|---|---|
-| `GET /api/posts` (studio/SDK path) | `404` |
-| `POST /api/posts` (studio/SDK path) | `404` |
-| `GET /api/collections` (SDK's collection listing) | `404` — the collections meta API is not built yet |
-| `GET /api/collections/posts/records` | `200` |
-| `POST /api/collections/posts/records` | `201` |
-| `GET /api/collections/_superusers/auth-methods` | `200` |
-
-Both still build on their own (`bun run build` for the Studio, `bun run build && bun run typecheck`
-for the SDK), so they remain usable as references. The Studio's `adapter-static` output path was
-still pointed at the deleted Elixir tree (`../core/priv/static/studio`), which recreated `core/` on
-every build; it now writes to `build/studio` and moves to `crates/studio-embed/dist` when that crate
-lands.
+`lazypock-ts/` is rebuilt against this server's PocketBase-canonical routes and its live
+integration test passes. `studio/` is being adapted the same way, and the endpoints it calls — the
+collection admin API, `GET /api/export`, logs, crons, API keys and the import-status/rollback pair —
+now exist. The old Elixir shape (`/api/{collection}`) is gone; records are addressed as
+`/api/collections/{collection}/records`, which the SDK and Studio now use. The Studio's
+`adapter-static` output path writes to `build/studio` and moves to `crates/studio-embed/dist` when
+that crate lands.
 
 ### Roadmap
 
