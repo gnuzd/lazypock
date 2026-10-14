@@ -18,6 +18,7 @@ use crate::presets;
 use crate::realtime;
 use crate::records;
 use crate::state::AppState;
+use crate::superusers;
 
 /// The full application router.
 pub fn router(state: AppState) -> Router {
@@ -35,6 +36,10 @@ pub fn router(state: AppState) -> Router {
         )
         // PocketBase parity, and what a client calls to learn who it is.
         .route("/api/me", get(auth::me))
+        // First-run setup. Public by necessity — a client calls these before anybody
+        // can log in — and `setup` only works while no superuser exists.
+        .route("/api/superusers/check", get(superusers::check))
+        .route("/api/superusers/setup", post(superusers::setup))
         .route("/api/realtime", get(realtime::realtime))
         // The body limit bounds what is buffered before validation can reject it.
         .route(

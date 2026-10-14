@@ -388,7 +388,7 @@ pub async fn jwks(State(state): State<AppState>) -> Result<Response, ApiError> {
     Ok((StatusCode::OK, Json(jwks)).into_response())
 }
 
-fn auth_body(outcome: &AuthOutcome, record: Value) -> Value {
+pub(crate) fn auth_body(outcome: &AuthOutcome, record: Value) -> Value {
     json!({
         "token": outcome.access_token,
         "refreshToken": outcome.refresh_token,
@@ -496,9 +496,9 @@ pub fn auth_columns(
     ])
 }
 
-fn json_body(
-    body: Result<Json<PasswordAuth>, JsonRejection>,
-) -> Result<Json<PasswordAuth>, ApiError> {
+pub(crate) fn json_body<T: serde::de::DeserializeOwned>(
+    body: Result<Json<T>, JsonRejection>,
+) -> Result<Json<T>, ApiError> {
     body.map_err(|rejection| {
         ApiError::new(Error::invalid(format!(
             "invalid JSON body: {}",
