@@ -963,6 +963,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazypock-files"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "hmac 0.13.0",
+ "lazypock-core",
+ "lazypock-db",
+ "serde_json",
+ "sha2 0.11.1",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "lazypock-realtime"
 version = "0.1.0"
 dependencies = [
