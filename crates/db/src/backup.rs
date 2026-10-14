@@ -130,7 +130,7 @@ pub struct Manifest {
 }
 
 /// One collection's line in the manifest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestCollection {
     /// Table name.
     pub name: String,
@@ -288,10 +288,14 @@ pub async fn export(client: &Client) -> Result<Archive> {
             continue;
         }
 
+        // `to_jsonb(t)` renders the whole row, so Postgres decides how each type
+        // becomes JSON. A hand-written match was wrong for `timestamptz` — which
+        // every table here has, as `created` and `updated` — and would have been
+        // wrong again for the next type somebody added.
         let rows = client
             .query(
                 &format!(
-                    "select * from {}",
+                    "select to_jsonb(t) as row from {} t order by id",
                     crate::ddl::quote_ident(&collection.name)
                 ),
                 &[],
@@ -299,7 +303,7 @@ pub async fn export(client: &Client) -> Result<Archive> {
             .await
             .map_err(db_error)?;
 
-        let records: Vec<Value> = rows.iter().map(row_to_json).collect::<Vec<_>>();
+        let records: Vec<Value> = rows.iter().map(|row| row.get("row")).collect();
 
         manifest_collections.push(ManifestCollection {
             name: collection.name.clone(),
@@ -351,61 +355,6 @@ pub async fn export(client: &Client) -> Result<Archive> {
         schema,
         data,
     })
-}
-
-/// Render one row as a JSON object.
-///
-/// Every column goes through Postgres's own `to_jsonb` shape by asking it for the
-/// text form, which keeps the conversion in one place rather than in a hand-written
-/// type match that would drift as columns are added.
-fn row_to_json(row: &tokio_postgres::Row) -> Value {
-    let mut object = serde_json::Map::new();
-    for (index, column) in row.columns().iter().enumerate() {
-        object.insert(column.name().to_string(), column_to_json(row, index));
-    }
-    Value::Object(object)
-}
-
-/// One column of one row as JSON.
-fn column_to_json(row: &tokio_postgres::Row, index: usize) -> Value {
-    use tokio_postgres::types::Type;
-
-    let column = &row.columns()[index];
-    let json: Option<Value> = match *column.type_() {
-        Type::JSON | Type::JSONB => row.get(index),
-        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => {
-            row.get::<_, Option<String>>(index).map(Value::String)
-        }
-        Type::BOOL => row.get::<_, Option<bool>>(index).map(Value::Bool),
-        Type::INT2 => row
-            .get::<_, Option<i16>>(index)
-            .map(|value| Value::from(value as i64)),
-        Type::INT4 => row
-            .get::<_, Option<i32>>(index)
-            .map(|value| Value::from(value as i64)),
-        Type::INT8 => row.get::<_, Option<i64>>(index).map(Value::from),
-        Type::FLOAT4 => row
-            .get::<_, Option<f32>>(index)
-            .and_then(|value| serde_json::Number::from_f64(value as f64))
-            .map(Value::Number),
-        Type::FLOAT8 => row
-            .get::<_, Option<f64>>(index)
-            .and_then(serde_json::Number::from_f64)
-            .map(Value::Number),
-        Type::NUMERIC => row.get::<_, Option<String>>(index).map(|value| {
-            value
-                .parse::<f64>()
-                .ok()
-                .and_then(serde_json::Number::from_f64)
-                .map(Value::Number)
-                .unwrap_or(Value::String(value))
-        }),
-        Type::UUID => row.get::<_, Option<String>>(index).map(Value::String),
-        // Anything else is written as its text form rather than dropped: an archive
-        // that silently loses a column is worse than one holding it as a string.
-        _ => row.get::<_, Option<String>>(index).map(Value::String),
-    };
-    json.unwrap_or(Value::Null)
 }
 
 /// The current time, RFC 3339, from the system clock.
@@ -602,6 +551,435 @@ fn read_text<R: Read + std::io::Seek>(
         .read_to_string(&mut text)
         .map_err(|err| Error::invalid(format!("{name} is not readable text: {err}")))?;
     Ok(Some(text))
+}
+
+// ---------------------------------------------------------------------------
+// Applying an archive
+// ---------------------------------------------------------------------------
+
+use crate::types::FieldType;
+
+/// How an import applies its changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicMode {
+    /// Everything in one transaction: either the whole archive lands or none of it.
+    Batch,
+    /// One transaction per collection, so one bad collection costs only itself.
+    PerCollection,
+    /// No shared transaction: carry on past a failure and report each one.
+    Continue,
+}
+
+impl AtomicMode {
+    /// Parse the value the import form sends.
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "batch" => Ok(AtomicMode::Batch),
+            "per_collection" | "perCollection" => Ok(AtomicMode::PerCollection),
+            "false" | "none" | "continue" => Ok(AtomicMode::Continue),
+            other => Err(Error::invalid(format!(
+                "atomic must be `batch`, `per_collection` or `false`, got {other:?}"
+            ))),
+        }
+    }
+
+    /// The name it reports itself as.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AtomicMode::Batch => "batch",
+            AtomicMode::PerCollection => "per_collection",
+            AtomicMode::Continue => "false",
+        }
+    }
+}
+
+/// What an import was asked to do.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportOptions {
+    /// How to apply it.
+    pub atomic: AtomicMode,
+    /// Whether a large import has been confirmed.
+    pub confirm: bool,
+    /// The record count above which confirmation is required.
+    pub confirm_threshold: u64,
+}
+
+impl Default for ImportOptions {
+    fn default() -> Self {
+        // `batch` is the safest default: a failure leaves the database as it was
+        // rather than half-restored.
+        Self {
+            atomic: AtomicMode::Batch,
+            confirm: false,
+            confirm_threshold: 10_000,
+        }
+    }
+}
+
+/// What an archive holds, computed before anything is written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Preflight {
+    /// The collections it would write, with their row counts.
+    pub collections: Vec<ManifestCollection>,
+    /// Collections it refuses to touch, with the reason.
+    pub skipped: Vec<(String, String)>,
+    /// Records in total.
+    pub total_records: u64,
+    /// Whether confirmation is needed before applying.
+    pub requires_confirmation: bool,
+}
+
+/// One collection's result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportedCollection {
+    /// Table name.
+    pub name: String,
+    /// `base`, `auth` or `view`.
+    #[serde(rename = "type")]
+    pub collection_type: Option<String>,
+    /// Records written, which is `records_imported` on the wire.
+    #[serde(rename = "records_imported")]
+    pub records_imported: u64,
+}
+
+/// What an import did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportReport {
+    /// Collections written.
+    pub imported: Vec<ImportedCollection>,
+    /// Collections refused, with the reason.
+    pub skipped: Vec<(String, String)>,
+    /// Collections that failed, with the reason. Only ever non-empty under
+    /// [`AtomicMode::Continue`], which is the point of that mode.
+    pub errors: Vec<(String, String)>,
+}
+
+/// The result of asking to import.
+#[derive(Debug, Clone)]
+pub enum ImportOutcome {
+    /// It was applied.
+    Applied(Box<ImportReport>),
+    /// It is large enough to need confirmation first.
+    NeedsConfirmation(Box<Preflight>),
+}
+
+/// Work out what an import would do, without writing anything.
+pub fn preflight(archive: &Archive, options: &ImportOptions) -> Preflight {
+    let records_in = |name: &str| -> u64 {
+        archive
+            .data
+            .iter()
+            .find(|(collection, _)| collection == name)
+            .map(|(_, records)| records.len() as u64)
+            .unwrap_or(0)
+    };
+
+    let mut collections = Vec::new();
+    let mut skipped = Vec::new();
+    let mut total_records = 0;
+
+    for (name, action) in &archive.plan(&[]).actions {
+        match action {
+            ImportAction::Skip(reason) => skipped.push((name.clone(), reason.clone())),
+            _ => {
+                let definition = archive
+                    .schema
+                    .collections
+                    .iter()
+                    .find(|collection| &collection.name == name);
+                let records = records_in(name);
+                total_records += records;
+                collections.push(ManifestCollection {
+                    name: name.clone(),
+                    collection_type: definition.and_then(|c| c.collection_type.clone()),
+                    records,
+                });
+            }
+        }
+    }
+
+    Preflight {
+        requires_confirmation: total_records > options.confirm_threshold && !options.confirm,
+        collections,
+        skipped,
+        total_records,
+    }
+}
+
+/// Apply an archive.
+///
+/// The two safety rules hold here regardless of mode, of what the file says, or of
+/// what a client sends: a collection the archive omits is never touched, and a
+/// system collection is never written.
+pub async fn import(
+    client: &mut Client,
+    archive: &Archive,
+    options: &ImportOptions,
+) -> Result<ImportOutcome> {
+    let existing: Vec<String> = collections::list(client)
+        .await?
+        .into_iter()
+        .map(|collection| collection.name)
+        .collect();
+    let import_plan = archive.plan(&existing);
+
+    let preflight = preflight(archive, options);
+    if preflight.requires_confirmation {
+        return Ok(ImportOutcome::NeedsConfirmation(Box::new(preflight)));
+    }
+
+    let mut report = ImportReport {
+        imported: Vec::new(),
+        skipped: preflight.skipped.clone(),
+        errors: Vec::new(),
+    };
+
+    // `batch` runs the whole archive in one transaction, so borrow the client once
+    // and let the transaction back it. The other modes drive their own.
+    // Definitions first, outside the data phase: `collections::create` manages its
+    // own transaction and cannot join an outer one, so a collection's table is not
+    // created inside the batch transaction below. Stated rather than glossed,
+    // because it means `batch` covers the records, not the table creation.
+    for (name, action) in import_plan.writable() {
+        if matches!(action, ImportAction::Create) {
+            create_collection(client, archive, name).await?;
+        }
+    }
+
+    match options.atomic {
+        AtomicMode::Batch => {
+            let transaction = client.transaction().await.map_err(db_error)?;
+            for (name, _) in import_plan.writable() {
+                apply_records(&transaction, archive, name).await?;
+                report
+                    .imported
+                    .push(imported_of(archive, name, &ImportAction::Update));
+            }
+            transaction.commit().await.map_err(db_error)?;
+        }
+        AtomicMode::PerCollection | AtomicMode::Continue => {
+            for (name, action) in import_plan.writable() {
+                // `per_collection` commits one collection at a time so a failure in
+                // one does not discard the others; `continue` is the same but also
+                // carries on reporting rather than stopping at the first failure.
+                let transaction = client.transaction().await.map_err(db_error)?;
+                match apply_records(&transaction, archive, name).await {
+                    Ok(()) => match transaction.commit().await {
+                        Ok(()) => report.imported.push(imported_of(archive, name, action)),
+                        Err(err) => report.errors.push((name.clone(), err.to_string())),
+                    },
+                    Err(err) => {
+                        let _ = transaction.rollback().await;
+                        report
+                            .errors
+                            .push((name.clone(), err.message().to_string()));
+                        if options.atomic == AtomicMode::PerCollection {
+                            // Stop at the first failure: the rest is reported as not
+                            // attempted rather than silently skipped.
+                            for (remaining, _) in import_plan.writable() {
+                                if !report.imported.iter().any(|done| &done.name == remaining)
+                                    && !report.errors.iter().any(|(failed, _)| failed == remaining)
+                                {
+                                    report.errors.push((
+                                        remaining.clone(),
+                                        "not attempted: an earlier collection failed".to_string(),
+                                    ));
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        imported = report.imported.len(),
+        skipped = report.skipped.len(),
+        errors = report.errors.len(),
+        atomic = options.atomic.as_str(),
+        "applied a backup archive"
+    );
+
+    Ok(ImportOutcome::Applied(Box::new(report)))
+}
+
+/// What one collection will report.
+fn imported_of(archive: &Archive, name: &str, _action: &ImportAction) -> ImportedCollection {
+    ImportedCollection {
+        name: name.to_string(),
+        collection_type: archive
+            .schema
+            .collections
+            .iter()
+            .find(|collection| collection.name == name)
+            .and_then(|collection| collection.collection_type.clone()),
+        records_imported: archive
+            .data
+            .iter()
+            .find(|(collection, _)| collection == name)
+            .map(|(_, records)| records.len() as u64)
+            .unwrap_or(0),
+    }
+}
+
+/// Create a collection from its archive definition.
+///
+/// Fields are mapped explicitly rather than by deserialising the archive's shape
+/// into the data layer's, because the two spellings differ (`schema` versus
+/// `fields`) and a silent mismatch would create a collection with no columns.
+async fn create_collection(client: &mut Client, archive: &Archive, name: &str) -> Result<()> {
+    let definition = archive
+        .schema
+        .collections
+        .iter()
+        .find(|collection| collection.name == name)
+        .ok_or_else(|| Error::invalid(format!("the archive has no definition for {name:?}")))?;
+
+    let mut fields = Vec::with_capacity(definition.schema.len());
+    for field in &definition.schema {
+        fields.push(field_to_create(field)?);
+    }
+
+    crate::collections::create(
+        client,
+        crate::collections::CreateCollection {
+            name: name.to_string(),
+            collection_type: parse_collection_type(definition.collection_type.as_deref())?,
+            fields,
+            rules: definition
+                .rules
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({})),
+            options: definition
+                .options
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({})),
+            adopt_existing_table: false,
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Write one collection's records.
+async fn apply_records(
+    runner: &dyn crate::runner::QueryRunner,
+    archive: &Archive,
+    name: &str,
+) -> Result<()> {
+    let Some((_, records)) = archive
+        .data
+        .iter()
+        .find(|(collection, _)| collection == name)
+    else {
+        return Ok(());
+    };
+
+    for record in records {
+        upsert(runner, name, record).await?;
+    }
+
+    Ok(())
+}
+
+/// Insert or update one record by `id`.
+///
+/// `on conflict (id) do update` is what makes an import idempotent and, more
+/// importantly, makes it *additive*: a record the archive carries is updated, and a
+/// record it does not is left alone, because nothing here deletes.
+async fn upsert(
+    runner: &dyn crate::runner::QueryRunner,
+    table: &str,
+    record: &Value,
+) -> Result<()> {
+    let Some(object) = record.as_object() else {
+        return Err(Error::invalid(format!(
+            "a record in {table} is not an object"
+        )));
+    };
+    if !object.contains_key("id") {
+        return Err(Error::invalid(format!(
+            "a record in {table} has no id; an import upserts by id"
+        )));
+    }
+
+    // Every column except `id` is updated from the incoming row, so a restore is a
+    // faithful copy rather than a merge that keeps stale values.
+    let columns: Vec<&String> = object
+        .keys()
+        .filter(|column| column.as_str() != "id")
+        .collect();
+    let assignments = columns
+        .iter()
+        .map(|column| {
+            format!(
+                "{quoted} = excluded.{quoted}",
+                quoted = crate::ddl::quote_ident(column)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let sql = format!(
+        "insert into {table}          select * from jsonb_populate_record(null::{table}, $1::jsonb)          on conflict (\"id\") do {action}",
+        table = crate::ddl::quote_ident(table),
+        action = if assignments.is_empty() {
+            // Nothing but an id: an insert that conflicts has nothing to change.
+            "nothing".to_string()
+        } else {
+            format!("update set {assignments}")
+        }
+    );
+
+    runner
+        .run_execute(&sql, &[&record])
+        .await
+        .map_err(|err| Error::invalid(format!("cannot import a record into {table}: {err}")))?;
+    Ok(())
+}
+
+/// Map an archive's field object onto the data layer's input.
+fn field_to_create(value: &Value) -> Result<crate::collections::CreateField> {
+    let name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid("an archive field has no name"))?;
+    let field_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid(format!("the field {name:?} has no type")))?;
+
+    Ok(crate::collections::CreateField {
+        name: name.to_string(),
+        field_type: FieldType::parse(field_type)?,
+        required: value
+            .get("required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        unique: value
+            .get("unique")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        options: value
+            .get("options")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    })
+}
+
+/// Map an archive's collection type onto this server's.
+fn parse_collection_type(value: Option<&str>) -> Result<crate::types::CollectionType> {
+    match value.unwrap_or("base") {
+        "base" => Ok(crate::types::CollectionType::Base),
+        "auth" => Ok(crate::types::CollectionType::Auth),
+        "view" => Ok(crate::types::CollectionType::View),
+        other => Err(Error::invalid(format!(
+            "unknown collection type {other:?}; expected base, auth or view"
+        ))),
+    }
 }
 
 #[cfg(test)]
