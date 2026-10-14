@@ -22,5 +22,5 @@ pub use config::{FilesConfig, StorageAdapter};
 pub use keys::{safe_filename, storage_key};
 pub use presets::ImagePreset;
 pub use storage::{Files, LocalStorage, Storage, StoredObject};
-pub use thumbnail::ResizeMode;
+pub use thumbnail::{OutputFormat, ResizeMode};
 pub use validation::{sniff, ImageFormat, UploadLimits};

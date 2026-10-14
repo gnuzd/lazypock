@@ -2,7 +2,7 @@
 
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use lazypock_core::error::Error;
@@ -12,6 +12,7 @@ use crate::auth;
 use crate::batch;
 use crate::error::ApiError;
 use crate::files;
+use crate::presets;
 use crate::realtime;
 use crate::records;
 use crate::state::AppState;
@@ -33,6 +34,17 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/files/{collection}/{record}/{filename}/thumbs/{preset}",
             get(files::serve_thumbnail),
+        )
+        // Reading the available sizes is public: a client needs them to build a
+        // thumbnail URL. Changing them is a superuser action, enforced in the
+        // handlers.
+        .route(
+            "/api/image-presets",
+            get(presets::list).post(presets::create),
+        )
+        .route(
+            "/api/image-presets/{name}",
+            patch(presets::update).delete(presets::delete),
         )
         .route("/.well-known/jwks.json", get(auth::jwks))
         // `_superusers` is handled inside the same handler, so there is no route

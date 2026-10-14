@@ -24,3 +24,4 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread"] }
+tokio-postgres = "0.7.18"

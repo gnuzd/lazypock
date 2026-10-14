@@ -30,6 +30,10 @@ pub struct ImagePreset {
     /// Box height, or `None` to derive it from the source.
     pub height: Option<u32>,
     /// How the source is fitted to the box.
+    ///
+    /// Serialises as `fit`, matching both the `_image_presets.fit` column and the
+    /// field a request body sends: one vocabulary everywhere.
+    #[serde(rename = "fit")]
     pub mode: ResizeMode,
     /// The encoding of the result.
     pub format: OutputFormat,
@@ -192,6 +196,133 @@ pub async fn find(runner: &dyn QueryRunner, name: &str) -> Result<Option<ImagePr
     row.as_ref().map(ImagePreset::from_row).transpose()
 }
 
+/// The longest preset name accepted.
+pub const MAX_NAME_LENGTH: usize = 40;
+
+/// Check a preset before it is written.
+///
+/// Loud and immediate: a preset that cannot be served is worse than no preset,
+/// because it looks fine until somebody requests a thumbnail.
+pub fn validate(preset: &ImagePreset) -> Result<()> {
+    if preset.name.is_empty() || preset.name.len() > MAX_NAME_LENGTH {
+        return Err(Error::invalid(format!(
+            "a preset name must be 1 to {MAX_NAME_LENGTH} characters"
+        )));
+    }
+    // The name becomes a path segment in a thumbnail key and part of a URL, so
+    // anything that could escape either is refused here rather than later.
+    if !preset
+        .name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+    {
+        return Err(Error::invalid(format!(
+            "the preset name {:?} may only contain letters, digits, `-` and `_`",
+            preset.name
+        )));
+    }
+
+    if preset.width.is_none() && preset.height.is_none() {
+        return Err(Error::invalid(
+            "a preset must give a width, a height, or both",
+        ));
+    }
+    for (value, axis) in [(preset.width, "width"), (preset.height, "height")] {
+        if let Some(value) = value {
+            if value == 0 || value > MAX_DIMENSION {
+                return Err(Error::invalid(format!(
+                    "the preset {axis} must be between 1 and {MAX_DIMENSION}, got {value}"
+                )));
+            }
+        }
+    }
+    if !(1..=100).contains(&preset.quality) {
+        return Err(Error::invalid(format!(
+            "the preset quality must be between 1 and 100, got {}",
+            preset.quality
+        )));
+    }
+    if preset.format == OutputFormat::Avif {
+        // Refused on the way in, so nobody can configure a preset that will fail
+        // on every request instead.
+        return Err(Error::unsupported(
+            "AVIF thumbnails are not implemented; use webp, jpeg or png",
+        ));
+    }
+    Ok(())
+}
+
+/// Insert a preset.
+pub async fn create(runner: &dyn QueryRunner, preset: &ImagePreset) -> Result<()> {
+    validate(preset)?;
+
+    let written = runner
+        .run_execute(
+            "insert into _image_presets (name, width, height, fit, format, quality) \
+             values ($1::text, $2::text::integer, $3::text::integer, $4::text, $5::text, \
+                     $6::text::integer) \
+             on conflict (name) do nothing",
+            &[
+                &preset.name,
+                &preset.width.map(|value| value.to_string()),
+                &preset.height.map(|value| value.to_string()),
+                &preset.mode.as_str().to_string(),
+                &preset.format.as_str().to_string(),
+                &preset.quality.to_string(),
+            ],
+        )
+        .await
+        .map_err(db_error)?;
+
+    if written == 0 {
+        return Err(Error::conflict(format!(
+            "an image preset named {:?} already exists",
+            preset.name
+        )));
+    }
+    Ok(())
+}
+
+/// Update a preset, returning whether it existed.
+pub async fn update(runner: &dyn QueryRunner, name: &str, preset: &ImagePreset) -> Result<bool> {
+    validate(preset)?;
+
+    let written = runner
+        .run_execute(
+            "update _image_presets set width = $2::text::integer, height = $3::text::integer, \
+             fit = $4::text, format = $5::text, quality = $6::text::integer, updated = now() \
+             where name = $1::text",
+            &[
+                &name.to_string(),
+                &preset.width.map(|value| value.to_string()),
+                &preset.height.map(|value| value.to_string()),
+                &preset.mode.as_str().to_string(),
+                &preset.format.as_str().to_string(),
+                &preset.quality.to_string(),
+            ],
+        )
+        .await
+        .map_err(db_error)?;
+
+    Ok(written > 0)
+}
+
+/// Delete a preset, returning whether it existed.
+///
+/// Thumbnails already generated from it are left in place; removing those is the
+/// orphan sweeper's job, not this call's.
+pub async fn delete(runner: &dyn QueryRunner, name: &str) -> Result<bool> {
+    let written = runner
+        .run_execute(
+            "delete from _image_presets where name = $1::text",
+            &[&name.to_string()],
+        )
+        .await
+        .map_err(db_error)?;
+
+    Ok(written > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +339,73 @@ mod tests {
             ImagePreset::parse_size("400X300").expect("parse").width,
             Some(400)
         );
+    }
+
+    fn preset(name: &str, width: Option<u32>, height: Option<u32>) -> ImagePreset {
+        ImagePreset {
+            name: name.into(),
+            width,
+            height,
+            mode: ResizeMode::Inside,
+            format: OutputFormat::Webp,
+            quality: 80,
+        }
+    }
+
+    #[test]
+    fn a_valid_preset_passes_validation() {
+        validate(&preset("card", Some(400), Some(300))).expect("a normal preset");
+        // One side is enough: the schema allows the other to be null.
+        validate(&preset("wide", Some(400), None)).expect("a one-sided preset");
+        validate(&preset("tall", None, Some(300))).expect("a one-sided preset");
+        validate(&preset("sm-2_x", Some(10), Some(10))).expect("dashes and underscores");
+    }
+
+    #[test]
+    fn a_preset_name_that_could_escape_a_path_or_a_url_is_refused() {
+        for bad in ["", "../etc", "a/b", "a b", "a.b", "ünïcode", "a%2Fb"] {
+            let error =
+                validate(&preset(bad, Some(10), Some(10))).expect_err("{bad:?} should be refused");
+            assert!(
+                error.message().contains("name"),
+                "{bad:?} gave {}",
+                error.message()
+            );
+        }
+        // ... and a name longer than the cap.
+        let long = "a".repeat(MAX_NAME_LENGTH + 1);
+        assert!(validate(&preset(&long, Some(10), Some(10))).is_err());
+    }
+
+    #[test]
+    fn a_preset_without_any_dimension_is_refused_on_the_way_in() {
+        let error = validate(&preset("nothing", None, None)).expect_err("refused");
+        assert!(error.message().contains("width"), "{}", error.message());
+    }
+
+    #[test]
+    fn an_out_of_range_dimension_or_quality_is_refused_on_the_way_in() {
+        for bad in [
+            preset("zero", Some(0), Some(10)),
+            preset("huge", Some(10), Some(99999)),
+        ] {
+            assert!(validate(&bad).is_err(), "{bad:?} should be refused");
+        }
+        let mut quiet = preset("quiet", Some(10), Some(10));
+        quiet.quality = 0;
+        assert!(validate(&quiet).is_err());
+        quiet.quality = 101;
+        assert!(validate(&quiet).is_err());
+    }
+
+    #[test]
+    fn avif_is_refused_when_a_preset_is_written() {
+        // The schema allows it and the encoder cannot write it, so the refusal
+        // happens at configuration time rather than on every request.
+        let mut broken = preset("avif", Some(10), Some(10));
+        broken.format = OutputFormat::Avif;
+        let error = validate(&broken).expect_err("avif should be refused");
+        assert!(error.message().contains("AVIF"), "{}", error.message());
     }
 
     #[test]

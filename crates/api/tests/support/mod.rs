@@ -232,6 +232,67 @@ pub async fn call(app: &Router, method: Method, uri: &str, body: Option<Value>) 
     }
 }
 
+/// Drive the router with a bearer token.
+pub async fn call_authed(
+    app: &Router,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+    token: &str,
+) -> Reply {
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
+
+    let request = match body {
+        Some(value) => builder
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&value).expect("encode")))
+            .expect("request"),
+        None => builder.body(Body::empty()).expect("request"),
+    };
+
+    let response = app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body");
+    let body = if bytes.is_empty() {
+        None
+    } else {
+        serde_json::from_slice(&bytes).ok()
+    };
+
+    Reply {
+        status,
+        headers,
+        body,
+    }
+}
+
+/// Create a superuser and log in, returning an access token.
+///
+/// Shared so every test that needs a superuser token gets the same one, rather
+/// than each file growing its own login dance.
+pub async fn superuser_token(app: &TestApp, email: &str, password: &str) -> String {
+    let client = app.client().await;
+    // Ignore an existing account: a test may call this twice.
+    let _ = lazypock_auth::superuser::create(&client, email, password).await;
+
+    let reply = post(
+        &lazypock_api::router::router(app.state.clone()),
+        "/api/collections/_superusers/auth-with-password",
+        serde_json::json!({ "identity": email, "password": password }),
+    )
+    .await;
+    reply.body.expect("a login body")["token"]
+        .as_str()
+        .expect("a token")
+        .to_string()
+}
+
 /// `GET` without a body.
 pub async fn get(app: &Router, uri: &str) -> Reply {
     call(app, Method::GET, uri, None).await

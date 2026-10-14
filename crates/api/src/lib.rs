@@ -7,6 +7,7 @@ pub mod auth;
 pub mod batch;
 pub mod error;
 pub mod files;
+pub mod presets;
 pub mod realtime;
 pub mod records;
 pub mod router;

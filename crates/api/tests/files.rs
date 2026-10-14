@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use lazypock_db::collections::{self, CreateCollection, CreateField};
 use lazypock_db::types::{CollectionType, FieldType};
 
-use support::{call, test_app, TestApp};
+use support::{test_app, TestApp};
 
 /// A real, fully decodable PNG of the given dimensions.
 ///
@@ -89,21 +89,7 @@ async fn seed(app: &TestApp) {
 
 /// A superuser access token, since uploading needs an authenticated request.
 async fn token(app: &TestApp) -> String {
-    let client = app.client().await;
-    lazypock_auth::superuser::create(&client, "admin@example.com", "correct-horse")
-        .await
-        .expect("superuser");
-    let reply = call(
-        &router(app).await,
-        Method::POST,
-        "/api/collections/_superusers/auth-with-password",
-        Some(json!({"identity": "admin@example.com", "password": "correct-horse"})),
-    )
-    .await;
-    reply.body.expect("body")["token"]
-        .as_str()
-        .expect("token")
-        .to_string()
+    support::superuser_token(app, "admin@example.com", "correct-horse").await
 }
 
 async fn upload(
