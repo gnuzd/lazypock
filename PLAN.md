@@ -783,7 +783,7 @@ Independent tracks, so progress and estimates do not entangle:
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
 | E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections, and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). |
-| F. Realtime | not started |
+| F. Realtime | done — the change-event trigger plus `_rt_log`, the `EventBus` seam with a Postgres `LISTEN` implementation, RLS-filtered fan-out with connection-id echo suppression, and SSE at `/api/realtime` with `lastEventId` resume. The Redis backend, event batching and logical replication are deliberately deferred (section 8.8). |
 | G–I. Files, hooks, jobs | not started |
 | J–K. Studio, SDK | not started |
 | L. Deploy | not started |
