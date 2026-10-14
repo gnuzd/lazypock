@@ -5,6 +5,7 @@
 //! driver is `tokio-postgres` with `deadpool-postgres` for pooling; there is no
 //! ORM — the query layer builds SQL explicitly (see `PLAN.md` section 2).
 
+pub mod backup;
 pub mod collections;
 pub mod ddl;
 pub mod hooks;
