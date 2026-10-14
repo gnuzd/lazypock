@@ -135,7 +135,9 @@ async fn backup_and_restore_need_a_superuser() {
         (Method::GET, "/api/export"),
         (Method::GET, "/api/export/archive"),
         (Method::GET, "/api/import/preflight"),
+        (Method::GET, "/api/import/status"),
         (Method::POST, "/api/import"),
+        (Method::POST, "/api/import/rollback"),
     ] {
         let reply = call(&router(&app).await, method.clone(), uri, None).await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{method} {uri}");
@@ -286,6 +288,202 @@ async fn a_zip_that_is_not_a_lazypock_archive_is_refused_with_a_reason() {
         .expect("a message")
         .to_string();
     assert!(message.contains("archive"), "{message}");
+
+    app.cleanup().await;
+}
+
+/// Add a collection and a row that an import will then bring in, so a rollback has
+/// something to remove.
+async fn add_extra(app: &TestApp) {
+    let mut client = app.client().await;
+    collections::create(
+        &mut client,
+        CreateCollection {
+            name: "extra".into(),
+            collection_type: CollectionType::Base,
+            fields: vec![CreateField {
+                name: "name".into(),
+                field_type: FieldType::Text,
+                required: false,
+                unique: false,
+                options: json!({}),
+            }],
+            rules: json!({}),
+            options: json!({}),
+            adopt_existing_table: false,
+        },
+    )
+    .await
+    .expect("create extra");
+    app.reload_schema().await;
+    sql(app, "insert into extra (id, name) values ('e1', 'one')").await;
+    sql(app, "insert into posts (id, title) values ('p3', 'third')").await;
+}
+
+#[tokio::test]
+async fn an_import_takes_a_snapshot_and_rollback_undoes_it() {
+    let Some(app) = test_app("backup_rollback").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // No checkpoint before any import.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/import/status",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert!(reply.body.expect("status")["snapshot"].is_null());
+
+    // Build an archive that carries a collection and a row the import will add.
+    add_extra(&app).await;
+    let archive = export(&app, &token).await;
+
+    // Put the database back to just `posts` p1/p2, so the import really adds.
+    {
+        let mut client = app.client().await;
+        collections::delete(&mut client, "extra", true)
+            .await
+            .expect("drop extra");
+    }
+    app.reload_schema().await;
+    sql(&app, "delete from posts where id = 'p3'").await;
+
+    // Import: the snapshot is taken first, so it lacks `extra` and p3.
+    let reply = import(&app, &token, &archive, &[("atomic", "batch")]).await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    // The additions are there...
+    let count: i64 = app
+        .client()
+        .await
+        .query_one("select count(*) from extra", &[])
+        .await
+        .expect("extra")
+        .get(0);
+    assert_eq!(count, 1);
+
+    // ...and the status reports the checkpoint.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/import/status",
+        None,
+        &token,
+    )
+    .await;
+    let body = reply.body.expect("status");
+    assert!(body["snapshot"]["created_at"].is_string(), "{body}");
+
+    // Roll back, confirming with the password.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/import/rollback",
+        Some(json!({ "password": "correct-horse" })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert_eq!(reply.body.expect("report")["rolled_back"], json!(true));
+
+    // The collection the import created is gone, and so is the row it added.
+    let exists: bool = app
+        .client()
+        .await
+        .query_one("select to_regclass('extra') is not null", &[])
+        .await
+        .expect("check")
+        .get(0);
+    assert!(
+        !exists,
+        "a collection an import created must be removed by a rollback"
+    );
+    let count: i64 = app
+        .client()
+        .await
+        .query_one("select count(*) from posts", &[])
+        .await
+        .expect("posts")
+        .get(0);
+    assert_eq!(
+        count, 2,
+        "a row an import added must be removed by a rollback"
+    );
+
+    // The checkpoint is spent.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/import/status",
+        None,
+        &token,
+    )
+    .await;
+    assert!(reply.body.expect("status")["snapshot"].is_null());
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn rolling_back_needs_a_password_and_a_snapshot() {
+    let Some(app) = test_app("backup_rollback_gate").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // No checkpoint yet: a rollback is a 404 even with the right password.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/import/rollback",
+        Some(json!({ "password": "correct-horse" })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{:?}", reply.body);
+
+    // Take a checkpoint by importing, then prove the password is required.
+    let archive = export(&app, &token).await;
+    let reply = import(&app, &token, &archive, &[("atomic", "batch")]).await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/import/rollback",
+        Some(json!({ "password": "wrong" })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/import/rollback",
+        Some(json!({})),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
+
+    // A rejected rollback leaves the checkpoint alone.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/import/status",
+        None,
+        &token,
+    )
+    .await;
+    assert!(reply.body.expect("status")["snapshot"].is_object());
 
     app.cleanup().await;
 }

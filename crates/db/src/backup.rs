@@ -303,6 +303,166 @@ pub fn to_payload(archive: &Archive) -> Value {
     serde_json::json!({ "collections": collections })
 }
 
+/// Parse a single-document JSON payload into an [`Archive`].
+///
+/// Accepts the canonical `{ "collections": [...] }` envelope, a bare array of
+/// collections, and either field spelling (`schema` or `fields`) — all three are
+/// what a client or a PocketBase export can send. Kept beside [`to_payload`] so the
+/// document this server writes is a document it reads.
+pub fn archive_from_payload(payload: &Value) -> Result<Archive> {
+    let envelope =
+        match payload {
+            Value::Array(_) => serde_json::json!({ "collections": payload }),
+            Value::Object(map) if map.contains_key("collections") => payload.clone(),
+            _ => return Err(Error::invalid(
+                "a backup payload must be an object with `collections`, or an array of collections",
+            )),
+        };
+
+    let mut schema: ArchiveSchema = serde_json::from_value(envelope)
+        .map_err(|err| Error::invalid(format!("the backup payload is not valid: {err}")))?;
+
+    // Records travel inline in the payload but live in `data` in memory, so split
+    // them out the same way `read` does for a zip archive.
+    let data: Vec<(String, Vec<Value>)> = schema
+        .collections
+        .iter_mut()
+        .map(|collection| {
+            (
+                collection.name.clone(),
+                std::mem::take(&mut collection.records),
+            )
+        })
+        .collect();
+
+    let collections: Vec<ManifestCollection> = schema
+        .collections
+        .iter()
+        .map(|collection| ManifestCollection {
+            name: collection.name.clone(),
+            collection_type: collection.collection_type.clone(),
+            records: data
+                .iter()
+                .find(|(name, _)| name == &collection.name)
+                .map_or(0, |(_, records)| records.len() as u64),
+        })
+        .collect();
+    let records = collections
+        .iter()
+        .map(|collection| collection.records)
+        .sum();
+
+    Ok(Archive {
+        manifest: Manifest {
+            format: ARCHIVE_FORMAT.to_string(),
+            format_version: ARCHIVE_FORMAT_VERSION,
+            lazypock_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            created_at: Some(now_rfc3339()),
+            totals: Some(ManifestTotals {
+                collections: schema.collections.len() as u64,
+                records,
+                files: 0,
+            }),
+            collections,
+            files: Some(ManifestFiles::default()),
+        },
+        schema,
+        data,
+    })
+}
+
+/// Restore the database to a snapshot payload, **destructively**.
+///
+/// This is the rollback path, and it is the one place that removes data: a bad
+/// import can have added a collection or a row, and undoing it means deleting what
+/// the snapshot does not have. The additive [`import`] is untouched. System
+/// collections are never dropped.
+///
+/// Rows are replaced with the tables' triggers disabled, so a foreign key cannot
+/// fail on insert order. `ALTER TABLE ... DISABLE TRIGGER ALL` is transactional, so
+/// a failure rolls the disable back with everything else and triggers can never be
+/// left off.
+pub async fn restore_snapshot(client: &mut Client, payload: &Value) -> Result<ImportReport> {
+    let archive = archive_from_payload(payload)?;
+
+    let wanted: std::collections::HashSet<String> = archive
+        .schema
+        .collections
+        .iter()
+        .map(|collection| collection.name.clone())
+        .filter(|name| !is_system_collection(name))
+        .collect();
+
+    // Drop every user collection the snapshot does not know about: those are the
+    // ones an import created.
+    let existing: Vec<String> = collections::list(client)
+        .await?
+        .into_iter()
+        .map(|collection| collection.name)
+        .filter(|name| !is_system_collection(name))
+        .collect();
+    for name in &existing {
+        if !wanted.contains(name) {
+            collections::delete(client, name, true).await?;
+        }
+    }
+
+    // Recreate any collection the snapshot has and the database has lost.
+    let current: std::collections::HashSet<String> = collections::list(client)
+        .await?
+        .into_iter()
+        .map(|collection| collection.name)
+        .collect();
+    for name in &wanted {
+        if !current.contains(name) {
+            create_collection(client, &archive, name).await?;
+        }
+    }
+
+    let mut report = ImportReport {
+        imported: Vec::new(),
+        skipped: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    let names: Vec<String> = wanted.iter().cloned().collect();
+    let transaction = client.transaction().await.map_err(db_error)?;
+    for name in &names {
+        let table = crate::ddl::quote_ident(name);
+        transaction
+            .batch_execute(&format!("alter table {table} disable trigger all"))
+            .await
+            .map_err(db_error)?;
+    }
+    for name in &names {
+        let table = crate::ddl::quote_ident(name);
+        transaction
+            .batch_execute(&format!("delete from {table}"))
+            .await
+            .map_err(db_error)?;
+    }
+    for name in &names {
+        apply_records(&transaction, &archive, name).await?;
+        report
+            .imported
+            .push(imported_of(&archive, name, &ImportAction::Update));
+    }
+    for name in &names {
+        let table = crate::ddl::quote_ident(name);
+        transaction
+            .batch_execute(&format!("alter table {table} enable trigger all"))
+            .await
+            .map_err(db_error)?;
+    }
+    transaction.commit().await.map_err(db_error)?;
+
+    tracing::info!(
+        collections = report.imported.len(),
+        "restored an import snapshot"
+    );
+    Ok(report)
+}
+
 /// Build the archive for every user collection in the database.
 ///
 /// **System collections are not exported at all.** Their definitions are created by

@@ -35,6 +35,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/export", get(backup::export_json))
         .route("/api/export/archive", get(backup::export))
         .route("/api/import/preflight", get(backup::preflight))
+        .route("/api/import/status", get(backup::import_status))
+        .route("/api/import/rollback", post(backup::import_rollback))
         .route(
             "/api/import",
             post(backup::import).layer(backup::body_limit()),

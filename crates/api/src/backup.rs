@@ -8,15 +8,17 @@
 //! the one the Studio import page already handles: `data.requires_confirmation`
 //! plus the preflight, so a client can show what would happen and ask.
 
-use axum::extract::{DefaultBodyLimit, Multipart, State};
+use axum::extract::{DefaultBodyLimit, Extension, Multipart, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use lazypock_core::error::Error;
+use lazypock_core::id::new_id;
 use lazypock_db::backup::{self, ImportOptions, ImportOutcome};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::Superuser;
+use crate::auth::{Principal, Superuser};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -183,6 +185,11 @@ pub async fn import(
     };
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
+
+    // The undo checkpoint, taken before anything is written. A snapshot that cannot
+    // be captured fails the import rather than letting it proceed with no way back.
+    capture_snapshot(&client).await?;
+
     match backup::import(&mut client, &archive, &options)
         .await
         .map_err(ApiError::new)?
@@ -208,4 +215,128 @@ pub async fn import(
                 .into_response())
         }
     }
+}
+
+/// `GET /api/import/status`
+///
+/// Whether an undo checkpoint exists — what the Studio's "Undo last import"
+/// renders from. There is at most one, so nothing is paginated.
+pub async fn import_status(
+    State(state): State<AppState>,
+    _: Superuser,
+) -> Result<Json<Value>, ApiError> {
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let row = client
+        .query_opt(
+            "select to_char(created_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') as created_at \
+               from _import_snapshots order by created_at desc, id desc limit 1",
+            &[],
+        )
+        .await
+        .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+
+    let snapshot = row.map(|row| json!({ "created_at": row.get::<_, String>("created_at") }));
+    Ok(Json(json!({ "snapshot": snapshot })))
+}
+
+/// The body `POST /api/import/rollback` accepts.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RollbackBody {
+    /// The acting superuser's password.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// `POST /api/import/rollback`
+///
+/// Destructive by design: undoing an import means removing what it added, which is
+/// the one thing `/api/import` will not do. Password confirmation is required on top
+/// of the superuser token, because this is a whole-database operation.
+pub async fn import_rollback(
+    State(state): State<AppState>,
+    _: Superuser,
+    Extension(principal): Extension<Principal>,
+    Json(body): Json<RollbackBody>,
+) -> Result<Json<Value>, ApiError> {
+    let password = body.password.unwrap_or_default();
+    if password.is_empty() {
+        return Err(ApiError::new(Error::unauthorized(
+            "password confirmation is required",
+        )));
+    }
+
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let id = principal
+        .user_id()
+        .ok_or_else(|| ApiError::new(Error::unauthorized("no superuser identity")))?;
+    let account = lazypock_auth::superuser::find_by_id(&client, id)
+        .await
+        .map_err(ApiError::new)?
+        .ok_or_else(|| ApiError::new(Error::unauthorized("the superuser no longer exists")))?;
+
+    if state
+        .auth
+        .authenticate_superuser(&account.email, &password)
+        .await
+        .is_err()
+    {
+        return Err(ApiError::new(Error::unauthorized("invalid password")));
+    }
+
+    let row = client
+        .query_opt(
+            "select payload from _import_snapshots order by created_at desc, id desc limit 1",
+            &[],
+        )
+        .await
+        .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+    let Some(row) = row else {
+        return Err(ApiError::new(Error::not_found(
+            "there is no import snapshot to roll back to",
+        )));
+    };
+    let payload: Value = row.get("payload");
+
+    let report = backup::restore_snapshot(&mut client, &payload)
+        .await
+        .map_err(ApiError::new)?;
+
+    // The checkpoint is spent: a second rollback would restore the same state, and
+    // the Studio should stop offering the action.
+    client
+        .execute("delete from _import_snapshots", &[])
+        .await
+        .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+
+    tracing::warn!(
+        collections = report.imported.len(),
+        "rolled back the last import"
+    );
+    Ok(Json(json!({
+        "rolled_back": true,
+        "imported": report.imported,
+        "errors": report.errors,
+    })))
+}
+
+/// Capture the undo checkpoint, replacing any previous one.
+async fn capture_snapshot(client: &lazypock_db::deadpool_postgres::Client) -> Result<(), ApiError> {
+    let archive = backup::export(client).await.map_err(ApiError::new)?;
+    let payload = backup::to_payload(&archive);
+
+    // Only the latest is kept: the client's action is "undo the last import", and a
+    // full copy of the database per import is not something to accumulate.
+    client
+        .execute("delete from _import_snapshots", &[])
+        .await
+        .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+    client
+        .execute(
+            "insert into _import_snapshots (id, payload) values ($1, $2)",
+            &[&new_id(), &payload],
+        )
+        .await
+        .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+    Ok(())
 }

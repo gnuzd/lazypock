@@ -86,6 +86,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "crons",
         sql: include_str!("../../../migrations/0008_crons.sql"),
     },
+    Migration {
+        version: 9,
+        name: "import_snapshots",
+        sql: include_str!("../../../migrations/0009_import_snapshots.sql"),
+    },
 ];
 
 /// Outcome of a migration run.
