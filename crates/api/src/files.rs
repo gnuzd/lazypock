@@ -11,6 +11,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use bytes::Bytes;
 use lazypock_core::error::Error;
+use lazypock_db::pool::db_error;
+use lazypock_db::runner::QueryRunner;
 use lazypock_db::types::validate_identifier;
 use lazypock_files::{keys, outbox, presets, thumbnail, ImagePreset};
 use serde::Deserialize;
@@ -85,6 +87,15 @@ pub async fn upload(
     if state.schema.snapshot().get(&collection).is_none() {
         return Err(ApiError::new(Error::not_found(format!(
             "no collection named {collection:?}"
+        ))));
+    }
+
+    // The record has to exist. The sweeper reclaims any object whose record is
+    // gone, so without this an upload for a record that does not exist yet would
+    // be reclaimed before it was ever referenced.
+    if !record_exists(&state, &collection, &record_id).await? {
+        return Err(ApiError::new(Error::not_found(format!(
+            "no record {record_id:?} in the collection {collection:?}"
         ))));
     }
 
@@ -295,6 +306,94 @@ pub async fn delete(
 
     tracing::info!(key = %key, "file deleted");
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Whether a record row exists.
+async fn record_exists(state: &AppState, collection: &str, record: &str) -> Result<bool, ApiError> {
+    // Already validated as an identifier by the caller; quoted here so a name that
+    // happens to be a keyword is still just a name.
+    let sql = format!("select 1 from \"{collection}\" where id = $1::text");
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    Ok(client
+        .run_query_opt(&sql, &[&record.to_string()])
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?
+        .is_some())
+}
+
+/// The body accepted by the sweep endpoint.
+///
+/// Unknown fields are rejected rather than ignored: a misspelled `dryRun` would
+/// otherwise be dropped and the default used, which on this endpoint means the
+/// difference between reporting and deleting.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SweepBody {
+    /// Report without deleting. Defaults to true, because the dangerous
+    /// direction of this operation is deleting.
+    #[serde(default = "default_true", rename = "dryRun")]
+    pub dry_run: bool,
+    /// Most objects to examine in one run.
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_limit() -> usize {
+    10_000
+}
+
+/// `POST /api/files/sweep`
+///
+/// Reclaims stored objects whose owning record is gone. Superuser-only: it walks
+/// and deletes across the whole store.
+pub async fn sweep(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Json(body): Json<SweepBody>,
+) -> Result<Response, ApiError> {
+    if !principal.is_superuser() {
+        return Err(ApiError::new(Error::forbidden(
+            "sweeping storage requires a superuser token",
+        )));
+    }
+
+    let options = lazypock_files::SweepOptions {
+        dry_run: body.dry_run,
+        limit: body.limit,
+    };
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let storage = state.files.storage();
+
+    let report = lazypock_files::sweep::sweep(&client, storage.as_ref(), &options)
+        .await
+        .map_err(ApiError::new)?;
+
+    // A dry run stops here. A real one also drains, so a single admin call leaves
+    // the store consistent rather than waiting for a worker.
+    let drained = if options.dry_run {
+        outbox::DrainReport::default()
+    } else {
+        outbox::drain(&client, storage.as_ref())
+            .await
+            .map_err(ApiError::new)?
+    };
+
+    Ok(Json(json!({
+        "dryRun": report.dry_run,
+        "scanned": report.scanned,
+        "orphans": report.orphans,
+        "enqueued": report.enqueued,
+        "deleted": drained.deleted,
+        "failed": drained.failed,
+        "unrecognised": report.unrecognised,
+        "truncated": report.was_truncated(&options),
+        "sample": report.sample,
+    }))
+    .into_response())
 }
 
 /// A path segment that is safe inside a storage key.

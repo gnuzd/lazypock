@@ -41,6 +41,12 @@ pub trait Storage: Send + Sync {
 
     /// Whether the backend is usable.
     fn health(&self) -> StorageFuture<'_, ()>;
+
+    /// Every key under a prefix, sorted. An empty prefix means the whole store.
+    ///
+    /// Used by the orphan sweeper, which is the one caller that needs to see what
+    /// is actually there rather than what something asked for.
+    fn list<'a>(&'a self, prefix: &'a str) -> StorageFuture<'a, Vec<String>>;
 }
 
 /// The local filesystem backend.
@@ -147,6 +153,56 @@ impl Storage for LocalStorage {
                     path.display()
                 ))),
             }
+        })
+    }
+
+    fn list<'a>(&'a self, prefix: &'a str) -> StorageFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            let start = if prefix.is_empty() {
+                self.root.clone()
+            } else {
+                self.path_for(prefix)?
+            };
+
+            let mut keys = Vec::new();
+            let mut stack = vec![start];
+            while let Some(directory) = stack.pop() {
+                let mut entries = match tokio::fs::read_dir(&directory).await {
+                    Ok(entries) => entries,
+                    // Nothing stored here yet is not an error.
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(err) => {
+                        return Err(Error::internal(format!(
+                            "cannot read {}: {err}",
+                            directory.display()
+                        )))
+                    }
+                };
+
+                while let Some(entry) = entries.next_entry().await.map_err(|err| {
+                    Error::internal(format!("cannot read {}: {err}", directory.display()))
+                })? {
+                    let path = entry.path();
+                    let file_type = entry.file_type().await.map_err(|err| {
+                        Error::internal(format!("cannot stat {}: {err}", path.display()))
+                    })?;
+
+                    if file_type.is_dir() {
+                        stack.push(path);
+                    } else if file_type.is_file() {
+                        if let Ok(relative) = path.strip_prefix(&self.root) {
+                            if let Some(key) = relative.to_str() {
+                                // Keys are always `/`-separated, whatever the
+                                // platform's path separator is.
+                                keys.push(key.replace('\\', "/"));
+                            }
+                        }
+                    }
+                }
+            }
+
+            keys.sort();
+            Ok(keys)
         })
     }
 

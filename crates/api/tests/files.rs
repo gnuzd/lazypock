@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use lazypock_db::collections::{self, CreateCollection, CreateField};
 use lazypock_db::types::{CollectionType, FieldType};
 
-use support::{test_app, TestApp};
+use support::{call, call_authed, test_app, TestApp};
 
 /// A real, fully decodable PNG of the given dimensions.
 ///
@@ -85,6 +85,9 @@ async fn seed(app: &TestApp) {
     .await
     .expect("create posts");
     app.reload_schema().await;
+
+    // Uploads require the record to exist, so the fixture has to be a real one.
+    sql(app, "insert into posts (id, title) values ('p1', 'a post')").await;
 }
 
 /// A superuser access token, since uploading needs an authenticated request.
@@ -411,7 +414,13 @@ async fn a_thumbnail_of_something_that_is_not_a_resizable_image_is_refused() {
         Some(&token),
     )
     .await;
-    if reply.status == StatusCode::CREATED {
+    assert_eq!(
+        reply.status,
+        StatusCode::CREATED,
+        "the fixture must upload before its thumbnail is requested: {:?}",
+        reply.body
+    );
+    {
         let url = reply.body.expect("body")["url"]
             .as_str()
             .expect("url")
@@ -423,6 +432,155 @@ async fn a_thumbnail_of_something_that_is_not_a_resizable_image_is_refused() {
             String::from_utf8_lossy(&body)
         );
     }
+
+    app.cleanup().await;
+}
+
+/// Run a statement directly, the way SQL run outside the API would.
+async fn sql(app: &TestApp, statement: &str) {
+    let client = app.client().await;
+    client
+        .batch_execute(statement)
+        .await
+        .expect("the test statement should apply");
+}
+
+/// Run a sweep and return its report.
+async fn sweep(app: &TestApp, token: &str, dry_run: bool) -> serde_json::Value {
+    let reply = call_authed(
+        &router(app).await,
+        Method::POST,
+        "/api/files/sweep",
+        Some(json!({"dryRun": dry_run})),
+        token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    reply.body.expect("a report")
+}
+
+#[tokio::test]
+async fn sweeping_storage_requires_a_superuser() {
+    let Some(app) = test_app("http_files_sweep_auth").await else {
+        return;
+    };
+
+    let reply = call(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/sweep",
+        Some(json!({"dryRun": true})),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_sweeper_reclaims_objects_whose_record_is_gone() {
+    let Some(app) = test_app("http_files_sweep").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = support::superuser_token(&app, "admin@example.com", "correct-horse").await;
+    let url = uploaded_png(&app, &token, 64, 48).await;
+
+    // While the record exists, nothing is an orphan.
+    let report = sweep(&app, &token, true).await;
+    assert_eq!(report["scanned"], json!(1), "{report}");
+    assert_eq!(report["orphans"], json!(0), "{report}");
+
+    // Remove the record the way SQL or a crash would, leaving the object behind.
+    sql(&app, "delete from posts where id = 'p1'").await;
+
+    // A dry run reports it, and deletes nothing.
+    let report = sweep(&app, &token, true).await;
+    assert_eq!(report["orphans"], json!(1), "{report}");
+    assert_eq!(
+        report["enqueued"],
+        json!(0),
+        "a dry run must enqueue nothing"
+    );
+    assert_eq!(report["deleted"], json!(0), "a dry run must delete nothing");
+    let sample = report["sample"].as_array().expect("a sample");
+    assert!(
+        sample
+            .iter()
+            .any(|key| key.as_str().unwrap_or_default().ends_with("_photo.png")),
+        "the report should name the orphan: {report}"
+    );
+
+    let (status, _) = fetch(&app, &url).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a dry run must leave the object in place"
+    );
+
+    // A real run reclaims it.
+    let report = sweep(&app, &token, false).await;
+    assert_eq!(report["enqueued"], json!(1), "{report}");
+    assert_eq!(report["deleted"], json!(1), "{report}");
+
+    let (status, _) = fetch(&app, &url).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the object should be gone");
+
+    // Running again finds nothing, so the sweep converges.
+    let report = sweep(&app, &token, false).await;
+    assert_eq!(report["orphans"], json!(0), "{report}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_sweeper_reclaims_a_thumbnail_whose_preset_is_gone_but_keeps_the_source() {
+    let Some(app) = test_app("http_files_sweep_preset").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = support::superuser_token(&app, "admin@example.com", "correct-horse").await;
+    let url = uploaded_png(&app, &token, 64, 48).await;
+
+    // Generate a thumbnail so there is a cached object to orphan.
+    let (status, _) = fetch(&app, &format!("{url}?preset=thumb")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let report = sweep(&app, &token, true).await;
+    assert_eq!(
+        report["orphans"],
+        json!(0),
+        "both objects are in use: {report}"
+    );
+
+    // Delete the preset the thumbnail was generated from.
+    sql(&app, "delete from _image_presets where name = 'thumb'").await;
+
+    let report = sweep(&app, &token, true).await;
+    assert_eq!(
+        report["orphans"],
+        json!(1),
+        "expected the thumbnail to be orphaned: {report}"
+    );
+    let sample = report["sample"].as_array().expect("a sample");
+    assert!(
+        sample
+            .iter()
+            .any(|key| key.as_str().unwrap_or_default().contains("/thumbs/")),
+        "the orphan should be the thumbnail, not the source: {report}"
+    );
+
+    // The source's record still exists, so the source must survive.
+    let report = sweep(&app, &token, false).await;
+    assert_eq!(report["deleted"], json!(1), "{report}");
+
+    let (status, served) = fetch(&app, &url).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the source must survive a preset change"
+    );
+    assert_eq!(served.len(), png(64, 48).len(), "and be unchanged");
 
     app.cleanup().await;
 }

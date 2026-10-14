@@ -35,6 +35,7 @@ pub fn router(state: AppState) -> Router {
             "/api/files/{collection}/{record}/{filename}/thumbs/{preset}",
             get(files::serve_thumbnail),
         )
+        .route("/api/files/sweep", post(files::sweep))
         // Reading the available sizes is public: a client needs them to build a
         // thumbnail URL. Changing them is a superuser action, enforced in the
         // handlers.

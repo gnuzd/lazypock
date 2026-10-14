@@ -15,6 +15,7 @@ pub mod outbox;
 pub mod presets;
 pub mod s3;
 pub mod storage;
+pub mod sweep;
 pub mod thumbnail;
 pub mod validation;
 
@@ -22,5 +23,6 @@ pub use config::{FilesConfig, StorageAdapter};
 pub use keys::{safe_filename, storage_key};
 pub use presets::ImagePreset;
 pub use storage::{Files, LocalStorage, Storage, StoredObject};
+pub use sweep::{SweepOptions, SweepReport};
 pub use thumbnail::{OutputFormat, ResizeMode};
 pub use validation::{sniff, ImageFormat, UploadLimits};

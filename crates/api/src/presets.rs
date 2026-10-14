@@ -30,6 +30,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ImagePreset>
 /// Dimensions are optional individually, matching the schema: a preset may
 /// constrain one side only, and the other is derived from the source.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PresetBody {
     /// The name. Required when creating; on update it must match the path.
     #[serde(default)]
