@@ -299,7 +299,7 @@ pub async fn export(client: &Client) -> Result<Archive> {
             .await
             .map_err(db_error)?;
 
-        let records: Vec<Value> = rows.iter().map(|row| row_to_json(row)).collect::<Vec<_>>();
+        let records: Vec<Value> = rows.iter().map(row_to_json).collect::<Vec<_>>();
 
         manifest_collections.push(ManifestCollection {
             name: collection.name.clone(),
@@ -400,16 +400,13 @@ fn column_to_json(row: &tokio_postgres::Row, index: usize) -> Value {
                 .map(Value::Number)
                 .unwrap_or(Value::String(value))
         }),
-        Type::UUID => row.get::<_, Option<uuid_text>>(index).map(Value::String),
+        Type::UUID => row.get::<_, Option<String>>(index).map(Value::String),
         // Anything else is written as its text form rather than dropped: an archive
         // that silently loses a column is worse than one holding it as a string.
         _ => row.get::<_, Option<String>>(index).map(Value::String),
     };
     json.unwrap_or(Value::Null)
 }
-
-/// A type alias so the uuid branch above reads as one `get` like the others.
-type uuid_text = String;
 
 /// The current time, RFC 3339, from the system clock.
 fn now_rfc3339() -> String {
