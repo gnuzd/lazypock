@@ -243,6 +243,9 @@ pub async fn create_record(
         &resolved.context,
         body,
         &extra,
+        // No hook runtime is reachable from a request yet; the seam is in place so
+        // the adapter is the only thing left to add.
+        &lazypock_db::hooks::NoHooks,
     )
     .await
     .map_err(ApiError::from)?;

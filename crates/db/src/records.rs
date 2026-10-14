@@ -12,6 +12,7 @@ use lazypock_core::error::{Error, Result};
 
 use crate::collections::{Collection, Field};
 use crate::ddl::quote_ident;
+use crate::hooks::{HookEvent, NoHooks, RecordHooks};
 use crate::pool::db_error;
 use crate::query::compile::FilterContext;
 use crate::query::projection::{ExpandSpec, FieldSelection};
@@ -85,7 +86,7 @@ pub async fn create(
     context: &FilterContext,
     input: Value,
 ) -> std::result::Result<Value, RecordWriteError> {
-    create_with(runner, collection, context, input, &[]).await
+    create_with(runner, collection, context, input, &[], &NoHooks).await
 }
 
 /// Insert a record, adding server-managed columns the caller has computed.
@@ -98,7 +99,17 @@ pub async fn create_with(
     context: &FilterContext,
     input: Value,
     extra: &[(String, Option<String>)],
+    hooks: &dyn RecordHooks,
 ) -> std::result::Result<Value, RecordWriteError> {
+    // A before-hook runs *before* validation, so it can fill in a field the caller
+    // did not send — generating a slug is the obvious case. Whatever it returns is
+    // then validated like any other input, so a hook cannot write something the
+    // collection does not allow.
+    let input = hooks
+        .before(HookEvent::Create, &collection.name, input)
+        .await
+        .map_err(RecordWriteError::Other)?;
+
     let object = expect_object(&input)?;
     validation::validate(collection, object, false).map_err(RecordWriteError::Validation)?;
 

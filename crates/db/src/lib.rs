@@ -7,6 +7,7 @@
 
 pub mod collections;
 pub mod ddl;
+pub mod hooks;
 pub mod migrate;
 pub mod pool;
 pub mod query;

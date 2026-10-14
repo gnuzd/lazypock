@@ -218,10 +218,18 @@ async fn execute(runner: &dyn QueryRunner, step: &Step) -> Result<(u16, Value), 
         "POST" => {
             let input = step.input.clone().expect("planned");
             let extra = crate::auth::auth_columns(&step.collection, &input)?;
-            let record =
-                records::create_with(runner, &step.collection, &step.context, input, &extra)
-                    .await
-                    .map_err(ApiError::from)?;
+            let record = records::create_with(
+                runner,
+                &step.collection,
+                &step.context,
+                input,
+                &extra,
+                // Same seam as the create route; no hook runtime is reachable
+                // from a batch step yet.
+                &lazypock_db::hooks::NoHooks,
+            )
+            .await
+            .map_err(ApiError::from)?;
             Ok((201, record))
         }
         "PATCH" => {
