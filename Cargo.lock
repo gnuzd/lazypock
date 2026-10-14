@@ -1715,6 +1715,7 @@ dependencies = [
  "lazypock-core",
  "lazypock-db",
  "lazypock-files",
+ "lazypock-hooks",
  "lazypock-realtime",
  "tokio",
  "tracing",
@@ -1734,6 +1735,7 @@ dependencies = [
  "lazypock-core",
  "lazypock-db",
  "lazypock-files",
+ "lazypock-hooks",
  "lazypock-realtime",
  "serde",
  "serde_json",
@@ -1809,6 +1811,7 @@ name = "lazypock-hooks"
 version = "0.1.0"
 dependencies = [
  "lazypock-core",
+ "lazypock-db",
  "oxc_allocator",
  "oxc_codegen",
  "oxc_parser",
@@ -1817,6 +1820,7 @@ dependencies = [
  "oxc_transformer",
  "rquickjs",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 

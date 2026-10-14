@@ -5,6 +5,11 @@ mod shutdown;
 
 use std::process::ExitCode;
 use std::sync::Arc;
+
+/// Where hook files live, from `LAZYPOCK_HOOKS_DIR`.
+fn hooks_directory() -> String {
+    std::env::var("LAZYPOCK_HOOKS_DIR").unwrap_or_else(|_| "hooks".to_string())
+}
 use std::time::Duration;
 
 use clap::Parser;
@@ -182,7 +187,15 @@ async fn serve(config: Config) -> Result<()> {
         .await
         .map_err(|err| Error::config(format!("file storage is not usable: {err}")))?;
 
-    let app = router(AppState::new(config, db, schema, auth, hub, files));
+    // The hook worker owns the QuickJS runtime on its own thread, because the
+    // runtime is not `Send`. It starts even with no hook files: it costs an idle
+    // thread, and it means a hook added later is picked up without a restart.
+    let hooks = Arc::new(lazypock_hooks::HookService::start(
+        hooks_directory(),
+        lazypock_hooks::HookLimits::default(),
+    ));
+
+    let app = router(AppState::new(config, db, schema, auth, hub, files, hooks));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

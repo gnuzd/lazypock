@@ -27,3 +27,4 @@ axum = "0.8.9"
 lazypock-auth = { version = "0.1.0", path = "../auth" }
 lazypock-realtime = { version = "0.1.0", path = "../realtime" }
 lazypock-files = { version = "0.1.0", path = "../files" }
+lazypock-hooks = { version = "0.1.0", path = "../hooks" }

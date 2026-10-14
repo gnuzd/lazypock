@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 
 use lazypock_core::error::Error;
 use lazypock_db::collections::Collection;
+use lazypock_db::hooks::RecordHooks;
 use lazypock_db::pool::db_error;
 use lazypock_db::query::compile::FilterContext;
 use lazypock_db::query::filter;
@@ -243,9 +244,7 @@ pub async fn create_record(
         &resolved.context,
         body,
         &extra,
-        // No hook runtime is reachable from a request yet; the seam is in place so
-        // the adapter is the only thing left to add.
-        &lazypock_db::hooks::NoHooks,
+        state.hooks.as_ref(),
     )
     .await
     .map_err(ApiError::from)?;
@@ -254,6 +253,18 @@ pub async fn create_record(
         .commit()
         .await
         .map_err(|err| ApiError::new(db_error(err)))?;
+
+    // After-hooks run once the write is committed, so a failure here cannot undo a
+    // record that is already durable.
+    state
+        .hooks
+        .after(
+            lazypock_db::hooks::HookEvent::Create,
+            &resolved.collection.name,
+            record.clone(),
+        )
+        .await
+        .map_err(ApiError::new)?;
 
     Ok((StatusCode::CREATED, Json(record)).into_response())
 }

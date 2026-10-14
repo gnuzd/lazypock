@@ -36,6 +36,9 @@ pub struct TestApp {
     admin_url: String,
     /// The schema this test is scoped to.
     schema: String,
+    /// This test's hooks directory. Writing a file here and reloading is how a
+    /// test installs a hook.
+    pub hooks_directory: std::path::PathBuf,
 }
 
 impl TestApp {
@@ -181,8 +184,24 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
         .expect("files"),
     );
 
+    let hooks_directory = std::env::temp_dir().join(format!("lazypock-api-hooks-{nanos}"));
+    std::fs::create_dir_all(&hooks_directory).expect("hooks directory");
+    let hooks = Arc::new(lazypock_hooks::HookService::start(
+        &hooks_directory,
+        lazypock_hooks::HookLimits::default(),
+    ));
+
     Some(TestApp {
-        state: lazypock_api::AppState::new(config, db.clone(), cache, auth, hub, files),
+        state: lazypock_api::AppState::new(
+            config,
+            db.clone(),
+            cache,
+            auth,
+            hub,
+            files,
+            hooks.clone(),
+        ),
+        hooks_directory: hooks_directory.clone(),
         db,
         admin_url: url,
         schema,

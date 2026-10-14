@@ -17,8 +17,10 @@
 
 pub mod loader;
 pub mod runtime;
+pub mod service;
 pub mod strip;
 
 pub use loader::{HookLoader, LoadReport};
 pub use runtime::{HookLimits, HookRuntime, RecordEvent};
+pub use service::HookService;
 pub use strip::strip_types;
