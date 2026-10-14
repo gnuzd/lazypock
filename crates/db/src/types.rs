@@ -26,6 +26,31 @@ pub const SYSTEM_COLUMNS: &[&str] = &["id", "created", "updated"];
 /// Extra system columns on auth collections.
 pub const AUTH_SYSTEM_COLUMNS: &[&str] = &["email", "password_hash", "verified", "token_key"];
 
+/// The collection a relation field points at, under either name.
+///
+/// PocketBase stores `collectionId`; the implementation this replaced — and the
+/// Studio built for it — send `collection`, carrying a collection *name*:
+///
+///     "options": { "collection": "users" }
+///
+/// Both are accepted, and the value may be either an id or a name, which is how the
+/// DDL already resolved it. Read through here rather than off `options` directly, so
+/// validation and the foreign-key builder cannot end up looking in different places —
+/// which is precisely how a relation field came to be refused for a missing option it
+/// had, under another name.
+pub fn relation_target(options: &serde_json::Value) -> Option<&str> {
+    options
+        .get("collectionId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            options
+                .get("collection")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
+}
+
 /// Kind of collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CollectionType {
@@ -344,9 +369,10 @@ pub fn validate_options(field_type: FieldType, options: &Value) -> Result<()> {
         }
     }
 
-    if field_type == FieldType::Relation && options.get("collectionId").is_none() {
+    if field_type == FieldType::Relation && relation_target(options).is_none() {
         return Err(Error::invalid(
-            "a relation field needs a `collectionId` option",
+            "a relation field needs a `collectionId` option naming its target \
+             collection (PocketBase's name), or `collection` with its name",
         ));
     }
 

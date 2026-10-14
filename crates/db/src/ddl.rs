@@ -107,16 +107,12 @@ fn column_definition(
     // referential integrity. Multi-relations cannot (Postgres has no array
     // element FK) and are validated by the records layer.
     if field.field_type == types::FieldType::Relation && !field.is_multiple() {
-        let target_id = field
-            .options
-            .get("collectionId")
-            .and_then(|value| value.as_str())
-            .ok_or_else(|| {
-                Error::invalid(format!(
-                    "relation field {:?} has no collectionId",
-                    field.name
-                ))
-            })?;
+        let target_id = types::relation_target(&field.options).ok_or_else(|| {
+            Error::invalid(format!(
+                "relation field {:?} has no collectionId",
+                field.name
+            ))
+        })?;
         let target = resolve_table(target_id).ok_or_else(|| {
             Error::invalid(format!(
                 "relation field {:?} references unknown collection {target_id:?}",

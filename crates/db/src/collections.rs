@@ -370,7 +370,18 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
     // Resolve relation targets, including a self-reference.
     let mut targets = load_table_names(client).await?;
     targets.insert(id.clone(), name.clone());
-    let resolve = |collection_id: &str| targets.get(collection_id).cloned();
+
+    // A relation may **name** its target rather than identify it. PocketBase stores
+    // the target's id, but the implementation this replaced — and the Studio built
+    // for it — send `options.collection` with a name, and here a collection's name
+    // *is* its table name, so a name is a valid key in its own right. Without this the
+    // resolver was id-only and a name was reported as an unknown collection, which is
+    // what stopped a relation field being created at all.
+    for table in targets.values().cloned().collect::<Vec<_>>() {
+        targets.entry(table.clone()).or_insert(table);
+    }
+
+    let resolve = |target: &str| targets.get(target).cloned();
     // Read once: the rule compiler needs the other collections to whitelist
     // dotted paths, and this must happen before the transaction borrows `client`.
     let all = list(client).await?;
