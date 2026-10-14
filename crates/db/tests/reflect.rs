@@ -193,6 +193,43 @@ async fn lazypocks_own_tables_are_never_adopted() {
 }
 
 #[tokio::test]
+async fn an_adopted_table_is_not_readable_by_a_restricted_role() {
+    let Some(db) = migrated_test_db("reflect_rls").await else {
+        return;
+    };
+    let client = db.client().await;
+    client
+        .batch_execute(LEGACY)
+        .await
+        .expect("the legacy schema");
+    run_reflect(&client).await.expect("reflect");
+
+    // Migration 0003 grants `lazypock_anon` access to every table in the schema,
+    // so an adopted table is only superuser-only if reflection turned row-level
+    // security on as well. Without it, an anonymous request can read somebody
+    // else's rows through the records API.
+    let mut client = db.client().await;
+    let transaction = client.transaction().await.expect("transaction");
+    let anonymous = lazypock_db::rls::context::RequestContext::anonymous();
+    lazypock_db::rls::context::apply(&transaction, &anonymous)
+        .await
+        .expect("apply the anonymous context");
+
+    let row = transaction
+        .query_one("select count(*) from orders", &[])
+        .await
+        .expect("count as an anonymous caller");
+    let count: i64 = row.get(0);
+    assert_eq!(
+        count, 0,
+        "an adopted table must not be readable without a rule"
+    );
+
+    transaction.rollback().await.expect("rollback");
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn a_table_without_an_id_column_is_still_reflected_but_records_its_key() {
     // Somebody else's table may key on something else. It still becomes a
     // collection, and the real key is recorded rather than assumed.

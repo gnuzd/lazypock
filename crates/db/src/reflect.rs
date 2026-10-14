@@ -23,6 +23,8 @@ use serde_json::{json, Value};
 use tokio_postgres::Client;
 
 use crate::pool::db_error;
+use crate::query::compile::FilterContext;
+use crate::rls;
 use crate::types::FieldType;
 
 /// A column as the database describes it.
@@ -236,6 +238,26 @@ pub async fn reflect(client: &Client) -> Result<ReflectionReport> {
 
         tracing::info!(table = %table, fields = columns.len(), "adopted an existing table");
         report.adopted.push(table);
+    }
+
+    // Registering a collection is not complete until its table is subject to
+    // row-level security. Migration 0003 grants `lazypock_anon` and
+    // `lazypock_authenticated` access to every table in the schema, so an adopted
+    // table left without RLS would be readable by anyone — not "superuser only"
+    // as its absent rules intend. Applying the (empty) rules enables RLS and
+    // creates no policy, which is exactly the default-deny those rules promise.
+    if !report.adopted.is_empty() {
+        let collections = crate::collections::list(client).await?;
+        for name in &report.adopted {
+            let Some(collection) = collections
+                .iter()
+                .find(|collection| &collection.name == name)
+            else {
+                continue;
+            };
+            let context = FilterContext::for_collection(collection, &collections)?;
+            rls::policies::apply(client, collection, &context).await?;
+        }
     }
 
     Ok(report)

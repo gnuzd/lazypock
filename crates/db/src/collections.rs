@@ -653,16 +653,35 @@ pub async fn update(
         }
     }
 
+    // Re-read after the field changes above: the policy context below has to see
+    // the fields that now exist, not the ones the collection started with.
+    let mut updated = get(client, &existing.id).await?;
+    updated.rules = rules;
+    updated.options = options;
+
+    // The rule compiler resolves relation paths, so it needs the other
+    // collections. Read once, before the transaction borrows `client`.
+    let all = list(client).await?;
+
     // In a transaction with the notification, so subscribers are told only once
     // the change is actually visible — the same pattern the other mutations use.
     let transaction = client.transaction().await.map_err(db_error)?;
     transaction
         .execute(
             "update _collections set rules = $2, options = $3, updated = now() where id = $1",
-            &[&existing.id, &rules, &options],
+            &[&existing.id, &updated.rules, &updated.options],
         )
         .await
         .map_err(db_error)?;
+
+    // Rebuild the policies from the new rules. Without this the row changed but
+    // the table kept the policies it already had, so a rule edited to public in
+    // the Studio was stored and displayed but never enforced, and an
+    // unauthenticated read returned an empty list. `apply` rebuilds the policies
+    // wholesale, so a rule that was removed stops applying too.
+    let rule_context = FilterContext::for_collection(&updated, &all)?;
+    rls::policies::apply(&transaction, &updated, &rule_context).await?;
+
     notify_schema_changed(&transaction).await?;
     transaction.commit().await.map_err(db_error)?;
 

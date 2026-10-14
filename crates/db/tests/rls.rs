@@ -10,7 +10,7 @@ mod support;
 
 use serde_json::{json, Value};
 
-use lazypock_db::collections::{self, CreateCollection, CreateField};
+use lazypock_db::collections::{self, CreateCollection, CreateField, UpdateCollection};
 use lazypock_db::pool::Db;
 use lazypock_db::rls::context::{apply, missing_roles, RequestContext};
 use lazypock_db::rls::policies;
@@ -154,6 +154,58 @@ async fn an_empty_rule_is_public() {
     assert_eq!(
         visible(&test.db, &RequestContext::anonymous()).await,
         vec!["p1", "p2", "p3"]
+    );
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn editing_a_rule_is_enforced_not_just_stored() {
+    let Some(test) = migrated_test_db("rls_rule_edited").await else {
+        return;
+    };
+    // Start locked, then open it up — the order the Studio's rule editor uses.
+    seed(&test, json!({})).await;
+    assert_eq!(
+        visible(&test.db, &RequestContext::anonymous()).await,
+        Vec::<String>::new()
+    );
+
+    let mut client = test.client().await;
+    collections::update(
+        &mut client,
+        "posts",
+        UpdateCollection {
+            rules: Some(json!({ "listRule": "" })),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("open the rule");
+
+    assert_eq!(
+        visible(&test.db, &RequestContext::anonymous()).await,
+        vec!["p1", "p2", "p3"],
+        "a rule changed to public must be enforced, not only stored"
+    );
+
+    // And closing it again must hide the rows, so a removed rule really stops
+    // applying rather than its policy lingering.
+    collections::update(
+        &mut client,
+        "posts",
+        UpdateCollection {
+            rules: Some(json!({})),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("close the rule");
+
+    assert_eq!(
+        visible(&test.db, &RequestContext::anonymous()).await,
+        Vec::<String>::new(),
+        "closing a rule must take effect too"
     );
 
     test.cleanup().await;
