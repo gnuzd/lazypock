@@ -8,6 +8,7 @@
 pub mod backup;
 pub mod collections;
 pub mod ddl;
+pub mod defaults;
 pub mod hooks;
 pub mod migrate;
 pub mod pool;

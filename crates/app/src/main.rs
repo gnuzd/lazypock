@@ -168,6 +168,10 @@ async fn serve(config: Config) -> Result<()> {
         // lazypock is pointed at it, rather than showing an empty installation.
         // Adopting them is what makes that true: every table becomes a collection
         // and every column a field. Nothing here alters the existing tables.
+        // A client's collection list should not be empty on a fresh installation, and
+        // accounts need somewhere to live. Idempotent, so it is safe on every boot.
+        lazypock_db::defaults::ensure_users(&mut client).await?;
+
         if reflect_existing()? {
             let reflected = lazypock_db::reflect::reflect(&client).await?;
             if !reflected.adopted.is_empty() {

@@ -13,6 +13,7 @@ pub mod presets;
 pub mod realtime;
 pub mod records;
 pub mod router;
+pub mod settings;
 pub mod state;
 pub mod superusers;
 
