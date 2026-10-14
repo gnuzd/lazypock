@@ -25,6 +25,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/batch", post(batch::batch))
         // The public half of the token signing key, for other services.
         .route("/api/jwks", get(auth::jwks))
+        // PocketBase parity, and what a client calls to learn who it is.
+        .route("/api/me", get(auth::me))
         .route("/api/realtime", get(realtime::realtime))
         // The body limit bounds what is buffered before validation can reject it.
         .route("/api/files", post(files::upload).layer(files::body_limit()))

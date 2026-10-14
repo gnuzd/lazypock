@@ -6,7 +6,7 @@
 //! instead of quietly losing access.
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Extension, Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -197,6 +197,39 @@ pub struct RefreshAuth {
 
 /// `POST /api/collections/{collection}/auth-with-password`
 ///
+/// `GET /api/me`
+///
+/// The current identity, in the record-like shape a client expects: `id`, `email`
+/// and, for a collection user, the collection it belongs to. A superuser has no
+/// collection, and that absence is how a client tells the two apart — the same
+/// distinction the token itself makes.
+///
+/// Answered from the token's claims rather than a database read, so it stays cheap
+/// enough to call on start-up, and so an identity that has since been deleted
+/// still reports itself rather than 404ing on the way to being rejected.
+pub async fn me(Extension(principal): Extension<Principal>) -> Result<Json<Value>, ApiError> {
+    let Some(claims) = principal.claims() else {
+        return Err(ApiError::new(Error::unauthorized(
+            "an access token is required",
+        )));
+    };
+
+    let mut body = json!({
+        "id": claims.sub,
+        "email": claims.email,
+        "superuser": claims.typ.is_superuser(),
+    });
+
+    if !claims.typ.is_superuser() {
+        if let Some(object) = body.as_object_mut() {
+            object.insert("collectionId".to_string(), json!(claims.col));
+            object.insert("collectionName".to_string(), json!(claims.name));
+        }
+    }
+
+    Ok(Json(body))
+}
+
 /// Also serves `POST /api/collections/_superusers/auth-with-password`, which is
 /// how PocketBase spells superuser login.
 pub async fn auth_with_password(
