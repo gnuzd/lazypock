@@ -11,7 +11,14 @@ homepage.workspace = true
 
 [dependencies]
 lazypock-core.workspace = true
+oxc_allocator = "0.154"
+oxc_codegen = "0.154"
+oxc_parser = "0.154"
+oxc_semantic = "0.154"
+oxc_span = "0.154"
+oxc_transformer = "0.154"
 rquickjs = "0.14"
 serde_json = "1.0.154"
+tracing = "0.1.44"
 
 [dev-dependencies]

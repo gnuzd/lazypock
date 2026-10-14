@@ -15,6 +15,10 @@
 //!   the runtime is rebuilt rather than reused; the error is reported once and the
 //!   request or the server survives.
 
+pub mod loader;
 pub mod runtime;
+pub mod strip;
 
+pub use loader::{HookLoader, LoadReport};
 pub use runtime::{HookLimits, HookRuntime, RecordEvent};
+pub use strip::strip_types;
