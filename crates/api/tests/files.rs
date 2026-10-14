@@ -13,14 +13,20 @@ use lazypock_db::types::{CollectionType, FieldType};
 
 use support::{call, test_app, TestApp};
 
-/// A PNG header with the given dimensions.
+/// A real, fully decodable PNG of the given dimensions.
+///
+/// It has to be a complete image, not just a header: upload validation reads the
+/// dimensions out of the header without decoding, so a header-only fixture gets
+/// stored happily and then fails at thumbnail time.
 fn png(width: u32, height: u32) -> Vec<u8> {
-    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
-    bytes.extend_from_slice(&13u32.to_be_bytes());
-    bytes.extend_from_slice(b"IHDR");
-    bytes.extend_from_slice(&width.to_be_bytes());
-    bytes.extend_from_slice(&height.to_be_bytes());
-    bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let raw = image::RgbaImage::from_pixel(width, height, image::Rgba([10, 120, 200, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(raw)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .expect("encode png");
     bytes
 }
 
@@ -310,6 +316,125 @@ async fn a_traversing_file_path_is_refused() {
         assert!(
             status == StatusCode::BAD_REQUEST || status == StatusCode::NOT_FOUND,
             "{url} returned {status}"
+        );
+    }
+
+    app.cleanup().await;
+}
+
+/// Upload a PNG and return its served URL.
+async fn uploaded_png(app: &TestApp, token: &str, width: u32, height: u32) -> String {
+    let bytes = png(width, height);
+    let reply = upload(
+        app,
+        &[
+            ("collection", None, b"posts"),
+            ("record", None, b"p1"),
+            ("file", Some("photo.png"), &bytes),
+        ],
+        Some(token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    reply.body.expect("body")["url"]
+        .as_str()
+        .expect("url")
+        .to_string()
+}
+
+#[tokio::test]
+async fn a_thumbnail_can_be_requested_by_size_preset_or_path() {
+    let Some(app) = test_app("http_files_thumbnails").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = token(&app).await;
+    let source = png(400, 200);
+    let url = uploaded_png(&app, &token, 400, 200).await;
+
+    // An ad-hoc size fits inside the box, preserving the ratio.
+    let (status, bytes) = fetch(&app, &format!("{url}?thumb=100x100")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "body was: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert_eq!(
+        lazypock_files::sniff(&bytes),
+        Some(lazypock_files::ImageFormat::Webp),
+        "an ad-hoc size encodes to webp"
+    );
+    assert_eq!(
+        lazypock_files::validation::dimensions(&bytes, lazypock_files::ImageFormat::Webp),
+        Some((100, 50)),
+        "the aspect ratio is preserved"
+    );
+
+    // Asking for a thumbnail must not disturb the original.
+    let (status, original) = fetch(&app, &url).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(original, source, "the original is served unchanged");
+
+    // A stored preset, by query and by path.
+    let (status, bytes) = fetch(&app, &format!("{url}?preset=thumb")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        lazypock_files::validation::dimensions(&bytes, lazypock_files::ImageFormat::Webp),
+        Some((200, 200)),
+        "the `thumb` preset is a 200x200 cover crop"
+    );
+
+    let (status, by_path) = fetch(&app, &format!("{url}/thumbs/thumb")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        by_path, bytes,
+        "the path form and the query form return the same cached object"
+    );
+
+    // An unknown preset is a clear 404 rather than a silent fallback to the
+    // original, which would look like success and serve the wrong size.
+    let (status, _) = fetch(&app, &format!("{url}?preset=nope")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Asking for two sizes at once is ambiguous.
+    let (status, _) = fetch(&app, &format!("{url}?thumb=10x10&preset=thumb")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_thumbnail_of_something_that_is_not_a_resizable_image_is_refused() {
+    let Some(app) = test_app("http_files_thumbnail_non_image").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = token(&app).await;
+
+    // A GIF is a valid upload, so it stores fine, but we cannot produce a
+    // thumbnail of it usefully and must say so rather than return something odd.
+    let gif = b"GIF89a\x01\x00\x01\x00\x00\x00\x00;";
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"posts"),
+            ("record", None, b"p1"),
+            ("file", Some("anim.gif"), gif),
+        ],
+        Some(&token),
+    )
+    .await;
+    if reply.status == StatusCode::CREATED {
+        let url = reply.body.expect("body")["url"]
+            .as_str()
+            .expect("url")
+            .to_string();
+        let (status, body) = fetch(&app, &format!("{url}?thumb=32x32")).await;
+        assert!(
+            !status.is_server_error(),
+            "an image we cannot resize must be a clear client error, not a 500:              {status} {}",
+            String::from_utf8_lossy(&body)
         );
     }
 

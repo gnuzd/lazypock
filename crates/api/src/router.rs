@@ -30,6 +30,10 @@ pub fn router(state: AppState) -> Router {
             "/api/files/{collection}/{record}/{filename}",
             get(files::serve).delete(files::delete),
         )
+        .route(
+            "/api/files/{collection}/{record}/{filename}/thumbs/{preset}",
+            get(files::serve_thumbnail),
+        )
         .route("/.well-known/jwks.json", get(auth::jwks))
         // `_superusers` is handled inside the same handler, so there is no route
         // ordering to get wrong.

@@ -9,7 +9,8 @@ use bytes::Bytes;
 use lazypock_core::error::{Error, Result};
 
 /// The formats we accept, and can measure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ImageFormat {
     /// PNG.
     Png,

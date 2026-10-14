@@ -81,7 +81,21 @@ async fn admin_connect(url: &str) -> Result<tokio_postgres::Client, tokio_postgr
 }
 
 /// Prepare an isolated schema with the system migrations applied.
+/// Initialise logging once, so an internal error the API redacts from the
+/// response is still visible when a test runs with `--nocapture`.
+fn init_logging() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = lazypock_core::telemetry::init(
+            lazypock_core::config::LogLevel::Info,
+            lazypock_core::config::LogFormat::Text,
+        );
+    });
+}
+
 pub async fn test_app(label: &str) -> Option<TestApp> {
+    init_logging();
     let explicit = std::env::var("TEST_DATABASE_URL").ok();
     let required = std::env::var("LAZYPOCK_REQUIRE_DB_TESTS").is_ok();
     let url = explicit

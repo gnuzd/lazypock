@@ -25,6 +25,7 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 base64 = "0.23.1"
+image = { version = "0.25.9", default-features = false, features = ["png"] }
 serde_urlencoded = "0.7.1"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }

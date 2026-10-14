@@ -12,11 +12,15 @@
 pub mod config;
 pub mod keys;
 pub mod outbox;
+pub mod presets;
 pub mod s3;
 pub mod storage;
+pub mod thumbnail;
 pub mod validation;
 
 pub use config::{FilesConfig, StorageAdapter};
 pub use keys::{safe_filename, storage_key};
+pub use presets::ImagePreset;
 pub use storage::{Files, LocalStorage, Storage, StoredObject};
+pub use thumbnail::ResizeMode;
 pub use validation::{sniff, ImageFormat, UploadLimits};

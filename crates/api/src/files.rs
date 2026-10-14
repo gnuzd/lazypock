@@ -5,14 +5,15 @@
 //! it behaves as a capability URL — that is the same model PocketBase uses for
 //! its file URLs, and it is why the random prefix is not optional.
 
-use axum::extract::{DefaultBodyLimit, Extension, Multipart, Path, State};
+use axum::extract::{DefaultBodyLimit, Extension, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use bytes::Bytes;
 use lazypock_core::error::Error;
 use lazypock_db::types::validate_identifier;
-use lazypock_files::{keys, outbox};
+use lazypock_files::{keys, outbox, presets, thumbnail, ImagePreset};
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::auth::Principal;
@@ -110,11 +111,72 @@ pub async fn upload(
         .into_response())
 }
 
+/// Query parameters accepted when serving a file.
+#[derive(Debug, Default, Deserialize)]
+pub struct ServeQuery {
+    /// An ad-hoc size, e.g. `?thumb=400x300`.
+    pub thumb: Option<String>,
+    /// A stored preset, e.g. `?preset=sm`.
+    pub preset: Option<String>,
+}
+
 /// `GET /api/files/{collection}/{record}/{filename}`
 pub async fn serve(
     State(state): State<AppState>,
     Path((collection, record_id, filename)): Path<(String, String, String)>,
+    Query(query): Query<ServeQuery>,
 ) -> Result<Response, ApiError> {
+    serve_path(
+        state,
+        collection,
+        record_id,
+        filename,
+        query.thumb,
+        query.preset,
+    )
+    .await
+}
+
+/// `GET /api/files/{collection}/{record}/{filename}/thumbs/{preset}`
+pub async fn serve_thumbnail(
+    State(state): State<AppState>,
+    Path((collection, record_id, filename, preset)): Path<(String, String, String, String)>,
+) -> Result<Response, ApiError> {
+    serve_path(state, collection, record_id, filename, None, Some(preset)).await
+}
+
+/// Serve an object, optionally resized.
+async fn serve_path(
+    state: AppState,
+    collection: String,
+    record_id: String,
+    filename: String,
+    thumb: Option<String>,
+    preset: Option<String>,
+) -> Result<Response, ApiError> {
+    let preset = match (thumb, preset) {
+        (Some(_), Some(_)) => {
+            return Err(ApiError::new(Error::invalid(
+                "give either `thumb` or `preset`, not both",
+            )))
+        }
+        (Some(specification), None) => {
+            Some(ImagePreset::parse_size(&specification).map_err(ApiError::new)?)
+        }
+        (None, Some(name)) => {
+            let client = state.db.client().await.map_err(ApiError::new)?;
+            Some(
+                presets::find(&client, &name)
+                    .await
+                    .map_err(ApiError::new)?
+                    .ok_or_else(|| {
+                        ApiError::new(Error::not_found(format!("no image preset named {name:?}")))
+                    })?,
+            )
+        }
+        (None, None) => None,
+    };
+
     // The path segments become a key, so they are checked exactly as an upload's
     // would be: a traversal here would read outside the storage root.
     validate_identifier("collection name", &collection).map_err(ApiError::new)?;
@@ -124,27 +186,77 @@ pub async fn serve(
         safe_segment(&filename)?
     );
 
-    let object = state
-        .files
-        .storage()
+    let storage = state.files.storage();
+
+    let Some(preset) = preset else {
+        let object = storage
+            .get(&key)
+            .await
+            .map_err(ApiError::new)?
+            .ok_or_else(|| ApiError::new(Error::not_found("no such file")))?;
+        return Ok(image_response(object.body, &object.content_type));
+    };
+
+    let thumbnail_key = preset.thumbnail_key(&key);
+
+    // A thumbnail is immutable — it is derived from an object whose key already
+    // carries a random component — so it is generated once and then cached in the
+    // same backend as the original.
+    if let Some(cached) = storage.get(&thumbnail_key).await.map_err(ApiError::new)? {
+        return Ok(image_response(cached.body, &cached.content_type));
+    }
+
+    let source = storage
         .get(&key)
         .await
         .map_err(ApiError::new)?
         .ok_or_else(|| ApiError::new(Error::not_found("no such file")))?;
 
-    let mut response = (StatusCode::OK, object.body).into_response();
-    let content_type = HeaderValue::from_str(&object.content_type)
+    // The bytes decide the format, never a caller. A file that is not an image we
+    // can decode gets a clear refusal rather than a broken thumbnail.
+    let source_format = lazypock_files::sniff(&source.body).ok_or_else(|| {
+        ApiError::new(Error::invalid(
+            "this file is not an image that can be resized",
+        ))
+    })?;
+
+    let bytes = thumbnail::resize(thumbnail::ResizeRequest {
+        source: &source.body,
+        source_format,
+        width: preset.width,
+        height: preset.height,
+        mode: preset.mode,
+        format: preset.format,
+        quality: preset.quality,
+    })
+    .map_err(ApiError::new)?;
+
+    let content_type = preset.format.content_type().to_string();
+    storage
+        .put(&thumbnail_key, &content_type, Bytes::from(bytes.clone()))
+        .await
+        .map_err(ApiError::new)?;
+
+    tracing::debug!(key = %thumbnail_key, "generated a thumbnail");
+    Ok(image_response(Bytes::from(bytes), &content_type))
+}
+
+/// A response for an image body.
+///
+/// Cacheable forever: an object at a key never changes, and a thumbnail is
+/// derived from one.
+fn image_response(body: Bytes, content_type: &str) -> Response {
+    let mut response = (StatusCode::OK, body).into_response();
+    let content_type = HeaderValue::from_str(content_type)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, content_type);
-    // The key contains a random component and an object at a key never changes,
-    // so the response can be cached indefinitely.
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=31536000, immutable"),
     );
-    Ok(response)
+    response
 }
 
 /// `DELETE /api/files/{collection}/{record}/{filename}`

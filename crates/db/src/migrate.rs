@@ -66,6 +66,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "realtime",
         sql: include_str!("../../../migrations/0004_realtime.sql"),
     },
+    Migration {
+        version: 5,
+        name: "image_presets",
+        sql: include_str!("../../../migrations/0005_image_presets.sql"),
+    },
 ];
 
 /// Outcome of a migration run.
