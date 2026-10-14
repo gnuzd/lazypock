@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::SystemTime;
 
-use crate::auth::require_superuser;
+use crate::auth::{require_superuser, require_superuser_or_api_key};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -32,7 +32,7 @@ pub async fn list(
     Extension(principal): Extension<Principal>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    require_superuser(&principal)?;
+    require_superuser_or_api_key(&principal)?;
     let client = state.db.client().await.map_err(ApiError::new)?;
     let collections = collections::list(&client).await.map_err(ApiError::new)?;
 
@@ -82,7 +82,7 @@ pub async fn get(
     Extension(principal): Extension<Principal>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    require_superuser(&principal)?;
+    require_superuser_or_api_key(&principal)?;
     if name == crate::auth::SUPERUSERS {
         return Ok(Json(collection_json(&superusers_collection(), true)?));
     }

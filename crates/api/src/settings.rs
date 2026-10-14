@@ -10,11 +10,13 @@
 //! Superuser-only. Settings include secrets — SMTP credentials, storage keys — so
 //! this is configuration, not content.
 
-use axum::extract::{Json, State};
+use axum::extract::{Json, Path, State};
 use axum::response::Json as ResponseJson;
 use lazypock_core::error::Error;
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::api_keys;
 use crate::auth::Superuser;
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -140,6 +142,78 @@ pub async fn refresh_cors(
     let origins = state.cors.origins();
     tracing::info!(?origins, "CORS allowlist refreshed");
     Ok(ResponseJson(json!({ "cors_origins": origins })))
+}
+
+/// The body `POST /api/settings/api-keys` accepts.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateApiKey {
+    /// Days until the key expires; absent or `0` means it does not.
+    #[serde(default)]
+    pub expires_in_days: Option<i64>,
+}
+
+/// `GET /api/settings/api-keys`
+///
+/// The stored keys, without their digests — a client only needs an id to revoke and
+/// the dates to display.
+pub async fn list_api_keys(
+    State(state): State<AppState>,
+    _: Superuser,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    Ok(ResponseJson(
+        json!({ "items": public_items(&client).await? }),
+    ))
+}
+
+/// `POST /api/settings/api-keys`
+///
+/// The raw key is in the response **once**; only its digest is stored, so it can
+/// never be shown again.
+pub async fn generate_api_key(
+    State(state): State<AppState>,
+    _: Superuser,
+    Json(body): Json<CreateApiKey>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let (raw, key) = api_keys::create(&client, body.expires_in_days).await?;
+
+    tracing::info!(id = %key.id, "API key created");
+    Ok(ResponseJson(json!({
+        "api_key": raw,
+        "items": public_items(&client).await?,
+    })))
+}
+
+/// `DELETE /api/settings/api-keys/{id}`
+///
+/// Revokes rather than deletes, so the list still shows that the key existed and
+/// was revoked.
+pub async fn revoke_api_key(
+    State(state): State<AppState>,
+    _: Superuser,
+    Path(id): Path<String>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    if !api_keys::revoke(&client, &id).await? {
+        return Err(ApiError::new(Error::not_found(format!(
+            "no API key with id {id:?}"
+        ))));
+    }
+    tracing::info!(id = %id, "API key revoked");
+    Ok(ResponseJson(json!({ "ok": true })))
+}
+
+/// Every key in the shape a client reads.
+async fn public_items(
+    client: &lazypock_db::deadpool_postgres::Client,
+) -> Result<Vec<Value>, ApiError> {
+    Ok(api_keys::list(client)
+        .await?
+        .iter()
+        .map(api_keys::ApiKey::public)
+        .collect())
 }
 
 #[cfg(test)]

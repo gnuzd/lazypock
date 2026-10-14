@@ -36,6 +36,8 @@ pub const SUPERUSERS: &str = "_superusers";
 #[derive(Debug, Clone, Default)]
 pub struct Principal {
     claims: Option<Claims>,
+    /// Whether this caller authenticated with an API key rather than a token.
+    api_key: bool,
     /// The client's device/tab id, used by realtime to suppress echoes.
     connection_id: String,
 }
@@ -45,6 +47,7 @@ impl Principal {
     pub fn anonymous() -> Self {
         Self {
             claims: None,
+            api_key: false,
             connection_id: String::new(),
         }
     }
@@ -53,6 +56,21 @@ impl Principal {
     pub fn from_claims(claims: Claims) -> Self {
         Self {
             claims: Some(claims),
+            api_key: false,
+            connection_id: String::new(),
+        }
+    }
+
+    /// A caller authenticated by an API key.
+    ///
+    /// Deliberately not a superuser and with no record identity: an API key is a
+    /// scoped credential, so it carries no superuser bypass and no
+    /// `@request.auth.*`. Endpoints that accept it check [`Principal::is_api_key`]
+    /// explicitly.
+    pub fn from_api_key() -> Self {
+        Self {
+            claims: None,
+            api_key: true,
             connection_id: String::new(),
         }
     }
@@ -91,6 +109,11 @@ impl Principal {
         self.claims
             .as_ref()
             .is_some_and(|claims| claims.typ.is_superuser())
+    }
+
+    /// Whether this caller presented a valid API key.
+    pub fn is_api_key(&self) -> bool {
+        self.api_key
     }
 
     /// The authenticated account id.
@@ -139,9 +162,36 @@ pub async fn authenticate(
         return next.run(request).await;
     }
 
-    let principal = match bearer_token(request.headers()) {
+    // A key may travel in the query string as well as the bearer header. Take it
+    // out before the handler runs: a strict query parser (`GET /api/collections`
+    // denies unknown fields) would otherwise reject `api_key` as a bad parameter.
+    let query_key = api_key_from_query(request.uri());
+    if let Some(uri) = query_key
+        .as_ref()
+        .and_then(|_| strip_query_param(request.uri(), "api_key"))
+    {
+        *request.uri_mut() = uri;
+    }
+
+    let principal = match bearer_token(request.headers())
+        .map(str::to_string)
+        .or_else(|| query_key.clone())
+    {
         None => Principal::anonymous(),
-        Some(token) => match state.auth.verify(token) {
+        // Only a value carrying the key prefix is looked up, so the common JWT
+        // path never pays for a database round trip.
+        Some(token) if token.starts_with(crate::api_keys::PREFIX) => {
+            let client = match state.db.client().await {
+                Ok(client) => client,
+                Err(err) => return ApiError::new(err).into_response(),
+            };
+            match crate::api_keys::verify(&client, &token).await {
+                Ok(true) => Principal::from_api_key(),
+                Ok(false) => Principal::anonymous(),
+                Err(err) => return err.into_response(),
+            }
+        }
+        Some(token) => match state.auth.verify(&token) {
             Ok(claims) => Principal::from_claims(claims),
             Err(err) => return ApiError::new(err).into_response(),
         },
@@ -435,6 +485,39 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Superuser {
     }
 }
 
+/// The `api_key` query parameter, if present.
+///
+/// PocketBase's SDK can carry a key in either place; the value is the raw key, so
+/// no percent-decoding is needed for the characters it can contain.
+fn api_key_from_query(uri: &axum::http::Uri) -> Option<String> {
+    uri.query()?.split('&').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        (name == "api_key").then(|| value.to_string())
+    })
+}
+
+/// The same URI with one query parameter removed.
+fn strip_query_param(uri: &axum::http::Uri, name: &str) -> Option<axum::http::Uri> {
+    let kept: Vec<&str> = uri
+        .query()?
+        .split('&')
+        .filter(|pair| {
+            pair.split_once('=')
+                .map_or(*pair != name, |(key, _)| key != name)
+        })
+        .collect();
+
+    let target = if kept.is_empty() {
+        uri.path().to_string()
+    } else {
+        format!("{}?{}", uri.path(), kept.join("&"))
+    };
+
+    let mut parts = uri.clone().into_parts();
+    parts.path_and_query = Some(axum::http::uri::PathAndQuery::from_maybe_shared(target).ok()?);
+    axum::http::Uri::from_parts(parts).ok()
+}
+
 /// Fail unless the caller is a superuser.
 ///
 /// One implementation for every administrative surface: configuration is
@@ -446,6 +529,21 @@ pub fn require_superuser(principal: &Principal) -> Result<(), ApiError> {
     } else {
         Err(ApiError::new(Error::forbidden(
             "this action requires a superuser token",
+        )))
+    }
+}
+
+/// Fail unless the caller is a superuser or a valid API key.
+///
+/// Used only by the collection reads a codegen client needs. An API key stays
+/// refused everywhere [`require_superuser`] is used, so granting it here cannot
+/// widen it by accident.
+pub fn require_superuser_or_api_key(principal: &Principal) -> Result<(), ApiError> {
+    if principal.is_superuser() || principal.is_api_key() {
+        Ok(())
+    } else {
+        Err(ApiError::new(Error::forbidden(
+            "this action requires a superuser token or an API key",
         )))
     }
 }

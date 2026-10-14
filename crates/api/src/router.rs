@@ -47,6 +47,14 @@ pub fn router(state: AppState) -> Router {
         // Settings. Superuser-only: they hold SMTP credentials and storage keys.
         .route("/api/settings", get(settings::get).patch(settings::update))
         .route("/api/settings/refresh-cors", post(settings::refresh_cors))
+        .route(
+            "/api/settings/api-keys",
+            get(settings::list_api_keys).post(settings::generate_api_key),
+        )
+        .route(
+            "/api/settings/api-keys/{id}",
+            delete(settings::revoke_api_key),
+        )
         .route("/api/superusers/setup", post(superusers::setup))
         .route("/api/realtime", get(realtime::realtime))
         // The body limit bounds what is buffered before validation can reject it.
@@ -87,8 +95,9 @@ pub fn router(state: AppState) -> Router {
         // Reading the available sizes is public: a client needs them to build a
         // thumbnail URL. Changing them is a superuser action, enforced in the
         // handlers.
-        // Collection administration. Superuser-only throughout, and the reads
-        // included: a collection's definition carries its access rules.
+        // Collection administration. Writes are superuser-only; the reads also
+        // accept an API key, which is the only thing a codegen client needs and is
+        // exactly what the reference implementation scoped a key to.
         .route("/api/collections", get(admin::list).post(admin::create))
         .route(
             "/api/collections/{name}",
