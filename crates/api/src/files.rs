@@ -16,7 +16,7 @@ use lazypock_db::runner::QueryRunner;
 use lazypock_db::types::validate_identifier;
 use lazypock_files::{keys, outbox, presets, thumbnail, ImagePreset};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -394,6 +394,144 @@ pub async fn sweep(
         "sample": report.sample,
     }))
     .into_response())
+}
+
+/// Query for the stored-file listing.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListQuery {
+    /// Only files belonging to this collection.
+    #[serde(default)]
+    pub collection: Option<String>,
+    /// Only files belonging to this record.
+    #[serde(default)]
+    pub record: Option<String>,
+    /// 1-based page.
+    #[serde(default = "first_page")]
+    pub page: usize,
+    /// Items per page.
+    #[serde(default = "default_per_page", rename = "perPage")]
+    pub per_page: usize,
+}
+
+fn first_page() -> usize {
+    1
+}
+
+fn default_per_page() -> usize {
+    50
+}
+
+/// The largest page a caller may ask for.
+const MAX_PER_PAGE: usize = 200;
+
+/// `GET /api/files`
+///
+/// The media library has to be able to see what is stored, and nothing could: the
+/// only way to reach an object was to already know its key. Keys are enumerated
+/// from the backend itself rather than from a table, because there is no files
+/// table — an object *is* its key.
+///
+/// Each item carries the URLs a client needs — the object itself, plus one per
+/// preset — so a client renders from `url` rather than composing paths and
+/// guessing the server's layout.
+///
+/// Superuser-only: this is the whole contents of the store.
+pub async fn list(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if !principal.is_superuser() {
+        return Err(ApiError::new(Error::forbidden(
+            "listing stored files requires a superuser token",
+        )));
+    }
+
+    let keys = state
+        .files
+        .storage()
+        .list("")
+        .await
+        .map_err(ApiError::new)?;
+
+    // One query for the presets, so each item can offer its variants.
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let presets = lazypock_files::presets::load(&client)
+        .await
+        .map_err(ApiError::new)?;
+
+    let mut items: Vec<Value> = Vec::new();
+    for key in &keys {
+        // Only source objects: a thumbnail is reached through its source's
+        // `variants`, so listing it separately would show every image several
+        // times over.
+        let lazypock_files::sweep::ObjectOwner::Source { collection, record } =
+            lazypock_files::sweep::classify(key)
+        else {
+            continue;
+        };
+        if query
+            .collection
+            .as_deref()
+            .is_some_and(|wanted| wanted != collection)
+        {
+            continue;
+        }
+        if query
+            .record
+            .as_deref()
+            .is_some_and(|wanted| wanted != record)
+        {
+            continue;
+        }
+
+        let name = key.rsplit('/').next().unwrap_or_default().to_string();
+        let url = state.files.url(&collection, &record, &name);
+
+        let mut variants = serde_json::Map::new();
+        // `content` is the full-size object, which is the variant a rich text
+        // editor wants; each preset adds its own named variant.
+        variants.insert("content".to_string(), json!(url.clone()));
+        for preset in &presets {
+            variants.insert(
+                preset.name.clone(),
+                json!(format!("{url}?preset={}", preset.name)),
+            );
+        }
+
+        items.push(json!({
+            "collection": collection,
+            "record": record,
+            "name": name,
+            "key": key,
+            "url": url,
+            "variants": Value::Object(variants),
+        }));
+    }
+
+    items.sort_by(|left, right| {
+        left["key"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["key"].as_str().unwrap_or_default())
+    });
+
+    let per_page = query.per_page.clamp(1, MAX_PER_PAGE);
+    let page = query.page.max(1);
+    let total = items.len();
+    let total_pages = total.div_ceil(per_page).max(1);
+    let start = (page - 1).saturating_mul(per_page).min(total);
+    let window: Vec<Value> = items.into_iter().skip(start).take(per_page).collect();
+
+    // PocketBase's list shape, which the clients already speak.
+    Ok(Json(json!({
+        "page": page,
+        "perPage": per_page,
+        "totalItems": total,
+        "totalPages": total_pages,
+        "items": window,
+    })))
 }
 
 /// A path segment that is safe inside a storage key.

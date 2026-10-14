@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use lazypock_db::collections::{self, CreateCollection, CreateField};
 use lazypock_db::types::{CollectionType, FieldType};
 
-use support::{call, call_authed, test_app, TestApp};
+use support::{call, call_authed, superuser_token, test_app, TestApp};
 
 /// A real, fully decodable PNG of the given dimensions.
 ///
@@ -581,6 +581,137 @@ async fn the_sweeper_reclaims_a_thumbnail_whose_preset_is_gone_but_keeps_the_sou
         "the source must survive a preset change"
     );
     assert_eq!(served.len(), png(64, 48).len(), "and be unchanged");
+
+    app.cleanup().await;
+}
+
+/// Run a listing and return the body.
+async fn listing(app: &TestApp, token: &str, query: &str) -> serde_json::Value {
+    let reply = call_authed(
+        &router(app).await,
+        Method::GET,
+        &format!("/api/files{query}"),
+        None,
+        token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    reply.body.expect("a listing")
+}
+
+#[tokio::test]
+async fn listing_stored_files_requires_a_superuser() {
+    let Some(app) = test_app("http_files_list_auth").await else {
+        return;
+    };
+
+    let reply = call(&router(&app).await, Method::GET, "/api/files", None).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_stored_files_are_listed_with_the_urls_a_client_renders_from() {
+    let Some(app) = test_app("http_files_list").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // An empty store is an empty page, not an error.
+    let empty = listing(&app, &token, "").await;
+    assert_eq!(empty["totalItems"], json!(0), "{empty}");
+    assert_eq!(empty["items"], json!([]));
+
+    let first = uploaded_png(&app, &token, 64, 48).await;
+    let second = uploaded_png(&app, &token, 32, 32).await;
+
+    let body = listing(&app, &token, "").await;
+    assert_eq!(body["totalItems"], json!(2), "{body}");
+
+    let items = body["items"].as_array().expect("items");
+    let urls: Vec<&str> = items
+        .iter()
+        .map(|item| item["url"].as_str().expect("a url"))
+        .collect();
+    assert!(urls.contains(&first.as_str()), "{urls:?}");
+    assert!(urls.contains(&second.as_str()), "{urls:?}");
+
+    // Each item carries the variants a client needs, so it renders from `url`
+    // rather than composing the server's layout itself.
+    let variants = &items[0]["variants"];
+    assert!(variants["content"].is_string(), "{variants}");
+    assert!(
+        variants["thumb"].is_string(),
+        "a preset variant should be offered: {variants}"
+    );
+    assert!(
+        variants["thumb"]
+            .as_str()
+            .expect("a url")
+            .ends_with("?preset=thumb"),
+        "{variants}"
+    );
+
+    // The key is included, so a client can delete or reference the object.
+    assert!(items[0]["key"].is_string(), "{}", items[0]);
+    assert_eq!(items[0]["collection"], json!("posts"));
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_listing_pages_and_filters() {
+    let Some(app) = test_app("http_files_list_paging").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+    uploaded_png(&app, &token, 64, 48).await;
+    uploaded_png(&app, &token, 32, 32).await;
+
+    let page = listing(&app, &token, "?page=1&perPage=1").await;
+    assert_eq!(page["totalItems"], json!(2), "{page}");
+    assert_eq!(page["totalPages"], json!(2), "{page}");
+    assert_eq!(page["items"].as_array().expect("items").len(), 1);
+
+    let second = listing(&app, &token, "?page=2&perPage=1").await;
+    let third = listing(&app, &token, "?page=3&perPage=1").await;
+    assert_eq!(second["items"].as_array().expect("items").len(), 1);
+    assert_eq!(
+        third["items"].as_array().expect("items").len(),
+        0,
+        "a page past the end is empty rather than an error"
+    );
+
+    // A filter that matches nothing, and one that matches.
+    let none = listing(&app, &token, "?collection=nope").await;
+    assert_eq!(none["totalItems"], json!(0), "{none}");
+    let some = listing(&app, &token, "?collection=posts").await;
+    assert_eq!(some["totalItems"], json!(2), "{some}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_generated_thumbnail_is_not_listed_as_its_own_file() {
+    let Some(app) = test_app("http_files_list_variants").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+    let url = uploaded_png(&app, &token, 64, 48).await;
+
+    // Generate a thumbnail, which stores a second object.
+    let (status, _) = fetch(&app, &format!("{url}?preset=thumb")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // It is offered as a variant of its source, not as a file of its own:
+    // otherwise every image would appear several times in the library.
+    let body = listing(&app, &token, "").await;
+    assert_eq!(body["totalItems"], json!(1), "{body}");
+    assert!(body["items"][0]["variants"]["thumb"].is_string(), "{body}");
 
     app.cleanup().await;
 }

@@ -29,7 +29,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/me", get(auth::me))
         .route("/api/realtime", get(realtime::realtime))
         // The body limit bounds what is buffered before validation can reject it.
-        .route("/api/files", post(files::upload).layer(files::body_limit()))
+        .route(
+            "/api/files",
+            get(files::list)
+                .post(files::upload)
+                .layer(files::body_limit()),
+        )
         .route(
             "/api/files/{collection}/{record}/{filename}",
             get(files::serve).delete(files::delete),
