@@ -71,6 +71,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "image_presets",
         sql: include_str!("../../../migrations/0005_image_presets.sql"),
     },
+    Migration {
+        version: 6,
+        name: "auth_system_fields",
+        sql: include_str!("../../../migrations/0006_auth_system_fields.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

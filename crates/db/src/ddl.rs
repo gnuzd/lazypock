@@ -70,12 +70,7 @@ pub fn create_table_statement(
     if collection.collection_type == CollectionType::Auth {
         // From the shared definition, never hardcoded: a column the constant lists
         // but this misses is a column the definition advertises and the table lacks.
-        for (name, definition) in [
-            ("email", "text"),
-            ("password_hash", "text"),
-            ("verified", "boolean not null default false"),
-            ("token_key", "text"),
-        ] {
+        for (name, definition) in types::auth_system_column_definitions() {
             columns.push(format!("{} {definition}", quote_ident(name)));
         }
     }

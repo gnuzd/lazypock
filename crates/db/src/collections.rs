@@ -431,6 +431,37 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
         }
     }
 
+    // An auth collection has fields the framework owns, whether or not the caller
+    // declared them. Recording them here — and not only in the migration that
+    // backfilled the collections which already existed — is what stops a collection
+    // created afterwards from showing no email and no password, which is the bug this
+    // fixes. `on conflict do nothing` so a caller who declared one keeps their version.
+    if collection.collection_type.is_auth() {
+        for (index, (field_name, field_type, required, unique, options)) in
+            types::auth_system_fields().into_iter().enumerate()
+        {
+            transaction
+                .execute(
+                    "insert into _fields \
+                     (id, collection_id, name, type, required, is_unique, options, position) \
+                     values ($1, $2, $3, $4, $5, $6, $7, $8) \
+                     on conflict (collection_id, name) do nothing",
+                    &[
+                        &lazypock_core::id::new_id(),
+                        &collection.id,
+                        &field_name.to_string(),
+                        &field_type.as_str(),
+                        &required,
+                        &unique,
+                        &options,
+                        &((index + 1) as i32),
+                    ],
+                )
+                .await
+                .map_err(db_error)?;
+        }
+    }
+
     // An auth collection needs case-insensitive unique emails: login looks the
     // account up by `lower(email)`, so a duplicate would be ambiguous.
     if collection.collection_type.is_auth() && !existing_table {

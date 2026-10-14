@@ -24,7 +24,80 @@ pub const MAX_IDENTIFIER_LEN: usize = 63;
 pub const SYSTEM_COLUMNS: &[&str] = &["id", "created", "updated"];
 
 /// Extra system columns on auth collections.
-pub const AUTH_SYSTEM_COLUMNS: &[&str] = &["email", "password_hash", "verified", "token_key"];
+pub const AUTH_SYSTEM_COLUMNS: &[&str] = &[
+    "email",
+    "password_hash",
+    "verified",
+    "token_key",
+    "emailVisibility",
+];
+
+/// The auth columns that are credentials.
+///
+/// These are the ones that must never be **written from input** (they are supplied
+/// already hashed by the caller that owns hashing) and never **read back**: the map
+/// a filter and a projection are built from is also what `fields=*` returns, so a
+/// credential left in it is a credential returned to a client.
+///
+/// `email` and `verified` are deliberately *not* here — they are ordinary columns
+/// that a caller sets and reads.
+pub const CREDENTIAL_COLUMNS: &[&str] = &["password_hash", "token_key"];
+
+/// The auth columns and their SQL definitions — the single source the DDL builds
+/// from, so a column the field metadata advertises cannot be missing from the table.
+///
+/// It used to push four hardcoded columns while a separate constant listed the
+/// names; adding a name to the constant produced a table without the column, and the
+/// failure was \`column users.emailVisibility does not exist\`.
+pub fn auth_system_column_definitions() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("email", "text"),
+        ("password_hash", "text"),
+        ("verified", "boolean not null default false"),
+        ("token_key", "text"),
+        ("emailVisibility", "boolean not null default false"),
+    ]
+}
+
+/// The fields an auth collection has whether or not anybody declared them.
+///
+/// The **SQL twin** of this is \`migrations/0006_auth_system_fields.sql\`, which
+/// backfilled the collections that existed before it. Keep the two in step: the
+/// migration cannot see collections created later, and this cannot see ones created
+/// earlier.
+pub fn auth_system_fields() -> Vec<(&'static str, FieldType, bool, bool, serde_json::Value)> {
+    vec![
+        ("email", FieldType::Email, true, true, serde_json::json!({})),
+        (
+            "password_hash",
+            FieldType::Password,
+            false,
+            false,
+            serde_json::json!({ "hidden": true, "writeOnly": true }),
+        ),
+        (
+            "token_key",
+            FieldType::Text,
+            false,
+            false,
+            serde_json::json!({ "hidden": true }),
+        ),
+        (
+            "emailVisibility",
+            FieldType::Bool,
+            false,
+            false,
+            serde_json::json!({}),
+        ),
+        (
+            "verified",
+            FieldType::Bool,
+            false,
+            false,
+            serde_json::json!({ "hidden": true }),
+        ),
+    ]
+}
 
 /// The collection a relation field points at, under either name.
 ///

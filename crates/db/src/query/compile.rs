@@ -86,6 +86,16 @@ impl FilterContext {
         let mut relations = HashMap::new();
 
         for field in &collection.fields {
+            // This map is what is filterable *and* what `fields=*` returns, so a
+            // credential in it is a credential returned to a client. The auth fields
+            // are recorded now — an account's email and password are part of its
+            // definition — and without this the password hash would be back in the
+            // document, which is what the credential test caught.
+            if collection.collection_type.is_auth()
+                && types::CREDENTIAL_COLUMNS.contains(&field.name.as_str())
+            {
+                continue;
+            }
             let column_type = field.column_type()?;
             columns.insert(field.name.clone(), column_type.to_string());
 

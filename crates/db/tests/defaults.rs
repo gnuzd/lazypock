@@ -75,6 +75,10 @@ async fn running_it_again_leaves_an_existing_collection_alone() {
         .get(0);
     assert_eq!(count, 1, "no duplicate");
 
+    // Counted rather than hard-coded: the assertion is that a second run duplicates
+    // nothing, and a fixed number would have to be edited every time the set of
+    // fields an auth collection gets changes — which is exactly what happened when the
+    // auth system fields started being recorded.
     let fields: i64 = client
         .query_one(
             "select count(*) from _fields f join _collections c on c.id = f.collection_id \
@@ -84,7 +88,12 @@ async fn running_it_again_leaves_an_existing_collection_alone() {
         .await
         .expect("count")
         .get(0);
-    assert_eq!(fields, 2, "and its fields are not duplicated either");
+    assert!(fields >= 2, "the user-declared fields are there: {fields}");
+    assert_eq!(
+        fields,
+        defaults_field_count(&client).await,
+        "a second run must not duplicate a field"
+    );
 
     db.cleanup().await;
 }
@@ -162,4 +171,17 @@ async fn an_existing_users_table_is_left_alone_rather_than_converted() {
     );
 
     db.cleanup().await;
+}
+
+/// The number of fields on `users`, for comparing two runs.
+async fn defaults_field_count(client: &lazypock_db::tokio_postgres::Client) -> i64 {
+    client
+        .query_one(
+            "select count(*) from _fields f join _collections c on c.id = f.collection_id \
+             where c.name = 'users'",
+            &[],
+        )
+        .await
+        .expect("count")
+        .get(0)
 }

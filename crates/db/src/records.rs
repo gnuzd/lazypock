@@ -355,11 +355,13 @@ fn writable_columns(collection: &Collection) -> Result<Vec<Writable<'_>>> {
         }
         // An auth collection's system fields are recorded so a client can see them —
         // an account has an email and a password, and a definition that showed
-        // neither was the bug this fixes — but they are **not** written from input.
-        // `email` is validated and `password_hash` is supplied by the caller that
-        // hashed the password, both through `extra`; letting a client post a
-        // `password_hash` column would be a way to set it directly.
-        if is_auth && crate::types::AUTH_SYSTEM_COLUMNS.contains(&field.name.as_str()) {
+        // neither was the bug this fixes. The **credentials** among them are not
+        // written from input: `password_hash` is supplied through `extra` by the
+        // caller that owns hashing, and `token_key` is the server's, so letting a
+        // client post either would be a way to set them directly. `email` and
+        // `verified` are ordinary columns a caller does set, so they are left
+        // writable.
+        if is_auth && crate::types::CREDENTIAL_COLUMNS.contains(&field.name.as_str()) {
             continue;
         }
         columns.push(Writable {
