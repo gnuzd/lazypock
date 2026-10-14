@@ -76,6 +76,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "auth_system_fields",
         sql: include_str!("../../../migrations/0006_auth_system_fields.sql"),
     },
+    Migration {
+        version: 7,
+        name: "request_logs",
+        sql: include_str!("../../../migrations/0007_request_logs.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

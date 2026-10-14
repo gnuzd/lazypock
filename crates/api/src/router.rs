@@ -15,6 +15,7 @@ use crate::collections as admin;
 use crate::cors;
 use crate::error::ApiError;
 use crate::files;
+use crate::logs;
 use crate::presets;
 use crate::realtime;
 use crate::records;
@@ -63,6 +64,15 @@ pub fn router(state: AppState) -> Router {
             get(files::serve_thumbnail),
         )
         .route("/api/files/sweep", post(files::sweep))
+        // Request logs. Superuser-only: they carry IPs, paths and user agents.
+        .route("/api/logs", get(logs::list).delete(logs::delete))
+        .route("/api/logs/stats", get(logs::stats))
+        .route("/api/logs/collections", get(logs::collections))
+        .route(
+            "/api/logs/retention",
+            get(logs::get_retention).patch(logs::set_retention),
+        )
+        .route("/api/logs/{id}", get(logs::show))
         // Reading the available sizes is public: a client needs them to build a
         // thumbnail URL. Changing them is a superuser action, enforced in the
         // handlers.
@@ -117,6 +127,9 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             auth::authenticate,
         ))
+        // Outside authentication, so a refused request is still logged. Inside
+        // CORS, so preflights are answered without a log write.
+        .layer(middleware::from_fn_with_state(state.clone(), logs::record))
         // Outermost, and it has to be: a preflight carries no credentials, so it must
         // be answered before authentication runs, and a 401 still needs its CORS
         // headers or the browser reports an opaque network error instead of the

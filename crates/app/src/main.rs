@@ -288,10 +288,13 @@ async fn serve(config: Config) -> Result<()> {
 
     tracing::info!(%addr, "listening");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown::signal())
-        .await
-        .map_err(|err| Error::internal(format!("server error: {err}")))?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown::signal())
+    .await
+    .map_err(|err| Error::internal(format!("server error: {err}")))?;
 
     Ok(())
 }

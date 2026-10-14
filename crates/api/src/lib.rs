@@ -10,6 +10,7 @@ pub mod collections;
 pub mod cors;
 pub mod error;
 pub mod files;
+pub mod logs;
 pub mod presets;
 pub mod realtime;
 pub mod records;
