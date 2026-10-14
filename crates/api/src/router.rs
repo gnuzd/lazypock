@@ -30,6 +30,7 @@ pub fn router(state: AppState) -> Router {
         // The public half of the token signing key, for other services.
         .route("/api/jwks", get(auth::jwks))
         // Backup and restore. Superuser-only: an export is the whole database.
+        .route("/api/export", get(backup::export_json))
         .route("/api/export/archive", get(backup::export))
         .route("/api/import/preflight", get(backup::preflight))
         .route(

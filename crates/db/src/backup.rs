@@ -268,6 +268,41 @@ impl Archive {
     }
 }
 
+/// The canonical single-document JSON a backup holds.
+///
+/// This is the shape `GET /api/export` serves and `docs/static/backup.schema.json`
+/// describes: the definitions and their records together, rather than the archive's
+/// split `schema.json` + `data/*` entries. It lives beside [`Archive`] so the two
+/// cannot drift, and so a downloaded JSON backup and a pre-import snapshot are the
+/// same document.
+///
+/// System collections never appear: [`export`] already leaves them out, because
+/// `_superusers` holds password hashes and `_settings` holds the signing key.
+pub fn to_payload(archive: &Archive) -> Value {
+    let collections: Vec<Value> = archive
+        .schema
+        .collections
+        .iter()
+        .map(|collection| {
+            let mut value = serde_json::to_value(collection).unwrap_or(Value::Null);
+            let records = archive
+                .data
+                .iter()
+                .find(|(name, _)| name == &collection.name)
+                .map(|(_, records)| Value::Array(records.clone()))
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            if let Some(object) = value.as_object_mut() {
+                // `ArchiveCollection.records` is filled by a JSON reader, not by
+                // `export` (which keeps records in `data`), so put them back.
+                object.insert("records".to_string(), records);
+            }
+            value
+        })
+        .collect();
+
+    serde_json::json!({ "collections": collections })
+}
+
 /// Build the archive for every user collection in the database.
 ///
 /// **System collections are not exported at all.** Their definitions are created by

@@ -80,6 +80,27 @@ pub async fn export(State(state): State<AppState>, _: Superuser) -> Result<Respo
     Ok(response)
 }
 
+/// `GET /api/export`
+///
+/// The single-document JSON backup — the same collections and records as
+/// `/api/export/archive`, in one object. Studio's "Download JSON" button reads this
+/// shape, and the pre-import snapshot stores it.
+pub async fn export_json(
+    State(state): State<AppState>,
+    _: Superuser,
+) -> Result<Json<Value>, ApiError> {
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let archive = backup::export(&client).await.map_err(ApiError::new)?;
+
+    tracing::info!(
+        collections = archive.schema.collections.len(),
+        records = archive.record_count(),
+        "exported a JSON backup"
+    );
+
+    Ok(Json(backup::to_payload(&archive)))
+}
+
 /// `GET /api/import/preflight`
 ///
 /// What an import would be gated on, before any file is sent. The per-archive

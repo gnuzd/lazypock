@@ -132,6 +132,7 @@ async fn backup_and_restore_need_a_superuser() {
     };
 
     for (method, uri) in [
+        (Method::GET, "/api/export"),
         (Method::GET, "/api/export/archive"),
         (Method::GET, "/api/import/preflight"),
         (Method::POST, "/api/import"),
@@ -139,6 +140,55 @@ async fn backup_and_restore_need_a_superuser() {
         let reply = call(&router(&app).await, method.clone(), uri, None).await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{method} {uri}");
     }
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_json_export_holds_every_collection_and_its_records() {
+    let Some(app) = test_app("backup_export_json").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/export",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("a payload");
+
+    let collections = body["collections"].as_array().expect("collections");
+    assert_eq!(collections.len(), 1, "only user collections: {body}");
+    let posts = &collections[0];
+    assert_eq!(posts["name"], json!("posts"));
+    assert_eq!(posts["type"], json!("base"));
+    // The definition is there...
+    assert_eq!(posts["schema"][0]["name"], json!("title"));
+    // ...and so are the rows, inline, which is what makes the document restorable.
+    let records = posts["records"].as_array().expect("records");
+    assert_eq!(records.len(), 2, "{body}");
+    let titles: Vec<&str> = records
+        .iter()
+        .map(|record| record["title"].as_str().expect("a title"))
+        .collect();
+    assert!(
+        titles.contains(&"first") && titles.contains(&"second"),
+        "{titles:?}"
+    );
+
+    // System tables are never exported: `_superusers` holds password hashes.
+    assert!(
+        collections
+            .iter()
+            .all(|collection| !collection["name"].as_str().unwrap_or("").starts_with('_')),
+        "{body}"
+    );
 
     app.cleanup().await;
 }
