@@ -151,9 +151,24 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
     auth.load().await.expect("load the token signing key");
 
     let hub = lazypock_realtime::Hub::new(db.clone(), cache.clone());
+    // Each test gets its own storage directory, so uploads cannot leak between them.
+    let files_directory = std::env::temp_dir().join(format!("lazypock-api-files-{nanos}"));
+    let files = Arc::new(
+        lazypock_files::Files::from_config(&lazypock_files::FilesConfig {
+            adapter: lazypock_files::StorageAdapter::Local,
+            directory: files_directory.display().to_string(),
+            public_base_url: None,
+            endpoint: None,
+            bucket: None,
+            region: "auto".into(),
+            access_key: None,
+            secret_key: None,
+        })
+        .expect("files"),
+    );
 
     Some(TestApp {
-        state: lazypock_api::AppState::new(config, db.clone(), cache, auth, hub),
+        state: lazypock_api::AppState::new(config, db.clone(), cache, auth, hub, files),
         db,
         admin_url: url,
         schema,

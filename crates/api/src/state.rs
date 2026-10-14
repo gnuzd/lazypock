@@ -6,6 +6,7 @@ use lazypock_auth::AuthService;
 use lazypock_core::config::Config;
 use lazypock_db::pool::Db;
 use lazypock_db::schema::SchemaCache;
+use lazypock_files::Files;
 use lazypock_realtime::Hub;
 
 /// State handed to every handler.
@@ -24,6 +25,8 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     /// Live subscriptions on this node.
     pub hub: Arc<Hub>,
+    /// File storage: validation rules plus the object backend.
+    pub files: Arc<Files>,
 }
 
 impl AppState {
@@ -34,6 +37,7 @@ impl AppState {
         schema: Arc<SchemaCache>,
         auth: Arc<AuthService>,
         hub: Arc<Hub>,
+        files: Arc<Files>,
     ) -> Self {
         Self {
             config: Arc::new(config),
@@ -41,6 +45,7 @@ impl AppState {
             schema,
             auth,
             hub,
+            files,
         }
     }
 }

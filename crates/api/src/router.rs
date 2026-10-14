@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use crate::auth;
 use crate::batch;
 use crate::error::ApiError;
+use crate::files;
 use crate::realtime;
 use crate::records;
 use crate::state::AppState;
@@ -23,6 +24,12 @@ pub fn router(state: AppState) -> Router {
         // The public half of the token signing key, for other services.
         .route("/api/jwks", get(auth::jwks))
         .route("/api/realtime", get(realtime::realtime))
+        // The body limit bounds what is buffered before validation can reject it.
+        .route("/api/files", post(files::upload).layer(files::body_limit()))
+        .route(
+            "/api/files/{collection}/{record}/{filename}",
+            get(files::serve).delete(files::delete),
+        )
         .route("/.well-known/jwks.json", get(auth::jwks))
         // `_superusers` is handled inside the same handler, so there is no route
         // ordering to get wrong.

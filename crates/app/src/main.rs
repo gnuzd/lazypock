@@ -170,7 +170,19 @@ async fn serve(config: Config) -> Result<()> {
         ),
     }
 
-    let app = router(AppState::new(config, db, schema, auth, hub));
+    // File storage: configured from the environment, and it has to be usable at
+    // boot rather than failing on the first upload.
+    let files = Arc::new(
+        lazypock_files::Files::from_config(&lazypock_files::FilesConfig::from_env()?)
+            .map_err(|err| Error::config(format!("cannot configure file storage: {err}")))?,
+    );
+    files
+        .storage()
+        .health()
+        .await
+        .map_err(|err| Error::config(format!("file storage is not usable: {err}")))?;
+
+    let app = router(AppState::new(config, db, schema, auth, hub, files));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
