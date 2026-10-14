@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 
 use lazypock_core::error::Error;
 use lazypock_db::collections::Collection;
+use lazypock_db::hooks::RecordHooks;
 use lazypock_db::pool::db_error;
 use lazypock_db::query::compile::FilterContext;
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
@@ -103,7 +104,7 @@ pub async fn batch(
         .await
         .map_err(|err| ApiError::new(db_error(err)))?;
 
-    match run(&transaction, &steps, &principal).await {
+    match run(&transaction, &steps, &principal, state.hooks.as_ref()).await {
         Ok(results) => {
             transaction
                 .commit()
@@ -195,6 +196,7 @@ async fn run(
     runner: &dyn QueryRunner,
     steps: &[Step],
     principal: &Principal,
+    hooks: &dyn RecordHooks,
 ) -> Result<Vec<Value>, (usize, ApiError)> {
     let mut results = Vec::with_capacity(steps.len());
     for (index, step) in steps.iter().enumerate() {
@@ -205,7 +207,7 @@ async fn run(
             .await
             .map_err(|error| (index, ApiError::new(error)))?;
 
-        let (status, body) = execute(runner, step)
+        let (status, body) = execute(runner, step, hooks)
             .await
             .map_err(|error| (index, error))?;
         results.push(json!({ "status": status, "body": body }));
@@ -213,7 +215,11 @@ async fn run(
     Ok(results)
 }
 
-async fn execute(runner: &dyn QueryRunner, step: &Step) -> Result<(u16, Value), ApiError> {
+async fn execute(
+    runner: &dyn QueryRunner,
+    step: &Step,
+    hooks: &dyn RecordHooks,
+) -> Result<(u16, Value), ApiError> {
     match step.method.as_str() {
         "POST" => {
             let input = step.input.clone().expect("planned");
@@ -224,9 +230,9 @@ async fn execute(runner: &dyn QueryRunner, step: &Step) -> Result<(u16, Value), 
                 &step.context,
                 input,
                 &extra,
-                // Same seam as the create route; no hook runtime is reachable
-                // from a batch step yet.
-                &lazypock_db::hooks::NoHooks,
+                // The same seam the create route uses. A batch step must not be a
+                // way to bypass a hook.
+                hooks,
             )
             .await
             .map_err(ApiError::from)?;
