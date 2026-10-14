@@ -375,6 +375,21 @@ fn auth_body(outcome: &AuthOutcome, record: Value) -> Value {
 /// "something may fill an absent field in later" — true for an update, and true
 /// for a create with hooks. The authoritative check always runs in the record
 /// layer, so this is an early, cheaper report rather than the only guard.
+/// Fail unless the caller is a superuser.
+///
+/// One implementation for every administrative surface: configuration is
+/// superuser-only, and places that enforce it separately are places that can
+/// disagree.
+pub fn require_superuser(principal: &Principal) -> Result<(), ApiError> {
+    if principal.is_superuser() {
+        Ok(())
+    } else {
+        Err(ApiError::new(Error::forbidden(
+            "this action requires a superuser token",
+        )))
+    }
+}
+
 pub fn validate_first(
     collection: &Collection,
     input: &Value,

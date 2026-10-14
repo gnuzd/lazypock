@@ -449,6 +449,49 @@ async fn verify_adoptable(client: &Client, collection: &Collection) -> Result<()
 ///
 /// Keeping the data (`drop_data = false`) is useful for recovering from an
 /// accidental metadata delete, and is what an undo flow would use.
+/// Input for updating a collection's metadata.
+///
+/// Only rules and options: changing a table's shape is a field operation, which
+/// goes through `add_field`/`delete_field` so the DDL stays in one place.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCollection {
+    /// Replacement access rules, when given.
+    pub rules: Option<Value>,
+    /// Replacement type-specific settings, when given.
+    pub options: Option<Value>,
+}
+
+/// Update a collection's rules and options.
+///
+/// Absent keys are left as they were, so a caller can change a rule without
+/// sending the rest of the definition back.
+pub async fn update(
+    client: &mut Client,
+    name_or_id: &str,
+    input: UpdateCollection,
+) -> Result<Collection> {
+    let existing = get(client, name_or_id).await?;
+
+    let rules = input.rules.unwrap_or(existing.rules.clone());
+    let options = input.options.unwrap_or(existing.options.clone());
+
+    // In a transaction with the notification, so subscribers are told only once
+    // the change is actually visible — the same pattern the other mutations use.
+    let transaction = client.transaction().await.map_err(db_error)?;
+    transaction
+        .execute(
+            "update _collections set rules = $2, options = $3, updated = now() where id = $1",
+            &[&existing.id, &rules, &options],
+        )
+        .await
+        .map_err(db_error)?;
+    notify_schema_changed(&transaction).await?;
+    transaction.commit().await.map_err(db_error)?;
+
+    get(client, &existing.id).await
+}
+
 pub async fn delete(client: &mut Client, name_or_id: &str, drop_data: bool) -> Result<Collection> {
     let collection = get(client, name_or_id).await?;
 

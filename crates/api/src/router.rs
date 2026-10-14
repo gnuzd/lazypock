@@ -2,7 +2,7 @@
 
 use axum::{
     middleware,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use lazypock_core::error::Error;
@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::auth;
 use crate::batch;
+use crate::collections as admin;
 use crate::error::ApiError;
 use crate::files;
 use crate::presets;
@@ -39,6 +40,18 @@ pub fn router(state: AppState) -> Router {
         // Reading the available sizes is public: a client needs them to build a
         // thumbnail URL. Changing them is a superuser action, enforced in the
         // handlers.
+        // Collection administration. Superuser-only throughout, and the reads
+        // included: a collection's definition carries its access rules.
+        .route("/api/collections", get(admin::list).post(admin::create))
+        .route(
+            "/api/collections/{name}",
+            get(admin::get).patch(admin::update).delete(admin::delete),
+        )
+        .route("/api/collections/{name}/fields", post(admin::add_field))
+        .route(
+            "/api/collections/{name}/fields/{field}",
+            delete(admin::delete_field),
+        )
         .route(
             "/api/image-presets",
             get(presets::list).post(presets::create),

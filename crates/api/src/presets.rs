@@ -14,7 +14,7 @@ use lazypock_files::presets::{self, ImagePreset};
 use lazypock_files::{OutputFormat, ResizeMode};
 use serde::Deserialize;
 
-use crate::auth::Principal;
+use crate::auth::{require_superuser, Principal};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -158,16 +158,4 @@ pub async fn delete(
 /// server and hide the real cause.
 fn as_invalid(error: Error) -> ApiError {
     ApiError::new(Error::invalid(error.message().to_string()))
-}
-
-/// Presets are installation-wide configuration, so only a superuser may change
-/// them.
-fn require_superuser(principal: &Principal) -> Result<(), ApiError> {
-    if principal.is_superuser() {
-        Ok(())
-    } else {
-        Err(ApiError::new(Error::forbidden(
-            "managing image presets requires a superuser token",
-        )))
-    }
 }
