@@ -65,13 +65,12 @@ async fn every_collection_admin_call_needs_a_superuser() {
 }
 
 #[tokio::test]
-async fn a_collection_can_be_created_read_updated_and_deleted() {
-    let Some(app) = test_app("collections_crud").await else {
+async fn system_collections_are_listed_with_a_lock_and_are_not_records() {
+    let Some(app) = test_app("collections_system").await else {
         return;
     };
     let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
 
-    // Nothing yet.
     let reply = call_authed(
         &router(&app).await,
         Method::GET,
@@ -82,12 +81,81 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
     .await;
     assert_eq!(reply.status, StatusCode::OK);
     let body = reply.body.expect("a list");
+    let superusers = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|collection| collection["name"] == json!("_superusers"))
+        .expect("_superusers should be listed");
     assert_eq!(
-        body["items"],
-        json!([]),
-        "an empty installation lists nothing"
+        superusers["system"],
+        json!(true),
+        "it must be marked system so the Studio locks it"
     );
-    assert_eq!(body["totalItems"], json!(0));
+    assert_eq!(superusers["type"], json!("auth"));
+    let field_names: Vec<&str> = superusers["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| field["name"].as_str().expect("a name"))
+        .collect();
+    assert!(field_names.contains(&"email"), "{field_names:?}");
+    assert!(field_names.contains(&"password_hash"), "{field_names:?}");
+
+    // A single read resolves it too.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/collections/_superusers",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert_eq!(reply.body.expect("_superusers")["system"], json!(true));
+
+    // But it is **not** a records collection. The schema cache has no
+    // `_superusers` (it is not a `_collections` row), so the records API refuses
+    // it — which is what keeps superuser rows and their credential hashes off the
+    // records endpoints. The `_superusers` table has no row-level security either.
+    let reply = support::get(&router(&app).await, "/api/collections/_superusers/records").await;
+    assert_eq!(
+        reply.status,
+        StatusCode::NOT_FOUND,
+        "_superusers must not be served as records: {:?}",
+        reply.body
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_collection_can_be_created_read_updated_and_deleted() {
+    let Some(app) = test_app("collections_crud").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // Nothing user-defined yet: the only entry is the synthesised system one.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/collections",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let body = reply.body.expect("a list");
+    let items = body["items"].as_array().expect("an items array");
+    assert_eq!(
+        items.len(),
+        1,
+        "an empty installation lists only _superusers: {body}"
+    );
+    assert_eq!(items[0]["name"], json!("_superusers"));
+    assert_eq!(items[0]["system"], json!(true));
+    assert_eq!(body["totalItems"], json!(1));
 
     // Create.
     let reply = call_authed(

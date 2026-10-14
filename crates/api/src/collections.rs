@@ -14,9 +14,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use lazypock_core::error::Error;
-use lazypock_db::collections::{self, Collection, CreateCollection, CreateField, UpdateCollection};
+use lazypock_db::collections::{
+    self, Collection, CreateCollection, CreateField, Field, UpdateCollection,
+};
+use lazypock_db::types::{self, CollectionType};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::time::SystemTime;
 
 use crate::auth::require_superuser;
 use crate::error::ApiError;
@@ -32,16 +36,24 @@ pub async fn list(
     let client = state.db.client().await.map_err(ApiError::new)?;
     let collections = collections::list(&client).await.map_err(ApiError::new)?;
 
+    // `_superusers` leads the list, which is where an `_`-prefixed name sorts.
+    // It is synthesised, not stored: see `superusers_collection`.
+    let mut items = Vec::with_capacity(collections.len() + 1);
+    items.push(collection_json(&superusers_collection(), true)?);
+    for collection in &collections {
+        items.push(collection_json(collection, false)?);
+    }
+
     // The **list envelope**, not a bare array. A client reads `items`, so an array
     // arrives as an object with no `items` and the collection list renders empty —
     // which is exactly what happened: the SDK's `getList()` returned `null` and
     // Studio showed no collections at all, with a 200 in the network tab and nothing
     // to suggest why.
-    let total = collections.len();
+    let total = items.len();
     let per_page = query.per_page.unwrap_or(200).clamp(1, 200);
     let page = query.page.unwrap_or(1).max(1);
     let start = (page - 1).saturating_mul(per_page).min(total);
-    let window: Vec<&Collection> = collections.iter().skip(start).take(per_page).collect();
+    let window: Vec<Value> = items.into_iter().skip(start).take(per_page).collect();
 
     Ok(Json(json!({
         "page": page,
@@ -69,14 +81,17 @@ pub async fn get(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path(name): Path<String>,
-) -> Result<Json<Collection>, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     require_superuser(&principal)?;
+    if name == crate::auth::SUPERUSERS {
+        return Ok(Json(collection_json(&superusers_collection(), true)?));
+    }
     let client = state.db.client().await.map_err(ApiError::new)?;
     let collection = collections::find(&client, &name)
         .await
         .map_err(ApiError::new)?
         .ok_or_else(|| not_found(&name))?;
-    Ok(Json(collection))
+    Ok(Json(collection_json(&collection, false)?))
 }
 
 /// `POST /api/collections`
@@ -207,6 +222,60 @@ pub async fn delete_field(
 /// One helper so every endpoint reports it the same way.
 fn not_found(name: &str) -> ApiError {
     ApiError::new(Error::not_found(format!("no collection named {name:?}")))
+}
+
+/// The `_superusers` collection, presented to the Studio.
+///
+/// It is deliberately **not** a `_collections` row. It has no table-driven schema
+/// of its own and the auth path special-cases it, but the reason it must stay out
+/// of `collections::list` is sharper: that list feeds the schema cache, so a
+/// `_superusers` visible there would make `records::resolve` serve superuser rows —
+/// and the `_superusers` table has no row-level security. Synthesising it in the
+/// admin list and single-read keeps it visible (and locked) without exposing it as
+/// a records collection.
+fn superusers_collection() -> Collection {
+    let id = crate::auth::SUPERUSERS.to_string();
+    let fields = types::auth_system_fields()
+        .into_iter()
+        .enumerate()
+        .map(
+            |(position, (name, field_type, required, is_unique, options))| Field {
+                id: format!("{id}_{name}"),
+                collection_id: id.clone(),
+                name: name.to_string(),
+                field_type,
+                required,
+                is_unique,
+                options,
+                position: position as i32,
+            },
+        )
+        .collect();
+    let now = SystemTime::now();
+    Collection {
+        id,
+        name: crate::auth::SUPERUSERS.to_string(),
+        collection_type: CollectionType::Auth,
+        options: json!({}),
+        rules: json!({}),
+        fields,
+        created: now,
+        updated: now,
+    }
+}
+
+/// Serialize a collection with its `system` flag attached. The stored model has no
+/// such column, and the Studio reads `system` to place an entry under its System
+/// section and lock it, so every entry the admin API returns carries one.
+fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiError> {
+    let mut value = serde_json::to_value(collection).map_err(|err| {
+        ApiError::new(Error::internal(format!(
+            "cannot serialize the collection {:?}: {err}",
+            collection.name
+        )))
+    })?;
+    value["system"] = json!(system);
+    Ok(value)
 }
 
 use axum::Extension;
