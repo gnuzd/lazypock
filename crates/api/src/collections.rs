@@ -16,6 +16,7 @@ use axum::Json;
 use lazypock_core::error::Error;
 use lazypock_db::collections::{self, Collection, CreateCollection, CreateField, UpdateCollection};
 use serde::Deserialize;
+use serde_json::{json, Value};
 
 use crate::auth::require_superuser;
 use crate::error::ApiError;
@@ -25,11 +26,42 @@ use crate::state::AppState;
 pub async fn list(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-) -> Result<Json<Vec<Collection>>, ApiError> {
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
     require_superuser(&principal)?;
     let client = state.db.client().await.map_err(ApiError::new)?;
     let collections = collections::list(&client).await.map_err(ApiError::new)?;
-    Ok(Json(collections))
+
+    // The **list envelope**, not a bare array. A client reads `items`, so an array
+    // arrives as an object with no `items` and the collection list renders empty —
+    // which is exactly what happened: the SDK's `getList()` returned `null` and
+    // Studio showed no collections at all, with a 200 in the network tab and nothing
+    // to suggest why.
+    let total = collections.len();
+    let per_page = query.per_page.unwrap_or(200).clamp(1, 200);
+    let page = query.page.unwrap_or(1).max(1);
+    let start = (page - 1).saturating_mul(per_page).min(total);
+    let window: Vec<&Collection> = collections.iter().skip(start).take(per_page).collect();
+
+    Ok(Json(json!({
+        "page": page,
+        "perPage": per_page,
+        "totalItems": total,
+        "totalPages": total.div_ceil(per_page).max(1),
+        "items": window,
+    })))
+}
+
+/// Paging for the collections list, as the client sends it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListQuery {
+    /// 1-based page.
+    #[serde(default)]
+    pub page: Option<usize>,
+    /// Items per page.
+    #[serde(default, rename = "perPage")]
+    pub per_page: Option<usize>,
 }
 
 /// `GET /api/collections/{name}`

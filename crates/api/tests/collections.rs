@@ -81,7 +81,13 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
     )
     .await;
     assert_eq!(reply.status, StatusCode::OK);
-    assert_eq!(reply.body.expect("a list"), json!([]));
+    let body = reply.body.expect("a list");
+    assert_eq!(
+        body["items"],
+        json!([]),
+        "an empty installation lists nothing"
+    );
+    assert_eq!(body["totalItems"], json!(0));
 
     // Create.
     let reply = call_authed(
@@ -104,9 +110,10 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
     )
     .await;
     let listed = reply.body.expect("a list");
-    let posts = listed
+    // The list envelope, not a bare array: a client reads `items`.
+    let posts = listed["items"]
         .as_array()
-        .expect("an array")
+        .expect("an items array")
         .iter()
         .find(|collection| collection["name"] == json!("posts"))
         .expect("posts");
@@ -350,9 +357,9 @@ async fn a_reflected_table_shows_up_in_the_api_which_is_what_studio_needs() {
     assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
 
     let listed = reply.body.expect("a list");
-    let customers = listed
+    let customers = listed["items"]
         .as_array()
-        .expect("an array")
+        .expect("an items array")
         .iter()
         .find(|collection| collection["name"] == json!("customers"))
         .expect("the existing table should be listed as a collection");
