@@ -305,6 +305,7 @@ pub async fn update_record(
         &id,
         body,
         &extra,
+        state.hooks.as_ref(),
     )
     .await
     .map_err(ApiError::from)?;
@@ -323,7 +324,20 @@ pub async fn update_record(
         .map_err(|err| ApiError::new(db_error(err)))?;
 
     match record {
-        Some(record) => Ok((StatusCode::OK, Json(record)).into_response()),
+        Some(record) => {
+            // After the commit, like create: a failure here cannot undo a write
+            // that is already durable.
+            state
+                .hooks
+                .after(
+                    lazypock_db::hooks::HookEvent::Update,
+                    &resolved.collection.name,
+                    record.clone(),
+                )
+                .await
+                .map_err(ApiError::new)?;
+            Ok((StatusCode::OK, Json(record)).into_response())
+        }
         None => Err(not_found(&collection, &id)),
     }
 }
@@ -339,6 +353,32 @@ pub async fn delete_record(
     let mut client = state.db.client().await.map_err(ApiError::new)?;
     let transaction = scoped(&mut client, &principal).await?;
 
+    // A before-delete hook sees the record that is about to go, so it can act on
+    // its contents — deleting the files a row pointed at, say — or refuse by
+    // throwing. Its return value is ignored, because a delete writes nothing.
+    let existing = records::get_one(
+        &transaction,
+        &resolved.collection,
+        &resolved.context,
+        &id,
+        &FieldSelection::all(),
+        &ExpandSpec::none(),
+    )
+    .await
+    .map_err(ApiError::new)?;
+
+    if let Some(existing) = &existing {
+        state
+            .hooks
+            .before(
+                lazypock_db::hooks::HookEvent::Delete,
+                &resolved.collection.name,
+                existing.clone(),
+            )
+            .await
+            .map_err(ApiError::new)?;
+    }
+
     let removed = records::delete(&transaction, &resolved.collection, &id)
         .await
         .map_err(ApiError::from)?;
@@ -349,6 +389,17 @@ pub async fn delete_record(
         .map_err(|err| ApiError::new(db_error(err)))?;
 
     if removed {
+        if let Some(existing) = existing {
+            state
+                .hooks
+                .after(
+                    lazypock_db::hooks::HookEvent::Delete,
+                    &resolved.collection.name,
+                    existing,
+                )
+                .await
+                .map_err(ApiError::new)?;
+        }
         Ok(StatusCode::NO_CONTENT.into_response())
     } else {
         Err(not_found(&collection, &id))

@@ -172,7 +172,7 @@ pub async fn update(
     id: &str,
     input: Value,
 ) -> std::result::Result<Option<Value>, RecordWriteError> {
-    update_with(runner, collection, context, id, input, &[]).await
+    update_with(runner, collection, context, id, input, &[], &NoHooks).await
 }
 
 /// Update a record, adding server-managed columns the caller has computed.
@@ -183,7 +183,15 @@ pub async fn update_with(
     id: &str,
     input: Value,
     extra: &[(String, Option<String>)],
+    hooks: &dyn RecordHooks,
 ) -> std::result::Result<Option<Value>, RecordWriteError> {
+    // Before validation, for the same reason a create does it: a hook may supply a
+    // field the caller left out, and its output is validated like any other input.
+    let input = hooks
+        .before(HookEvent::Update, &collection.name, input)
+        .await
+        .map_err(RecordWriteError::Other)?;
+
     let object = expect_object(&input)?;
     validation::validate(collection, object, true).map_err(RecordWriteError::Validation)?;
 

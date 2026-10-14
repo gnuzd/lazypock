@@ -228,3 +228,152 @@ async fn a_broken_hook_file_is_reported_and_the_previous_hooks_keep_serving() {
 
     app.cleanup().await;
 }
+
+/// Create a record, returning its id.
+async fn create_record(app: &TestApp, token: &str) -> String {
+    let reply = call_authed(
+        &router(app).await,
+        Method::POST,
+        "/api/collections/posts/records",
+        Some(json!({ "title": "T", "slug": "given" })),
+        token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    reply.body.expect("a record")["id"]
+        .as_str()
+        .expect("id")
+        .to_string()
+}
+
+#[tokio::test]
+async fn a_before_update_hook_decides_what_is_written() {
+    let Some(app) = test_app("http_hooks_update").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+    let id = create_record(&app, &token).await;
+
+    install(
+        &app,
+        r#"onRecordBeforeUpdate("posts", (e) => { e.record.slug = "updated-by-hook"; });"#,
+    )
+    .await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        &format!("/api/collections/posts/records/{id}"),
+        Some(json!({ "slug": "ignored" })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert_eq!(
+        reply.body.expect("a record")["slug"],
+        json!("updated-by-hook"),
+        "the hook's value is what was written"
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_before_delete_hook_can_refuse_the_delete() {
+    let Some(app) = test_app("http_hooks_delete_veto").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+    let id = create_record(&app, &token).await;
+
+    install(
+        &app,
+        r#"onRecordBeforeDelete("posts", () => { throw new Error("not so fast"); });"#,
+    )
+    .await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/collections/posts/records/{id}"),
+        None,
+        &token,
+    )
+    .await;
+    assert!(
+        reply.status.is_client_error(),
+        "a refusing hook should fail the request: {} {:?}",
+        reply.status,
+        reply.body
+    );
+
+    // The record is still there: the refusal happened before the delete.
+    let reply = support::get(
+        &router(&app).await,
+        &format!("/api/collections/posts/records/{id}"),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    // A hook that allows it lets the delete through.
+    install(&app, r#"onRecordBeforeDelete("posts", () => {});"#).await;
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/collections/posts/records/{id}"),
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_after_hook_runs_once_the_write_has_committed() {
+    let Some(app) = test_app("http_hooks_after_update").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+    let id = create_record(&app, &token).await;
+
+    // An after-hook that fails is reported, but cannot undo a write that is
+    // already durable. That is the documented trade of running it post-commit.
+    install(
+        &app,
+        r#"onRecordAfterUpdate("posts", () => { throw new Error("after"); });"#,
+    )
+    .await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        &format!("/api/collections/posts/records/{id}"),
+        Some(json!({ "slug": "committed" })),
+        &token,
+    )
+    .await;
+    assert!(
+        reply.status.is_server_error() || reply.status.is_client_error(),
+        "the hook failure should be reported: {} {:?}",
+        reply.status,
+        reply.body
+    );
+
+    let reply = support::get(
+        &router(&app).await,
+        &format!("/api/collections/posts/records/{id}"),
+    )
+    .await;
+    assert_eq!(
+        reply.body.expect("a record")["slug"],
+        json!("committed"),
+        "the write committed before the hook ran"
+    );
+
+    app.cleanup().await;
+}

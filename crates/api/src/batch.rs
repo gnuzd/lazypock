@@ -242,9 +242,17 @@ async fn execute(
             let input = step.input.clone().expect("planned");
             let id = step.id.clone().expect("planned");
             let extra = crate::auth::auth_columns(&step.collection, &input)?;
-            match records::update_with(runner, &step.collection, &step.context, &id, input, &extra)
-                .await
-                .map_err(ApiError::from)?
+            match records::update_with(
+                runner,
+                &step.collection,
+                &step.context,
+                &id,
+                input,
+                &extra,
+                hooks,
+            )
+            .await
+            .map_err(ApiError::from)?
             {
                 Some(record) => Ok((200, record)),
                 None => Err(missing(&step.collection.name, &id)),

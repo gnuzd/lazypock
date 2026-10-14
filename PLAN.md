@@ -774,7 +774,21 @@ Independent tracks, so progress and estimates do not entangle:
 | **L. Deploy** | Docker, compose, CI, docs, release | all |
 | **M. Cloud** | control plane, tenants, scale-to-zero | all |
 
-#### Configuration convention
+#### Hook bindings: why `$db` is not a small change
+
+The hook runtime is not `Send` (QuickJS holds an `Rc`), so it runs on its own thread
+and the request reaches it over a channel. That means a hook **cannot** use the
+request's transaction: the transaction lives on the request's connection, which
+belongs to a different thread.
+
+So `$db` has to run on the hook thread with its own connection, and its writes
+commit independently of the record write. A before-hook's `$db` write therefore
+would *not* roll back with the record, which contradicts the "`$db` inside the
+request's transaction" in section 11.2. That is a real semantic decision rather
+than plumbing, so it is left undone rather than half-done, and `$http` additionally
+needs the domain allowlist from section 11.3 before it is safe to expose.
+
+### Configuration convention
 
 **Every environment variable lazypock reads is prefixed `LAZYPOCK_`.** The one
 deliberate exception is `RUST_LOG`, which belongs to the `tracing` ecosystem and is
@@ -795,7 +809,7 @@ somebody else's database.
 | E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections, and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). |
 | F. Realtime | done — the change-event trigger plus `_rt_log`, the `EventBus` seam with a Postgres `LISTEN` implementation, RLS-filtered fan-out with connection-id echo suppression, and SSE at `/api/realtime` with `lastEventId` resume. The Redis backend, event batching and logical replication are deliberately deferred (section 8.8). |
 | G. Files & images | **done** — upload validation, the key layout, local and S3 backends, the delete outbox, the HTTP upload/serve/delete routes, image presets with cached thumbnails, a superuser-gated CRUD API for them, and an orphan sweeper (**resized in-process, so no `imgproxy` sidecar and no extra artifact to ship — a deliberate change from section 10**). Two known limits: AVIF output is refused loudly because the schema allows it and the encoder cannot write it, and the S3 path has **not** been exercised against a live bucket (signing and listing are unit-tested; a live round-trip needs credentials and a bucket). |
-| H. Hooks | **partly, and reachable** — the thread-owned worker (QuickJS is not `Send`, so it lives on its own thread behind a channel), the six events, TypeScript stripping, the loader with hot reload, the `RecordHooks` seam and the `AppState`/create/after wiring are in, and **a hook file genuinely changes what a created record stores, proven end to end**. Remaining: after-hooks on update/delete, and the `$db`/`$http`/`$app` bindings. |
+| H. Hooks | **partly** — the thread-owned worker, the six events, TypeScript stripping, the loader with hot reload and the `RecordHooks` seam are in, and **create, update and delete all run their before-hooks and after-hooks** (before runs before validation so a hook can supply a field; after runs post-commit; a before-delete hook can refuse by throwing). Remaining: the `$db`/`$http`/`$app` bindings — see the note below on why `$db` is not a small change. |
 | I. Jobs & ops | not started |
 | J–K. Studio, SDK | **partly** — the collection administration API now exists (`GET/POST /api/collections`, `GET/PATCH/DELETE /api/collections/{name}`, field add/remove), which is what a client needs to see collections at all, including reflected existing ones. Verifying and adapting `studio/` and `lazypock-ts` against it is the remaining work. |
 | L. Deploy | **partly** — boot-time auto-migration works on an empty database and on one that already holds tables, and an existing ordinary database is **reflected**: every table becomes a collection and every column a field, verified against a real database. Remaining: the GitHub Action that builds and publishes the image, and the compose/release docs. |
