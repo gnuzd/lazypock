@@ -18,6 +18,7 @@ use lazypock_db::collections::Collection;
 use lazypock_db::query::compile::AuthContext;
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
 use lazypock_db::records;
+use lazypock_db::rls::context::RequestContext;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -35,19 +36,49 @@ pub const SUPERUSERS: &str = "_superusers";
 #[derive(Debug, Clone, Default)]
 pub struct Principal {
     claims: Option<Claims>,
+    /// The client's device/tab id, used by realtime to suppress echoes.
+    connection_id: String,
 }
 
 impl Principal {
     /// Nobody is authenticated.
     pub fn anonymous() -> Self {
-        Self { claims: None }
+        Self {
+            claims: None,
+            connection_id: String::new(),
+        }
     }
 
     /// A caller with verified claims.
     pub fn from_claims(claims: Claims) -> Self {
         Self {
             claims: Some(claims),
+            connection_id: String::new(),
         }
+    }
+
+    /// Attach the client's connection id.
+    pub fn with_connection_id(mut self, connection_id: impl Into<String>) -> Self {
+        self.connection_id = connection_id.into();
+        self
+    }
+
+    /// The row-level-security context this request must run under.
+    ///
+    /// A superuser runs as the owner, which is exactly what makes a superuser
+    /// bypass the collection rules; an authenticated record runs as the
+    /// restricted role with its identity attached; anyone else is anonymous, so
+    /// `@request.auth.*` resolves to nothing and a rule depending on it matches
+    /// nothing.
+    pub fn request_context(&self) -> RequestContext {
+        let context = match &self.claims {
+            Some(claims) if claims.typ.is_superuser() => RequestContext::owner(),
+            Some(claims) => {
+                RequestContext::authenticated(&claims.sub, &claims.email, &claims.col, &claims.name)
+            }
+            None => RequestContext::anonymous(),
+        };
+        context.with_connection_id(self.connection_id.clone())
     }
 
     /// The verified claims, when there are any.
@@ -114,10 +145,25 @@ pub async fn authenticate(
             Ok(claims) => Principal::from_claims(claims),
             Err(err) => return ApiError::new(err).into_response(),
         },
-    };
+    }
+    .with_connection_id(connection_id(request.headers()));
 
     request.extensions_mut().insert(principal);
     next.run(request).await
+}
+
+/// The client's device/tab id from `X-Connection-Id`.
+///
+/// Not a secret: it only lets the server avoid echoing a change back to the
+/// device that made it. Length-capped and ignored if it is unusable.
+pub fn connection_id(headers: &HeaderMap) -> String {
+    headers
+        .get("x-connection-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Pull the bearer token out of the `Authorization` header.

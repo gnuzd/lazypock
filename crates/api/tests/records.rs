@@ -28,7 +28,13 @@ fn collection(name: &str, fields: Vec<CreateField>) -> CreateCollection {
         name: name.into(),
         collection_type: CollectionType::Base,
         fields,
-        rules: json!({}),
+        rules: json!({
+            "listRule": "",
+            "viewRule": "",
+            "createRule": "",
+            "updateRule": "",
+            "deleteRule": "",
+        }),
         options: json!({}),
         adopt_existing_table: false,
     }
@@ -451,6 +457,57 @@ async fn bad_query_parameters_are_rejected_with_a_message() {
     // An unknown collection is a 404, not a 400.
     let reply = get(&router, "/api/collections/nope/records").await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_collection_with_no_rules_refuses_access() {
+    // Default deny: row-level security is on and the collection has no rules at
+    // all, so nobody but the service may touch it.
+    let Some(app) = test_app("http_records_default_deny").await else {
+        return;
+    };
+    let router = lazypock_api::router::router(app.state.clone());
+
+    {
+        let mut client = app.client().await;
+        collections::create(
+            &mut client,
+            CreateCollection {
+                name: "locked".into(),
+                collection_type: CollectionType::Base,
+                fields: vec![CreateField {
+                    name: "title".into(),
+                    field_type: FieldType::Text,
+                    required: false,
+                    unique: false,
+                    options: json!({}),
+                }],
+                rules: json!({}),
+                options: json!({}),
+                adopt_existing_table: false,
+            },
+        )
+        .await
+        .expect("create locked");
+        app.reload_schema().await;
+    }
+
+    // A read is filtered to nothing rather than erroring: that is what a policy
+    // does, and it does not reveal whether the table holds anything.
+    let reply = get(&router, "/api/collections/locked/records").await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert_eq!(reply.body.expect("body")["totalItems"], json!(0));
+
+    // A write is refused outright.
+    let reply = post(
+        &router,
+        "/api/collections/locked/records",
+        json!({"title": "nope"}),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
 
     app.cleanup().await;
 }

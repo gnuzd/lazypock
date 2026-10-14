@@ -16,6 +16,8 @@ use tokio_postgres::Client;
 
 use crate::ddl;
 use crate::pool::db_error;
+use crate::query::compile::FilterContext;
+use crate::rls;
 use crate::types::{
     self, validate_collection_name, validate_field_name, validate_options, CollectionType,
     FieldType,
@@ -322,6 +324,9 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
     let mut targets = load_table_names(client).await?;
     targets.insert(id.clone(), name.clone());
     let resolve = |collection_id: &str| targets.get(collection_id).cloned();
+    // Read once: the rule compiler needs the other collections to whitelist
+    // dotted paths, and this must happen before the transaction borrows `client`.
+    let all = list(client).await?;
     let create_table = if existing_table {
         None
     } else {
@@ -378,6 +383,12 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
                 Error::invalid(format!("failed to make emails unique in {name:?}: {err}"))
             })?;
     }
+
+    // Row-level security is applied as part of creating a collection rather than
+    // left to the caller, so a new call site cannot forget it and end up with a
+    // table that has no policies at all.
+    let rule_context = FilterContext::for_collection(&collection, &all)?;
+    rls::policies::apply(&transaction, &collection, &rule_context).await?;
 
     notify_schema_changed(&transaction).await?;
     transaction.commit().await.map_err(db_error)?;

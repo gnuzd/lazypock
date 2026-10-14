@@ -782,7 +782,7 @@ Independent tracks, so progress and estimates do not entangle:
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
-| E. Access control | done for password auth — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, **and accounts in auth collections** (register/login/change password). Postgres RLS remains. |
+| E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections, and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). |
 | F. Realtime | not started |
 | G–I. Files, hooks, jobs | not started |
 | J–K. Studio, SDK | not started |
@@ -810,6 +810,33 @@ Two security notes for the auth layer:
 * Access tokens are verified from the signature alone, with no database round trip. Revocation
   therefore takes effect at the next refresh; the 15-minute token lifetime is the backstop. Pinned by
   a test so the behaviour cannot drift silently.
+
+### Row-level security: what was decided, and why
+
+The policies, the role switch and the default-deny all work as designed, but three
+things about the implementation are worth recording because they are not obvious:
+
+* **No `FORCE ROW LEVEL SECURITY`.** Forcing it makes the schema *owner* subject to policies too,
+  which would break the server's own internal reads (the login lookup being the obvious one)
+  whenever the node connects as a non-superuser owner. Verified against Postgres: `FORCE` has no
+  effect on a superuser, so it would add that risk without adding the guarantee. The owner is the
+  service identity — internal work and superusers run as it and bypass policies — while every
+  user-facing request runs as `lazypock_anon` or `lazypock_authenticated` through `SET LOCAL ROLE`.
+* **Writes do not use `RETURNING`.** Postgres applies the *select* policies to an
+  `INSERT ... RETURNING` row, so a caller allowed to create a record but not to see it was refused
+  outright — which broke anonymous registration. A write now runs under the request's role, so the
+  `WITH CHECK` authorises it, and the stored row is read back as the owner to build the response.
+  That is what keeps "the write response is the stored record" true, which is what PocketBase
+  clients expect. The write policies still exist as defence in depth for any query that does run
+  restricted.
+* **`SET ROLE` needs membership, not just existence.** The connecting role must be a member of both
+  restricted roles, or be a superuser. The migration grants the roles their privileges but cannot
+  know the application's role, so the server probes the switch at boot and warns loudly: a
+  connection that cannot switch role is not enforcing anything.
+
+Rules keep their PocketBase three-state meaning (absent denies, `""` is public, a filter becomes
+ the predicate) with `manageRule` as a single `for all` policy, and the policies are rebuilt on every
+change so a removed rule stops applying.
 * `password_hash` and `token_key` are deliberately **absent from the filter context**. Everything in
   that map is both filterable and returned by `fields=*`, so having them there returned the password
   hash to the client on every auth-collection read — a real leak that is now pinned by a test, along

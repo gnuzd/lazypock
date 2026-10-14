@@ -56,6 +56,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "superusers",
         sql: include_str!("../../../migrations/0002_superusers.sql"),
     },
+    Migration {
+        version: 3,
+        name: "rls",
+        sql: include_str!("../../../migrations/0003_rls.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

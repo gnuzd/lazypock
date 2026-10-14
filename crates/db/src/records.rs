@@ -16,6 +16,7 @@ use crate::pool::db_error;
 use crate::query::compile::FilterContext;
 use crate::query::projection::{ExpandSpec, FieldSelection};
 use crate::query::read;
+use crate::rls;
 use crate::runner::QueryRunner;
 use crate::types::FieldType;
 use crate::validation::{self, ValidationErrors};
@@ -104,7 +105,7 @@ pub async fn create_with(
     let id = resolve_id(object)?;
     let mut columns: Vec<String> = vec!["id".to_string()];
     let mut placeholders: Vec<String> = vec!["$1::text".to_string()];
-    let mut params: Vec<String> = vec![id];
+    let mut params: Vec<String> = vec![id.clone()];
 
     for writable in writable_columns(collection).map_err(RecordWriteError::Other)? {
         let Some(value) = object.get(writable.name) else {
@@ -119,9 +120,8 @@ pub async fn create_with(
         placeholders.push(text_placeholder(value, &mut params));
     }
 
-    let document = record_document(collection, context)?;
-    let sql = format!(
-        "insert into {} ({}) values ({}) returning {document} as record",
+    let insert = format!(
+        "insert into {} ({}) values ({})",
         quote_ident(&collection.name),
         columns
             .iter()
@@ -131,11 +131,26 @@ pub async fn create_with(
         placeholders.join(", "),
     );
 
-    let row = runner
-        .run_query_one(&sql, &bound(&params))
+    // The insert carries no `RETURNING`: Postgres applies the *select* policies
+    // to a returned row, so a caller allowed to create a record but not to see it
+    // would be refused. The stored row is read back afterwards instead.
+    runner
+        .run_execute(&insert, &bound(&params))
         .await
         .map_err(|err| map_write_error(err, &collection.name))?;
-    Ok(row.get("record"))
+
+    rls::context::assume_owner(runner)
+        .await
+        .map_err(RecordWriteError::Other)?;
+
+    read_back(runner, collection, context, &id)
+        .await
+        .map_err(RecordWriteError::Other)?
+        .ok_or_else(|| {
+            RecordWriteError::Other(Error::internal(
+                "the record was written but could not be read back",
+            ))
+        })
 }
 
 /// Update a record, returning the stored row, or `None` when it does not exist.
@@ -183,18 +198,30 @@ pub async fn update_with(
     params.push(id.to_string());
     let id_placeholder = format!("${}::text", params.len());
 
-    let document = record_document(collection, context)?;
-    let sql = format!(
-        "update {} set {} where \"id\" = {id_placeholder} returning {document} as record",
+    let update = format!(
+        "update {} set {} where \"id\" = {id_placeholder}",
         quote_ident(&collection.name),
         assignments.join(", "),
     );
 
-    let row = runner
-        .run_query_opt(&sql, &bound(&params))
+    let updated = runner
+        .run_execute(&update, &bound(&params))
         .await
         .map_err(|err| map_write_error(err, &collection.name))?;
-    Ok(row.map(|row| row.get("record")))
+    if updated == 0 {
+        // Either there is no such record, or the policies do not let this request
+        // touch it. Both are reported identically, so the response cannot be used
+        // to discover that a hidden record exists.
+        return Ok(None);
+    }
+
+    rls::context::assume_owner(runner)
+        .await
+        .map_err(RecordWriteError::Other)?;
+
+    read_back(runner, collection, context, id)
+        .await
+        .map_err(RecordWriteError::Other)
 }
 
 /// Delete a record. Returns whether a row was removed.
@@ -265,17 +292,22 @@ fn resolve_id(object: &Map<String, Value>) -> std::result::Result<String, Record
     }
 }
 
-fn record_document(
+/// Read a stored record back, under whoever currently holds the transaction.
+async fn read_back(
+    runner: &dyn QueryRunner,
     collection: &Collection,
     context: &FilterContext,
-) -> std::result::Result<String, RecordWriteError> {
-    read::record_document(
+    id: &str,
+) -> Result<Option<Value>> {
+    get_one(
+        runner,
+        collection,
         context,
-        &quote_ident(&collection.name),
+        id,
         &FieldSelection::all(),
         &ExpandSpec::none(),
     )
-    .map_err(RecordWriteError::Other)
+    .await
 }
 
 /// A column a client may write.
@@ -401,6 +433,12 @@ fn map_write_error(err: tokio_postgres::Error, collection: &str) -> RecordWriteE
             "23503" => {
                 return RecordWriteError::Other(Error::invalid(format!(
                     "a relation in {collection:?} points to a record that does not exist"
+                )))
+            }
+            // A row-level security policy refused the write.
+            "42501" => {
+                return RecordWriteError::Other(Error::forbidden(format!(
+                    "not allowed to write that record in {collection:?}"
                 )))
             }
             "23502" => {

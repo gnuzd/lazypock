@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -22,15 +22,18 @@ use serde_json::{json, Value};
 use lazypock_core::error::Error;
 use lazypock_db::collections::Collection;
 use lazypock_db::pool::db_error;
-use lazypock_db::query::compile::{AuthContext, FilterContext};
+use lazypock_db::query::compile::FilterContext;
 use lazypock_db::query::filter;
 use lazypock_db::query::pagination::{Cursor, Page};
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
 use lazypock_db::query::read::{self, BuiltQuery, ReadQuery};
 use lazypock_db::query::sort::{self, SortSpec};
 use lazypock_db::records;
+use lazypock_db::rls;
+use lazypock_db::runner::QueryRunner;
 use lazypock_db::schema::Schema;
 
+use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -114,22 +117,26 @@ pub async fn list_records(
     State(state): State<AppState>,
     Path(collection): Path<String>,
     Query(params): Query<ListParams>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response, ApiError> {
     let (_schema, resolved) = resolve(&state, &collection)?;
-    // Track E replaces this with the request's claims.
-    let auth = AuthContext::default();
+    // The rules are enforced by the database, so this context is only for
+    // `@request.auth.*` inside a user-supplied filter.
+    let auth = principal.auth_context();
 
     let read_query = build_read_query(&params, &resolved.context)?;
     let built = read::build_list(&read_query, &resolved.context, &auth).map_err(ApiError::new)?;
 
-    let client = state.db.client().await.map_err(ApiError::new)?;
-    let rows = run_list(&client, &built).await?;
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let transaction = scoped(&mut client, &principal).await?;
+
+    let rows = run_list(&transaction, &built).await?;
 
     let total = match &read_query.page {
         Page::Offset(request) if !request.skip_total => {
             let count = read::build_count(read_query.filter.as_ref(), &resolved.context, &auth)
                 .map_err(ApiError::new)?;
-            Some(run_count(&client, &count).await?)
+            Some(run_count(&transaction, &count).await?)
         }
         _ => None,
     };
@@ -145,6 +152,11 @@ pub async fn list_records(
         _ => None,
     };
 
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
     let items = rows.into_iter().map(|row| row.record).collect();
     Ok((
         StatusCode::OK,
@@ -158,6 +170,7 @@ pub async fn view_record(
     State(state): State<AppState>,
     Path((collection, id)): Path<(String, String)>,
     Query(params): Query<ListParams>,
+    Extension(principal): Extension<Principal>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let (_schema, resolved) = resolve(&state, &collection)?;
@@ -167,9 +180,11 @@ pub async fn view_record(
     let expand =
         ExpandSpec::parse(params.expand.as_deref(), &resolved.context).map_err(ApiError::new)?;
 
-    let client = state.db.client().await.map_err(ApiError::new)?;
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let transaction = scoped(&mut client, &principal).await?;
+
     let record = records::get_one(
-        &client,
+        &transaction,
         &resolved.collection,
         &resolved.context,
         &id,
@@ -177,8 +192,14 @@ pub async fn view_record(
         &expand,
     )
     .await
-    .map_err(ApiError::new)?
-    .ok_or_else(|| {
+    .map_err(ApiError::new)?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
+    let record = record.ok_or_else(|| {
         ApiError::new(Error::not_found(format!(
             "no record {id:?} in collection {collection:?}"
         )))
@@ -204,16 +225,20 @@ pub async fn view_record(
 pub async fn create_record(
     State(state): State<AppState>,
     Path(collection): Path<String>,
+    Extension(principal): Extension<Principal>,
     body: Result<Json<Value>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(body) = json_body(body)?;
     let (_schema, resolved) = resolve(&state, &collection)?;
 
-    let client = state.db.client().await.map_err(ApiError::new)?;
     crate::auth::validate_first(&resolved.collection, &body, false)?;
     let extra = crate::auth::auth_columns(&resolved.collection, &body)?;
+
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let transaction = scoped(&mut client, &principal).await?;
+
     let record = records::create_with(
-        &client,
+        &transaction,
         &resolved.collection,
         &resolved.context,
         body,
@@ -222,6 +247,11 @@ pub async fn create_record(
     .await
     .map_err(ApiError::from)?;
 
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
     Ok((StatusCode::CREATED, Json(record)).into_response())
 }
 
@@ -229,6 +259,7 @@ pub async fn create_record(
 pub async fn update_record(
     State(state): State<AppState>,
     Path((collection, id)): Path<(String, String)>,
+    Extension(principal): Extension<Principal>,
     body: Result<Json<Value>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(body) = json_body(body)?;
@@ -237,10 +268,7 @@ pub async fn update_record(
     // One transaction, so a password change and the session revocation that must
     // accompany it either both happen or neither does.
     let mut client = state.db.client().await.map_err(ApiError::new)?;
-    let transaction = client
-        .transaction()
-        .await
-        .map_err(|err| ApiError::new(db_error(err)))?;
+    let transaction = scoped(&mut client, &principal).await?;
 
     crate::auth::validate_first(&resolved.collection, &body, true)?;
     let extra = crate::auth::auth_columns(&resolved.collection, &body)?;
@@ -280,19 +308,46 @@ pub async fn update_record(
 pub async fn delete_record(
     State(state): State<AppState>,
     Path((collection, id)): Path<(String, String)>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Response, ApiError> {
     let (_schema, resolved) = resolve(&state, &collection)?;
 
-    let client = state.db.client().await.map_err(ApiError::new)?;
-    let removed = records::delete(&client, &resolved.collection, &id)
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let transaction = scoped(&mut client, &principal).await?;
+
+    let removed = records::delete(&transaction, &resolved.collection, &id)
         .await
         .map_err(ApiError::from)?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
 
     if removed {
         Ok(StatusCode::NO_CONTENT.into_response())
     } else {
         Err(not_found(&collection, &id))
     }
+}
+
+/// Begin a transaction with the request's row-level-security context applied.
+///
+/// Every user-facing query goes through this: the context is `SET LOCAL`, so it
+/// is undone at commit and cannot leak onto the pooled connection the next
+/// request will reuse.
+async fn scoped<'a>(
+    client: &'a mut lazypock_db::deadpool_postgres::Client,
+    principal: &Principal,
+) -> Result<lazypock_db::deadpool_postgres::Transaction<'a>, ApiError> {
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+    rls::context::apply(&transaction, &principal.request_context())
+        .await
+        .map_err(ApiError::new)?;
+    Ok(transaction)
 }
 
 fn not_found(collection: &str, id: &str) -> ApiError {
@@ -348,12 +403,9 @@ struct ListRow {
     id: String,
 }
 
-async fn run_list(
-    client: &lazypock_db::tokio_postgres::Client,
-    built: &BuiltQuery,
-) -> Result<Vec<ListRow>, ApiError> {
-    let rows = client
-        .query(&built.sql, &bind(&built.params))
+async fn run_list(runner: &dyn QueryRunner, built: &BuiltQuery) -> Result<Vec<ListRow>, ApiError> {
+    let rows = runner
+        .run_query(&built.sql, &bind(&built.params))
         .await
         .map_err(|err| ApiError::new(db_error(err)))?;
     Ok(rows
@@ -366,12 +418,9 @@ async fn run_list(
         .collect())
 }
 
-async fn run_count(
-    client: &lazypock_db::tokio_postgres::Client,
-    built: &BuiltQuery,
-) -> Result<i64, ApiError> {
-    let row = client
-        .query_one(&built.sql, &bind(&built.params))
+async fn run_count(runner: &dyn QueryRunner, built: &BuiltQuery) -> Result<i64, ApiError> {
+    let row = runner
+        .run_query_one(&built.sql, &bind(&built.params))
         .await
         .map_err(|err| ApiError::new(db_error(err)))?;
     Ok(row.get(0))

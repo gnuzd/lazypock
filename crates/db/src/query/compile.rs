@@ -374,7 +374,7 @@ fn compile_operator(
 
 /// Reject operator/type combinations that would produce a confusing runtime
 /// error (or silently wrong results) instead of a clear message.
-fn check_operator_supported(op: CompareOp, column_type: &str, target: &str) -> Result<()> {
+pub fn check_operator_supported(op: CompareOp, column_type: &str, target: &str) -> Result<()> {
     let is_array = column_type == "text[]";
 
     match op {
@@ -457,7 +457,7 @@ fn push_param(value: String, cast: &str, params: &mut Vec<String>) -> String {
     format!("${index}::text::{cast}")
 }
 
-fn cast_for(column_type: &str) -> &'static str {
+pub fn cast_for(column_type: &str) -> &'static str {
     match column_type {
         "bigint" => "bigint",
         "double precision" => "double precision",
@@ -470,7 +470,7 @@ fn cast_for(column_type: &str) -> &'static str {
 }
 
 /// Escape the `LIKE` metacharacters so a user value is matched literally.
-fn escape_like(value: &str) -> String {
+pub fn escape_like(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for character in value.chars() {
         if matches!(character, '\\' | '%' | '_') {

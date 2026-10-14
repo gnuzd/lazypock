@@ -325,7 +325,16 @@ async fn seed_auth_collection(app: &TestApp) {
                 unique: false,
                 options: json!({}),
             }],
-            rules: json!({}),
+            // A realistic auth collection: open registration, but everything else
+            // limited to the account itself. With no rules at all, default-deny
+            // would refuse even signup — which is what the plan specifies.
+            rules: json!({
+                "createRule": "",
+                "listRule": "id = @request.auth.id",
+                "viewRule": "id = @request.auth.id",
+                "updateRule": "id = @request.auth.id",
+                "deleteRule": "id = @request.auth.id",
+            }),
             options: json!({}),
             adopt_existing_table: false,
         },
@@ -502,16 +511,21 @@ async fn changing_a_password_ends_existing_sessions() {
     .await
     .body
     .expect("body");
+    // Changing a password is an authenticated action: `updateRule` is
+    // `id = @request.auth.id`, so an anonymous request is refused by the
+    // database before the handler ever sees it.
+    let access = session["token"].as_str().expect("token").to_string();
     let refresh = session["refreshToken"]
         .as_str()
         .expect("refresh")
         .to_string();
 
-    // Change the password through the ordinary records API.
+    // Change the password through the ordinary records API, as the account.
     let request = Request::builder()
         .method(Method::PATCH)
         .uri(format!("/api/collections/users/records/{id}"))
         .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {access}"))
         .body(Body::from(
             json!({ "password": "a-new-password" }).to_string(),
         ))
@@ -589,4 +603,147 @@ async fn credential_columns_are_neither_returned_nor_filterable() {
     }
 
     app.cleanup().await;
+}
+
+// ------------------------------------------------ access control, end to end
+
+/// Create a `notes` collection whose rows each account owns.
+async fn seed_notes(app: &TestApp) {
+    let mut client = app.client().await;
+    collections::create(
+        &mut client,
+        CreateCollection {
+            name: "notes".into(),
+            collection_type: CollectionType::Base,
+            fields: vec![
+                CreateField {
+                    name: "author".into(),
+                    field_type: FieldType::Text,
+                    required: false,
+                    unique: false,
+                    options: json!({}),
+                },
+                CreateField {
+                    name: "body".into(),
+                    field_type: FieldType::Text,
+                    required: false,
+                    unique: false,
+                    options: json!({}),
+                },
+            ],
+            rules: json!({
+                "listRule": "author = @request.auth.id",
+                "viewRule": "author = @request.auth.id",
+                "createRule": "author = @request.auth.id",
+                "updateRule": "author = @request.auth.id",
+                "deleteRule": "author = @request.auth.id",
+            }),
+            options: json!({}),
+            adopt_existing_table: false,
+        },
+    )
+    .await
+    .expect("create notes");
+    app.reload_schema().await;
+}
+
+/// Register an account and return its access token.
+async fn account(app: &TestApp, email: &str) -> String {
+    register(app, json!({"email": email, "password": "correct-horse"})).await;
+    post(
+        &router(app).await,
+        "/api/collections/users/auth-with-password",
+        json!({ "identity": email, "password": "correct-horse" }),
+    )
+    .await
+    .body
+    .expect("body")["token"]
+        .as_str()
+        .expect("token")
+        .to_string()
+}
+
+async fn list_notes(app: &TestApp, token: &str) -> Value {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/api/collections/notes/records")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("request");
+    let response = router(app).await.oneshot(request).await.expect("response");
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body");
+    serde_json::from_slice(&bytes).expect("json")
+}
+
+async fn create_note(app: &TestApp, token: &str, author: &str, body: &str) -> StatusCode {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/collections/notes/records")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            json!({ "author": author, "body": body }).to_string(),
+        ))
+        .expect("request");
+    router(app)
+        .await
+        .oneshot(request)
+        .await
+        .expect("response")
+        .status()
+}
+
+#[tokio::test]
+async fn each_account_only_sees_its_own_records() {
+    let Some(app) = test_app("http_rls_end_to_end").await else {
+        return;
+    };
+    seed_auth_collection(&app).await;
+    seed_notes(&app).await;
+
+    let alice = account(&app, "alice@example.com").await;
+    let bob = account(&app, "bob@example.com").await;
+    // Each account's id, taken from the token it was issued.
+    let alice_id = token_subject(&alice);
+    let bob_id = token_subject(&bob);
+
+    assert_eq!(
+        create_note(&app, &alice, &alice_id, "alice's note").await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        create_note(&app, &bob, &bob_id, "bob's note").await,
+        StatusCode::CREATED
+    );
+
+    // Each sees exactly one note, their own. Postgres does the filtering.
+    let alice_notes = list_notes(&app, &alice).await;
+    assert_eq!(alice_notes["totalItems"], json!(1));
+    assert_eq!(alice_notes["items"][0]["body"], json!("alice's note"));
+
+    let bob_notes = list_notes(&app, &bob).await;
+    assert_eq!(bob_notes["totalItems"], json!(1));
+    assert_eq!(bob_notes["items"][0]["body"], json!("bob's note"));
+
+    // Writing a note owned by somebody else is refused by the WITH CHECK.
+    assert_eq!(
+        create_note(&app, &alice, &bob_id, "forged").await,
+        StatusCode::FORBIDDEN,
+        "the create rule must refuse a row owned by another account"
+    );
+
+    app.cleanup().await;
+}
+
+/// The `sub` claim of an access token, decoded without verifying.
+fn token_subject(token: &str) -> String {
+    use base64::Engine;
+    let payload = token.split('.').nth(1).expect("payload");
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .expect("decode");
+    let claims: Value = serde_json::from_slice(&bytes).expect("claims");
+    claims["sub"].as_str().expect("sub").to_string()
 }

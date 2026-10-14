@@ -13,7 +13,7 @@
 //! rather than silently half-supported.
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -29,6 +29,7 @@ use lazypock_db::records;
 use lazypock_db::runner::QueryRunner;
 use lazypock_db::schema::Schema;
 
+use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -66,6 +67,7 @@ struct Step {
 /// `POST /api/batch`
 pub async fn batch(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     body: Result<Json<BatchRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(request) = body.map_err(|rejection| {
@@ -101,7 +103,7 @@ pub async fn batch(
         .await
         .map_err(|err| ApiError::new(db_error(err)))?;
 
-    match run(&transaction, &steps).await {
+    match run(&transaction, &steps, &principal).await {
         Ok(results) => {
             transaction
                 .commit()
@@ -189,9 +191,20 @@ fn plan(schema: &Schema, item: &BatchItem) -> Result<Step, ApiError> {
     })
 }
 
-async fn run(runner: &dyn QueryRunner, steps: &[Step]) -> Result<Vec<Value>, (usize, ApiError)> {
+async fn run(
+    runner: &dyn QueryRunner,
+    steps: &[Step],
+    principal: &Principal,
+) -> Result<Vec<Value>, (usize, ApiError)> {
     let mut results = Vec::with_capacity(steps.len());
     for (index, step) in steps.iter().enumerate() {
+        // Re-applied for every sub-request: a write hands the transaction back to
+        // the owner so it can read the stored row back, so without this the next
+        // one would run unrestricted.
+        lazypock_db::rls::context::apply(runner, &principal.request_context())
+            .await
+            .map_err(|error| (index, ApiError::new(error)))?;
+
         let (status, body) = execute(runner, step)
             .await
             .map_err(|error| (index, error))?;

@@ -140,6 +140,22 @@ async fn serve(config: Config) -> Result<()> {
         .await
         .map_err(|err| Error::config(format!("cannot load the token signing key: {err}")))?;
 
+    // Row-level security needs the restricted roles. Without them a request cannot
+    // switch role, and the only safe reading is that it is not in force — so this
+    // is loud rather than a debug line.
+    {
+        let mut client = db.client().await?;
+        let unreachable = lazypock_db::rls::context::unreachable_roles(&mut client).await?;
+        if !unreachable.is_empty() {
+            tracing::warn!(
+                unreachable = ?unreachable,
+                "row-level security is NOT in force: this connection cannot switch to those roles. \
+                 The connecting role must be a member of them, or be a superuser; see PLAN.md \
+                 section 6."
+            );
+        }
+    }
+
     let app = router(AppState::new(config, db, schema, auth));
 
     let listener = tokio::net::TcpListener::bind(addr)
