@@ -408,6 +408,33 @@ fn auth_body(outcome: &AuthOutcome, record: Value) -> Value {
 /// "something may fill an absent field in later" — true for an update, and true
 /// for a create with hooks. The authoritative check always runs in the record
 /// layer, so this is an early, cheaper report rather than the only guard.
+/// An extractor that admits only a superuser.
+///
+/// It runs among the **parts** extractors, so it rejects before a body extractor has
+/// read anything. Checking inside a handler body instead means the body extractor
+/// runs first, and an anonymous caller with no multipart body gets the body error
+/// rather than the authorization error — which is exactly how `/api/import` answered
+/// 415 where it should have answered 403.
+#[derive(Debug, Clone, Copy)]
+pub struct Superuser;
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Superuser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let principal = parts
+            .extensions
+            .get::<Principal>()
+            .cloned()
+            .unwrap_or_else(Principal::anonymous);
+        require_superuser(&principal)?;
+        Ok(Superuser)
+    }
+}
+
 /// Fail unless the caller is a superuser.
 ///
 /// One implementation for every administrative surface: configuration is

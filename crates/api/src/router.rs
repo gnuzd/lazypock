@@ -9,6 +9,7 @@ use lazypock_core::error::Error;
 use serde_json::{json, Value};
 
 use crate::auth;
+use crate::backup;
 use crate::batch;
 use crate::collections as admin;
 use crate::error::ApiError;
@@ -25,6 +26,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/batch", post(batch::batch))
         // The public half of the token signing key, for other services.
         .route("/api/jwks", get(auth::jwks))
+        // Backup and restore. Superuser-only: an export is the whole database.
+        .route("/api/export/archive", get(backup::export))
+        .route("/api/import/preflight", get(backup::preflight))
+        .route(
+            "/api/import",
+            post(backup::import).layer(backup::body_limit()),
+        )
         // PocketBase parity, and what a client calls to learn who it is.
         .route("/api/me", get(auth::me))
         .route("/api/realtime", get(realtime::realtime))
