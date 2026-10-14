@@ -312,3 +312,587 @@ mod tests {
         assert_eq!(host_of("http://localhost:9000/"), "localhost:9000");
     }
 }
+
+// ---------------------------------------------------------------------------
+// The transport
+// ---------------------------------------------------------------------------
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use bytes::Bytes;
+use lazypock_core::error::{Error, Result};
+
+use crate::config::FilesConfig;
+use crate::storage::{Storage, StorageFuture, StoredObject};
+
+/// Most keys one listing page may return.
+const LIST_PAGE: u32 = 1000;
+
+/// The current UTC time as `YYYYMMDDTHHMMSSZ`, which SigV4 requires.
+///
+/// Written out rather than pulling in a date library: the only thing needed is
+/// this one format, and it is a fixed number of integer operations.
+pub fn utc_timestamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    format_timestamp(seconds)
+}
+
+/// Format unix seconds as `YYYYMMDDTHHMMSSZ`.
+fn format_timestamp(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let time = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}{month:02}{day:02}T{:02}{:02}{:02}Z",
+        time / 3600,
+        (time % 3600) / 60,
+        time % 60
+    )
+}
+
+/// The calendar date for a count of days since 1970-01-01.
+///
+/// Howard Hinnant's `civil_from_days`, which is exact for the proleptic Gregorian
+/// calendar and needs no tables.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * march_month + 2) / 5 + 1) as u32;
+    let month = if march_month < 10 {
+        march_month + 3
+    } else {
+        march_month - 9
+    } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+/// Percent-encode a query parameter value the way SigV4 requires.
+pub fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// An S3-compatible backend: AWS S3, Cloudflare R2, MinIO and the rest.
+///
+/// Requests are addressed path-style, `{endpoint}/{bucket}/{key}`, which every
+/// S3-compatible service accepts and which avoids needing a wildcard DNS name for
+/// the bucket.
+#[derive(Clone)]
+pub struct S3Storage {
+    endpoint: String,
+    host: String,
+    bucket: String,
+    region: String,
+    access_key: String,
+    secret_key: String,
+    client: reqwest::Client,
+}
+
+impl std::fmt::Debug for S3Storage {
+    /// Never prints the secret.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("S3Storage")
+            .field("endpoint", &self.endpoint)
+            .field("bucket", &self.bucket)
+            .field("region", &self.region)
+            .field("access_key", &"<redacted>")
+            .field("secret_key", &"<redacted>")
+            .finish_non_exhaustive()
+    }
+}
+
+impl S3Storage {
+    /// Build a backend from configuration.
+    pub fn new(config: &FilesConfig) -> Result<Self> {
+        let endpoint = config
+            .endpoint
+            .as_deref()
+            .ok_or_else(|| Error::config("the S3 adapter needs LAZYPOCK_S3_ENDPOINT"))?;
+        let bucket = config
+            .bucket
+            .as_deref()
+            .ok_or_else(|| Error::config("the S3 adapter needs LAZYPOCK_S3_BUCKET"))?;
+        let access_key = config
+            .access_key
+            .as_deref()
+            .ok_or_else(|| Error::config("the S3 adapter needs LAZYPOCK_S3_ACCESS_KEY"))?;
+        let secret_key = config
+            .secret_key
+            .as_deref()
+            .ok_or_else(|| Error::config("the S3 adapter needs LAZYPOCK_S3_SECRET_KEY"))?;
+
+        let client = reqwest::Client::builder()
+            .build()
+            .map_err(|err| Error::config(format!("cannot build the S3 HTTP client: {err}")))?;
+
+        Ok(Self {
+            host: host_of(endpoint),
+            endpoint: endpoint.trim_end_matches('/').to_string(),
+            bucket: bucket.to_string(),
+            region: config.region.clone(),
+            access_key: access_key.to_string(),
+            secret_key: secret_key.to_string(),
+            client,
+        })
+    }
+
+    /// The canonical URI for a key.
+    fn uri_for(&self, key: &str) -> String {
+        if key.is_empty() {
+            format!("/{}/", self.bucket)
+        } else {
+            format!("/{}/{}", self.bucket, encode_path(key))
+        }
+    }
+
+    /// Sign a request without sending it.
+    ///
+    /// Separated from sending so the request can be asserted on directly: signing
+    /// is where the mistakes are, and a test that needs a live bucket would not
+    /// run.
+    pub fn signed(
+        &self,
+        method: &str,
+        canonical_uri: &str,
+        canonical_query: &str,
+        payload: &[u8],
+        content_type: Option<&str>,
+        timestamp: &str,
+    ) -> SignedRequest {
+        let mut headers = vec![
+            ("host".to_string(), self.host.clone()),
+            ("x-amz-content-sha256".to_string(), payload_hash(payload)),
+        ];
+        if let Some(content_type) = content_type {
+            headers.push(("content-type".to_string(), content_type.to_string()));
+        }
+
+        let hash = payload_hash(payload);
+        sign(SignableRequest {
+            method,
+            canonical_uri,
+            canonical_query,
+            headers,
+            payload_hash: &hash,
+            region: &self.region,
+            service: "s3",
+            access_key: &self.access_key,
+            secret_key: &self.secret_key,
+            timestamp,
+        })
+    }
+
+    /// Send a signed request.
+    async fn send(&self, signed: SignedRequest, body: Vec<u8>) -> Result<reqwest::Response> {
+        let url = if signed.query.is_empty() {
+            format!("{}{}", self.endpoint, signed.uri)
+        } else {
+            format!("{}{}?{}", self.endpoint, signed.uri, signed.query)
+        };
+
+        let method = reqwest::Method::from_bytes(signed.method.as_bytes())
+            .map_err(|err| Error::internal(format!("bad S3 method: {err}")))?;
+        let mut request = self.client.request(method, &url);
+
+        for (name, value) in &signed.headers {
+            // `host` is signed but must be set by the client from the URL, so
+            // setting it here as well would be redundant at best.
+            if name.eq_ignore_ascii_case("host") {
+                continue;
+            }
+            request = request.header(name.as_str(), value.as_str());
+        }
+        request = request.header("authorization", signed.authorization.as_str());
+
+        request
+            .body(body)
+            .send()
+            .await
+            .map_err(|err| Error::internal(format!("the S3 request to {url} failed: {err}")))
+    }
+
+    /// Turn a failed response into an error that names the cause.
+    async fn failure(what: &str, response: reqwest::Response) -> Error {
+        let status = response.status();
+        // S3 explains itself in the body and in a code header; keep enough of it
+        // to be actionable without dumping a whole document into the log.
+        let code = response
+            .headers()
+            .get("x-amz-error-code")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = response.text().await.unwrap_or_default();
+        let detail = body.chars().take(300).collect::<String>();
+
+        Error::internal(format!(
+            "S3 {what} failed: {status}{}{}",
+            code.map(|code| format!(" ({code})")).unwrap_or_default(),
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        ))
+    }
+}
+
+impl Storage for S3Storage {
+    fn put<'a>(
+        &'a self,
+        key: &'a str,
+        content_type: &'a str,
+        body: Bytes,
+    ) -> StorageFuture<'a, ()> {
+        Box::pin(async move {
+            let signed = self.signed(
+                "PUT",
+                &self.uri_for(key),
+                "",
+                &body,
+                Some(content_type),
+                &utc_timestamp(),
+            );
+            let response = self.send(signed, body.to_vec()).await?;
+            if !response.status().is_success() {
+                return Err(Self::failure(&format!("PUT {key}"), response).await);
+            }
+            Ok(())
+        })
+    }
+
+    fn get<'a>(&'a self, key: &'a str) -> StorageFuture<'a, Option<StoredObject>> {
+        Box::pin(async move {
+            let signed = self.signed("GET", &self.uri_for(key), "", b"", None, &utc_timestamp());
+            let response = self.send(signed, Vec::new()).await?;
+
+            match response.status().as_u16() {
+                200 => {
+                    let content_type = response
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("application/octet-stream")
+                        .to_string();
+                    let body = response
+                        .bytes()
+                        .await
+                        .map_err(|err| Error::internal(format!("cannot read {key}: {err}")))?;
+                    Ok(Some(StoredObject { content_type, body }))
+                }
+                404 => Ok(None),
+                _ => Err(Self::failure(&format!("GET {key}"), response).await),
+            }
+        })
+    }
+
+    fn delete<'a>(&'a self, key: &'a str) -> StorageFuture<'a, ()> {
+        Box::pin(async move {
+            let signed = self.signed(
+                "DELETE",
+                &self.uri_for(key),
+                "",
+                b"",
+                None,
+                &utc_timestamp(),
+            );
+            let response = self.send(signed, Vec::new()).await?;
+
+            match response.status().as_u16() {
+                // A missing object is not an error, so a retried delete succeeds.
+                200 | 204 | 404 => Ok(()),
+                _ => Err(Self::failure(&format!("DELETE {key}"), response).await),
+            }
+        })
+    }
+
+    fn health(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            // One key is enough to prove the credentials and the bucket work.
+            let query = format!("list-type=2&max-keys=1&prefix={}", encode_query_value(""));
+            let signed = self.signed(
+                "GET",
+                &self.uri_for(""),
+                &query,
+                b"",
+                None,
+                &utc_timestamp(),
+            );
+            let response = self.send(signed, Vec::new()).await?;
+            if !response.status().is_success() {
+                return Err(Self::failure("bucket check", response).await);
+            }
+            Ok(())
+        })
+    }
+
+    fn list<'a>(&'a self, prefix: &'a str) -> StorageFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            let mut keys = Vec::new();
+            let mut token: Option<String> = None;
+
+            loop {
+                let mut query = format!(
+                    "list-type=2&max-keys={LIST_PAGE}&prefix={}",
+                    encode_query_value(prefix)
+                );
+                if let Some(token) = &token {
+                    query.push_str(&format!(
+                        "&continuation-token={}",
+                        encode_query_value(token)
+                    ));
+                }
+
+                let signed = self.signed(
+                    "GET",
+                    &self.uri_for(""),
+                    &query,
+                    b"",
+                    None,
+                    &utc_timestamp(),
+                );
+                let response = self.send(signed, Vec::new()).await?;
+                if !response.status().is_success() {
+                    return Err(Self::failure("LIST", response).await);
+                }
+
+                let body = response
+                    .text()
+                    .await
+                    .map_err(|err| Error::internal(format!("cannot read the S3 listing: {err}")))?;
+                keys.extend(parse_listing(&body));
+
+                // Keep going only while the service says there is more; an
+                // ignored truncation would make the sweeper think a partial view
+                // was the whole store.
+                token = if is_truncated(&body) {
+                    parse_continuation(&body)
+                } else {
+                    None
+                };
+                if token.is_none() {
+                    break;
+                }
+            }
+
+            keys.sort();
+            Ok(keys)
+        })
+    }
+}
+
+/// The `<Key>` values in a ListObjectsV2 response.
+pub fn parse_listing(xml: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<Key>") {
+        let after = &rest[start + "<Key>".len()..];
+        match after.find("</Key>") {
+            Some(end) => {
+                keys.push(unescape_xml(&after[..end]));
+                rest = &after[end + "</Key>".len()..];
+            }
+            None => break,
+        }
+    }
+    keys
+}
+
+/// Whether the listing says more results follow.
+pub fn is_truncated(xml: &str) -> bool {
+    element(xml, "IsTruncated").is_some_and(|value| value == "true")
+}
+
+/// The continuation token, when the service issued one.
+pub fn parse_continuation(xml: &str) -> Option<String> {
+    element(xml, "NextContinuationToken").filter(|token| !token.is_empty())
+}
+
+/// The text of the first `name` element.
+fn element(xml: &str, name: &str) -> Option<String> {
+    let open = format!("<{name}>");
+    let close = format!("</{name}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    Some(unescape_xml(&xml[start..end]))
+}
+
+/// Undo the five entities XML requires.
+fn unescape_xml(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        // Ampersand last, so an escaped entity is not unescaped twice.
+        .replace("&amp;", "&")
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    fn storage() -> S3Storage {
+        S3Storage::new(&FilesConfig {
+            adapter: crate::config::StorageAdapter::S3,
+            directory: String::new(),
+            public_base_url: None,
+            endpoint: Some("https://account.r2.cloudflarestorage.com".into()),
+            bucket: Some("media".into()),
+            region: "auto".into(),
+            access_key: Some("AKIDEXAMPLE".into()),
+            secret_key: Some("secret".into()),
+        })
+        .expect("storage")
+    }
+
+    #[test]
+    fn the_debug_output_never_carries_the_credentials() {
+        let rendered = format!("{:?}", storage());
+        // The field names appear; the credential *values* must not.
+        assert!(!rendered.contains("\"secret\""), "{rendered}");
+        assert!(!rendered.contains("AKIDEXAMPLE"), "{rendered}");
+    }
+
+    #[test]
+    fn a_timestamp_is_formatted_the_way_sigv4_requires() {
+        assert_eq!(format_timestamp(0), "19700101T000000Z");
+        // Two well-known instants, as a check on the calendar arithmetic.
+        assert_eq!(format_timestamp(1_000_000_000), "20010909T014640Z");
+        assert_eq!(format_timestamp(1_700_000_000), "20231114T221320Z");
+        // The shape is always the same, which is what the signature depends on.
+        let now = utc_timestamp();
+        assert_eq!(now.len(), 16, "{now}");
+        assert!(now.ends_with('Z'), "{now}");
+        assert_eq!(now.as_bytes()[8], b'T', "{now}");
+    }
+
+    #[test]
+    fn query_values_are_encoded_for_signing() {
+        assert_eq!(encode_query_value("posts"), "posts");
+        assert_eq!(encode_query_value("photos/a b.png"), "photos%2Fa%20b.png");
+        // A slash has to be encoded in a query value, unlike in a path.
+        assert!(!encode_query_value("a/b").contains('/'));
+    }
+
+    #[test]
+    fn a_get_is_signed_with_the_empty_payload_hash() {
+        let signed = storage().signed(
+            "GET",
+            "/media/posts/p1/photo.png",
+            "",
+            b"",
+            None,
+            "20260101T000000Z",
+        );
+        assert!(signed.authorization.starts_with(ALGORITHM));
+        assert!(signed
+            .authorization
+            .contains("Credential=AKIDEXAMPLE/20260101/auto/s3/aws4_request"));
+        assert!(signed
+            .authorization
+            .contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date"));
+        assert_eq!(signed.method, "GET");
+        assert_eq!(signed.uri, "/media/posts/p1/photo.png");
+        assert_eq!(signed.query, "");
+    }
+
+    #[test]
+    fn a_put_signs_the_content_type_and_the_body() {
+        let signed = storage().signed(
+            "PUT",
+            "/media/posts/p1/photo.png",
+            "",
+            b"the bytes",
+            Some("image/png"),
+            "20260101T000000Z",
+        );
+        assert!(signed
+            .authorization
+            .contains("SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date"));
+        assert_eq!(signed.header("content-type"), Some("image/png"));
+        // The body hash is the one for these bytes, not the empty hash.
+        assert_eq!(
+            signed.header("x-amz-content-sha256"),
+            Some(payload_hash(b"the bytes").as_str())
+        );
+        assert_ne!(
+            signed.header("x-amz-content-sha256"),
+            Some(empty_payload_hash().as_str())
+        );
+    }
+
+    #[test]
+    fn the_same_request_at_a_different_time_signs_differently() {
+        let storage = storage();
+        let first = storage.signed("GET", "/media/k", "", b"", None, "20260101T000000Z");
+        let second = storage.signed("GET", "/media/k", "", b"", None, "20260102T000000Z");
+        assert_ne!(first.authorization, second.authorization);
+    }
+
+    #[test]
+    fn keys_are_addressed_under_the_bucket() {
+        let storage = storage();
+        assert_eq!(
+            storage.uri_for("posts/p1/photo.png"),
+            "/media/posts/p1/photo.png"
+        );
+        // A key needing encoding is encoded, and the separators survive.
+        assert_eq!(
+            storage.uri_for("posts/p1/a b.png"),
+            "/media/posts/p1/a%20b.png"
+        );
+        assert_eq!(storage.uri_for(""), "/media/");
+    }
+
+    #[test]
+    fn a_listing_is_parsed_including_escaped_keys() {
+        let xml = r#"<?xml version="1.0"?>
+<ListBucketResult>
+  <IsTruncated>true</IsTruncated>
+  <Contents><Key>posts/p1/a.png</Key><Size>10</Size></Contents>
+  <Contents><Key>posts/p1/b&amp;c.png</Key><Size>20</Size></Contents>
+  <NextContinuationToken>1ueGcxLPRx1Tr</NextContinuationToken>
+</ListBucketResult>"#;
+        assert_eq!(
+            parse_listing(xml),
+            vec!["posts/p1/a.png".to_string(), "posts/p1/b&c.png".to_string()]
+        );
+        assert!(is_truncated(xml));
+        assert_eq!(parse_continuation(xml).as_deref(), Some("1ueGcxLPRx1Tr"));
+    }
+
+    #[test]
+    fn a_complete_listing_has_no_continuation() {
+        let xml = r#"<ListBucketResult><IsTruncated>false</IsTruncated>
+  <Contents><Key>a</Key></Contents></ListBucketResult>"#;
+        assert!(!is_truncated(xml));
+        assert_eq!(parse_continuation(xml), None);
+        assert_eq!(parse_listing(xml), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_listing_parses_to_nothing_rather_than_failing() {
+        let xml = r#"<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"#;
+        assert!(parse_listing(xml).is_empty());
+        assert!(!is_truncated(xml));
+        assert_eq!(parse_continuation(xml), None);
+    }
+}

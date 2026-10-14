@@ -237,19 +237,14 @@ impl std::fmt::Debug for Files {
 impl Files {
     /// Build the service from the configuration.
     ///
-    /// A backend that is configured but not implemented is refused here rather
-    /// than quietly falling back to the local disk, which would put objects
-    /// somewhere the operator is not looking.
+    /// A backend is built from configuration and validated here, at boot, rather
+    /// than failing on the first upload. A misconfigured S3 backend is refused
+    /// loudly instead of quietly falling back to the local disk, which would put
+    /// objects somewhere the operator is not looking.
     pub fn from_config(config: &FilesConfig) -> Result<Self> {
         let storage: Arc<dyn Storage> = match config.adapter {
             StorageAdapter::Local => Arc::new(LocalStorage::new(&config.directory)),
-            StorageAdapter::S3 => {
-                return Err(Error::unsupported(
-                    "the S3 storage adapter is not implemented yet (the request signing is in \
-                     crates/files/src/s3.rs); use LAZYPOCK_FILES_ADAPTER=local or see PLAN.md \
-                     section 10",
-                ))
-            }
+            StorageAdapter::S3 => Arc::new(crate::s3::S3Storage::new(config)?),
         };
 
         Ok(Self {
@@ -411,10 +406,16 @@ mod tests {
     }
 
     #[test]
-    fn an_unimplemented_backend_is_refused_rather_than_fallen_back_to() {
+    fn a_misconfigured_backend_is_refused_rather_than_fallen_back_to() {
+        // An S3 adapter with no endpoint is a configuration error at boot — not a
+        // silent fall back to the local disk, which would put objects somewhere
+        // the operator is not looking.
         let err = service(StorageAdapter::S3).expect_err("refused");
-        assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
-        assert!(err.message().contains("S3"), "{err}");
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+        assert!(
+            err.message().contains("LAZYPOCK_S3_ENDPOINT"),
+            "the message must name the missing setting: {err}"
+        );
         assert!(service(StorageAdapter::Local).is_ok());
     }
 
