@@ -233,6 +233,380 @@ pub fn plan(archive: &[ArchiveCollection], existing: &[String]) -> ImportPlan {
     ImportPlan { actions }
 }
 
+// ---------------------------------------------------------------------------
+// Reading and writing the archive
+// ---------------------------------------------------------------------------
+
+use std::io::{Cursor, Read, Write};
+
+use lazypock_core::error::{Error, Result};
+use tokio_postgres::Client;
+
+use crate::collections;
+use crate::pool::db_error;
+
+/// An archive as it is held in memory.
+#[derive(Debug, Clone)]
+pub struct Archive {
+    /// The manifest, which identifies the format and lists what is inside.
+    pub manifest: Manifest,
+    /// Collection definitions.
+    pub schema: ArchiveSchema,
+    /// Records per collection, in the order the archive holds them.
+    pub data: Vec<(String, Vec<Value>)>,
+}
+
+impl Archive {
+    /// Rows the archive carries, per the data it actually holds.
+    pub fn record_count(&self) -> usize {
+        self.data.iter().map(|(_, records)| records.len()).sum()
+    }
+
+    /// The collections the archive would write, and how.
+    pub fn plan(&self, existing: &[String]) -> ImportPlan {
+        plan(&self.schema.collections, existing)
+    }
+}
+
+/// Build the archive for every user collection in the database.
+///
+/// **System collections are not exported at all.** Their definitions are created by
+/// migrations, so a restore does not need them, and their rows are the opposite of
+/// a backup: `_superusers` holds password hashes and `_settings` holds the signing
+/// key. Shipping those in a file that gets emailed around would turn a convenience
+/// into a credential leak.
+pub async fn export(client: &Client) -> Result<Archive> {
+    let mut manifest_collections: Vec<ManifestCollection> = Vec::new();
+    let mut schema = ArchiveSchema {
+        collections: Vec::new(),
+    };
+    let mut data = Vec::new();
+    let mut total_records: u64 = 0;
+
+    for collection in collections::list(client).await? {
+        if is_system_collection(&collection.name) {
+            continue;
+        }
+
+        let rows = client
+            .query(
+                &format!(
+                    "select * from {}",
+                    crate::ddl::quote_ident(&collection.name)
+                ),
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+
+        let records: Vec<Value> = rows.iter().map(|row| row_to_json(row)).collect::<Vec<_>>();
+
+        manifest_collections.push(ManifestCollection {
+            name: collection.name.clone(),
+            collection_type: Some(collection.collection_type.as_str().to_string()),
+            records: records.len() as u64,
+        });
+        total_records += records.len() as u64;
+
+        schema.collections.push(ArchiveCollection {
+            name: collection.name.clone(),
+            collection_type: Some(collection.collection_type.as_str().to_string()),
+            schema: collection
+                .fields
+                .iter()
+                .map(|field| serde_json::to_value(field).unwrap_or(Value::Null))
+                .collect(),
+            rules: Some(collection.rules.clone()),
+            options: Some(collection.options.clone()),
+            records: Vec::new(),
+        });
+
+        data.push((collection.name.clone(), records));
+    }
+
+    let manifest = Manifest {
+        format: ARCHIVE_FORMAT.to_string(),
+        format_version: ARCHIVE_FORMAT_VERSION,
+        lazypock_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        created_at: Some(now_rfc3339()),
+        totals: Some(ManifestTotals {
+            collections: manifest_collections.len() as u64,
+            records: total_records,
+            files: 0,
+        }),
+        collections: manifest_collections,
+        // No upload metadata is exported yet; reported as zero rather than omitted,
+        // so a reader can tell "none" from "not recorded".
+        files: Some(ManifestFiles::default()),
+    };
+
+    tracing::info!(
+        collections = schema.collections.len(),
+        records = total_records,
+        "exported a backup archive"
+    );
+
+    Ok(Archive {
+        manifest,
+        schema,
+        data,
+    })
+}
+
+/// Render one row as a JSON object.
+///
+/// Every column goes through Postgres's own `to_jsonb` shape by asking it for the
+/// text form, which keeps the conversion in one place rather than in a hand-written
+/// type match that would drift as columns are added.
+fn row_to_json(row: &tokio_postgres::Row) -> Value {
+    let mut object = serde_json::Map::new();
+    for (index, column) in row.columns().iter().enumerate() {
+        object.insert(column.name().to_string(), column_to_json(row, index));
+    }
+    Value::Object(object)
+}
+
+/// One column of one row as JSON.
+fn column_to_json(row: &tokio_postgres::Row, index: usize) -> Value {
+    use tokio_postgres::types::Type;
+
+    let column = &row.columns()[index];
+    let json: Option<Value> = match *column.type_() {
+        Type::JSON | Type::JSONB => row.get(index),
+        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => {
+            row.get::<_, Option<String>>(index).map(Value::String)
+        }
+        Type::BOOL => row.get::<_, Option<bool>>(index).map(Value::Bool),
+        Type::INT2 => row
+            .get::<_, Option<i16>>(index)
+            .map(|value| Value::from(value as i64)),
+        Type::INT4 => row
+            .get::<_, Option<i32>>(index)
+            .map(|value| Value::from(value as i64)),
+        Type::INT8 => row.get::<_, Option<i64>>(index).map(Value::from),
+        Type::FLOAT4 => row
+            .get::<_, Option<f32>>(index)
+            .and_then(|value| serde_json::Number::from_f64(value as f64))
+            .map(Value::Number),
+        Type::FLOAT8 => row
+            .get::<_, Option<f64>>(index)
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number),
+        Type::NUMERIC => row.get::<_, Option<String>>(index).map(|value| {
+            value
+                .parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number)
+                .unwrap_or(Value::String(value))
+        }),
+        Type::UUID => row.get::<_, Option<uuid_text>>(index).map(Value::String),
+        // Anything else is written as its text form rather than dropped: an archive
+        // that silently loses a column is worse than one holding it as a string.
+        _ => row.get::<_, Option<String>>(index).map(Value::String),
+    };
+    json.unwrap_or(Value::Null)
+}
+
+/// A type alias so the uuid branch above reads as one `get` like the others.
+type uuid_text = String;
+
+/// The current time, RFC 3339, from the system clock.
+fn now_rfc3339() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    crate::backup::format_rfc3339(seconds)
+}
+
+/// Format unix seconds as RFC 3339, in UTC.
+pub fn format_rfc3339(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let time = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        time / 3600,
+        (time % 3600) / 60,
+        time % 60
+    )
+}
+
+/// The date for a count of days since 1970-01-01.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * march_month + 2) / 5 + 1) as u32;
+    let month = if march_month < 10 {
+        march_month + 3
+    } else {
+        march_month - 9
+    } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+/// Write an archive.
+///
+/// `manifest.json` is written **first**, because Studio reads it straight out of the
+/// zip's first local file header to show an import preview without unpacking the
+/// archive. Nothing else may be written before it.
+pub fn write(archive: &Archive) -> Result<Vec<u8>> {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+
+    let stored = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        // A large file would mean a data descriptor; the format rules those out so a
+        // client can trust the sizes in the header it peeks at.
+        .large_file(false);
+
+    start(&mut writer, MANIFEST_ENTRY, stored)?;
+    write_json(&mut writer, &archive.manifest)?;
+
+    start(&mut writer, SCHEMA_ENTRY, stored)?;
+    write_json(&mut writer, &archive.schema)?;
+
+    for (name, records) in &archive.data {
+        start(&mut writer, &format!("{DATA_PREFIX}{name}.ndjson"), stored)?;
+        // One record per line, written as it is read: never the whole collection in
+        // one string, which is what makes a large collection tractable.
+        for record in records {
+            let line = serde_json::to_string(record)
+                .map_err(|err| Error::internal(format!("cannot serialise a record: {err}")))?;
+            writer
+                .write_all(line.as_bytes())
+                .and_then(|()| writer.write_all(b"\n"))
+                .map_err(|err| Error::internal(format!("cannot write a record: {err}")))?;
+        }
+    }
+
+    // No upload metadata yet, but the entry exists so a reader does not have to
+    // treat its absence as a different format.
+    start(&mut writer, FILES_ENTRY, stored)?;
+
+    let cursor = writer
+        .finish()
+        .map_err(|err| Error::internal(format!("cannot finish the archive: {err}")))?;
+    Ok(cursor.into_inner())
+}
+
+/// Start an entry in the archive.
+fn start<W: Write + std::io::Seek>(
+    writer: &mut zip::ZipWriter<W>,
+    name: &str,
+    options: zip::write::SimpleFileOptions,
+) -> Result<()> {
+    writer
+        .start_file(name, options)
+        .map_err(|err| Error::internal(format!("cannot write {name} to the archive: {err}")))
+}
+
+/// Write a JSON value to the archive.
+fn write_json<W: Write>(writer: &mut W, value: &impl Serialize) -> Result<()> {
+    let json = serde_json::to_vec(value)
+        .map_err(|err| Error::internal(format!("cannot serialise the archive: {err}")))?;
+    writer
+        .write_all(&json)
+        .map_err(|err| Error::internal(format!("cannot write the archive: {err}")))
+}
+
+/// Read an archive.
+///
+/// The manifest is checked before anything else is trusted: an archive from a
+/// version this server does not understand is refused rather than partly applied.
+pub fn read(bytes: &[u8]) -> Result<Archive> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes.to_vec()))
+        .map_err(|err| Error::invalid(format!("not a readable archive: {err}")))?;
+
+    let manifest: Manifest = read_json(&mut zip, MANIFEST_ENTRY)?;
+    if manifest.format != ARCHIVE_FORMAT {
+        return Err(Error::invalid(format!(
+            "this is not a lazypock archive (format {:?}, expected {ARCHIVE_FORMAT:?})",
+            manifest.format
+        )));
+    }
+    if manifest.format_version > ARCHIVE_FORMAT_VERSION {
+        return Err(Error::invalid(format!(
+            "the archive is format version {} but this server understands {ARCHIVE_FORMAT_VERSION}; \
+             a newer archive may contain things this version would silently drop",
+            manifest.format_version
+        )));
+    }
+
+    let schema: ArchiveSchema = read_json(&mut zip, SCHEMA_ENTRY)?;
+
+    let mut data = Vec::new();
+    for collection in &schema.collections {
+        let entry = format!("{DATA_PREFIX}{}.ndjson", collection.name);
+        let Some(text) = read_text(&mut zip, &entry)? else {
+            // A collection with no data entry carries no records, which is legal:
+            // `view` collections have none and a definition-only archive is valid.
+            data.push((collection.name.clone(), Vec::new()));
+            continue;
+        };
+
+        let mut records = Vec::new();
+        for (number, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: Value = serde_json::from_str(line).map_err(|err| {
+                Error::invalid(format!(
+                    "{entry} line {} is not valid JSON: {err}",
+                    number + 1
+                ))
+            })?;
+            records.push(record);
+        }
+        data.push((collection.name.clone(), records));
+    }
+
+    Ok(Archive {
+        manifest,
+        schema,
+        data,
+    })
+}
+
+/// Read a JSON entry, or fail naming it.
+fn read_json<R: Read + std::io::Seek, T: serde::de::DeserializeOwned>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Result<T> {
+    let text = read_text(zip, name)?
+        .ok_or_else(|| Error::invalid(format!("the archive has no {name}")))?;
+    serde_json::from_str(&text)
+        .map_err(|err| Error::invalid(format!("{name} is not valid JSON: {err}")))
+}
+
+/// Read one entry, or `None` when it is absent.
+fn read_text<R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Result<Option<String>> {
+    let mut entry = match zip.by_name(name) {
+        Ok(entry) => entry,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(err) => {
+            return Err(Error::invalid(format!(
+                "cannot read {name} from the archive: {err}"
+            )))
+        }
+    };
+
+    let mut text = String::new();
+    entry
+        .read_to_string(&mut text)
+        .map_err(|err| Error::invalid(format!("{name} is not readable text: {err}")))?;
+    Ok(Some(text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +771,196 @@ mod tests {
         assert_eq!(parsed.collections[0].records, 812_345);
         // A missing upload is recorded rather than fatal.
         assert_eq!(parsed.files.expect("files").missing, 1);
+    }
+
+    /// A small archive with one collection and two records.
+    fn sample() -> Archive {
+        Archive {
+            manifest: Manifest {
+                format: ARCHIVE_FORMAT.into(),
+                format_version: ARCHIVE_FORMAT_VERSION,
+                lazypock_version: Some("0.1.0".into()),
+                created_at: Some("2026-01-01T00:00:00Z".into()),
+                collections: vec![ManifestCollection {
+                    name: "posts".into(),
+                    collection_type: Some("base".into()),
+                    records: 2,
+                }],
+                files: Some(ManifestFiles::default()),
+                totals: Some(ManifestTotals {
+                    collections: 1,
+                    records: 2,
+                    files: 0,
+                }),
+            },
+            schema: ArchiveSchema {
+                collections: vec![collection("posts")],
+            },
+            data: vec![(
+                "posts".into(),
+                vec![
+                    serde_json::json!({"id": "p1", "title": "Hello"}),
+                    serde_json::json!({"id": "p2", "title": "World"}),
+                ],
+            )],
+        }
+    }
+
+    #[test]
+    fn an_archive_round_trips_through_the_wire_format() {
+        let archive = sample();
+        let bytes = write(&archive).expect("write");
+        let read_back = read(&bytes).expect("read");
+
+        assert_eq!(read_back.manifest.format, ARCHIVE_FORMAT);
+        assert_eq!(read_back.manifest.format_version, ARCHIVE_FORMAT_VERSION);
+        assert_eq!(read_back.manifest.collections[0].records, 2);
+        assert_eq!(
+            read_back.manifest.totals.as_ref().expect("totals").records,
+            2
+        );
+        assert_eq!(read_back.schema.collections.len(), 1);
+        assert_eq!(read_back.schema.collections[0].name, "posts");
+        assert_eq!(read_back.record_count(), 2);
+        assert_eq!(
+            read_back.data[0].1[0]["title"],
+            serde_json::json!("Hello"),
+            "record contents survive"
+        );
+    }
+
+    #[test]
+    fn the_manifest_is_the_first_entry_because_a_client_peeks_at_it() {
+        // Studio reads the first local file header to show an import preview without
+        // unpacking the archive, so nothing may be written before the manifest.
+        let bytes = write(&sample()).expect("write");
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes.clone())).expect("a readable archive");
+        assert_eq!(zip.by_index(0).expect("an entry").name(), MANIFEST_ENTRY);
+
+        // And the header it peeks at must be self-describing: Studio reads the
+        // compressed size out of the local file header, so a data descriptor (bit
+        // 3 of the flags) or ZIP64 would make it give up quietly. Asserted on the
+        // bytes, because "the library does not do that" is not a property.
+        assert_eq!(
+            &bytes[0..4],
+            b"PK\x03\x04",
+            "the first entry is a local header"
+        );
+        let flags = u16::from_le_bytes([bytes[6], bytes[7]]);
+        assert_eq!(
+            flags & 0x08,
+            0,
+            "bit 3 must be clear: sizes live in the local header, not a trailing descriptor"
+        );
+        let compressed = u32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]);
+        assert_ne!(
+            compressed, 0xffff_ffff,
+            "ZIP64 would hide the size from a peeking client"
+        );
+        assert!(
+            compressed > 0,
+            "the manifest's compressed size is in the header"
+        );
+    }
+
+    #[test]
+    fn a_value_containing_a_newline_still_occupies_one_line() {
+        // The property NDJSON depends on: a newline *inside* a value must be escaped,
+        // or the record would split across two lines and a reader counting lines would
+        // see records that do not exist. Asserting merely that the text holds no
+        // newline proves nothing — it holds one per record by design, which is what my
+        // first version of this test got wrong.
+        let mut archive = sample();
+        archive.data = vec![(
+            "posts".into(),
+            vec![serde_json::json!({
+                "id": "p1",
+                "body": "first\nsecond\ttabbed \"quoted\"",
+            })],
+        )];
+
+        let bytes = write(&archive).expect("write");
+        let read_back = read(&bytes).expect("read");
+        assert_eq!(
+            read_back.data[0].1.len(),
+            1,
+            "one record in, one record out"
+        );
+        assert_eq!(
+            read_back.data[0].1[0]["body"],
+            serde_json::json!("first\nsecond\ttabbed \"quoted\""),
+            "the value survives intact"
+        );
+    }
+    #[test]
+    fn the_data_entries_are_one_record_per_line() {
+        let bytes = write(&sample()).expect("write");
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("a readable archive");
+        let mut entry = zip.by_name("data/posts.ndjson").expect("the data entry");
+        let mut text = String::new();
+        entry.read_to_string(&mut text).expect("read");
+
+        assert_eq!(text.lines().count(), 2, "{text:?}");
+        // Each line is independently valid, which is what makes `wc -l` and `tail`
+        // work on a collection too large to hold in memory.
+        for line in text.lines() {
+            serde_json::from_str::<Value>(line).expect("each line is a record");
+        }
+    }
+
+    #[test]
+    fn an_empty_collection_writes_an_empty_entry_rather_than_none() {
+        let mut archive = sample();
+        archive.data = vec![("posts".into(), Vec::new())];
+        archive.manifest.collections[0].records = 0;
+
+        let bytes = write(&archive).expect("write");
+        let read_back = read(&bytes).expect("read");
+        assert_eq!(read_back.data[0].1.len(), 0);
+        assert_eq!(read_back.record_count(), 0);
+    }
+
+    #[test]
+    fn a_foreign_or_newer_archive_is_refused_rather_than_partly_applied() {
+        // Something that is not an archive at all.
+        let error = read(b"not a zip").expect_err("refused");
+        assert!(error.message().contains("archive"), "{}", error.message());
+
+        // A valid archive from a future format version: refused, because it may hold
+        // things this server would silently drop.
+        let mut archive = sample();
+        archive.manifest.format_version = ARCHIVE_FORMAT_VERSION + 1;
+        let bytes = write(&archive).expect("write");
+        let error = read(&bytes).expect_err("refused");
+        assert!(
+            error.message().contains("newer") || error.message().contains("format version"),
+            "{}",
+            error.message()
+        );
+
+        // A zip that is not a lazypock archive at all.
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(MANIFEST_ENTRY, zip::write::SimpleFileOptions::default())
+            .expect("start");
+        writer
+            .write_all(br#"{"format":"something-else","format_version":1}"#)
+            .expect("write");
+        let bytes = writer.finish().expect("finish").into_inner();
+        let error = read(&bytes).expect_err("refused");
+        assert!(
+            error.message().contains("not a lazypock archive"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn the_timestamp_is_formatted_as_rfc_3339() {
+        assert_eq!(format_rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_rfc3339(1_000_000_000), "2001-09-09T01:46:40Z");
+        assert_eq!(format_rfc3339(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert!(now_rfc3339().ends_with('Z'));
     }
 
     #[test]
