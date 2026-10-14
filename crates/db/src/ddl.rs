@@ -237,6 +237,16 @@ pub fn create_auth_email_index_statement(table: &str) -> String {
     )
 }
 
+/// The trigger that turns a collection's changes into realtime events.
+pub fn create_realtime_trigger_statement(table: &str) -> Result<String> {
+    validate_identifier("collection name", table)?;
+    Ok(format!(
+        "create trigger lazypock_change after insert or update or delete on {} \
+         for each row execute function lazypock_change_event()",
+        quote_ident(table)
+    ))
+}
+
 /// `drop index if exists`.
 pub fn drop_index_statement(table: &str, column: &str) -> String {
     format!(

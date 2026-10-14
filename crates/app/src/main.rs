@@ -156,7 +156,21 @@ async fn serve(config: Config) -> Result<()> {
         }
     }
 
-    let app = router(AppState::new(config, db, schema, auth));
+    // Realtime: every node listens on its own connection and fans out to its own
+    // clients. A node that cannot listen still serves the API, but says so loudly.
+    let hub = lazypock_realtime::Hub::new(db.clone(), schema.clone());
+    match lazypock_realtime::PgBus::connect(&config.database_url).await {
+        Ok(bus) => {
+            tokio::spawn(hub.clone().run(bus));
+            tracing::info!("realtime listening");
+        }
+        Err(err) => tracing::error!(
+            error = %err,
+            "realtime is unavailable: the LISTEN connection could not be established"
+        ),
+    }
+
+    let app = router(AppState::new(config, db, schema, auth, hub));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

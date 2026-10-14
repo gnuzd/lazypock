@@ -6,7 +6,7 @@ use crate::pool::db_error;
 use crate::runner::QueryRunner;
 
 /// Which database role a request runs as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     /// Stay on the connecting role, which owns the tables and so is not subject
     /// to their policies. Used for internal work and for superusers — which is
@@ -31,7 +31,7 @@ impl Role {
 }
 
 /// Everything a request tells the database about itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RequestContext {
     /// The role to switch to.
     pub role: Role,

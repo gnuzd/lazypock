@@ -390,6 +390,19 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
     let rule_context = FilterContext::for_collection(&collection, &all)?;
     rls::policies::apply(&transaction, &collection, &rule_context).await?;
 
+    // The change-event trigger, for the same reason policies are applied here: a
+    // collection that is not wired up would silently never publish anything.
+    if !existing_table {
+        transaction
+            .batch_execute(&ddl::create_realtime_trigger_statement(&collection.name)?)
+            .await
+            .map_err(|err| {
+                Error::invalid(format!(
+                    "failed to add the realtime trigger to {name:?}: {err}"
+                ))
+            })?;
+    }
+
     notify_schema_changed(&transaction).await?;
     transaction.commit().await.map_err(db_error)?;
 

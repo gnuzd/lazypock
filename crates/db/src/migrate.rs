@@ -61,6 +61,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "rls",
         sql: include_str!("../../../migrations/0003_rls.sql"),
     },
+    Migration {
+        version: 4,
+        name: "realtime",
+        sql: include_str!("../../../migrations/0004_realtime.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

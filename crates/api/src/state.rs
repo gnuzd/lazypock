@@ -6,6 +6,7 @@ use lazypock_auth::AuthService;
 use lazypock_core::config::Config;
 use lazypock_db::pool::Db;
 use lazypock_db::schema::SchemaCache;
+use lazypock_realtime::Hub;
 
 /// State handed to every handler.
 ///
@@ -21,16 +22,25 @@ pub struct AppState {
     pub schema: Arc<SchemaCache>,
     /// Signing keys and the login/refresh flows.
     pub auth: Arc<AuthService>,
+    /// Live subscriptions on this node.
+    pub hub: Arc<Hub>,
 }
 
 impl AppState {
     /// Build the state.
-    pub fn new(config: Config, db: Db, schema: Arc<SchemaCache>, auth: Arc<AuthService>) -> Self {
+    pub fn new(
+        config: Config,
+        db: Db,
+        schema: Arc<SchemaCache>,
+        auth: Arc<AuthService>,
+        hub: Arc<Hub>,
+    ) -> Self {
         Self {
             config: Arc::new(config),
             db,
             schema,
             auth,
+            hub,
         }
     }
 }

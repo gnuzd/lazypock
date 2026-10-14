@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use crate::auth;
 use crate::batch;
 use crate::error::ApiError;
+use crate::realtime;
 use crate::records;
 use crate::state::AppState;
 
@@ -21,6 +22,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/batch", post(batch::batch))
         // The public half of the token signing key, for other services.
         .route("/api/jwks", get(auth::jwks))
+        .route("/api/realtime", get(realtime::realtime))
         .route("/.well-known/jwks.json", get(auth::jwks))
         // `_superusers` is handled inside the same handler, so there is no route
         // ordering to get wrong.
