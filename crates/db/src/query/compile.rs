@@ -100,16 +100,21 @@ impl FilterContext {
                 continue;
             }
 
-            let target_id = field
-                .options
-                .get("collectionId")
-                .and_then(|value| value.as_str())
-                .ok_or_else(|| {
-                    Error::invalid(format!(
-                        "relation field {:?} has no collectionId",
-                        field.name
-                    ))
-                })?;
+            // Through the shared accessor, not off `options` directly. This was the
+            // **third** place reading the target, and the only one the request
+            // reached: the resolver and the DDL both looked it up one way while this
+            // looked for `collectionId` alone, so a relation naming its target by
+            // *name* — which is what Studio sends — was accepted by validation, given
+            // a foreign key, and then refused here.
+            //
+            // A single accessor would have made that impossible, which is why there is
+            // now one, and why every reader goes through it.
+            let target_id = types::relation_target(&field.options).ok_or_else(|| {
+                Error::invalid(format!(
+                    "relation field {:?} has no collectionId",
+                    field.name
+                ))
+            })?;
             let target = all.iter().find(|candidate| candidate.id == target_id);
             let Some(target) = target else {
                 // A dangling relation means the schema is inconsistent; the

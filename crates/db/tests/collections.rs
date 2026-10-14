@@ -583,3 +583,79 @@ async fn every_mutation_notifies_the_schema_changed_channel() {
 
     test.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_relation_may_name_its_target_instead_of_identifying_it() {
+    // Studio sends `"options": { "collection": "users" }` — the target's *name* —
+    // where PocketBase stores `collectionId`. Three places read that option: the
+    // validator, the foreign-key builder and the filter compiler. Two were taught to
+    // accept a name; the third was not, and it was the one the request actually
+    // reached, so a relation field was accepted by validation, given a foreign key,
+    // and then refused with "has no collectionId". Hence one accessor, used by all
+    // three, and this test.
+    use lazypock_db::collections::{self, CreateCollection, CreateField};
+    use lazypock_db::types::{CollectionType, FieldType};
+    use serde_json::json;
+
+    let Some(db) = support::migrated_test_db("relation_target_by_name").await else {
+        return;
+    };
+    let mut client = db.client().await;
+
+    for name in ["authors", "posts"] {
+        let fields = if name == "posts" {
+            vec![CreateField {
+                name: "author".into(),
+                field_type: FieldType::Relation,
+                required: false,
+                unique: false,
+                // The name, not an id — Studio's shape.
+                options: json!({ "collection": "authors", "maxSelect": 1 }),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        collections::create(
+            &mut client,
+            CreateCollection {
+                name: name.into(),
+                collection_type: CollectionType::Base,
+                fields,
+                rules: json!({}),
+                options: json!({}),
+                adopt_existing_table: false,
+            },
+        )
+        .await
+        .unwrap_or_else(|err| panic!("create {name}: {err}"));
+    }
+
+    // The foreign key exists, which is the DDL having resolved the name.
+    let constraint: i64 = client
+        .query_one(
+            "select count(*) from information_schema.table_constraints \
+              where table_name = 'posts' and constraint_type = 'FOREIGN KEY' \
+                and table_schema = current_schema()",
+            &[],
+        )
+        .await
+        .expect("constraints")
+        .get(0);
+    assert_eq!(
+        constraint, 1,
+        "a relation naming its target must still get a foreign key"
+    );
+
+    // And the filter compiler resolves it too — the reader that was missing.
+    let all = collections::list(&client).await.expect("list");
+    let posts = all
+        .iter()
+        .find(|collection| collection.name == "posts")
+        .cloned()
+        .expect("posts");
+    lazypock_db::query::compile::FilterContext::for_collection(&posts, &all)
+        .expect("the filter compiler must resolve the relation by name");
+
+    db.cleanup().await;
+}

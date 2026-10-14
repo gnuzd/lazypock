@@ -29,11 +29,8 @@ pub const AUTH_SYSTEM_COLUMNS: &[&str] = &["email", "password_hash", "verified",
 /// The collection a relation field points at, under either name.
 ///
 /// PocketBase stores `collectionId`; the implementation this replaced — and the
-/// Studio built for it — send `collection`, carrying a collection *name*:
-///
-///     "options": { "collection": "users" }
-///
-/// Both are accepted, and the value may be either an id or a name, which is how the
+/// Studio built for it — send `collection`, carrying a collection *name*
+/// (`{"collection": "users"}`). Both are accepted, and the value may be either an id or a name, which is how the
 /// DDL already resolved it. Read through here rather than off `options` directly, so
 /// validation and the foreign-key builder cannot end up looking in different places —
 /// which is precisely how a relation field came to be refused for a missing option it
