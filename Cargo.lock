@@ -1726,6 +1726,7 @@ dependencies = [
 name = "lazypock-api"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "axum",
  "base64 0.23.1",
  "bytes",

@@ -7,6 +7,7 @@ pub mod auth;
 pub mod backup;
 pub mod batch;
 pub mod collections;
+pub mod cors;
 pub mod error;
 pub mod files;
 pub mod presets;
@@ -17,4 +18,4 @@ pub mod settings;
 pub mod state;
 pub mod superusers;
 
-pub use state::AppState;
+pub use state::{AppState, Services};

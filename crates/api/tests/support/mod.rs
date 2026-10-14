@@ -188,6 +188,15 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
         .expect("files"),
     );
 
+    // Loaded from settings like the real node, so a test can set `cors_origins` and
+    // see the enforcement.
+    // Loaded from settings, as the real node does, so a test can set `cors_origins`
+    // and see the enforcement.
+    let cors = Arc::new(lazypock_api::cors::CorsPolicy::new());
+    cors.load(&db.client().await.expect("cors client"))
+        .await
+        .expect("load the CORS allowlist");
+
     let hooks_directory = std::env::temp_dir().join(format!("lazypock-api-hooks-{schema}"));
     std::fs::create_dir_all(&hooks_directory).expect("hooks directory");
     let hooks = Arc::new(lazypock_hooks::HookService::start(
@@ -200,10 +209,13 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
             config,
             db.clone(),
             cache,
-            auth,
-            hub,
-            files,
-            hooks.clone(),
+            lazypock_api::Services {
+                auth,
+                hub,
+                files,
+                hooks: hooks.clone(),
+                cors: cors.clone(),
+            },
         ),
         hooks_directory: hooks_directory.clone(),
         db,

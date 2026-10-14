@@ -12,6 +12,7 @@ use crate::auth;
 use crate::backup;
 use crate::batch;
 use crate::collections as admin;
+use crate::cors;
 use crate::error::ApiError;
 use crate::files;
 use crate::presets;
@@ -42,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/superusers/check", get(superusers::check))
         // Settings. Superuser-only: they hold SMTP credentials and storage keys.
         .route("/api/settings", get(settings::get).patch(settings::update))
+        .route("/api/settings/refresh-cors", post(settings::refresh_cors))
         .route("/api/superusers/setup", post(superusers::setup))
         .route("/api/realtime", get(realtime::realtime))
         // The body limit bounds what is buffered before validation can reject it.
@@ -113,6 +115,19 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::authenticate,
+        ))
+        // Outermost, and it has to be: a preflight carries no credentials, so it must
+        // be answered before authentication runs, and a 401 still needs its CORS
+        // headers or the browser reports an opaque network error instead of the
+        // reason.
+        //
+        // It also has to come *after* the routes above. `Router::layer` wraps only
+        // what is already registered, so a layer added at the top wraps nothing —
+        // which is how the first version of this shipped with CORS implemented and
+        // never applied.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            cors::apply,
         ))
         .with_state(state)
 }

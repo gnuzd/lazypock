@@ -8,6 +8,8 @@ use lazypock_db::pool::Db;
 use lazypock_db::schema::SchemaCache;
 use lazypock_files::Files;
 use lazypock_hooks::HookService;
+
+use crate::cors::CorsPolicy;
 use lazypock_realtime::Hub;
 
 /// State handed to every handler.
@@ -30,19 +32,21 @@ pub struct AppState {
     pub files: Arc<Files>,
     /// The hook worker, or a handle to one that has nothing loaded.
     pub hooks: Arc<HookService>,
+    /// The CORS allowlist, reloadable while the node runs.
+    pub cors: Arc<CorsPolicy>,
 }
 
 impl AppState {
     /// Build the state.
-    pub fn new(
-        config: Config,
-        db: Db,
-        schema: Arc<SchemaCache>,
-        auth: Arc<AuthService>,
-        hub: Arc<Hub>,
-        files: Arc<Files>,
-        hooks: Arc<HookService>,
-    ) -> Self {
+    pub fn new(config: Config, db: Db, schema: Arc<SchemaCache>, services: Services) -> Self {
+        let Services {
+            auth,
+            hub,
+            files,
+            hooks,
+            cors,
+        } = services;
+
         Self {
             config: Arc::new(config),
             db,
@@ -51,8 +55,28 @@ impl AppState {
             hub,
             files,
             hooks,
+            cors,
         }
     }
+}
+
+/// The services a node wires together.
+///
+/// Grouped so the state constructor takes four arguments rather than eight: a
+/// positional list that long is one where two Arc-wrapped services of similar shape
+/// can be swapped without the compiler noticing.
+#[derive(Clone)]
+pub struct Services {
+    /// Authentication: passwords, tokens, sessions.
+    pub auth: Arc<AuthService>,
+    /// Realtime fan-out on this node.
+    pub hub: Arc<Hub>,
+    /// File storage.
+    pub files: Arc<Files>,
+    /// The hook worker.
+    pub hooks: Arc<HookService>,
+    /// The CORS allowlist.
+    pub cors: Arc<CorsPolicy>,
 }
 
 impl std::fmt::Debug for AppState {

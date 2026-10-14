@@ -125,6 +125,23 @@ fn is_internal(key: &str) -> bool {
     key.starts_with(INTERNAL_PREFIX)
 }
 
+/// `POST /api/settings/refresh-cors`
+///
+/// Reload the CORS allowlist from settings. Studio calls this straight after saving
+/// `cors_origins` so the change takes effect immediately, and it exists because the
+/// enforcement does — an endpoint that accepted this call and changed nothing would
+/// report success while leaving the old origins in force.
+pub async fn refresh_cors(
+    State(state): State<AppState>,
+    _: Superuser,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    state.cors.load(&client).await.map_err(ApiError::new)?;
+    let origins = state.cors.origins();
+    tracing::info!(?origins, "CORS allowlist refreshed");
+    Ok(ResponseJson(json!({ "cors_origins": origins })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

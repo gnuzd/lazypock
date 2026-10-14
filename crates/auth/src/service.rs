@@ -75,11 +75,28 @@ impl AuthService {
         }
     }
 
-    /// Load the signing key, generating one the first time.
+    /// Load the signing key.
     ///
-    /// The key lives in `_settings` so every node signs with the same key; a
-    /// node that started with its own would reject the others' tokens.
+    /// `LAZYPOCK_SIGNING_KEY` wins when it is set, and is **never written to the
+    /// database**. That is the point of the override: a signing key in `_settings`
+    /// is a signing key in every dump, replica and SQL console, and it mints every
+    /// token the installation issues. Supplying it from the environment keeps it out
+    /// of all of them.
+    ///
+    /// Without the override the key is read from `_settings`, and generated there on
+    /// first run — convenient for a single node, and the reason it is still the
+    /// fallback rather than being removed: a restart must not silently invalidate
+    /// every session when no key was configured.
     pub async fn load(&self) -> Result<()> {
+        if let Some(keys) = signing_key_from_env()? {
+            tracing::info!(
+                kid = keys.kid(),
+                "using the signing key from LAZYPOCK_SIGNING_KEY; the database copy is not used"
+            );
+            self.keys.store(Some(Arc::new(keys)));
+            return Ok(());
+        }
+
         let client = self.db.client().await?;
         let keys = match read_key(&client).await? {
             Some(der) => SigningKeys::from_der(&der)?,
@@ -345,6 +362,32 @@ fn dummy_hash() -> &'static str {
     DUMMY.get_or_init(|| {
         password::hash("lazypock-placeholder-password").expect("the placeholder hash must be valid")
     })
+}
+
+/// The signing key from `LAZYPOCK_SIGNING_KEY`, base64 of the raw key.
+///
+/// The same encoding the database copy uses, so a key can be moved between the two
+/// without a conversion step, and an operator can copy one out of a running
+/// installation with a single query.
+fn signing_key_from_env() -> Result<Option<SigningKeys>> {
+    let Ok(raw) = std::env::var("LAZYPOCK_SIGNING_KEY") else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        // A set-but-empty variable is almost always a deploy templating mistake, and
+        // silently falling back to the database would hide it until the tokens
+        // quietly changed signer.
+        return Err(Error::config(
+            "LAZYPOCK_SIGNING_KEY is set but empty; unset it to use the database copy, \
+             or give it a base64 key",
+        ));
+    }
+
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(raw)
+        .map_err(|_| Error::config("LAZYPOCK_SIGNING_KEY is not valid base64"))?;
+    Ok(Some(SigningKeys::from_der(&der)?))
 }
 
 async fn read_key(runner: &dyn QueryRunner) -> Result<Option<Vec<u8>>> {

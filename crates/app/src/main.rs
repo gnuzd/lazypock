@@ -259,7 +259,28 @@ async fn serve(config: Config) -> Result<()> {
         lazypock_hooks::HookLimits::default(),
     ));
 
-    let app = router(AppState::new(config, db, schema, auth, hub, files, hooks));
+    // CORS is enforced from the `cors_origins` setting, so it is a runtime value
+    // rather than a startup one; `POST /api/settings/refresh-cors` reloads it.
+    let cors = Arc::new(lazypock_api::cors::CorsPolicy::new());
+    {
+        let client = db.client().await?;
+        cors.load(&client)
+            .await
+            .map_err(|err| Error::config(format!("cannot load the CORS allowlist: {err}")))?;
+    }
+
+    let app = router(AppState::new(
+        config,
+        db,
+        schema,
+        lazypock_api::Services {
+            auth,
+            hub,
+            files,
+            hooks,
+            cors,
+        },
+    ));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
