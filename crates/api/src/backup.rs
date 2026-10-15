@@ -8,7 +8,7 @@
 //! the one the Studio import page already handles: `data.requires_confirmation`
 //! plus the preflight, so a client can show what would happen and ask.
 
-use axum::extract::{DefaultBodyLimit, Extension, Multipart, State};
+use axum::extract::{DefaultBodyLimit, Extension, FromRequest, Multipart, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -123,17 +123,149 @@ pub async fn preflight(
     })))
 }
 
+/// The JSON body `POST /api/import` accepts, which is what a client restores a
+/// downloaded JSON backup with.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonImport {
+    /// The `{collections: [...]}` envelope, or a bare array.
+    #[serde(default)]
+    pub collections: Option<Value>,
+    /// `batch`, `per_collection`, `continue`, or `false`.
+    #[serde(default)]
+    pub atomic: Option<Value>,
+    /// Whether a gated import is confirmed.
+    #[serde(default)]
+    pub confirm: Option<bool>,
+    /// Accepted and ignored: the server never deletes on import.
+    #[serde(default)]
+    pub delete_missing: Option<bool>,
+    /// Accepted and ignored: this confirms a rollback, not an import.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
 /// `POST /api/import`
 ///
-/// Multipart: `file`, `atomic`, and `confirm`. Returns the report, or the gate.
+/// Two shapes: a multipart archive upload, or the single-document JSON a client
+/// downloaded from `GET /api/export`. Both accept `deleteMissing` and `password` so
+/// a Studio request is not rejected, but the server never deletes on import and the
+/// password is not consumed here — an ignored option is reported back rather than
+/// silently dropped.
 pub async fn import(
     State(state): State<AppState>,
     _: Superuser,
-    mut multipart: Multipart,
+    request: Request,
 ) -> Result<Response, ApiError> {
+    let content_type = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+
+    let (archive, atomic, confirm, ignored) = if content_type.starts_with("application/json") {
+        let bytes = axum::body::to_bytes(request.into_body(), MAX_ARCHIVE_BYTES)
+            .await
+            .map_err(|err| ApiError::new(Error::invalid(format!("cannot read the body: {err}"))))?;
+        let body: JsonImport = serde_json::from_slice(&bytes).map_err(|err| {
+            ApiError::new(Error::invalid(format!("invalid import payload: {err}")))
+        })?;
+
+        let collections = body
+            .collections
+            .ok_or_else(|| ApiError::new(Error::invalid("an import needs `collections`")))?;
+        let archive = backup::archive_from_payload(&collections).map_err(ApiError::new)?;
+        let atomic = match body.atomic {
+            None | Some(Value::Bool(false)) => String::new(),
+            Some(Value::String(value)) => value,
+            Some(Value::Bool(true)) => "batch".to_string(),
+            Some(other) => {
+                return Err(ApiError::new(Error::invalid(format!(
+                    "`atomic` must be a string or false, got {other}"
+                ))))
+            }
+        };
+        (
+            archive,
+            atomic,
+            body.confirm.unwrap_or(false),
+            body.delete_missing
+                .unwrap_or(false)
+                .then(|| "deleteMissing".to_string()),
+        )
+    } else {
+        let multipart = Multipart::from_request(request, &state)
+            .await
+            .map_err(|err| {
+                ApiError::new(Error::invalid(format!("cannot read the upload: {err}")))
+            })?;
+        parse_multipart(multipart).await?
+    };
+
+    let atomic = if atomic.trim().is_empty() {
+        backup::AtomicMode::Batch
+    } else {
+        backup::AtomicMode::parse(atomic.trim()).map_err(ApiError::new)?
+    };
+
+    let options = ImportOptions {
+        atomic,
+        confirm,
+        confirm_threshold: confirm_threshold()?,
+    };
+
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+
+    // The undo checkpoint, taken before anything is written. A snapshot that cannot
+    // be captured fails the import rather than letting it proceed with no way back.
+    capture_snapshot(&client).await?;
+
+    match backup::import(&mut client, &archive, &options)
+        .await
+        .map_err(ApiError::new)?
+    {
+        ImportOutcome::Applied(report) => {
+            let mut body = serde_json::to_value(&report).map_err(|err| {
+                ApiError::new(Error::internal(format!(
+                    "cannot serialize the import report: {err}"
+                )))
+            })?;
+            if let Some(option) = &ignored {
+                body["ignoredOptions"] = json!([option]);
+            }
+            Ok((StatusCode::OK, Json(body)).into_response())
+        }
+        ImportOutcome::NeedsConfirmation(preflight) => {
+            // Not an error: the server is asking a question. Shaped the way the
+            // import page already reads it.
+            Ok((
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "status": 409,
+                    "message": format!(
+                        "this import holds {} records; confirm it to proceed",
+                        preflight.total_records
+                    ),
+                    "data": {
+                        "requires_confirmation": true,
+                        "preflight": *preflight,
+                    },
+                })),
+            )
+                .into_response())
+        }
+    }
+}
+
+/// Read the multipart archive upload, returning the archive and its options.
+async fn parse_multipart(
+    mut multipart: Multipart,
+) -> Result<(backup::Archive, String, bool, Option<String>), ApiError> {
     let mut file: Option<bytes::Bytes> = None;
     let mut atomic = String::new();
     let mut confirm = false;
+    let mut ignored: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -158,63 +290,33 @@ pub async fn import(
                 })?;
                 confirm = matches!(value.trim(), "true" | "1" | "yes" | "on");
             }
-            // An unknown part is refused rather than ignored: a client sending
-            // `deleteMissing` should be told the server has no such option, not have
-            // it silently dropped while believing its intent was honoured.
+            // Accepted and ignored rather than rejected: Studio sends both, and the
+            // server never deletes on import (the password confirms a rollback, not an
+            // import). What was ignored is reported back, so it is not silent.
+            "deleteMissing" => {
+                let value = field.text().await.map_err(|err| {
+                    ApiError::new(Error::invalid(format!(
+                        "cannot read `deleteMissing`: {err}"
+                    )))
+                })?;
+                if matches!(value.trim(), "true" | "1" | "yes" | "on") {
+                    ignored = Some("deleteMissing".to_string());
+                }
+            }
+            "password" => {
+                let _ = field.text().await;
+            }
             other => {
                 return Err(ApiError::new(Error::invalid(format!(
-                    "unknown import option {other:?}; the server deletes nothing on import, \
-                     so there is no option for it"
+                    "unknown import option {other:?}"
                 ))))
             }
         }
     }
 
     let file = file.ok_or_else(|| ApiError::new(Error::invalid("a `file` part is required")))?;
-    let atomic = if atomic.trim().is_empty() {
-        backup::AtomicMode::Batch
-    } else {
-        backup::AtomicMode::parse(atomic.trim()).map_err(ApiError::new)?
-    };
-
     let archive = backup::read(&file).map_err(ApiError::new)?;
-    let options = ImportOptions {
-        atomic,
-        confirm,
-        confirm_threshold: confirm_threshold()?,
-    };
-
-    let mut client = state.db.client().await.map_err(ApiError::new)?;
-
-    // The undo checkpoint, taken before anything is written. A snapshot that cannot
-    // be captured fails the import rather than letting it proceed with no way back.
-    capture_snapshot(&client).await?;
-
-    match backup::import(&mut client, &archive, &options)
-        .await
-        .map_err(ApiError::new)?
-    {
-        ImportOutcome::Applied(report) => Ok((StatusCode::OK, Json(json!(report))).into_response()),
-        ImportOutcome::NeedsConfirmation(preflight) => {
-            // Not an error: the server is asking a question. Shaped the way the
-            // import page already reads it.
-            Ok((
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "status": 409,
-                    "message": format!(
-                        "this import holds {} records; confirm it to proceed",
-                        preflight.total_records
-                    ),
-                    "data": {
-                        "requires_confirmation": true,
-                        "preflight": *preflight,
-                    },
-                })),
-            )
-                .into_response())
-        }
-    }
+    Ok((archive, atomic, confirm, ignored))
 }
 
 /// `GET /api/import/status`

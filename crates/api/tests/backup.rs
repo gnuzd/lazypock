@@ -227,24 +227,98 @@ async fn a_database_can_be_exported_and_imported_back_over_http() {
 }
 
 #[tokio::test]
-async fn the_import_endpoint_refuses_an_option_it_does_not_have() {
-    let Some(app) = test_app("backup_http_unknown_option").await else {
+async fn the_import_endpoint_accepts_the_studio_options_and_reports_what_it_ignored() {
+    let Some(app) = test_app("backup_http_options").await else {
         return;
     };
     seed(&app).await;
     let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
     let archive = export(&app, &token).await;
 
-    // A client sending `deleteMissing` must be told the server has no such option,
-    // rather than have it dropped while believing its intent was honoured.
-    let reply = import(&app, &token, &archive, &[("deleteMissing", "true")]).await;
+    // Studio sends `deleteMissing` and `password` with every archive upload. The
+    // server never deletes on import and the password confirms a rollback, so both
+    // are accepted, and `deleteMissing` is reported back as ignored rather than
+    // silently dropped or rejected.
+    let reply = import(
+        &app,
+        &token,
+        &archive,
+        &[("deleteMissing", "true"), ("password", "correct-horse")],
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("a report");
+    assert_eq!(body["imported"][0]["name"], json!("posts"));
+    assert_eq!(body["ignoredOptions"], json!(["deleteMissing"]));
+
+    // A genuinely unknown option is still refused.
+    let reply = import(&app, &token, &archive, &[("nonsense", "1")]).await;
     assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
     let message = reply.body.expect("an error")["message"]
         .as_str()
         .expect("a message")
         .to_string();
-    assert!(message.contains("deleteMissing"), "{message}");
-    assert!(message.contains("deletes nothing"), "{message}");
+    assert!(message.contains("nonsense"), "{message}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_json_backup_can_be_imported_over_the_same_endpoint() {
+    let Some(app) = test_app("backup_http_json").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // The single-document JSON `GET /api/export` produces, posted back as JSON — the
+    // path Studio's JSON restore uses.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/export",
+        None,
+        &token,
+    )
+    .await;
+    let payload = reply.body.expect("an export");
+    sql(&app, "delete from posts").await;
+
+    let body = json!({
+        "collections": payload["collections"],
+        "deleteMissing": true,
+        "atomic": false,
+        "password": "correct-horse",
+    });
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/import")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body).expect("body")))
+        .expect("request");
+    let response = router(&app).await.oneshot(request).await.expect("response");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+        .await
+        .expect("body");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(report["ignoredOptions"], json!(["deleteMissing"]));
+
+    let count: i64 = app
+        .client()
+        .await
+        .query_one("select count(*) from posts", &[])
+        .await
+        .expect("count")
+        .get(0);
+    assert_eq!(count, 2, "the JSON records are back");
 
     app.cleanup().await;
 }
