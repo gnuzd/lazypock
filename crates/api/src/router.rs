@@ -75,6 +75,27 @@ pub fn router(state: AppState) -> Router {
             get(files::serve_thumbnail),
         )
         .route("/api/files/sweep", post(files::sweep))
+        // Direct upload: reserve an object, PUT it straight to the bucket, then ask the
+        // server to verify it. A backend that cannot presign answers 501.
+        .route("/api/files/presign", post(files::presign))
+        .route("/api/files/{id}/complete", post(files::complete))
+        // The id-addressed pair: what a client holding a file field's value (or the id
+        // an upload returned) uses. A key is three segments, so this does not overlap
+        // the routes above, and the query carries the variant (`?preset=`, `?thumb=`).
+        .route(
+            "/api/files/{id}",
+            get(files::serve_by_id).delete(files::delete_by_id),
+        )
+        // The path-shaped variants of the same request, as the SDK's `thumbs`/
+        // `variants` maps document them.
+        .route(
+            "/api/files/{id}/thumbs/{size}",
+            get(files::serve_thumbnail_by_id),
+        )
+        .route(
+            "/api/files/{id}/scale/{size}",
+            get(files::serve_scale_by_id),
+        )
         // Request logs. Superuser-only: they carry IPs, paths and user agents.
         .route("/api/logs", get(logs::list).delete(logs::delete))
         .route("/api/logs/stats", get(logs::stats))

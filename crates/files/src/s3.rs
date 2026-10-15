@@ -108,14 +108,13 @@ pub fn sign(mut request: SignableRequest<'_>) -> SignedRequest {
     );
 
     let scope = format!("{date}/{}/{}/aws4_request", request.region, request.service);
-    let string_to_sign = format!(
-        "{ALGORITHM}\n{}\n{scope}\n{}",
+    let signature = signature_of(
+        &canonical_request,
         request.timestamp,
-        hex(&Sha256::digest(canonical_request.as_bytes())),
+        request.region,
+        request.service,
+        request.secret_key,
     );
-
-    let signing_key = signing_key(request.secret_key, date, request.region, request.service);
-    let signature = hex(&hmac(&signing_key, string_to_sign.as_bytes()));
 
     let authorization = format!(
         "{ALGORITHM} Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}",
@@ -129,6 +128,27 @@ pub fn sign(mut request: SignableRequest<'_>) -> SignedRequest {
         headers: request.headers,
         authorization,
     }
+}
+
+/// The `X-Amz-Signature` for a canonical request.
+///
+/// Shared by header signing and query-string signing, so there is one implementation of
+/// the signing maths rather than two that can disagree.
+fn signature_of(
+    canonical_request: &str,
+    timestamp: &str,
+    region: &str,
+    service: &str,
+    secret_key: &str,
+) -> String {
+    let date = &timestamp[..8];
+    let scope = format!("{date}/{region}/{service}/aws4_request");
+    let string_to_sign = format!(
+        "{ALGORITHM}\n{timestamp}\n{scope}\n{}",
+        hex(&Sha256::digest(canonical_request.as_bytes())),
+    );
+    let signing_key = signing_key(secret_key, date, region, service);
+    hex(&hmac(&signing_key, string_to_sign.as_bytes()))
 }
 
 /// The derived signing key for a day, region and service.
@@ -500,6 +520,58 @@ impl S3Storage {
         })
     }
 
+    /// A URL a browser can `PUT` an object to, without holding the secret.
+    ///
+    /// Query-string signing (`X-Amz-Signature` in the URL) rather than an
+    /// `Authorization` header, because the party sending the bytes is a client: it must
+    /// not be given the secret, and it must not have to sign anything. `host` is the
+    /// only signed header, and the payload hash is `UNSIGNED-PAYLOAD` — the signature
+    /// therefore authorizes "a PUT to this key before this time", nothing more. What
+    /// arrived is checked when the upload is completed ([`crate::store`] and the API's
+    /// `/complete` handler), which is where a presigned upload's bytes are validated.
+    ///
+    /// `timestamp` is a parameter rather than read from the clock so the URL is
+    /// reproducible in a test.
+    pub fn presign_put(&self, key: &str, expires_seconds: i64, timestamp: &str) -> String {
+        let date = &timestamp[..8];
+        let scope = format!("{date}/{}/s3/aws4_request", self.region);
+        let credential = format!("{}/{scope}", self.access_key);
+
+        // Sorted by parameter name, which is what the canonical query requires.
+        let parameters = [
+            ("X-Amz-Algorithm", ALGORITHM.to_string()),
+            ("X-Amz-Credential", credential),
+            ("X-Amz-Date", timestamp.to_string()),
+            ("X-Amz-Expires", expires_seconds.to_string()),
+            ("X-Amz-SignedHeaders", "host".to_string()),
+        ];
+        let canonical_query = parameters
+            .iter()
+            .map(|(name, value)| {
+                format!("{}={}", encode_query_value(name), encode_query_value(value))
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+
+        let canonical_uri = self.uri_for(key);
+        let canonical_request = format!(
+            "PUT\n{canonical_uri}\n{canonical_query}\nhost:{}\n\nhost\nUNSIGNED-PAYLOAD",
+            self.host
+        );
+        let signature = signature_of(
+            &canonical_request,
+            timestamp,
+            &self.region,
+            "s3",
+            &self.secret_key,
+        );
+
+        format!(
+            "{}{}?{canonical_query}&X-Amz-Signature={signature}",
+            self.endpoint, canonical_uri
+        )
+    }
+
     /// Send a signed request.
     async fn send(&self, signed: SignedRequest, body: Vec<u8>) -> Result<reqwest::Response> {
         let url = if signed.query.is_empty() {
@@ -641,6 +713,15 @@ impl Storage for S3Storage {
             }
             Ok(())
         })
+    }
+
+    fn presign_put(&self, key: &str, expires_seconds: i64) -> Option<String> {
+        Some(S3Storage::presign_put(
+            self,
+            key,
+            expires_seconds,
+            &utc_timestamp(),
+        ))
     }
 
     fn list<'a>(&'a self, prefix: &'a str) -> StorageFuture<'a, Vec<String>> {
@@ -792,6 +873,51 @@ mod transport_tests {
         assert_eq!(encode_query_value("photos/a b.png"), "photos%2Fa%20b.png");
         // A slash has to be encoded in a query value, unlike in a path.
         assert!(!encode_query_value("a/b").contains('/'));
+    }
+
+    #[test]
+    fn a_presigned_put_carries_the_signature_the_client_needs() {
+        let storage = storage();
+
+        let url = storage.presign_put("posts/p1/photo.png", 900, "20260101T000000Z");
+        assert!(
+            url.starts_with("https://account.r2.cloudflarestorage.com/media/posts/p1/photo.png?"),
+            "{url}"
+        );
+        for expected in [
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256",
+            // The credential scope is percent-encoded, slashes included: SigV4 says so,
+            // and a server that un-encodes it rejects the signature.
+            "X-Amz-Credential=AKIDEXAMPLE%2F20260101%2Fauto%2Fs3%2Faws4_request",
+            "X-Amz-Date=20260101T000000Z",
+            "X-Amz-Expires=900",
+            "X-Amz-SignedHeaders=host",
+        ] {
+            assert!(url.contains(expected), "{expected} missing from {url}");
+        }
+
+        let signature = url.split("X-Amz-Signature=").nth(1).expect("a signature");
+        assert_eq!(signature.len(), 64, "{url}");
+        assert!(signature.chars().all(|c| c.is_ascii_hexdigit()), "{url}");
+
+        // The same request signs the same way; a different expiry or key does not.
+        assert_eq!(
+            url,
+            storage.presign_put("posts/p1/photo.png", 900, "20260101T000000Z")
+        );
+        let other = storage.presign_put("posts/p1/photo.png", 901, "20260101T000000Z");
+        assert_ne!(
+            signature,
+            other.split("X-Amz-Signature=").nth(1).expect("a signature")
+        );
+        let other_key = storage.presign_put("posts/p1/other.png", 900, "20260101T000000Z");
+        assert_ne!(
+            signature,
+            other_key
+                .split("X-Amz-Signature=")
+                .nth(1)
+                .expect("a signature")
+        );
     }
 
     #[test]

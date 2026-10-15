@@ -165,12 +165,28 @@ async fn a_file_can_be_uploaded_served_and_deleted() {
     assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
     let body = reply.body.expect("body");
     assert_eq!(body["type"], json!("png"));
-    let url = body["url"].as_str().expect("url").to_string();
-    assert!(url.ends_with("_holiday.png"), "{url}");
-    assert!(
-        url.starts_with("/api/files/posts/p1/"),
-        "the key groups by collection and record: {url}"
+    assert_eq!(body["mime_type"], json!("image/png"));
+    assert_eq!(body["width"], json!(64));
+    assert_eq!(body["height"], json!(48));
+    assert_eq!(
+        body["status"],
+        json!("ready"),
+        "an upload that names a record arrives attached"
     );
+    assert_eq!(body["origin"], json!("field"));
+
+    // The URL is id-addressed, because the id is what a client stores in a file field;
+    // the storage key travels with it for a client that addresses objects directly.
+    let url = body["url"].as_str().expect("url").to_string();
+    assert!(url.starts_with("/api/files/"), "{url}");
+    assert_eq!(
+        url.rsplit('/').next(),
+        body["id"].as_str(),
+        "the URL ends in the file's id: {url}"
+    );
+    let key = body["key"].as_str().expect("key").to_string();
+    assert!(key.starts_with("posts/p1/"), "{key}");
+    assert!(key.ends_with("_holiday.png"), "{key}");
 
     // Serving returns the exact bytes, with a content type and a cache header.
     let (status, served) = fetch(&app, &url).await;
@@ -712,6 +728,742 @@ async fn a_generated_thumbnail_is_not_listed_as_its_own_file() {
     let body = listing(&app, &token, "").await;
     assert_eq!(body["totalItems"], json!(1), "{body}");
     assert!(body["items"][0]["variants"]["thumb"].is_string(), "{body}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_sdk_spellings_of_the_upload_parts_are_accepted() {
+    let Some(app) = test_app("http_files_sdk_parts").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = token(&app).await;
+
+    // Exactly the parts `lazypock-ts`'s `files.upload` sends. Spelling them
+    // `collection`/`record` — this route's original names — meant a Studio upload was
+    // rejected with "a `collection` part is required", which looks like a broken editor.
+    let reply = upload(
+        &app,
+        &[
+            ("file", Some("cover.png"), &png(20, 20)),
+            ("collection_name", None, b"posts"),
+            ("record_id", None, b"p1"),
+            ("field_name", None, b"cover"),
+            ("origin", None, b"field"),
+        ],
+        Some(&token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let body = reply.body.expect("body");
+    assert_eq!(body["collection_name"], json!("posts"), "{body}");
+    assert_eq!(body["record_id"], json!("p1"), "{body}");
+    assert_eq!(body["field_name"], json!("cover"), "{body}");
+    assert_eq!(body["status"], json!("ready"), "{body}");
+    assert!(
+        body["key"].as_str().expect("key").starts_with("posts/p1/"),
+        "{body}"
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_upload_with_no_record_is_pending_and_the_library_lists_it() {
+    let Some(app) = test_app("http_files_library_upload").await else {
+        return;
+    };
+    let token = token(&app).await;
+
+    // The editor's and the media library's case: bytes with no record to belong to. A
+    // listing of the storage backend could not show this at all — it has no record to be
+    // filed under — which is why the library could not offer an upload nobody had used.
+    let reply = upload(
+        &app,
+        &[
+            ("file", Some("diagram.png"), &png(20, 10)),
+            ("origin", None, b"library"),
+        ],
+        Some(&token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let body = reply.body.expect("body");
+    assert_eq!(body["status"], json!("pending"), "{body}");
+    assert_eq!(body["origin"], json!("library"), "{body}");
+    assert_eq!(body["collection_name"], json!(""), "{body}");
+    assert!(
+        body["key"].as_str().expect("key").starts_with("library/"),
+        "{body}"
+    );
+
+    let listed = listing(&app, &token, "").await;
+    assert_eq!(listed["total"], json!(1), "{listed}");
+    assert_eq!(listed["items"][0]["id"], body["id"], "{listed}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn deleting_a_record_removes_its_files() {
+    let Some(app) = test_app("http_files_record_delete").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = token(&app).await;
+
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"posts"),
+            ("record", None, b"p1"),
+            ("file", Some("cover.png"), &png(20, 20)),
+        ],
+        Some(&token),
+    )
+    .await;
+    let body = reply.body.expect("body");
+    let id = body["id"].as_str().expect("id").to_string();
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        "/api/collections/posts/records/p1",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    // The row is gone with the record: the library no longer lists it, and even serving
+    // it by id is a 404 — the object outlives the row only until the reaper runs.
+    let listed = listing(&app, &token, "").await;
+    assert_eq!(listed["total"], json!(0), "{listed}");
+    let (status, _) = fetch(&app, &format!("/api/files/{id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // And the object was queued for removal in the transaction that deleted the row.
+    let client = app.client().await;
+    let queued: i64 = client
+        .query_one(
+            "select count(*) from _file_deletions where file_id = $1::text",
+            &[&id],
+        )
+        .await
+        .expect("queued")
+        .get(0);
+    assert_eq!(queued, 1, "the object should be queued for the reaper");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_file_a_record_still_references_is_guarded_until_forced() {
+    let Some(app) = test_app("http_files_refs_guard").await else {
+        return;
+    };
+    // A collection with an editor field: that is where a reference comes from, since a
+    // rich text holds `/api/files/<id>` URLs.
+    let mut client = app.client().await;
+    collections::create(
+        &mut client,
+        CreateCollection {
+            name: "notes".into(),
+            collection_type: CollectionType::Base,
+            fields: vec![CreateField {
+                name: "body".into(),
+                field_type: FieldType::Editor,
+                required: false,
+                unique: false,
+                options: json!({}),
+            }],
+            rules: json!({
+                "listRule": "", "viewRule": "", "createRule": "",
+                "updateRule": "", "deleteRule": "",
+            }),
+            options: json!({}),
+            adopt_existing_table: false,
+        },
+    )
+    .await
+    .expect("create notes");
+    app.reload_schema().await;
+
+    let token = token(&app).await;
+
+    // An editor upload, then a record that embeds it.
+    let reply = upload(
+        &app,
+        &[
+            ("file", Some("inline.png"), &png(16, 16)),
+            ("origin", None, b"editor"),
+        ],
+        Some(&token),
+    )
+    .await;
+    let body = reply.body.expect("body");
+    let id = body["id"].as_str().expect("id").to_string();
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections/notes/records",
+        Some(json!({ "body": format!("<p>look <img src=\"/api/files/{id}\"></p>") })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    // Deleting it would leave that record pointing at nothing, so it is refused with the
+    // list of what still uses it — the shape the Studio's media library renders.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{id}"),
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT, "{:?}", reply.body);
+    let body = reply.body.expect("a refusal");
+    assert_eq!(
+        body["data"]["usage"][0]["collection"],
+        json!("notes"),
+        "{body}"
+    );
+    assert_eq!(body["data"]["usage"][0]["field"], json!("body"), "{body}");
+
+    // A superuser can break the reference deliberately.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{id}?force=true"),
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_reaper_reclaims_an_abandoned_upload_and_queued_objects() {
+    let Some(app) = test_app("http_files_reaper").await else {
+        return;
+    };
+    let token = token(&app).await;
+
+    let reply = upload(
+        &app,
+        &[
+            ("file", Some("abandoned.png"), &png(12, 12)),
+            ("origin", None, b"library"),
+        ],
+        Some(&token),
+    )
+    .await;
+    let body = reply.body.expect("body");
+    let key = body["key"].as_str().expect("key").to_string();
+    let id = body["id"].as_str().expect("id").to_string();
+
+    // A TTL of zero makes it instantly reclaimable. `_files` rows go first — which is
+    // what queues the object — and the pass that removes it is the next one.
+    let reaper = lazypock_files::Reaper::new(app.state.files.storage().clone(), "local")
+        .with_unattached_ttl(0);
+    let client = app.client().await;
+    let first = reaper.run(&client).await.expect("reaper pass");
+    assert_eq!(first.reclaimed, 1, "{first:?}");
+
+    let second = reaper.run(&client).await.expect("reaper pass");
+    assert_eq!(
+        second.deleted, 1,
+        "the queued object goes on the next pass: {second:?}"
+    );
+
+    let listed = listing(&app, &token, "").await;
+    assert_eq!(listed["total"], json!(0), "{listed}");
+    assert!(
+        app.state
+            .files
+            .storage()
+            .get(&key)
+            .await
+            .expect("storage")
+            .is_none(),
+        "the object should be gone from the backend"
+    );
+    let _ = id;
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_generated_variant_is_removed_with_its_source() {
+    let Some(app) = test_app("http_files_variant_cleanup").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = token(&app).await;
+    let url = uploaded_png(&app, &token, 64, 48).await;
+    let id = url.rsplit('/').next().expect("id").to_string();
+
+    // Generate a thumbnail lazily, through the id-addressed route.
+    let (status, _) = fetch(&app, &format!("/api/files/{id}?preset=thumb")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // It is recorded on the row. Without that the row can be deleted, the source object
+    // queued, and the thumbnail left in the bucket with nothing pointing at it.
+    let client = app.client().await;
+    let source_key: String = client
+        .query_one(
+            "select storage_path from _files where id = $1::text",
+            &[&id],
+        )
+        .await
+        .expect("row")
+        .get(0);
+    let thumb_key: String = client
+        .query_one(
+            "select variants ->> 'thumb' from _files where id = $1::text",
+            &[&id],
+        )
+        .await
+        .expect("row")
+        .get(0);
+    assert_ne!(thumb_key, source_key);
+    assert!(
+        thumb_key.contains("/thumbs/") && thumb_key.ends_with("thumb_webp"),
+        "{thumb_key}"
+    );
+
+    // Deleting the record queues both objects, and one pass removes both.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        "/api/collections/posts/records/p1",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    let reaper = lazypock_files::Reaper::new(app.state.files.storage().clone(), "local");
+    let report = reaper.run(&client).await.expect("reaper pass");
+    assert_eq!(report.deleted, 1, "one queue entry: {report:?}");
+
+    for key in [&source_key, &thumb_key] {
+        assert!(
+            app.state
+                .files
+                .storage()
+                .get(key)
+                .await
+                .expect("storage")
+                .is_none(),
+            "{key} should be gone"
+        );
+    }
+
+    app.cleanup().await;
+}
+
+/// Register an auth user and return a token for them.
+///
+/// The `users` collection is created on the app's own boot (idempotently), so a test
+/// that needs an ordinary identity makes sure of it first.
+async fn user_token(app: &TestApp, email: &str) -> String {
+    let mut client = app.client().await;
+    lazypock_db::defaults::ensure_users(&mut client)
+        .await
+        .expect("the users collection");
+    app.reload_schema().await;
+
+    let reply = call(
+        &router(app).await,
+        Method::POST,
+        "/api/collections/users/records",
+        Some(json!({ "email": email, "password": "user-password-123" })),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    let reply = call(
+        &router(app).await,
+        Method::POST,
+        "/api/collections/users/auth-with-password",
+        Some(json!({ "identity": email, "password": "user-password-123" })),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    reply.body.expect("auth")["token"]
+        .as_str()
+        .expect("token")
+        .to_string()
+}
+
+/// Write the file rules the way the Studio's Settings → Media page does.
+async fn set_file_rules(app: &TestApp, superuser: &str, rules: serde_json::Value) {
+    let reply = call_authed(
+        &router(app).await,
+        Method::PATCH,
+        "/api/settings",
+        Some(json!({ "files": { "rules": rules } })),
+        superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+}
+
+/// Upload one file as the given identity, returning its id.
+async fn upload_as(app: &TestApp, token: &str, filename: &str) -> String {
+    let reply = upload(
+        app,
+        &[
+            ("file", Some(filename), &png(16, 16)),
+            ("origin", None, b"library"),
+        ],
+        Some(token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    reply.body.expect("body")["id"]
+        .as_str()
+        .expect("id")
+        .to_string()
+}
+
+#[tokio::test]
+async fn an_absent_file_rule_leaves_the_library_to_superusers() {
+    let Some(app) = test_app("http_files_rules_absent").await else {
+        return;
+    };
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+
+    // Nothing configured is the safe reading: a rule that does not exist does not grant.
+    let reply = call_authed(&router(&app).await, Method::GET, "/api/files", None, &user).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+    assert!(
+        reply.body.expect("refusal")["message"]
+            .as_str()
+            .expect("message")
+            .contains("listRule"),
+        "the refusal should name the rule"
+    );
+
+    // The operator's own view is unaffected, which is what keeps the Studio working.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/files",
+        None,
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_list_rule_narrows_the_library_to_the_rows_it_matches() {
+    let Some(app) = test_app("http_files_rules_list").await else {
+        return;
+    };
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+
+    upload_as(&app, &user, "mine.png").await;
+    upload_as(&app, &superuser, "theirs.png").await;
+
+    // A public rule opens the listing to anyone.
+    set_file_rules(
+        &app,
+        &superuser,
+        json!({ "listRule": "", "deleteRule": null }),
+    )
+    .await;
+    let body = listing(&app, &user, "").await;
+    assert_eq!(body["total"], json!(2), "{body}");
+
+    // A filter shows only the rows it matches, per caller.
+    set_file_rules(
+        &app,
+        &superuser,
+        json!({ "listRule": "uploaded_by = @request.auth.id", "deleteRule": null }),
+    )
+    .await;
+
+    let body = listing(&app, &user, "").await;
+    assert_eq!(body["total"], json!(1), "only their own file: {body}");
+    assert_eq!(body["items"][0]["filename"], json!("mine.png"), "{body}");
+
+    // A superuser bypasses the rule and sees everything.
+    let body = listing(&app, &superuser, "").await;
+    assert_eq!(body["total"], json!(2), "{body}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_delete_rule_decides_whose_files_may_go() {
+    let Some(app) = test_app("http_files_rules_delete").await else {
+        return;
+    };
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+    let other = user_token(&app, "other@example.com").await;
+
+    let mine = upload_as(&app, &user, "mine.png").await;
+    let theirs = upload_as(&app, &other, "theirs.png").await;
+
+    set_file_rules(
+        &app,
+        &superuser,
+        json!({ "listRule": "", "deleteRule": "uploaded_by = @request.auth.id" }),
+    )
+    .await;
+
+    // The rule is asked about *this* file: uploader-owns-it means exactly that.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{theirs}"),
+        None,
+        &user,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{mine}"),
+        None,
+        &user,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    // A superuser is not bound by it.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{theirs}"),
+        None,
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_unreadable_rule_denies_instead_of_allowing() {
+    let Some(app) = test_app("http_files_rules_broken").await else {
+        return;
+    };
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+
+    // Whitespace is not the empty string, and a number is not a rule: both deny rather
+    // than quietly meaning "public".
+    set_file_rules(
+        &app,
+        &superuser,
+        json!({ "listRule": "   ", "deleteRule": 7 }),
+    )
+    .await;
+
+    let reply = call_authed(&router(&app).await, Method::GET, "/api/files", None, &user).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    // The operator can still get in, or they could not fix the rule.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/files",
+        None,
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_backend_without_direct_upload_says_so_and_drops_the_reservation() {
+    let Some(app) = test_app("http_files_presign_local").await else {
+        return;
+    };
+    seed(&app).await;
+    let superuser = token(&app).await;
+
+    // The local adapter has no HTTP endpoint of its own, so a direct upload is refused
+    // with a reason — and the row reserved for it goes, because a file nobody can upload
+    // is a leak.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({
+            "filename": "photo.png",
+            "size": 4096,
+            "mime": "image/png",
+            "collection_name": "posts",
+            "field_name": "cover",
+            "record_id": "p1"
+        })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::NOT_IMPLEMENTED,
+        "{:?}",
+        reply.body
+    );
+    let body = reply.body.expect("a refusal");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("message")
+            .contains("/api/files"),
+        "the refusal should say what to do instead: {body}"
+    );
+
+    let body = listing(&app, &superuser, "").await;
+    assert_eq!(
+        body["total"],
+        json!(0),
+        "the reservation should be gone: {body}"
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_direct_upload_is_validated_before_it_is_reserved() {
+    let Some(app) = test_app("http_files_presign_guards").await else {
+        return;
+    };
+    seed(&app).await;
+    let superuser = token(&app).await;
+
+    // Unauthenticated: refused.
+    let reply = call(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({ "filename": "photo.png", "size": 10, "mime": "image/png" })),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    // Not an image the server can read: refused, as the multipart route refuses it. The
+    // declared type is the first of two gates, so it has to be one of the four.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({ "filename": "script.sh", "size": 10, "mime": "text/x-sh" })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+
+    // A size that cannot be true: refused before anything is reserved.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({ "filename": "huge.png", "size": 1024 * 1024 * 1024, "mime": "image/png" })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+
+    // A record that is not there: refused, so an upload cannot be reserved for a record
+    // the reaper would immediately consider gone.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({
+            "filename": "photo.png", "size": 4096, "mime": "image/png",
+            "collection_name": "posts", "record_id": "nope"
+        })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{:?}", reply.body);
+
+    // And nothing was left behind by any of them.
+    let body = listing(&app, &superuser, "").await;
+    assert_eq!(body["total"], json!(0), "{body}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn completing_an_upload_verifies_the_object_and_finishes_the_row() {
+    let Some(app) = test_app("http_files_complete").await else {
+        return;
+    };
+    seed(&app).await;
+    let superuser = token(&app).await;
+
+    // An upload that went through the API stands in for the object a presigned PUT would
+    // have placed: completing it rewrites the row from what is actually stored.
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"posts"),
+            ("record", None, b"p1"),
+            ("file", Some("photo.png"), &png(40, 20)),
+        ],
+        Some(&superuser),
+    )
+    .await;
+    let id = reply.body.expect("body")["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        &format!("/api/files/{id}/complete?variants=thumb"),
+        Some(json!({})),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("a file");
+    assert_eq!(body["id"], json!(id), "{body}");
+    assert_eq!(body["mime_type"], json!("image/png"), "{body}");
+    assert_eq!(body["width"], json!(40), "{body}");
+    assert_eq!(body["height"], json!(20), "{body}");
+    assert!(
+        body["variants"]["thumb"].is_string(),
+        "the asked-for variant is offered: {body}"
+    );
+
+    // An id with no object behind it is dropped rather than left as a file that can never
+    // be served.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/doesNotExist123/complete",
+        Some(json!({})),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{:?}", reply.body);
 
     app.cleanup().await;
 }

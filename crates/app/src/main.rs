@@ -266,6 +266,54 @@ async fn serve(config: Config) -> Result<()> {
         .await
         .map_err(|err| Error::config(format!("file storage is not usable: {err}")))?;
 
+    // The file reaper. The `_files_deleted` trigger queues an object's removal in the
+    // transaction that deleted its row; this is what actually removes it, plus any
+    // editor or library upload nobody ever attached. Before this there was no worker at
+    // all, so the queue only drained if an operator called `POST /api/files/sweep` —
+    // "deleting a record removes its files" was true of the rows and not of the objects.
+    {
+        let interval = file_reaper_interval()?;
+        if interval.is_zero() {
+            tracing::warn!("LAZYPOCK_FILE_REAPER_INTERVAL=0: deleted objects stay in storage");
+        } else {
+            let ttl = unattached_upload_ttl(&db).await?;
+            let reaper = lazypock_files::Reaper::new(files.storage().clone(), files.backend_name())
+                .with_unattached_ttl(ttl);
+            tracing::info!(
+                every_seconds = interval.as_secs(),
+                unattached_ttl_seconds = ttl,
+                "file reaper started"
+            );
+
+            let db = db.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    ticker.tick().await;
+                    match db.client().await {
+                        Ok(client) => match reaper.run(&client).await {
+                            Ok(report) if !report.is_empty() => tracing::info!(
+                                deleted = report.deleted,
+                                failed = report.failed,
+                                reclaimed = report.reclaimed,
+                                "file reaper finished a pass"
+                            ),
+                            Ok(_) => {}
+                            Err(err) => {
+                                tracing::warn!(error = %err, "a file reaper pass failed")
+                            }
+                        },
+                        Err(err) => tracing::warn!(
+                            error = %err,
+                            "the file reaper could not reach the database"
+                        ),
+                    }
+                }
+            });
+        }
+    }
+
     // The hook worker owns the QuickJS runtime on its own thread, because the
     // runtime is not `Send`. It starts even with no hook files: it costs an idle
     // thread, and it means a hook added later is picked up without a restart.
@@ -361,4 +409,49 @@ async fn healthcheck(config: &Config) -> Result<()> {
             "unhealthy response from {addr}: {status_line}"
         )))
     }
+}
+
+/// How often the file reaper runs.
+///
+/// A pass with nothing to do is three indexed queries, so the default is a compromise
+/// between promptness and noise: an hour. `0` disables the worker — loudly, because a
+/// disabled reaper means deleted objects sit in storage forever.
+fn file_reaper_interval() -> Result<std::time::Duration> {
+    let seconds = match std::env::var("LAZYPOCK_FILE_REAPER_INTERVAL") {
+        Err(_) => 3600,
+        Ok(raw) => raw.trim().parse::<u64>().map_err(|_| {
+            Error::config(format!(
+                "LAZYPOCK_FILE_REAPER_INTERVAL must be a whole number of seconds, got {raw:?}"
+            ))
+        })?,
+    };
+    Ok(std::time::Duration::from_secs(seconds))
+}
+
+/// How long an unattached editor or library upload is kept.
+///
+/// Read from the `files` setting the Studio's Media page writes
+/// (`files.rules.unattached_ttl_ms`), falling back to a day. An upload that arrived
+/// through a record's field is never reclaimed, whatever this says.
+async fn unattached_upload_ttl(db: &Db) -> Result<i64> {
+    const DEFAULT_SECONDS: i64 = 24 * 60 * 60;
+
+    let client = db.client().await?;
+    // The settings row is one jsonb object; `->>` pulls the number out as text, so this
+    // needs no JSON type here.
+    let row = client
+        .query_opt(
+            "select value -> 'rules' ->> 'unattached_ttl_ms' from _settings where key = 'files'",
+            &[],
+        )
+        .await
+        .map_err(lazypock_db::pool::db_error)?;
+
+    let Some(row) = row else {
+        return Ok(DEFAULT_SECONDS);
+    };
+    let milliseconds: Option<i64> = row
+        .get::<_, Option<String>>(0)
+        .and_then(|raw| raw.parse().ok());
+    Ok(milliseconds.map(|ms| ms / 1000).unwrap_or(DEFAULT_SECONDS))
 }
