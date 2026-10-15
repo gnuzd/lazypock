@@ -803,7 +803,7 @@ somebody else's database.
 | Track | State |
 |---|---|
 | A. Foundations | done — workspace, config (fail-loud, secrets redacted), errors, ids, telemetry, CLI, `/api/health` |
-| B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS still outstanding (risk 12). |
+| B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS is implemented (rustls + system trust store): `sslmode=require`/`verify-ca`/`verify-full` and the `ssl=require` spelling are honoured with **certificate verification**, verified against Neon. |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
 | E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections, and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). |
@@ -947,10 +947,14 @@ that crate lands.
 9. **Binary size with embedded Studio + oxc + rquickjs**: measure in CI.
 10. **Safe schema changes on large tables**: avoid long locks; document expand/contract.
 11. **Redis sidecar** (if ever adopted) is a packaging/deployment dependency (8.8).
-12. **TLS is not implemented yet.** The pool refuses `sslmode=require`/`verify-*` rather than
-    silently downgrading (`crates/db/src/pool.rs`), so a Postgres reachable only over TLS (for
-    example Neon's direct endpoint) is blocked until the rustls connector lands. Tracked as its
-    own task; it does not block local/self-hosted development or Phase 1.
+12. **TLS — RESOLVED.** The pool builds a rustls connector (system trust store) when a URL
+    asks for TLS, so `sslmode=require`/`verify-ca`/`verify-full` and the `ssl=require` spelling
+    some providers use (Neon) are honoured, and `channel_binding` is dropped because the driver
+    does not support it. A live TLS round-trip against Neon succeeds. Two deliberate differences
+    from libpq: `require` **verifies the certificate** (libpq only encrypts), which is stricter
+    and the safe default; and `prefer` has no plaintext fallback, so it connects unencrypted as
+    before rather than silently upgrading. Note for packaging (Track L): rustls' default crypto
+    provider is `aws-lc-rs`, a native dependency that must build in the release image.
 
 ---
 

@@ -11,6 +11,7 @@ use lazypock_core::config::Config;
 use lazypock_core::error::{Error, Result};
 use tokio_postgres::config::SslMode;
 use tokio_postgres::NoTls;
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 /// How long to wait for a free pooled connection before giving up.
 pub const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -88,40 +89,33 @@ impl Db {
     ///
     /// Fails loud rather than deferring the failure to the first request.
     pub async fn connect(url: &str, options: &DbOptions) -> Result<Self> {
-        let mut pg_config = tokio_postgres::Config::from_str(url)
+        let mut pg_config = tokio_postgres::Config::from_str(&normalize_url(url))
             .map_err(|err| Error::config(format!("invalid DATABASE_URL: {err}")))?;
         pg_config.application_name("lazypock");
-
-        // TLS is not implemented yet. Refuse to silently downgrade a URL that
-        // demands it, and force plaintext otherwise so behaviour is explicit
-        // regardless of libpq's `prefer` default.
-        match sslmode(url).as_deref() {
-            Some("require") | Some("verify-ca") | Some("verify-full") => {
-                return Err(Error::unsupported(format!(
-                    "DATABASE_URL requests TLS (sslmode={}); this build has no TLS support yet. \
-                     Use sslmode=disable or a TLS-enabled build.",
-                    sslmode(url).unwrap_or_default()
-                )));
-            }
-            Some("prefer") => {
-                tracing::warn!(
-                    "DATABASE_URL asks for sslmode=prefer but this build has no TLS support; \
-                     connecting without encryption"
-                );
-            }
-            _ => {}
-        }
-        pg_config.ssl_mode(SslMode::Disable);
 
         if let Some(extra) = &options.options {
             pg_config.options(extra);
         }
 
-        let manager = deadpool_postgres::Manager::from_config(
-            pg_config,
-            NoTls,
-            deadpool_postgres::ManagerConfig::default(),
-        );
+        // A URL that asks for TLS is never silently downgraded: the connector is
+        // built here, and a TLS handshake or certificate failure surfaces as a
+        // connection error rather than a quiet plaintext session.
+        let manager = match tls_mode(url) {
+            TlsMode::Required => deadpool_postgres::Manager::from_config(
+                pg_config,
+                rustls_connector()?,
+                deadpool_postgres::ManagerConfig::default(),
+            ),
+            TlsMode::Disabled => {
+                // Force plaintext explicitly, regardless of libpq's `prefer` default.
+                pg_config.ssl_mode(SslMode::Disable);
+                deadpool_postgres::Manager::from_config(
+                    pg_config,
+                    NoTls,
+                    deadpool_postgres::ManagerConfig::default(),
+                )
+            }
+        };
 
         let pool = deadpool_postgres::Pool::builder(manager)
             .max_size(options.pool_size as usize)
@@ -185,16 +179,133 @@ impl Db {
     }
 }
 
-/// Extract the `sslmode` query parameter from a Postgres URL.
-pub fn sslmode(url: &str) -> Option<String> {
-    let query = url.split_once('?')?.1;
+/// Rewrite a URL into the shape `tokio_postgres` parses.
+///
+/// `ssl` is accepted as an alias for `sslmode` (Neon and some drivers use it), and
+/// `channel_binding` is dropped: the driver does not support it, and once the
+/// server certificate is verified there is no channel to bind. Both changes only
+/// affect what the driver is asked to do — [`tls_mode`] reads the original URL.
+fn normalize_url(url: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+
+    let mut params: Vec<String> = Vec::new();
+    let mut has_sslmode = false;
+    let mut ssl: Option<String> = None;
     for pair in query.split('&') {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        if key.eq_ignore_ascii_case("sslmode") {
-            return Some(value.trim().to_ascii_lowercase());
+        match key.to_ascii_lowercase().as_str() {
+            "sslmode" => {
+                has_sslmode = true;
+                params.push(pair.to_string());
+            }
+            "ssl" => ssl = Some(value.to_string()),
+            "channel_binding" => {}
+            _ => params.push(pair.to_string()),
         }
     }
-    None
+
+    // `sslmode` wins over `ssl`, so only use `ssl` when `sslmode` is absent.
+    let ssl = if has_sslmode { None } else { ssl };
+    if let Some(value) = ssl {
+        let value = if value.eq_ignore_ascii_case("true") || value == "1" {
+            "require".to_string()
+        } else {
+            value
+        };
+        params.push(format!("sslmode={value}"));
+    }
+
+    if params.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", params.join("&"))
+    }
+}
+
+/// Extract the TLS mode a Postgres URL asks for.
+///
+/// `sslmode` and the `ssl` spelling some providers use (Neon's `ssl=require`) are
+/// both read, so a URL that asks for TLS is never silently downgraded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsMode {
+    /// Plaintext. `disable`, `allow`, an unset mode, and the unimplemented `prefer`.
+    Disabled,
+    /// TLS with full certificate verification.
+    Required,
+}
+
+/// Whether a URL requires TLS.
+///
+/// `require`, `verify-ca` and `verify-full` all enable TLS **with certificate
+/// verification**, which is stricter than libpq's `require` (encrypt without
+/// verifying). That is the safe reading: a URL asking for encryption gets a
+/// verified connection, and an untrusted server is refused rather than accepted.
+pub fn tls_mode(url: &str) -> TlsMode {
+    match sslmode(url).as_deref() {
+        Some("require") | Some("verify-ca") | Some("verify-full") => TlsMode::Required,
+        Some("prefer") => {
+            tracing::warn!(
+                "sslmode=prefer is not implemented (there is no plaintext fallback); \
+                 connecting without encryption"
+            );
+            TlsMode::Disabled
+        }
+        _ => TlsMode::Disabled,
+    }
+}
+
+/// A rustls connector that verifies the server against the system trust store.
+fn rustls_connector() -> Result<MakeRustlsConnect> {
+    let loaded = rustls_native_certs::load_native_certs();
+    for error in &loaded.errors {
+        tracing::warn!(%error, "could not load a native certificate");
+    }
+
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in loaded.certs {
+        if let Err(err) = roots.add(cert) {
+            tracing::warn!(%err, "ignoring an unusable native certificate");
+        }
+    }
+    if roots.is_empty() {
+        return Err(Error::config(
+            "the system trust store is empty, so a TLS connection could not be verified; \
+             install CA certificates or use sslmode=disable",
+        ));
+    }
+
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(MakeRustlsConnect::new(config))
+}
+
+/// Extract the `sslmode` query parameter from a Postgres URL.
+///
+/// `sslmode` wins when both spellings are present; otherwise `ssl` is read, with
+/// `ssl=true`/`ssl=1` meaning `require`.
+pub fn sslmode(url: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    let mut ssl = None;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = value.trim().to_ascii_lowercase();
+        if key.eq_ignore_ascii_case("sslmode") {
+            return Some(value);
+        }
+        if key.eq_ignore_ascii_case("ssl") {
+            ssl = Some(value);
+        }
+    }
+    ssl.map(|value| {
+        if value == "true" || value == "1" {
+            "require".to_string()
+        } else {
+            value
+        }
+    })
 }
 
 /// Map a driver error to the application error model.
@@ -217,6 +328,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_url_is_normalized_for_the_driver() {
+        // `ssl` becomes `sslmode`, and `channel_binding` is dropped.
+        assert_eq!(
+            normalize_url("postgres://h/db?ssl=require&channel_binding=require"),
+            "postgres://h/db?sslmode=require"
+        );
+        // `sslmode` wins and is left alone.
+        assert_eq!(
+            normalize_url("postgres://h/db?sslmode=require&ssl=disable"),
+            "postgres://h/db?sslmode=require"
+        );
+        // Other parameters are preserved.
+        assert_eq!(
+            normalize_url("postgres://h/db?application_name=x&ssl=true"),
+            "postgres://h/db?application_name=x&sslmode=require"
+        );
+        assert_eq!(normalize_url("postgres://h/db"), "postgres://h/db");
+    }
+
+    #[test]
     fn parses_sslmode_from_urls() {
         assert_eq!(sslmode("postgres://h/db"), None);
         assert_eq!(
@@ -228,20 +359,78 @@ mod tests {
             Some("require".into())
         );
         assert_eq!(sslmode("postgres://h/db?sslmode="), Some("".into()));
+
+        // The `ssl` spelling, including Neon's `ssl=require&channel_binding=require`.
+        assert_eq!(
+            sslmode("postgres://h/db?ssl=require&channel_binding=require"),
+            Some("require".into())
+        );
+        assert_eq!(sslmode("postgres://h/db?ssl=true"), Some("require".into()));
+        assert_eq!(sslmode("postgres://h/db?ssl=1"), Some("require".into()));
+        // `sslmode` wins if both are present.
+        assert_eq!(
+            sslmode("postgres://h/db?ssl=disable&sslmode=require"),
+            Some("require".into())
+        );
+    }
+
+    #[test]
+    fn a_tls_spelling_selects_the_tls_mode() {
+        assert_eq!(tls_mode("postgres://h/db"), TlsMode::Disabled);
+        assert_eq!(
+            tls_mode("postgres://h/db?sslmode=disable"),
+            TlsMode::Disabled
+        );
+        assert_eq!(tls_mode("postgres://h/db?ssl=require"), TlsMode::Required);
+        assert_eq!(
+            tls_mode("postgres://h/db?sslmode=require"),
+            TlsMode::Required
+        );
+        assert_eq!(
+            tls_mode("postgres://h/db?sslmode=verify-full"),
+            TlsMode::Required
+        );
+    }
+
+    /// A live TLS round-trip, only when a URL is supplied. This is how Neon is
+    /// verified: `LAZYPOCK_TLS_TEST_URL=postgres://…` runs it, and it is skipped
+    /// otherwise so the suite does not need a TLS database.
+    #[tokio::test]
+    async fn connects_over_tls_when_a_url_is_provided() {
+        let Ok(url) = std::env::var("LAZYPOCK_TLS_TEST_URL") else {
+            return;
+        };
+        let db = Db::connect(
+            &url,
+            &DbOptions {
+                pool_size: 1,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a TLS connection should succeed");
+        let client = db.client().await.expect("client");
+        let row = client.query_one("select 1", &[]).await.expect("select 1");
+        assert_eq!(row.get::<_, i32>(0), 1);
     }
 
     #[tokio::test]
-    async fn tls_required_urls_fail_loud_without_tls_support() {
+    async fn a_tls_url_that_cannot_connect_fails_without_echoing_the_password() {
+        // Nothing listens on port 1, so the TLS attempt cannot complete. The point
+        // is that `require` attempts TLS (rather than being refused or silently
+        // downgraded) and that the failure never includes the password.
         let err = Db::connect(
             "postgres://user:pass@localhost:1/db?sslmode=require",
             &DbOptions::default(),
         )
         .await
-        .expect_err("sslmode=require must be rejected");
-        assert!(matches!(err, Error::Unsupported(_)), "got {err:?}");
-        assert!(err.message().contains("TLS"));
-        // The failure must not echo the password.
-        assert!(!err.message().contains("pass"));
+        .expect_err("a connection to a closed port must fail");
+        assert!(matches!(err, Error::Config(_)), "got {err:?}");
+        assert!(
+            !err.message().contains("pass"),
+            "the password must not appear: {}",
+            err.message()
+        );
     }
 
     #[tokio::test]
