@@ -16,8 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lazypock_db::pool::{Db, DbOptions};
 use lazypock_db::tokio_postgres::{self, NoTls};
 
-/// Default connection, matching `deploy/docker-compose.test.yml`.
-pub const DEFAULT_TEST_URL: &str = "postgres://postgres:postgres@localhost:55432/lazypock_test";
+/// Default connection: the development database.
+pub const DEFAULT_TEST_URL: &str = "postgres://postgres:postgres@localhost:5432/lazypock_dev";
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -54,7 +54,11 @@ impl TestDb {
 
 /// Prepare an isolated schema with the system migrations applied.
 pub async fn migrated_test_db(label: &str) -> Option<TestDb> {
-    let explicit = std::env::var("LAZYPOCK_TEST_DATABASE_URL").ok();
+    // `LAZYPOCK_TEST_DATABASE_URL` first, then the app's own variable, so exporting
+    // a single `LAZYPOCK_DATABASE_URL` is enough to point the tests somewhere.
+    let explicit = std::env::var("LAZYPOCK_TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("LAZYPOCK_DATABASE_URL"))
+        .ok();
     let required = std::env::var("LAZYPOCK_REQUIRE_DB_TESTS").is_ok();
     let url = explicit
         .clone()

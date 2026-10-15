@@ -17,7 +17,8 @@ use lazypock_db::types::{CollectionType, FieldType};
 use lazypock_realtime::Hub;
 use serde_json::Value;
 
-pub const DEFAULT_TEST_URL: &str = "postgres://postgres:postgres@localhost:55432/lazypock_test";
+/// Default connection: the development database.
+pub const DEFAULT_TEST_URL: &str = "postgres://postgres:postgres@localhost:5432/lazypock_dev";
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -56,7 +57,11 @@ pub async fn fixture(label: &str, rules: Value) -> Option<Fixture> {
         .with_env_filter("warn")
         .with_test_writer()
         .try_init();
-    let explicit = std::env::var("LAZYPOCK_TEST_DATABASE_URL").ok();
+    // `LAZYPOCK_TEST_DATABASE_URL` first, then the app's own variable, so exporting
+    // a single `LAZYPOCK_DATABASE_URL` is enough to point the tests somewhere.
+    let explicit = std::env::var("LAZYPOCK_TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("LAZYPOCK_DATABASE_URL"))
+        .ok();
     let required = std::env::var("LAZYPOCK_REQUIRE_DB_TESTS").is_ok();
     let url = explicit
         .clone()
