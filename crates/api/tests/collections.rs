@@ -352,8 +352,59 @@ async fn a_missing_collection_is_a_404_rather_than_a_surprise() {
 }
 
 #[tokio::test]
-async fn deleting_a_collection_keeps_the_data_unless_asked_to_drop_it() {
+async fn deleting_a_collection_drops_its_table_by_default() {
     let Some(app) = test_app("collections_drop_data").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+    call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(definition("posts")),
+        &token,
+    )
+    .await;
+    sql(&app, "insert into posts (id, title) values ('p1', 'gone')").await;
+
+    // With no `dropData`, the table goes — matching `main` and PocketBase. Before
+    // this the table was kept, and re-creating the same name then failed.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        "/api/collections/posts",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    let exists: bool = app
+        .client()
+        .await
+        .query_one("select to_regclass('posts') is not null", &[])
+        .await
+        .expect("check")
+        .get(0);
+    assert!(!exists, "deleting a collection must drop its table");
+
+    // And the name can be used again, which is what a user expects after a delete.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(definition("posts")),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn deleting_a_collection_can_keep_the_data_when_asked() {
+    let Some(app) = test_app("collections_keep_data").await else {
         return;
     };
     let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
@@ -367,25 +418,179 @@ async fn deleting_a_collection_keeps_the_data_unless_asked_to_drop_it() {
     .await;
     sql(&app, "insert into posts (id, title) values ('p1', 'kept')").await;
 
-    // Without `dropData` the definition goes and the rows stay: removing a
-    // collection by accident must not destroy data.
+    // `dropData=false` is the explicit opt-out: the definition goes, the rows stay,
+    // so an intentional metadata-only delete does not destroy data.
     let reply = call_authed(
         &router(&app).await,
         Method::DELETE,
-        "/api/collections/posts",
+        "/api/collections/posts?dropData=false",
         None,
         &token,
     )
     .await;
     assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
 
-    let client = app.client().await;
-    let count: i64 = client
+    let count: i64 = app
+        .client()
+        .await
         .query_one("select count(*) from posts", &[])
         .await
         .expect("the table should still exist")
         .get(0);
     assert_eq!(count, 1, "the rows should have survived");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn flat_rule_keys_from_the_studio_are_stored_and_enforced() {
+    let Some(app) = test_app("collections_flat_rules").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // The Studio sends rules as siblings of `name`/`fields`, not nested under
+    // `rules`. These used to be silently dropped, so every collection stayed
+    // default-deny and a public rule did nothing.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(json!({
+            "name": "posts",
+            "type": "base",
+            "fields": [
+                { "name": "title", "type": "text", "required": false, "unique": false }
+            ],
+            "listRule": "",
+            "createRule": "",
+            "indexes": []
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let created = reply.body.expect("a collection");
+    assert_eq!(created["rules"]["listRule"], json!(""));
+
+    // The records API resolves through the schema cache, which a test refreshes
+    // explicitly rather than waiting on the NOTIFY watcher.
+    app.reload_schema().await;
+
+    // A public create rule really is public: an anonymous write succeeds.
+    let reply = support::post(
+        &router(&app).await,
+        "/api/collections/posts/records",
+        json!({ "title": "anonymous" }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    // And a rule changed to a filter is enforced too.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({ "listRule": "title = 'nope'" })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert_eq!(
+        reply.body.as_ref().expect("a collection")["rules"]["listRule"],
+        json!("title = 'nope'"),
+        "the flat rule must be stored"
+    );
+    let reply = support::get(&router(&app).await, "/api/collections/posts/records").await;
+    let body = reply.body.expect("a list");
+    assert_eq!(
+        body["totalItems"],
+        json!(0),
+        "the filter rule must apply: {body}"
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn field_order_round_trips_as_sort_order() {
+    let Some(app) = test_app("collections_field_order").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(json!({
+            "name": "posts",
+            "type": "base",
+            "fields": [
+                { "name": "title", "type": "text" },
+                { "name": "views", "type": "number" }
+            ],
+            "rules": { "listRule": "" }
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let created = reply.body.expect("a collection");
+    assert_eq!(created["fields"][0]["sort_order"], json!(0));
+    assert_eq!(created["fields"][1]["sort_order"], json!(1));
+
+    // Send them back in the opposite order, the way a drag does.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({
+            "fields": [
+                { "name": "views", "type": "number" },
+                { "name": "title", "type": "text" }
+            ]
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let updated = reply.body.expect("a collection");
+    assert_eq!(updated["fields"][0]["name"], json!("views"));
+    assert_eq!(updated["fields"][0]["sort_order"], json!(0));
+    assert_eq!(updated["fields"][1]["name"], json!("title"));
+    assert_eq!(updated["fields"][1]["sort_order"], json!(1));
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_unsupported_index_list_is_refused_rather_than_ignored() {
+    let Some(app) = test_app("collections_indexes").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(json!({
+            "name": "posts",
+            "type": "base",
+            "fields": [{ "name": "title", "type": "text" }],
+            "indexes": ["CREATE INDEX idx_title ON posts (title)"],
+            "rules": {}
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::NOT_IMPLEMENTED,
+        "a custom index must fail loud, not be stored without it: {:?}",
+        reply.body
+    );
 
     app.cleanup().await;
 }

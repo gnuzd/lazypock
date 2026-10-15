@@ -94,16 +94,74 @@ pub async fn get(
     Ok(Json(collection_json(&collection, false)?))
 }
 
+/// The flat rule keys the Studio's collection editor sends as siblings of `name`.
+const RULE_KEYS: &[&str] = &[
+    "listRule",
+    "viewRule",
+    "createRule",
+    "updateRule",
+    "deleteRule",
+    "manageRule",
+];
+
+/// Fold the flat rule keys the Studio sends into the nested `rules` object the data
+/// layer reads, and refuse options the server cannot honour.
+///
+/// The Studio sends `listRule`, `viewRule`, … as siblings of `name`/`fields`, plus
+/// `indexes`. The data layer reads `rules.listRule`, and serde silently dropped the
+/// flat keys — so a rule set in the editor was never stored and every collection
+/// stayed default-deny. Folding them in is the fix; refusing a non-empty `indexes`
+/// list is the fail-loud half, because those would otherwise be silently ignored.
+fn normalize_collection_body(body: Value) -> Result<Value, ApiError> {
+    let Value::Object(mut object) = body else {
+        return Err(ApiError::new(Error::invalid(
+            "the collection must be a JSON object",
+        )));
+    };
+
+    if object
+        .get("indexes")
+        .and_then(Value::as_array)
+        .is_some_and(|indexes| !indexes.is_empty())
+    {
+        return Err(ApiError::new(Error::unsupported(
+            "custom collection indexes are not supported yet; the collection was not saved \
+             rather than stored without them",
+        )));
+    }
+    object.remove("indexes");
+
+    let mut rules = object
+        .get("rules")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for key in RULE_KEYS {
+        if let Some(value) = object.remove(*key) {
+            rules.insert((*key).to_string(), value);
+        }
+    }
+    if !rules.is_empty() {
+        object.insert("rules".to_string(), Value::Object(rules));
+    }
+
+    Ok(Value::Object(object))
+}
+
 /// `POST /api/collections`
 ///
 /// The body is the data layer's own input type, so the wire shape and the layer
-/// that builds the DDL cannot drift apart.
+/// that builds the DDL cannot drift apart. It is normalised first, to accept the
+/// shape the Studio sends.
 pub async fn create(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-    Json(body): Json<CreateCollection>,
+    Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     require_superuser(&principal)?;
+
+    let body: CreateCollection = serde_json::from_value(normalize_collection_body(body)?)
+        .map_err(|err| ApiError::new(Error::invalid(format!("invalid collection: {err}"))))?;
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
     let collection = collections::create(&mut client, body)
@@ -119,9 +177,12 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path(name): Path<String>,
-    Json(body): Json<UpdateCollection>,
+    Json(body): Json<Value>,
 ) -> Result<Json<Collection>, ApiError> {
     require_superuser(&principal)?;
+
+    let body: UpdateCollection = serde_json::from_value(normalize_collection_body(body)?)
+        .map_err(|err| ApiError::new(Error::invalid(format!("invalid collection: {err}"))))?;
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
     // Confirm it exists first, so the error is a 404 rather than whatever the
@@ -147,10 +208,10 @@ pub async fn update(
 pub struct DeleteQuery {
     /// Whether to drop the table and its rows.
     ///
-    /// Defaults to false, and the field is `dropData` rather than something
-    /// friendlier because the decision deserves an explicit word: dropping a
-    /// collection without this leaves the data in place and only removes the
-    /// definition.
+    /// **Defaults to true**, matching `main` and PocketBase: deleting a collection
+    /// deletes its table. Keeping the data is the explicit opt-out (`dropData=false`),
+    /// because otherwise a delete left the table behind and re-creating the same name
+    /// failed with "a table already exists".
     #[serde(default, rename = "dropData")]
     pub drop_data: Option<bool>,
 }
@@ -164,7 +225,7 @@ pub async fn delete(
 ) -> Result<Json<Collection>, ApiError> {
     require_superuser(&principal)?;
 
-    let drop_data = query.drop_data.unwrap_or(false);
+    let drop_data = query.drop_data.unwrap_or(true);
     let mut client = state.db.client().await.map_err(ApiError::new)?;
     if collections::find(&client, &name)
         .await

@@ -81,6 +81,7 @@ pub struct Field {
     /// 15-character record id.
     pub id: String,
     /// Owning collection id.
+    #[serde(rename = "collectionId")]
     pub collection_id: String,
     /// Lowercase snake_case column name.
     pub name: String,
@@ -96,6 +97,12 @@ pub struct Field {
     #[serde(default)]
     pub options: Value,
     /// Display position.
+    ///
+    /// The wire name is `sort_order`, which is what the Studio and the SDK read and
+    /// write; `position` stays the column name. It used to be serialized as
+    /// `position`, which neither client looked at, so a field list always rendered
+    /// in its stored order no matter what the editor did.
+    #[serde(rename = "sort_order")]
     pub position: i32,
 }
 
@@ -636,7 +643,7 @@ pub async fn update(
     // Ignoring them was the first version of this, and it was the worst possible
     // behaviour: a collection editor sent the whole definition, got a 200, and its
     // field changes — a relation field most visibly — silently did nothing.
-    if let Some(fields) = input.fields {
+    if let Some(fields) = &input.fields {
         for field in fields {
             match existing
                 .fields
@@ -644,10 +651,10 @@ pub async fn update(
                 .find(|current| current.name == field.name)
             {
                 None => {
-                    add_field(client, &existing.name, field).await?;
+                    add_field(client, &existing.name, field.clone()).await?;
                 }
                 Some(current) => {
-                    update_field(client, &existing.name, current, &field).await?;
+                    update_field(client, &existing.name, current, field).await?;
                 }
             }
         }
@@ -673,6 +680,22 @@ pub async fn update(
         )
         .await
         .map_err(db_error)?;
+
+    // Persist the order the client sent. The incoming array is the order the
+    // Studio's field list is in after a drag, and the read side now exposes the
+    // stored position as `sort_order`; without this a reorder was accepted and
+    // silently dropped, so the editor's drag never survived a refresh.
+    if let Some(fields) = &input.fields {
+        for (position, field) in fields.iter().enumerate() {
+            transaction
+                .execute(
+                    "update _fields set position = $3 where collection_id = $1 and name = $2",
+                    &[&existing.id, &field.name, &(position as i32)],
+                )
+                .await
+                .map_err(db_error)?;
+        }
+    }
 
     // Rebuild the policies from the new rules. Without this the row changed but
     // the table kept the policies it already had, so a rule edited to public in
