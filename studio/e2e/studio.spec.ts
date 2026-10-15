@@ -221,6 +221,34 @@ test('the Studio loads, logs in, and renders the collections page', async ({ pag
 	await expect(page.getByRole('button', { name: /New Collection/ })).toBeVisible();
 });
 
+test('the collections sidebar counts columns and lists the system collections', async ({ page }) => {
+	await signIn(page);
+	const name = `e2e_cols_${Date.now().toString(36)}`;
+	// One text field, so the sidebar count is deterministic.
+	await createCollectionViaApi(name);
+	try {
+		await page.goto(`/_/collections?collection=${name}`);
+
+		// The sidebar row is the collection name followed by its column count.
+		// The server has to serve the field list for that count: before it did,
+		// every collection rendered "0". Asserting a positive number is what
+		// catches the regression, so the check is on the number, not the name.
+		const row = page.locator('div[role="button"]').filter({ hasText: name }).first();
+		await expect(row).toContainText(name);
+		await expect(row.locator('span').last()).toHaveText(/^[1-9]\d*$/);
+
+		// The server presents the PocketBase system collections under System.
+		await page.getByText(/^System \(/).click();
+		for (const system of ['_superusers', '_auth_origins', '_external_auths', '_mfas', '_otps']) {
+			await expect(page.getByText(system, { exact: true })).toBeVisible();
+		}
+		// The registry is not one of them.
+		await expect(page.getByText('_collections', { exact: true })).toHaveCount(0);
+	} finally {
+		await deleteCollectionViaApi(name);
+	}
+});
+
 test('every Studio page loads for a superuser', async ({ page }) => {
 	await signIn(page);
 
