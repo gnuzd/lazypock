@@ -6,6 +6,9 @@
 //! access-token signing key is tracked as a gap rather than stored here.
 
 use lazypock_core::error::{Error, Result};
+use serde_json::Value;
+
+use crate::secrets::Secrets;
 
 /// Which backend stores objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +59,12 @@ pub struct FilesConfig {
     pub image_service_url: Option<String>,
     /// Shared secret sent to the image service as a bearer token.
     pub image_service_token: Option<String>,
+    /// How long a presigned URL stays valid, in seconds.
+    ///
+    /// Short by default: the URL authorizes a `PUT` to one key, so the window in which a
+    /// leaked one is useful should be small. Fifteen minutes is enough for a slow
+    /// connection to start an upload.
+    pub presign_ttl_seconds: i64,
 }
 
 impl FilesConfig {
@@ -63,6 +72,8 @@ impl FilesConfig {
     pub const DEFAULT_DIRECTORY: &'static str = "data/files";
     /// Default region, which is what Cloudflare R2 expects.
     pub const DEFAULT_REGION: &'static str = "auto";
+    /// Default lifetime of a presigned URL.
+    pub const DEFAULT_PRESIGN_TTL_SECONDS: i64 = 15 * 60;
 
     /// Read the configuration from the environment.
     pub fn from_env() -> Result<Self> {
@@ -98,9 +109,42 @@ impl FilesConfig {
             secret_key: optional("LAZYPOCK_S3_SECRET_KEY"),
             image_service_url: optional("LAZYPOCK_IMAGE_SERVICE_URL"),
             image_service_token: optional("LAZYPOCK_IMAGE_SERVICE_TOKEN"),
+            presign_ttl_seconds: match optional("LAZYPOCK_PRESIGN_TTL") {
+                Some(raw) => raw.parse::<i64>().map_err(|_| {
+                    Error::config(format!(
+                        "LAZYPOCK_PRESIGN_TTL must be a whole number of seconds, got {raw:?}"
+                    ))
+                })?,
+                None => Self::DEFAULT_PRESIGN_TTL_SECONDS,
+            },
         };
 
-        if let Some(url) = &config.public_base_url {
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    /// The fields the Studio's Files Storage page can save, and the environment variable
+    /// each of them falls back to.
+    ///
+    /// One table, so the view, the merge and the page's "set by LAZYPOCK_…" hints cannot
+    /// disagree about which variable owns which field.
+    pub const STORAGE_FIELDS: [(&'static str, &'static str); 7] = [
+        ("backend", "LAZYPOCK_FILES_ADAPTER"),
+        ("endpoint", "LAZYPOCK_S3_ENDPOINT"),
+        ("bucket", "LAZYPOCK_S3_BUCKET"),
+        ("region", "LAZYPOCK_S3_REGION"),
+        ("access_key_id", "LAZYPOCK_S3_ACCESS_KEY"),
+        ("secret_access_key", "LAZYPOCK_S3_SECRET_KEY"),
+        ("public_base_url", "LAZYPOCK_FILES_PUBLIC_URL"),
+    ];
+
+    /// Refuse a configuration that cannot work, at boot and again at save time.
+    ///
+    /// An incomplete S3 configuration is named here rather than failing on the first
+    /// upload.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(url) = &self.public_base_url {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
                 return Err(Error::config(format!(
                     "LAZYPOCK_FILES_PUBLIC_URL must start with http:// or https://, got {url:?}"
@@ -108,29 +152,32 @@ impl FilesConfig {
             }
         }
 
-        if let Some(url) = &config.image_service_url {
+        if let Some(url) = &self.image_service_url {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
                 return Err(Error::config(format!(
                     "LAZYPOCK_IMAGE_SERVICE_URL must start with http:// or https://, got {url:?}"
                 )));
             }
-        } else if config.image_service_token.is_some() {
-            // A token with nothing to send it to reads as "the service is configured
-            // and authenticated" while resizing still happens in this process.
+        } else if self.image_service_token.is_some() {
             return Err(Error::config(
                 "LAZYPOCK_IMAGE_SERVICE_TOKEN is set but LAZYPOCK_IMAGE_SERVICE_URL is not: \
                  the token would never be sent",
             ));
         }
 
-        // An incomplete S3 configuration is refused here rather than failing on
-        // the first upload.
-        if config.adapter == StorageAdapter::S3 {
+        if !(1..=7 * 24 * 60 * 60).contains(&self.presign_ttl_seconds) {
+            return Err(Error::config(format!(
+                "a presigned URL lifetime must be between 1 second and 7 days, got {}",
+                self.presign_ttl_seconds
+            )));
+        }
+
+        if self.adapter == StorageAdapter::S3 {
             for (key, value) in [
-                ("LAZYPOCK_S3_ENDPOINT", &config.endpoint),
-                ("LAZYPOCK_S3_BUCKET", &config.bucket),
-                ("LAZYPOCK_S3_ACCESS_KEY", &config.access_key),
-                ("LAZYPOCK_S3_SECRET_KEY", &config.secret_key),
+                ("LAZYPOCK_S3_ENDPOINT", &self.endpoint),
+                ("LAZYPOCK_S3_BUCKET", &self.bucket),
+                ("LAZYPOCK_S3_ACCESS_KEY", &self.access_key),
+                ("LAZYPOCK_S3_SECRET_KEY", &self.secret_key),
             ] {
                 if value.is_none() {
                     return Err(Error::config(format!(
@@ -140,7 +187,93 @@ impl FilesConfig {
             }
         }
 
-        Ok(config)
+        Ok(())
+    }
+
+    /// Apply a saved `storage` setting over this configuration.
+    ///
+    /// The environment supplies the defaults and **a saved setting wins**, which is what
+    /// lets a superuser change storage from the Studio without a rebuild while a
+    /// deployment configured by environment keeps behaving exactly as it did. A field the
+    /// setting does not carry is left alone.
+    ///
+    /// A stored secret needs `secrets` to read it. Without a key that is an **error**
+    /// rather than a fallback to the environment's value: silently using a different
+    /// credential than the one that was saved hides a rotated key behind a working-looking
+    /// deployment.
+    pub fn apply_storage_setting(
+        &mut self,
+        setting: &Value,
+        secrets: Option<&Secrets>,
+    ) -> Result<()> {
+        let saved = |field: &str| {
+            setting
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+
+        if let Some(backend) = saved("backend") {
+            self.adapter = StorageAdapter::parse(&backend)?;
+        }
+        if let Some(endpoint) = saved("endpoint") {
+            self.endpoint = Some(endpoint);
+        }
+        if let Some(bucket) = saved("bucket") {
+            self.bucket = Some(bucket);
+        }
+        if let Some(region) = saved("region") {
+            self.region = region;
+        }
+        if let Some(access_key) = saved("access_key_id") {
+            self.access_key = Some(access_key);
+        }
+        if let Some(public_base_url) = saved("public_base_url") {
+            self.public_base_url = Some(public_base_url);
+        }
+        if let Some(ttl) = setting
+            .get("presign_ttl")
+            .and_then(Value::as_i64)
+            .filter(|ttl| *ttl > 0)
+        {
+            self.presign_ttl_seconds = ttl;
+        }
+
+        if let Some(stored) = saved("secret_access_key") {
+            let secrets = secrets.ok_or_else(|| {
+                Error::config(format!(
+                    "a storage secret is saved in the database but {} is not set, so it cannot \
+                     be read: set it to the key the secret was saved with",
+                    crate::secrets::KEY_VARIABLE
+                ))
+            })?;
+            self.secret_key = Some(secrets.decrypt("secret_access_key", &stored)?);
+        }
+
+        self.validate()
+    }
+
+    /// The fields whose value still comes from the environment.
+    ///
+    /// What the Studio's page locks: a field the environment set and the setting does not
+    /// override is not editable, because saving it would look like it worked and change
+    /// nothing. Saving a field moves it out of this list.
+    pub fn storage_env_fields(setting: &Value) -> Vec<&'static str> {
+        Self::STORAGE_FIELDS
+            .iter()
+            .filter(|(field, variable)| {
+                let overridden = setting
+                    .get(*field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty());
+                let set_in_env =
+                    std::env::var(variable).is_ok_and(|value| !value.trim().is_empty());
+                !overridden && set_in_env
+            })
+            .map(|(field, _)| *field)
+            .collect()
     }
 
     /// A summary with the secret redacted, for logs and the CLI.
@@ -175,7 +308,8 @@ impl FilesConfig {
         ]
     }
 
-    fn adapter_str(&self) -> &'static str {
+    /// The backend's name, as `_files.storage_backend` and the settings API use it.
+    pub fn adapter_str(&self) -> &'static str {
         match self.adapter {
             StorageAdapter::Local => "local",
             StorageAdapter::S3 => "s3",

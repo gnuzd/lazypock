@@ -226,6 +226,67 @@ async fn the_signing_key_is_neither_exposed_nor_writable() {
     app.cleanup().await;
 }
 
+/// Run a statement against the test's schema.
+async fn sql(app: &TestApp, statement: &str) {
+    let client = app.client().await;
+    client
+        .batch_execute(statement)
+        .await
+        .expect("the statement should apply");
+}
+
+/// A real, decodable PNG: upload validation reads the header, thumbnails decode it.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let raw = image::RgbaImage::from_pixel(width, height, image::Rgba([10, 120, 200, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(raw)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .expect("encode png");
+    bytes
+}
+
+/// Upload one PNG, the way the Studio's record form does.
+async fn upload_png(app: &TestApp, token: &str) -> support::Reply {
+    const BOUNDARY: &str = "----lazypockSettingsBoundary";
+    let bytes = png(8, 8);
+
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\";                  filename=\"cover.png\"\r\nContent-Type: image/png\r\n\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(&bytes);
+    body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+
+    let request = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri("/api/files")
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(axum::body::Body::from(body))
+        .expect("request");
+
+    let response = tower::ServiceExt::oneshot(router(app).await, request)
+        .await
+        .expect("response");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body")
+        .to_vec();
+    support::Reply {
+        status,
+        headers: Default::default(),
+        body: serde_json::from_slice(&bytes).ok(),
+    }
+}
+
 #[tokio::test]
 async fn the_files_storage_page_reads_the_running_configuration() {
     let Some(app) = test_app("settings_storage_read").await else {
@@ -250,21 +311,23 @@ async fn the_files_storage_page_reads_the_running_configuration() {
     // The secret is never echoed, only whether there is one.
     assert_eq!(body["secret_access_key"], json!(""), "{body}");
     assert_eq!(body["secret_set"], json!(false), "{body}");
-    // Every field is environment-managed, which is what locks the form.
+    // Whatever the environment owns is named (and locked by the page); it can only ever be
+    // a subset of the fields the page knows, because a field nothing configured is
+    // editable — which is what makes "save from the Studio" possible at all.
     let locked = body["configured_from_env"].as_array().expect("a list");
-    for field in [
-        "backend",
-        "endpoint",
-        "bucket",
-        "region",
-        "access_key_id",
-        "secret_access_key",
-        "prefix",
-        "public_base_url",
-    ] {
+    for field in locked {
         assert!(
-            locked.contains(&json!(field)),
-            "{field} should be listed as environment-managed: {body}"
+            [
+                "backend",
+                "endpoint",
+                "bucket",
+                "region",
+                "access_key_id",
+                "secret_access_key",
+                "public_base_url"
+            ]
+            .contains(&field.as_str().expect("a field name")),
+            "unexpected environment-managed field {field}: {body}"
         );
     }
     assert_eq!(body["presign_ttl"], json!(900), "{body}");
@@ -283,43 +346,39 @@ async fn the_files_storage_page_reads_the_running_configuration() {
 }
 
 #[tokio::test]
-async fn saving_storage_settings_is_refused_with_the_variables_to_change() {
+async fn saving_storage_settings_takes_effect_without_a_restart() {
     let Some(app) = test_app("settings_storage_write").await else {
         return;
     };
     let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
 
-    // Accepting this and storing nothing would be worse than refusing it, so the refusal
-    // names every variable that has to change instead.
+    // What the Studio sends: its whole form, with a blank secret meaning "keep the stored
+    // one".
     let reply = call_authed(
         &router(&app).await,
         Method::PATCH,
         "/api/settings/storage",
-        Some(json!({ "backend": "s3", "bucket": "media" })),
+        Some(json!({
+            "backend": "local",
+            "region": "auto",
+            "public_base_url": "https://cdn.example.com",
+            "prefix": "",
+            "force_path_style": true,
+            "presign_ttl": 900,
+            "secret_access_key": ""
+        })),
         &token,
     )
     .await;
-    assert_eq!(reply.status, StatusCode::CONFLICT, "{:?}", reply.body);
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("a view");
+    assert_eq!(
+        body["public_base_url"],
+        json!("https://cdn.example.com"),
+        "{body}"
+    );
 
-    let message = reply.body.expect("a refusal")["message"]
-        .as_str()
-        .expect("a message")
-        .to_string();
-    for variable in [
-        "LAZYPOCK_FILES_ADAPTER",
-        "LAZYPOCK_S3_ENDPOINT",
-        "LAZYPOCK_S3_BUCKET",
-        "LAZYPOCK_S3_ACCESS_KEY",
-        "LAZYPOCK_S3_SECRET_KEY",
-        "LAZYPOCK_FILES_PUBLIC_URL",
-    ] {
-        assert!(
-            message.contains(variable),
-            "{variable} missing from {message}"
-        );
-    }
-
-    // And nothing was written: the setting the page would have saved is absent.
+    // It was stored as a setting, so a restart keeps it.
     let reply = call_authed(
         &router(&app).await,
         Method::GET,
@@ -328,11 +387,96 @@ async fn saving_storage_settings_is_refused_with_the_variables_to_change() {
         &token,
     )
     .await;
-    let body = reply.body.expect("settings");
-    assert!(
-        body.get("storage").is_none(),
-        "the storage setting must not be stored: {body}"
+    let settings = reply.body.expect("settings");
+    assert_eq!(
+        settings["storage"]["public_base_url"],
+        json!("https://cdn.example.com"),
+        "{settings}"
     );
+
+    // And it is **live**: the next upload hands out a URL on the CDN base, with no restart
+    // in between. That is the whole point of saving it here.
+    let mut client = app.client().await;
+    lazypock_db::collections::create(
+        &mut client,
+        lazypock_db::collections::CreateCollection {
+            name: "posts".into(),
+            collection_type: lazypock_db::types::CollectionType::Base,
+            fields: vec![lazypock_db::collections::CreateField {
+                name: "title".into(),
+                field_type: lazypock_db::types::FieldType::Text,
+                required: false,
+                unique: false,
+                options: json!({}),
+            }],
+            rules: json!({}),
+            options: json!({}),
+            adopt_existing_table: false,
+        },
+    )
+    .await
+    .expect("create posts");
+    sql(
+        &app,
+        "insert into posts (id, title) values ('p1', 'a post')",
+    )
+    .await;
+
+    let reply = upload_png(&app, &token).await;
+    let url = reply.body.expect("a file")["url"]
+        .as_str()
+        .expect("a url")
+        .to_string();
+    assert!(
+        url.starts_with("https://cdn.example.com/api/files/"),
+        "the saved base URL applies to the next upload: {url}"
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn storage_settings_that_cannot_be_honoured_are_refused() {
+    let Some(app) = test_app("settings_storage_unsupported").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // Storing these would look like they worked. This server addresses an object as
+    // `<endpoint>/<bucket>/<key>` and has no key prefix, so both are refused with the
+    // reason.
+    for body in [
+        json!({ "force_path_style": false }),
+        json!({ "prefix": "lazypock/my-app/" }),
+    ] {
+        let reply = call_authed(
+            &router(&app).await,
+            Method::PATCH,
+            "/api/settings/storage",
+            Some(body.clone()),
+            &token,
+        )
+        .await;
+        assert_eq!(
+            reply.status,
+            StatusCode::BAD_REQUEST,
+            "{body}: {:?}",
+            reply.body
+        );
+
+        let reply = call_authed(
+            &router(&app).await,
+            Method::GET,
+            "/api/settings",
+            None,
+            &token,
+        )
+        .await;
+        assert!(
+            reply.body.expect("settings").get("storage").is_none(),
+            "nothing should have been stored for {body}"
+        );
+    }
 
     app.cleanup().await;
 }

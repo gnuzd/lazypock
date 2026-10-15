@@ -159,7 +159,7 @@ pub async fn upload(
     // dimensions are needed for the row. The same validator is used either way, so the
     // refusal a caller sees (SVG, an unsupported type, an oversized upload) does not
     // depend on which layer noticed.
-    let format = lazypock_files::validation::validate(&body, &declared_type, state.files.limits())
+    let format = lazypock_files::validation::validate(&body, &declared_type, &state.files.limits())
         .map_err(ApiError::new)?;
     let dimensions = lazypock_files::validation::dimensions(&body, format);
     let declared_size = body.len() as i64;
@@ -349,7 +349,7 @@ async fn variant_bytes(
         // of this process. A service that refuses the work is an error, never a quiet
         // fallback to the local codecs — the deployment asked for the CPU to be
         // elsewhere.
-        state.files.image_service(),
+        state.files.image_service().as_ref(),
     )
     .await
     .map_err(ApiError::new)?;
@@ -592,7 +592,7 @@ pub async fn complete(
     let format = lazypock_files::validation::validate(
         &object.body,
         &object.content_type,
-        state.files.limits(),
+        &state.files.limits(),
     )
     .map_err(ApiError::new)?;
     let dimensions = lazypock_files::validation::dimensions(&object.body, format);

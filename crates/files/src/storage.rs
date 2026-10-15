@@ -230,8 +230,19 @@ impl Storage for LocalStorage {
     }
 }
 
-/// The file service: one configured backend plus the upload rules.
+/// The live file service.
+///
+/// Reconfigurable **without a restart**: a superuser saving storage settings swaps the
+/// inner service, and a request already in flight finishes against the backend it started
+/// with — the old one is dropped once the last holder lets go of it. That is what makes
+/// "change storage from the Studio" honest instead of "takes effect after a restart".
 pub struct Files {
+    inner: arc_swap::ArcSwap<Inner>,
+}
+
+/// The parts that change when the configuration does.
+#[derive(Clone)]
+struct Inner {
     storage: Arc<dyn Storage>,
     limits: UploadLimits,
     public_base_url: Option<String>,
@@ -239,43 +250,25 @@ pub struct Files {
     /// `local` or `s3`, as `_files.storage_backend` records it: a key is only unique
     /// within one backend, so the reaper has to know which store it owns.
     backend: &'static str,
-    /// The configuration this service was built from.
-    ///
-    /// Kept so the settings API can report the configuration the server is *running*
-    /// with — which is not necessarily what the environment says a restarted process
-    /// would use — without re-reading it.
+    /// The configuration this service was built from, so the settings API can report the
+    /// configuration the server is *running* with rather than re-reading the environment.
     config: FilesConfig,
 }
 
-impl std::fmt::Debug for Files {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Files")
-            .field("limits", &self.limits)
-            .field("public_base_url", &self.public_base_url)
-            // The service's URL, never its token.
-            .field(
-                "image_service",
-                &self.image_service.as_ref().map(|service| service.url()),
-            )
-            .finish_non_exhaustive()
-    }
-}
-
-impl Files {
-    /// Build the service from the configuration.
+impl Inner {
+    /// Build one from a configuration.
     ///
-    /// A backend is built from configuration and validated here, at boot, rather
-    /// than failing on the first upload. A misconfigured S3 backend is refused
-    /// loudly instead of quietly falling back to the local disk, which would put
-    /// objects somewhere the operator is not looking.
-    pub fn from_config(config: &FilesConfig) -> Result<Self> {
+    /// A backend is built and validated here rather than on the first upload: a
+    /// misconfigured S3 backend is refused loudly instead of quietly falling back to the
+    /// local disk, which would put objects somewhere the operator is not looking.
+    fn build(config: &FilesConfig) -> Result<Self> {
         let (storage, backend): (Arc<dyn Storage>, &'static str) = match config.adapter {
             StorageAdapter::Local => (Arc::new(LocalStorage::new(&config.directory)), "local"),
             StorageAdapter::S3 => (Arc::new(crate::s3::S3Storage::new(config)?), "s3"),
         };
 
-        // Built at boot, so a bad URL is a startup error rather than the first
-        // thumbnail's problem.
+        // Built up front, so a bad image service URL is a startup error rather than the
+        // first thumbnail's problem.
         let image_service = match &config.image_service_url {
             Some(url) => Some(crate::image_service::ImageService::new(
                 url.clone(),
@@ -293,45 +286,96 @@ impl Files {
             config: config.clone(),
         })
     }
+}
+
+impl std::fmt::Debug for Files {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = self.inner.load();
+        f.debug_struct("Files")
+            .field("backend", &inner.backend)
+            .field("limits", &inner.limits)
+            .field("public_base_url", &inner.public_base_url)
+            // The service's URL, never its token.
+            .field(
+                "image_service",
+                &inner.image_service.as_ref().map(|service| service.url()),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl Files {
+    /// Build the service from the configuration.
+    pub fn from_config(config: &FilesConfig) -> Result<Self> {
+        Ok(Self {
+            inner: arc_swap::ArcSwap::from_pointee(Inner::build(config)?),
+        })
+    }
+
+    /// Build a service from a new configuration and make it current.
+    ///
+    /// Built first and swapped second, so a configuration that cannot be built leaves the
+    /// running service exactly as it was — a bad save must not take a working deployment
+    /// down with it.
+    pub fn reconfigure(&self, config: &FilesConfig) -> Result<()> {
+        let inner = Inner::build(config)?;
+        self.inner.store(Arc::new(inner));
+        Ok(())
+    }
 
     /// The external image service, when one is configured.
     ///
     /// `None` means resizing happens in this process — or, in a build without the
     /// `local-image-codecs` feature, that no thumbnail can be produced at all.
-    pub fn image_service(&self) -> Option<&crate::image_service::ImageService> {
-        self.image_service.as_ref()
+    pub fn image_service(&self) -> Option<crate::image_service::ImageService> {
+        self.inner.load().image_service.clone()
     }
 
     /// The backend's name, as `_files.storage_backend` stores it.
     pub fn backend_name(&self) -> &'static str {
-        self.backend
+        self.inner.load().backend
     }
 
-    /// The configuration this service was built from.
-    pub fn config(&self) -> &FilesConfig {
-        &self.config
+    /// The configuration this service is running with.
+    pub fn config(&self) -> FilesConfig {
+        self.inner.load().config.clone()
     }
 
-    /// The backend.
-    pub fn storage(&self) -> &Arc<dyn Storage> {
-        &self.storage
+    /// The backend in use **now**.
+    ///
+    /// A handle rather than a borrow: the service can be reconfigured at any moment, and a
+    /// caller holding a borrow of it would hold the swap off. The backend it received
+    /// stays alive until the caller drops it, so a request finishes where it started.
+    pub fn storage(&self) -> Arc<dyn Storage> {
+        Arc::clone(&self.inner.load().storage)
     }
 
     /// The upload rules.
-    pub fn limits(&self) -> &UploadLimits {
-        &self.limits
+    pub fn limits(&self) -> UploadLimits {
+        self.inner.load().limits.clone()
     }
 
     /// Replace the upload rules, e.g. from a field's options.
-    pub fn with_limits(mut self, limits: UploadLimits) -> Self {
-        self.limits = limits;
+    pub fn with_limits(self, limits: UploadLimits) -> Self {
+        self.inner.rcu(|inner| {
+            let mut next = Inner::clone(inner);
+            next.limits = limits.clone();
+            Arc::new(next)
+        });
         self
     }
 
     /// Validate an upload and store it, returning what it turned out to be.
     pub async fn store(&self, key: &str, declared_type: &str, body: Bytes) -> Result<ImageFormat> {
-        let format = validation::validate(&body, declared_type, &self.limits)?;
-        self.storage.put(key, format.content_type(), body).await?;
+        // Read the current backend and rules out of the guard, then let it go: the upload
+        // is written where it started even if the settings change while it is in flight.
+        let (storage, limits) = {
+            let inner = self.inner.load();
+            (Arc::clone(&inner.storage), inner.limits.clone())
+        };
+
+        let format = validation::validate(&body, declared_type, &limits)?;
+        storage.put(key, format.content_type(), body).await?;
         Ok(format)
     }
 
@@ -341,7 +385,7 @@ impl Files {
     /// route.
     pub fn url(&self, collection: &str, record_id: &str, filename: &str) -> String {
         let path = format!("api/files/{collection}/{record_id}/{filename}");
-        match &self.public_base_url {
+        match &self.inner.load().public_base_url {
             Some(base) => format!("{}/{}", base.trim_end_matches('/'), path),
             None => format!("/{path}"),
         }
@@ -355,7 +399,7 @@ impl Files {
     /// same rule as [`Self::url`].
     pub fn file_url(&self, id: &str) -> String {
         let path = format!("api/files/{id}");
-        match &self.public_base_url {
+        match &self.inner.load().public_base_url {
             Some(base) => format!("{}/{}", base.trim_end_matches('/'), path),
             None => format!("/{path}"),
         }
@@ -377,8 +421,8 @@ mod tests {
         Bytes::from(bytes)
     }
 
-    fn service(adapter: StorageAdapter) -> Result<Files> {
-        Files::from_config(&FilesConfig {
+    fn config(adapter: StorageAdapter) -> FilesConfig {
+        FilesConfig {
             adapter,
             directory: "/tmp/lazypock-files-test".into(),
             public_base_url: None,
@@ -389,7 +433,12 @@ mod tests {
             secret_key: None,
             image_service_url: None,
             image_service_token: None,
-        })
+            presign_ttl_seconds: FilesConfig::DEFAULT_PRESIGN_TTL_SECONDS,
+        }
+    }
+
+    fn service(adapter: StorageAdapter) -> Result<Files> {
+        Files::from_config(&config(adapter))
     }
 
     #[tokio::test]
@@ -445,16 +494,8 @@ mod tests {
             lazypock_core::id::new_id()
         ));
         let files = Files::from_config(&FilesConfig {
-            adapter: StorageAdapter::Local,
             directory: directory.display().to_string(),
-            public_base_url: None,
-            endpoint: None,
-            bucket: None,
-            region: "auto".into(),
-            access_key: None,
-            secret_key: None,
-            image_service_url: None,
-            image_service_token: None,
+            ..config(StorageAdapter::Local)
         })
         .expect("service");
 
@@ -497,16 +538,76 @@ mod tests {
 
     #[test]
     fn urls_prefer_the_public_base_when_one_is_configured() {
-        let mut files = service(StorageAdapter::Local).expect("service");
+        let files = service(StorageAdapter::Local).expect("service");
         assert_eq!(
             files.url("posts", "abc", "p.png"),
             "/api/files/posts/abc/p.png"
         );
+        assert_eq!(files.file_url("f1"), "/api/files/f1");
 
-        files.public_base_url = Some("https://cdn.example.com".into());
+        // A CDN base applies to both shapes of URL, so a client that is handed either one
+        // is not quietly sent to the wrong host.
+        let with_cdn = Files::from_config(&FilesConfig {
+            public_base_url: Some("https://cdn.example.com".into()),
+            ..config(StorageAdapter::Local)
+        })
+        .expect("service");
+
         assert_eq!(
-            files.url("posts", "abc", "p.png"),
+            with_cdn.url("posts", "abc", "p.png"),
             "https://cdn.example.com/api/files/posts/abc/p.png"
         );
+        assert_eq!(
+            with_cdn.file_url("f1"),
+            "https://cdn.example.com/api/files/f1"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconfiguring_swaps_the_backend_without_a_restart() {
+        let first =
+            std::env::temp_dir().join(format!("lazypock-files-a-{}", lazypock_core::id::new_id()));
+        let second =
+            std::env::temp_dir().join(format!("lazypock-files-b-{}", lazypock_core::id::new_id()));
+
+        let files = Files::from_config(&FilesConfig {
+            directory: first.display().to_string(),
+            ..config(StorageAdapter::Local)
+        })
+        .expect("service");
+
+        files
+            .store("posts/p1/a.png", "image/png", png(4, 4))
+            .await
+            .expect("stored");
+
+        // What a settings save does: build the new service and swap it in.
+        files
+            .reconfigure(&FilesConfig {
+                directory: second.display().to_string(),
+                ..config(StorageAdapter::Local)
+            })
+            .expect("reconfigured");
+
+        assert_eq!(files.config().directory, second.display().to_string());
+        assert!(
+            files.storage().list("").await.expect("listing").is_empty(),
+            "the new directory is empty"
+        );
+        assert!(
+            first.join("posts/p1/a.png").exists(),
+            "the object stays where it was written"
+        );
+
+        // A configuration that cannot be built leaves the running service alone.
+        let broken = FilesConfig {
+            adapter: StorageAdapter::S3,
+            ..config(StorageAdapter::S3)
+        };
+        assert!(files.reconfigure(&broken).is_err());
+        assert_eq!(files.config().directory, second.display().to_string());
+
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
     }
 }

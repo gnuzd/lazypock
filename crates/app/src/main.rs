@@ -256,8 +256,25 @@ async fn serve(config: Config) -> Result<()> {
 
     // File storage: configured from the environment, and it has to be usable at
     // boot rather than failing on the first upload.
+    // Storage: the environment's configuration, with anything a superuser saved over it, so
+    // a change made in the Studio survives a restart as well as taking effect immediately.
+    let mut files_config = lazypock_files::FilesConfig::from_env()?;
+    {
+        let client = db.client().await?;
+        let setting = lazypock_files::storage_setting(&client).await?;
+        if setting.as_object().is_some_and(|object| !object.is_empty()) {
+            let secrets = lazypock_files::Secrets::from_env()?;
+            files_config
+                .apply_storage_setting(&setting, secrets.as_ref())
+                .map_err(|err| {
+                    Error::config(format!("cannot apply the saved storage settings: {err}"))
+                })?;
+            tracing::info!("applied the storage settings saved in the database");
+        }
+    }
+
     let files = Arc::new(
-        lazypock_files::Files::from_config(&lazypock_files::FilesConfig::from_env()?)
+        lazypock_files::Files::from_config(&files_config)
             .map_err(|err| Error::config(format!("cannot configure file storage: {err}")))?,
     );
     files
@@ -277,7 +294,7 @@ async fn serve(config: Config) -> Result<()> {
             tracing::warn!("LAZYPOCK_FILE_REAPER_INTERVAL=0: deleted objects stay in storage");
         } else {
             let ttl = unattached_upload_ttl(&db).await?;
-            let reaper = lazypock_files::Reaper::new(files.storage().clone(), files.backend_name())
+            let reaper = lazypock_files::Reaper::new(files.storage(), files.backend_name())
                 .with_unattached_ttl(ttl);
             tracing::info!(
                 every_seconds = interval.as_secs(),

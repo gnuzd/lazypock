@@ -190,6 +190,7 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
             secret_key: None,
             image_service_url: None,
             image_service_token: None,
+            presign_ttl_seconds: lazypock_files::FilesConfig::DEFAULT_PRESIGN_TTL_SECONDS,
         })
         .expect("files"),
     );

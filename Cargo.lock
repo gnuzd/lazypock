@@ -1962,12 +1962,14 @@ dependencies = [
 name = "lazypock-files"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "bytes",
  "hmac 0.13.0",
  "image",
  "lazypock-core",
  "lazypock-db",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "sha2 0.11.1",

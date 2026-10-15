@@ -970,8 +970,8 @@ async fn the_reaper_reclaims_an_abandoned_upload_and_queued_objects() {
 
     // A TTL of zero makes it instantly reclaimable. `_files` rows go first — which is
     // what queues the object — and the pass that removes it is the next one.
-    let reaper = lazypock_files::Reaper::new(app.state.files.storage().clone(), "local")
-        .with_unattached_ttl(0);
+    let reaper =
+        lazypock_files::Reaper::new(app.state.files.storage(), "local").with_unattached_ttl(0);
     let client = app.client().await;
     let first = reaper.run(&client).await.expect("reaper pass");
     assert_eq!(first.reclaimed, 1, "{first:?}");
@@ -1049,7 +1049,7 @@ async fn a_generated_variant_is_removed_with_its_source() {
     .await;
     assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
 
-    let reaper = lazypock_files::Reaper::new(app.state.files.storage().clone(), "local");
+    let reaper = lazypock_files::Reaper::new(app.state.files.storage(), "local");
     let report = reaper.run(&client).await.expect("reaper pass");
     assert_eq!(report.deleted, 1, "one queue entry: {report:?}");
 

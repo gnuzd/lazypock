@@ -12,7 +12,7 @@ uploads, puts the returned `id` in the field, and reads an image back from
 
 | What | Where |
 | --- | --- |
-| Storage backend, bucket, public base URL | environment (`LAZYPOCK_FILES_*`, `LAZYPOCK_S3_*`) |
+| Storage backend, bucket, public base URL | **Settings → Files** (saved in `_settings`, applied immediately) or the environment (`LAZYPOCK_FILES_*`, `LAZYPOCK_S3_*`) as the default |
 | Image presets | `PATCH /api/settings` with an `image.presets` list, or **Settings → Media** |
 | Who may list and delete files | `PATCH /api/settings` with a `files.rules` map, or **Settings → Media** |
 | Per-field type and size limits | the field's options in the collection editor |
@@ -209,12 +209,28 @@ An incomplete S3 configuration is refused at boot rather than on the first uploa
 backend is health-checked. With a public base URL the URLs a client is handed point at the
 CDN; without one they point at this server.
 
-**Settings → Files** shows this configuration — `GET /api/settings/storage`, with the secret
-reported only as "set" — and its **Test connection** button probes the backend
-(`POST /api/settings/storage/test`). Saving from there is refused with the variables to
-change, because the storage configuration is environment-only: a credential stored in the
-database would travel in every backup, replica and SQL console dump, and a form that saved
-nothing would be harder to notice than a refusal that says why.
+**Settings → Files** shows this configuration (`GET /api/settings/storage`, with the secret
+reported only as "set"), **saves it** (`PATCH`, superuser-only) and probes the backend
+(`POST /api/settings/storage/test`).
+
+A save takes effect **immediately** — the running file service is rebuilt and swapped in, so
+there is no restart in the middle — and it is kept in `_settings`, so it survives one. The
+environment supplies the defaults and a saved field wins over it; a field the environment
+set and nothing has overridden is shown locked, with the variable that owns it.
+
+Two things to know before you save a secret:
+
+- It is stored **encrypted**, with a key only the environment holds:
+  `LAZYPOCK_SECRET_KEY=$(openssl rand -hex 32)`. Without that variable a save that includes a
+  secret is refused rather than stored in the clear — `_settings` travels in every backup,
+  replica and `pg_dump`. Losing the key means the saved secret cannot be read again and has
+  to be entered once more.
+- Two form fields are refused rather than stored and ignored: **Force path style** has to stay
+  on (an object is addressed as `<endpoint>/<bucket>/<key>`) and **Key prefix** must be empty
+  (an object's key is `{collection}/{record}/{filename}`).
+
+`LAZYPOCK_PRESIGN_TTL` (or the page's **Presign TTL**) sets how long a presigned URL stays
+valid; the default is fifteen minutes.
 
 ### Deletion and the reaper
 
