@@ -557,8 +557,10 @@ pub async fn delete_for_collection(
 
 /// Uploads that were never attached and are older than `ttl_seconds`.
 ///
-/// The editor and the library may upload something the user then abandons; this is
-/// what the reaper reclaims.
+/// The editor and the media library may upload something the user then abandons, and
+/// those are what this reclaims. An upload that arrived through a record's field is
+/// **not** a candidate even while it is pending: the user meant that file to be in a
+/// record, and a bug in attaching it is not a reason to delete their upload.
 pub async fn unattached_older_than(
     runner: &dyn QueryRunner,
     ttl_seconds: i64,
@@ -566,7 +568,7 @@ pub async fn unattached_older_than(
 ) -> Result<Vec<FileRow>> {
     let sql = format!(
         "select {COLUMNS} from _files \
-         where status = 'pending' and attached_at is null \
+         where status = 'pending' and attached_at is null and origin <> 'field' \
            and created_at < now() - make_interval(secs => $1::text::bigint) \
          order by created_at limit $2::text::bigint"
     );
@@ -580,6 +582,110 @@ pub async fn unattached_older_than(
         files.push(FileRow::from_row(row)?);
     }
     Ok(files)
+}
+
+/// Delete the given files, returning the ids that were there.
+///
+/// A record delete uses this for the files its values name, so a row that never got
+/// attached to the record still goes when the record does. The trigger queues each
+/// object, exactly as for every other deletion.
+pub async fn delete_for_ids(runner: &dyn QueryRunner, ids: &[String]) -> Result<Vec<String>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows = runner
+        .run_query(
+            "delete from _files where id = any($1::text[]) returning id",
+            &[&ids.to_vec()],
+        )
+        .await
+        .map_err(db_error)?;
+
+    Ok(rows.iter().map(|row| row.get(0)).collect())
+}
+
+/// Every `(file id, field)` a record's values reference.
+///
+/// A `file` field holds the ids outright — one, or a list when the field allows
+/// several. An `editor` field holds markdown, so its references are the ids inside the
+/// `/api/files/<id>` URLs it contains, which is the shape this server hands out: an
+/// editor upload is referenced by the text that embeds it.
+///
+/// An id that no longer exists simply matches no row when the caller deletes, so this
+/// is a pure parse with no database round trip.
+pub fn file_ids_in(
+    collection: &lazypock_db::collections::Collection,
+    record: &Value,
+) -> Vec<(String, String)> {
+    use lazypock_db::types::FieldType;
+
+    let Some(object) = record.as_object() else {
+        return Vec::new();
+    };
+
+    let mut found: Vec<(String, String)> = Vec::new();
+    for field in &collection.fields {
+        let Some(value) = object.get(&field.name) else {
+            continue;
+        };
+
+        match field.field_type {
+            FieldType::File => match value {
+                Value::String(id) if !id.is_empty() => {
+                    found.push((id.clone(), field.name.clone()));
+                }
+                Value::Array(values) => {
+                    for value in values {
+                        if let Some(id) = value.as_str() {
+                            if !id.is_empty() {
+                                found.push((id.to_string(), field.name.clone()));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
+            FieldType::Editor => {
+                if let Some(text) = value.as_str() {
+                    for id in ids_in_text(text) {
+                        found.push((id, field.name.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // The same file can be named twice (a text embeds it, a field repeats it), and one
+    // reference is all the table holds.
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// The file ids embedded in a value as `/api/files/<id>` URLs.
+///
+/// Hand-rolled rather than a regular expression: the id is a run of alphanumeric
+/// characters and the prefix is a constant, so a scan is simpler and needs no
+/// dependency.
+fn ids_in_text(text: &str) -> Vec<String> {
+    const PREFIX: &str = "/api/files/";
+
+    let mut ids = Vec::new();
+    let mut rest = text;
+    while let Some(position) = rest.find(PREFIX) {
+        let after = &rest[position + PREFIX.len()..];
+        let id: String = after
+            .chars()
+            .take_while(|character| character.is_ascii_alphanumeric())
+            .collect();
+        if !id.is_empty() {
+            ids.push(id);
+        }
+        rest = after;
+    }
+    ids
 }
 
 /// One record a file is referenced by.
@@ -889,6 +995,110 @@ mod tests {
                 "posts/p1/abc_photo.png".to_string(),
                 "posts/p1/thumbs/abc_photo.png/thumb_webp".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn a_file_field_names_its_ids_and_an_editor_field_names_the_ids_in_its_text() {
+        use lazypock_db::collections::{Collection, Field};
+        use lazypock_db::types::{CollectionType, FieldType};
+
+        let field = |name: &str, field_type: FieldType| Field {
+            id: format!("f_{name}"),
+            collection_id: "posts".into(),
+            name: name.into(),
+            field_type,
+            required: false,
+            is_unique: false,
+            options: serde_json::json!({}),
+            position: 0,
+        };
+        let collection = Collection {
+            id: "posts".into(),
+            name: "posts".into(),
+            collection_type: CollectionType::Base,
+            fields: vec![
+                field("cover", FieldType::File),
+                field("gallery", FieldType::File),
+                field("body", FieldType::Editor),
+                field("title", FieldType::Text),
+            ],
+            rules: serde_json::json!({}),
+            options: serde_json::json!({}),
+            created: std::time::SystemTime::UNIX_EPOCH,
+            updated: std::time::SystemTime::UNIX_EPOCH,
+        };
+
+        let record = serde_json::json!({
+            "cover": "AbcDef123456789",
+            "gallery": ["SecondId1234567", ""] ,
+            "body": "<p>look <img src=\"/api/files/EditorId1234567?thumb=sm\"></p>\
+                     <p>and <a href=\"/api/files/NestedId123456\">again</a></p>",
+            "title": "not a file"
+        });
+
+        let ids = file_ids_in(&collection, &record);
+        assert_eq!(
+            ids,
+            vec![
+                ("AbcDef123456789".to_string(), "cover".to_string()),
+                ("EditorId1234567".to_string(), "body".to_string()),
+                ("NestedId123456".to_string(), "body".to_string()),
+                ("SecondId1234567".to_string(), "gallery".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_same_file_named_twice_is_one_reference() {
+        use lazypock_db::collections::{Collection, Field};
+        use lazypock_db::types::{CollectionType, FieldType};
+
+        let collection = Collection {
+            id: "posts".into(),
+            name: "posts".into(),
+            collection_type: CollectionType::Base,
+            fields: vec![Field {
+                id: "f_body".into(),
+                collection_id: "posts".into(),
+                name: "body".into(),
+                field_type: FieldType::Editor,
+                required: false,
+                is_unique: false,
+                options: serde_json::json!({}),
+                position: 0,
+            }],
+            rules: serde_json::json!({}),
+            options: serde_json::json!({}),
+            created: std::time::SystemTime::UNIX_EPOCH,
+            updated: std::time::SystemTime::UNIX_EPOCH,
+        };
+
+        let record = serde_json::json!({
+            "body": "<img src=\"/api/files/SameId123456789\"><img src=\"/api/files/SameId123456789\">"
+        });
+
+        assert_eq!(
+            file_ids_in(&collection, &record),
+            vec![("SameId123456789".to_string(), "body".to_string())]
+        );
+    }
+
+    #[test]
+    fn ids_in_text_ignores_a_prefix_with_no_id_after_it() {
+        assert!(ids_in_text("nothing here").is_empty());
+        assert!(ids_in_text("/api/files/").is_empty());
+        assert!(ids_in_text("/api/files/?thumb=sm").is_empty());
+        // Two URLs, one of them with a query and one without: the id ends at the
+        // first character that cannot be part of one.
+        assert_eq!(
+            ids_in_text("see /api/files/Abc123/scale/thumb and /api/files/Id9?thumb=sm"),
+            vec!["Abc123".to_string(), "Id9".to_string()]
+        );
+        // A path that is not this server's file route is not a reference.
+        assert_eq!(
+            ids_in_text("/other/files/Id9 and /api/files/Abc123"),
+            vec!["Abc123".to_string()]
         );
     }
 }

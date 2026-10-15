@@ -67,9 +67,10 @@ pub fn safe_filename(original: &str) -> String {
 
 /// Build the object key for a new upload.
 pub fn storage_key(collection: &str, record_id: &str, filename: &str) -> Result<String> {
-    // Reuses the identifier rules, so a collection or record id cannot introduce
-    // a path segment of its own.
+    // Reuses the identifier rules, so a collection name cannot introduce a path
+    // segment of its own.
     lazypock_db::types::validate_identifier("collection name", collection)?;
+
     let record_id = record_id.trim();
     if record_id.is_empty()
         || record_id.contains(['/', '\\'])
@@ -86,6 +87,21 @@ pub fn storage_key(collection: &str, record_id: &str, filename: &str) -> Result<
         lazypock_core::id::new_id(),
         safe_filename(filename)
     ))
+}
+
+/// Build the object key for an upload that has no record yet.
+///
+/// The editor and the media library store a file before anything points at it, and
+/// the owner of such an object is the *file*, not a record: `library/<id>/<name>`.
+/// The key-based orphan sweeper only attributes `{collection}/{record}/{filename}`,
+/// so it leaves these alone — an unattached upload is reclaimed by `_files` aging
+/// out ([`crate::reaper`]), which knows it was never attached.
+pub fn pending_key(filename: &str) -> String {
+    format!(
+        "library/{}/{}",
+        lazypock_core::id::new_id(),
+        safe_filename(filename)
+    )
 }
 
 /// The content type to serve a format with.
