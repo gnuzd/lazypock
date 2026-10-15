@@ -361,7 +361,7 @@ consequences worth stating:
 
 - `updateRule` and `deleteRule` also get a `SELECT` mirror keyed to their action
   (`lazypock_update_select` / `lazypock_delete_select`), because Postgres applies the `SELECT`
-policies to the rows an `UPDATE`/`DELETE` reads to find its target. The mirror carries the
+  policies to the rows an `UPDATE`/`DELETE` reads to find its target. The mirror carries the
   rule's own predicate, so a row is writable exactly when its rule says so — and never because
   of a wider `listRule`/`viewRule`.
 - `write` is the default action and matches no `SELECT` policy: a read that forgets to declare
@@ -369,6 +369,14 @@ policies to the rows an `UPDATE`/`DELETE` reads to find its target. The mirror c
   `SELECT` path must set `list`, `view`, `update` or `delete` explicitly (records endpoints,
   batch sub-requests, and realtime subscriptions — a collection subscription is a `list`, a
   record subscription a `view`).
+
+**Known divergence: expanded relations.** `expand` resolves relations with correlated
+subqueries inside the same statement, so a `list` request's expanded rows are filtered by the
+related collection's **`listRule`**, not its `viewRule` (the reference resolves each expanded
+record through its `viewRule`). The old behaviour ORed list+view, so this is *narrower*, not a
+leak — but it is a real semantic difference. Fixing it needs the expand subqueries to run with
+a view action, which a single statement-wide claim cannot express; that is a separate piece of
+work.
 
 ### 6.2 Superuser and `manageRule` mapping (resolved)
 
