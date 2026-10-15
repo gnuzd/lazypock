@@ -160,16 +160,16 @@ list is fine. View collections omit it (their columns come from the view query).
 
 ## Collection object
 
-| Key         | Type    | Required | Notes                                                                                     |
-| ----------- | ------- | -------- | ----------------------------------------------------------------------------------------- |
-| `name`      | string  | yes      | `^[a-z][a-z0-9_]*$` — lowercase table name.                                               |
-| `type`      | string  | yes      | `"base"`, `"auth"` or `"view"`.                                                            |
-| `schema`    | array   | no       | Field definitions (see below). PocketBase calls this `"fields"` — **use one or the other**. |
-| `id`        | string  | no       | Existing collection id. Omit it and the collection is matched/created by `name`.           |
-| `rules`     | object  | no       | Access rules (see below).                                                                  |
-| `options`   | object  | no       | `{ "indexes": [...] }`, and for views the query (see below).                               |
-| `hooks`     | object  | no       | Usually `{}`.                                                                              |
-| `records`   | array   | no       | Records to upsert (see below). Omit for `view` collections.                                |
+| Key       | Type   | Required | Notes                                                                                                                      |
+| --------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `name`    | string | yes      | `^[a-z][a-z0-9_]*$` — lowercase table name.                                                                                |
+| `type`    | string | yes      | `"base"`, `"auth"` or `"view"`.                                                                                            |
+| `schema`  | array  | no       | Field definitions (see below). PocketBase calls this `"fields"` — send either; if a collection has both, `fields` is used. |
+| `id`      | string | no       | Existing collection id. Omit it and the collection is matched/created by `name`.                                           |
+| `rules`   | object | no       | Access rules (see below).                                                                                                  |
+| `options` | object | no       | `{ "indexes": [...] }`, and for views the query (see below).                                                               |
+| `hooks`   | object | no       | Usually `{}`.                                                                                                              |
+| `records` | array  | no       | Records to upsert (see below). Omit for `view` collections.                                                                |
 
 > Auth collections always get a **unique `email`** field — if you declare one, its `unique` flag is
 > forced on for you.
@@ -286,14 +286,17 @@ and `updated_at` itself:
 
 A PocketBase export imports as-is. Differences the importer normalizes for you:
 
-- `"fields"` instead of `"schema"` (do not send both — that's an error).
+- `"fields"` instead of `"schema"`. A collection carrying **both** is fine too: `fields` is used.
+  The Studio's own "Export Collections" file looks like that, because it posts back the collection
+  objects the API serves.
 - camelCase field names and PocketBase collection ids in `relation` options.
 - Type options at the **top level** of a field (`"maxSelect": 3`) rather than nested under `"options"`.
 - PocketBase's `"system": true` fields (its own `id`, `tokenKey`, …) are stripped.
 
 ## Common mistakes
 
-- Sending both `fields` **and** `schema` on the same collection → rejected as ambiguous.
+- Sending both `fields` **and** `schema` on the same collection → `fields` wins, `schema` is ignored
+  (they mean the same thing; the derived `schema` beside `fields` is the poorer of the two).
 - Including a system `id` field in `schema` → stripped (harmless), but do not rely on it.
 - Using `geoPoint`/`multiSelect` style names from the Studio UI — use the canonical `geo` /
   `multi_select` types.

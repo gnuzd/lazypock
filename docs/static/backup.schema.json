@@ -36,7 +36,7 @@
 				},
 				"schema": {
 					"type": "array",
-					"description": "Field definitions (required for base/auth, omitted for view). PocketBase exports call this \"fields\" instead — send one or the other, never both.",
+					"description": "Field definitions (required for base/auth, omitted for view). PocketBase exports call this \"fields\" instead — send either, and if both are present \"fields\" wins.",
 					"items": { "$ref": "#/definitions/field" }
 				},
 				"fields": {
