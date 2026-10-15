@@ -136,7 +136,7 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
     };
     let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
 
-    // Nothing user-defined yet: the only entry is the synthesised system one.
+    // Nothing user-defined yet: the synthesised system collections only.
     let reply = call_authed(
         &router(&app).await,
         Method::GET,
@@ -150,12 +150,51 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
     let items = body["items"].as_array().expect("an items array");
     assert_eq!(
         items.len(),
-        1,
-        "an empty installation lists only _superusers: {body}"
+        5,
+        "an empty installation lists the PocketBase system collections: {body}"
     );
-    assert_eq!(items[0]["name"], json!("_superusers"));
-    assert_eq!(items[0]["system"], json!(true));
-    assert_eq!(body["totalItems"], json!(1));
+    let names: Vec<&str> = items
+        .iter()
+        .map(|collection| collection["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "_superusers",
+            "_auth_origins",
+            "_external_auths",
+            "_mfas",
+            "_otps"
+        ]
+    );
+    // The registry itself is not one of them: `main` never stored a `_collections`
+    // row, and presenting it would be a table that is not a system collection.
+    assert!(!names.contains(&"_collections"), "{names:?}");
+    for item in items {
+        assert_eq!(item["system"], json!(true), "{item}");
+        assert!(
+            item["schema"]
+                .as_array()
+                .is_some_and(|schema| !schema.is_empty()),
+            "a system collection must carry its columns so Studio can count them: {item}"
+        );
+    }
+    assert_eq!(body["totalItems"], json!(5));
+
+    // The auth collection's built-in columns are flagged the way Studio reads
+    // them: `password_hash` is hidden and every auth-owned column is system.
+    let password = items
+        .iter()
+        .find(|collection| collection["name"] == json!("_superusers"))
+        .expect("_superusers")["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|field| field["name"] == json!("password_hash"))
+        .expect("password_hash");
+    assert_eq!(password["hidden"], json!(true));
+    assert_eq!(password["system"], json!(true));
+    assert_eq!(password["indexed"], json!(false));
 
     // Create.
     let reply = call_authed(
@@ -167,6 +206,12 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
     )
     .await;
     assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let created = reply.body.expect("a collection");
+    assert_eq!(
+        created["schema"].as_array().map(Vec::len),
+        Some(1),
+        "the create response carries the field list the sidebar counts: {created}"
+    );
 
     // It is listed, with its field.
     let reply = call_authed(
@@ -187,6 +232,24 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
         .expect("posts");
     assert_eq!(posts["type"], json!("base"));
     assert_eq!(posts["fields"][0]["name"], json!("title"));
+
+    // The sidebar counts `schema`, which must track the field list.
+    assert_eq!(posts["schema"].as_array().map(Vec::len), Some(1));
+    assert_eq!(posts["schema"][0]["name"], json!("title"));
+    assert_eq!(posts["schema"][0]["type"], json!("text"));
+    // The field flags Studio reads sit at the top level of each field.
+    assert_eq!(posts["fields"][0]["hidden"], json!(false));
+    assert_eq!(posts["fields"][0]["system"], json!(false));
+    assert_eq!(posts["fields"][0]["indexed"], json!(false));
+    assert_eq!(posts["fields"][0]["sort_order"], json!(0));
+    // Top-level conveniences `main` served.
+    assert_eq!(posts["indexes"], json!([]));
+    assert_eq!(posts["viewQuery"], json!(null));
+    // Timestamps are RFC 3339, not serde's `{secs_since_epoch, ...}` shape.
+    assert!(
+        posts["created"].as_str().is_some_and(|s| s.ends_with('Z')),
+        "created must be an RFC 3339 string: {posts}"
+    );
 
     // A single read returns the same thing.
     let reply = call_authed(
@@ -398,6 +461,76 @@ async fn deleting_a_collection_drops_its_table_by_default() {
     )
     .await;
     assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn deleting_a_collection_another_relation_points_at_cascades() {
+    let Some(app) = test_app("collections_drop_cascade").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    for body in [
+        definition("authors"),
+        json!({
+            "name": "posts",
+            "type": "base",
+            "fields": [
+                { "name": "title", "type": "text" },
+                { "name": "author", "type": "relation",
+                  "options": { "collection": "authors", "maxSelect": 1 } }
+            ],
+            "rules": {},
+            "options": {}
+        }),
+    ] {
+        let reply = call_authed(
+            &router(&app).await,
+            Method::POST,
+            "/api/collections",
+            Some(body),
+            &token,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    }
+
+    // `authors` is referenced by `posts.author`. The drop cascades, so the delete
+    // succeeds and the referencing table survives with its foreign key gone —
+    // `main` dropped with `CASCADE` too.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        "/api/collections/authors",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    let exists: bool = app
+        .client()
+        .await
+        .query_one("select to_regclass('posts') is not null", &[])
+        .await
+        .expect("check")
+        .get(0);
+    assert!(
+        exists,
+        "the referencing table must survive, not be dropped by the cascade"
+    );
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/collections/authors",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
 
     app.cleanup().await;
 }

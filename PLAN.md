@@ -428,7 +428,12 @@ conditional, plus a `manageRule` that grants all actions.
 - Short-lived JWT access token (e.g. 15 min, EdDSA) + refresh token stored as a **hash** in
   `_sessions` (rotation, reuse detection).
 - Signing keys in settings, rotation supported (JWKS with multiple `kid`s).
-- Revocation: per-user `token_key`; changing it invalidates all old tokens.
+- Revocation: refresh tokens live in `_sessions` (rotation, reuse detection), and a password change
+  revokes the account's sessions — that is what ends the tokens issued before it. `token_key` is a
+  per-account column (PocketBase's `tokenKey`) that is rotated on a password change and carried in the
+  access token as its `tkey` claim, but nothing verifies it: an access token is checked by signature
+  until it expires, and refresh is keyed on `_sessions`, not on the key. It is therefore **not a
+  field** (migration 0010) — a client, and the Studio, never sees it.
 
 ### 7.3 External auth (bring your own IdP)
 
@@ -739,6 +744,17 @@ at the Rust API and swaps the realtime transport to SSE.
   superuser-only, read-only (SELECT/EXPLAIN/WITH) endpoint; the storage test needs a real
   backend round-trip. `studio/e2e/studio.spec.ts` carries the SQL console as a `test.fixme`
   until the endpoint exists.
+- **Invalid-credentials status.** `main` answers **400** on a failed `auth-with-password`; this server
+  answers **401** (pinned by `a_malformed_login_body_is_rejected_clearly`). 401 is more correct HTTP,
+  but it is a client-visible difference. Confirm before changing.
+- **Auth system collections are presented, not stored.** `_auth_origins`, `_external_auths`, `_mfas` and
+  `_otps` are synthesised in the admin list for Studio parity; their tables do not exist yet because
+  OAuth2, MFA and OTP are not ported (section 7.1). When those land, create the tables and register
+  them as real system collections, which also makes them browsable (today a click has no records to
+  show). Serving them will need the same default-deny as every other collection: the `_otps` and
+  `_external_auths` rows are credential-adjacent, so RLS has to be enabled with the migration rather
+  than left off. The names follow the existing snake_case convention (`_auth_origins`), not PocketBase's
+  camelCase (`_authOrigins`); confirm before creating the tables.
 - PocketBase data importer.
 - View collection builder (no-code) + ERD.
 - Audit log for admin actions.
@@ -847,12 +863,12 @@ somebody else's database.
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS is implemented (rustls + system trust store): `sslmode=require`/`verify-ca`/`verify-full` and the `ssl=require` spelling are honoured with **certificate verification**, verified against Neon. |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
-| E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections, and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). |
+| E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections (a password is optional, matching `main`, so OAuth/OTP/invite-only accounts exist), and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). A password change revokes the account's `_sessions` and rotates its `token_key`; the revocation is what ends the refresh tokens issued before it. |
 | F. Realtime | done — the change-event trigger plus `_rt_log`, the `EventBus` seam with a Postgres `LISTEN` implementation, RLS-filtered fan-out with connection-id echo suppression, and SSE at `/api/realtime` with `lastEventId` resume. The Redis backend, event batching and logical replication are deliberately deferred (section 8.8). |
 | G. Files & images | **done** — upload validation, the key layout, local and S3 backends, the delete outbox, the HTTP upload/serve/delete routes, image presets with cached thumbnails, a superuser-gated CRUD API for them, and an orphan sweeper (**resized in-process, so no `imgproxy` sidecar and no extra artifact to ship — a deliberate change from section 10**). Two known limits: AVIF output is refused loudly because the schema allows it and the encoder cannot write it, and the S3 path has **not** been exercised against a live bucket (signing and listing are unit-tested; a live round-trip needs credentials and a bucket). |
 | H. Hooks | **partly** — the thread-owned worker, the six events, TypeScript stripping, the loader with hot reload and the `RecordHooks` seam are in, and **create, update and delete all run their before-hooks and after-hooks** (before runs before validation so a hook can supply a field; after runs post-commit; a before-delete hook can refuse by throwing). Remaining: the `$db`/`$http`/`$app` bindings — see the note below on why `$db` is not a small change. |
 | I. Jobs & ops | **partly** — request logs are in end to end: `_logs` aligned by migration 0007, a recorder middleware that redacts credential keys and captures error messages, and `GET /api/logs`, `/logs/stats`, `/logs/collections`, `/logs/retention`, `PATCH /logs/retention`, and `DELETE /logs?all=true` and `DELETE /logs?days=n`. The cron **admin API** is in too (`GET/POST/PATCH/DELETE /api/crons`, `POST /crons/validate`, and `POST /crons/{id}` run-now for `sql`/`http`; a `hook` job refuses loudly). Remaining: the cron **scheduler** that fires on `next_run_at`, the job queue, mailer and rate limits. |
-| J–K. Studio, SDK | **done except the JSON import body.** The SDK is ported and its live integration test passes; the collection admin API exists; `_superusers` is listed as a locked system collection; `GET /api/export` serves the single-document JSON; logs, crons, API keys (`GET/POST/DELETE /api/settings/api-keys`, hashed, scoped, shown once) and `GET /api/import/status` / `POST /api/import/rollback` exist; and backup/restore is complete end to end — `GET /api/export/archive`, `POST /api/import`, `GET /api/import/preflight` — with the documented archive format and both safety invariants enforced server-side (an import never deletes; never writes a `_`-prefixed system collection). The Studio's import page defaults `deleteMissing` to **false** (the destructive case is opt-in, matching the published docs), so the only remaining item is that `POST /api/import` does not yet accept the JSON body a downloaded JSON backup is restored with. |
+| J–K. Studio, SDK | **done except the JSON import body.** The SDK is ported and its live integration test passes; the collection admin API exists and serves the shape the Studio reads (`schema` alongside `fields`, per-field `hidden`/`system`/`indexed`, RFC 3339 `created`/`updated`, top-level `indexes`/`view*`); the PocketBase system collections (`_superusers`, `_auth_origins`, `_external_auths`, `_mfas`, `_otps`) are listed as locked entries — synthesised, so they stay out of the schema cache; an auth record's password is accepted under PocketBase's `password` **or** the password field's own name, which is what the Studio's generated form sends, and is hashed either way; `GET /api/export` serves the single-document JSON; logs, crons, API keys (`GET/POST/DELETE /api/settings/api-keys`, hashed, scoped, shown once) and `GET /api/import/status` / `POST /api/import/rollback` exist; and backup/restore is complete end to end — `GET /api/export/archive`, `POST /api/import`, `GET /api/import/preflight` — with the documented archive format and both safety invariants enforced server-side (an import never deletes; never writes a `_`-prefixed system collection). The Studio's import page defaults `deleteMissing` to **false** (the destructive case is opt-in, matching the published docs), so the only remaining item is that `POST /api/import` does not yet accept the JSON body a downloaded JSON backup is restored with. |
 | L. Deploy | **partly** — boot-time auto-migration works on an empty database and on one that already holds tables, and an existing ordinary database is **reflected**: every table becomes a collection and every column a field, verified against a real database. Remaining: the GitHub Action that builds and publishes the image, and the compose/release docs. |
 | M. Cloud | not started |
 

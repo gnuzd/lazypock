@@ -331,14 +331,21 @@ async fn query_parameters_drive_filter_sort_projection_and_expand() {
         "every title contains an `a`"
     );
 
-    // expand + nested fields
+    // expand + nested fields. The expansion is nested under `expand`, and the
+    // relation's own key keeps the id — PocketBase's shape, which is what the Studio
+    // reads (`record.expand[field]`).
     let reply = get(
         &router,
-        "/api/collections/posts/records?filter=title%3D%22Alpha%22&expand=author&fields=id,author.name",
+        "/api/collections/posts/records?filter=title%3D%22Alpha%22&expand=author&fields=id,author,author.name",
     )
     .await;
     let items = reply.body.expect("body")["items"].clone();
-    assert_eq!(items[0]["author"]["name"], json!("Alice"));
+    assert_eq!(items[0]["expand"]["author"]["name"], json!("Alice"));
+    assert_eq!(
+        items[0]["author"],
+        json!(author),
+        "the relation key is the id"
+    );
     assert!(items[0].get("title").is_none());
 
     // perPage and page

@@ -65,6 +65,14 @@ pub fn auth_system_column_definitions() -> Vec<(&'static str, &'static str)> {
 /// backfilled the collections that existed before it. Keep the two in step: the
 /// migration cannot see collections created later, and this cannot see ones created
 /// earlier.
+///
+/// `token_key` is deliberately **absent**: it is a server-managed credential, not a
+/// field, so it should not appear in a collection's definition — which is what the
+/// Studio renders and what the SDK/codegen reads. It is still a real column
+/// ([`auth_system_column_definitions`]) that the auth layer reads and writes;
+/// `password_hash` stays a field because the Studio needs it to render its password
+/// input. `migrations/0010_token_key_is_not_a_field.sql` removes the field rows that
+/// 0006 created.
 pub fn auth_system_fields() -> Vec<(&'static str, FieldType, bool, bool, serde_json::Value)> {
     vec![
         ("email", FieldType::Email, true, true, serde_json::json!({})),
@@ -74,13 +82,6 @@ pub fn auth_system_fields() -> Vec<(&'static str, FieldType, bool, bool, serde_j
             false,
             false,
             serde_json::json!({ "hidden": true, "writeOnly": true }),
-        ),
-        (
-            "token_key",
-            FieldType::Text,
-            false,
-            false,
-            serde_json::json!({ "hidden": true }),
         ),
         (
             "emailVisibility",

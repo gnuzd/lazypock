@@ -249,10 +249,19 @@ pub fn drop_index_statement(table: &str, column: &str) -> String {
     )
 }
 
-/// `drop table if exists`.
+/// `drop table if exists ... cascade`.
+///
+/// `cascade` is what lets a collection another collection's relation points at be
+/// deleted: Postgres drops the referencing foreign key, not the referencing table.
+/// Without it the drop fails on the dependant, which `main` did not do — it dropped
+/// with `cascade` — and the Studio's delete has no way to resolve (it sends no
+/// `cascade`/`force` parameter).
 pub fn drop_table_statement(table: &str) -> Result<String> {
     validate_identifier("collection name", table)?;
-    Ok(format!("drop table if exists {}", quote_ident(table)))
+    Ok(format!(
+        "drop table if exists {} cascade",
+        quote_ident(table)
+    ))
 }
 
 /// Column types this module is allowed to emit.
@@ -436,9 +445,10 @@ mod tests {
 
     #[test]
     fn drop_table_is_quoted_and_guarded() {
+        // `cascade` so a relation pointing at the deleted collection does not block it.
         assert_eq!(
             drop_table_statement("posts").unwrap(),
-            "drop table if exists \"posts\""
+            "drop table if exists \"posts\" cascade"
         );
         assert!(drop_table_statement("Posts").is_err());
     }

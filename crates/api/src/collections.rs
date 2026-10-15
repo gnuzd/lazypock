@@ -17,7 +17,7 @@ use lazypock_core::error::Error;
 use lazypock_db::collections::{
     self, Collection, CreateCollection, CreateField, Field, UpdateCollection,
 };
-use lazypock_db::types::{self, CollectionType};
+use lazypock_db::types::{self, option_bool, CollectionType, FieldType};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::SystemTime;
@@ -36,12 +36,15 @@ pub async fn list(
     let client = state.db.client().await.map_err(ApiError::new)?;
     let collections = collections::list(&client).await.map_err(ApiError::new)?;
 
-    // `_superusers` leads the list, which is where an `_`-prefixed name sorts.
-    // It is synthesised, not stored: see `superusers_collection`.
-    let mut items = Vec::with_capacity(collections.len() + 1);
-    items.push(collection_json(&superusers_collection(), true)?);
+    // The system collections lead the list, which is where an `_`-prefixed name
+    // sorts. They are synthesised, not stored: see `system_collections`.
+    let system = system_collections();
+    let mut items = Vec::with_capacity(collections.len() + system.len());
+    for collection in &system {
+        items.push(collection_json(collection, true)?);
+    }
     for collection in &collections {
-        items.push(collection_json(collection, false)?);
+        items.push(collection_json(collection, is_system(&collection.name))?);
     }
 
     // The **list envelope**, not a bare array. A client reads `items`, so an array
@@ -83,8 +86,8 @@ pub async fn get(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     require_superuser_or_api_key(&principal)?;
-    if name == crate::auth::SUPERUSERS {
-        return Ok(Json(collection_json(&superusers_collection(), true)?));
+    if let Some(collection) = system_collections().into_iter().find(|c| c.name == name) {
+        return Ok(Json(collection_json(&collection, true)?));
     }
     let client = state.db.client().await.map_err(ApiError::new)?;
     let collection = collections::find(&client, &name)
@@ -169,7 +172,8 @@ pub async fn create(
         .map_err(ApiError::new)?;
 
     tracing::info!(collection = %collection.name, "collection created");
-    Ok((StatusCode::CREATED, Json(collection)).into_response())
+    let body = collection_json(&collection, is_system(&collection.name))?;
+    Ok((StatusCode::CREATED, Json(body)).into_response())
 }
 
 /// `PATCH /api/collections/{name}`
@@ -178,7 +182,7 @@ pub async fn update(
     Extension(principal): Extension<Principal>,
     Path(name): Path<String>,
     Json(body): Json<Value>,
-) -> Result<Json<Collection>, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     require_superuser(&principal)?;
 
     let body: UpdateCollection = serde_json::from_value(normalize_collection_body(body)?)
@@ -199,7 +203,10 @@ pub async fn update(
         .await
         .map_err(ApiError::new)?;
     tracing::info!(collection = %collection.name, "collection updated");
-    Ok(Json(collection))
+    Ok(Json(collection_json(
+        &collection,
+        is_system(&collection.name),
+    )?))
 }
 
 /// Query for deleting a collection.
@@ -222,7 +229,7 @@ pub async fn delete(
     Extension(principal): Extension<Principal>,
     Path(name): Path<String>,
     Query(query): Query<DeleteQuery>,
-) -> Result<Json<Collection>, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     require_superuser(&principal)?;
 
     let drop_data = query.drop_data.unwrap_or(true);
@@ -240,7 +247,10 @@ pub async fn delete(
         .map_err(ApiError::new)?;
 
     tracing::warn!(collection = %name, drop_data, "collection deleted");
-    Ok(Json(collection))
+    Ok(Json(collection_json(
+        &collection,
+        is_system(&collection.name),
+    )?))
 }
 
 /// `POST /api/collections/{name}/fields`
@@ -285,6 +295,73 @@ fn not_found(name: &str) -> ApiError {
     ApiError::new(Error::not_found(format!("no collection named {name:?}")))
 }
 
+/// The system collections the admin API presents, in list order.
+///
+/// They are synthesised **not** `_collections` rows, because that table feeds the
+/// schema cache: an entry visible there would also be served by the records API and
+/// would be reachable through the collection/field admin endpoints. Synthesising
+/// keeps a system collection visible in the Studio's System section while leaving
+/// it outside the schema cache — so it can be neither read as records nor altered.
+///
+/// The list is the PocketBase set. Four of these tables are not created yet —
+/// OAuth2, MFA and OTP are Track E backlog (PLAN.md 7.1) — so today they are
+/// presented for parity and have no records to serve.
+fn system_collections() -> Vec<Collection> {
+    vec![
+        superusers_collection(),
+        system_collection(
+            "_auth_origins",
+            &[
+                ("collection_ref", FieldType::Text),
+                ("record_ref", FieldType::Text),
+                ("fingerprint", FieldType::Text),
+                ("created_at", FieldType::Autodate),
+                ("updated_at", FieldType::Autodate),
+            ],
+        ),
+        system_collection(
+            "_external_auths",
+            &[
+                ("collection", FieldType::Text),
+                ("provider", FieldType::Text),
+                ("provider_id", FieldType::Text),
+                ("user_id", FieldType::Text),
+                ("created_at", FieldType::Autodate),
+                ("updated_at", FieldType::Autodate),
+            ],
+        ),
+        system_collection(
+            "_mfas",
+            &[
+                ("collection_ref", FieldType::Text),
+                ("record_ref", FieldType::Text),
+                ("method", FieldType::Text),
+                ("created_at", FieldType::Autodate),
+                ("updated_at", FieldType::Autodate),
+            ],
+        ),
+        system_collection(
+            "_otps",
+            &[
+                ("collection_ref", FieldType::Text),
+                ("record_ref", FieldType::Text),
+                ("password_hash", FieldType::Password),
+                ("sent_to", FieldType::Text),
+                ("created_at", FieldType::Autodate),
+                ("updated_at", FieldType::Autodate),
+            ],
+        ),
+    ]
+}
+
+/// Whether a collection is one of the server's own (`_`-prefixed) tables.
+///
+/// The same convention `reflect.rs` and `backup.rs` use. A user collection can
+/// never match: `validate_collection_name` rejects a leading `_`.
+fn is_system(name: &str) -> bool {
+    name.starts_with('_')
+}
+
 /// The `_superusers` collection, presented to the Studio.
 ///
 /// It is deliberately **not** a `_collections` row. It has no table-driven schema
@@ -325,9 +402,57 @@ fn superusers_collection() -> Collection {
     }
 }
 
-/// Serialize a collection with its `system` flag attached. The stored model has no
-/// such column, and the Studio reads `system` to place an entry under its System
-/// section and lock it, so every entry the admin API returns carries one.
+/// A synthesised system collection from its name and column list.
+///
+/// The fields are metadata for the Studio (its editor and any column list); the
+/// entry is not in the schema cache, so nothing here can be read as records or
+/// altered through the admin endpoints.
+fn system_collection(name: &str, columns: &[(&str, FieldType)]) -> Collection {
+    let id = name.to_string();
+    let now = SystemTime::now();
+    Collection {
+        id: id.clone(),
+        name: name.to_string(),
+        collection_type: CollectionType::Base,
+        options: json!({}),
+        rules: json!({}),
+        fields: columns
+            .iter()
+            .enumerate()
+            .map(|(position, (field, field_type))| Field {
+                id: format!("{id}_{field}"),
+                collection_id: id.clone(),
+                name: field.to_string(),
+                field_type: *field_type,
+                required: false,
+                is_unique: false,
+                options: json!({}),
+                position: position as i32,
+            })
+            .collect(),
+        created: now,
+        updated: now,
+    }
+}
+
+/// Serialize a collection in the shape the Studio reads.
+///
+/// This mirrors what the Elixir implementation served, which the Studio and the
+/// published import/export format were built against:
+///
+/// - `system` places an entry under the Studio's System section and locks it. It is
+///   derived from the `_` prefix, the same convention the rest of the server uses.
+/// - `schema` is the field list under its older spelling, which the Studio's sidebar
+///   counts. It is derived from `fields` here so the two can never disagree.
+/// - each field carries `hidden`/`system`/`indexed` at the top level, where the
+///   Studio reads them. `hidden` is stored inside `options` (PocketBase's shape), and
+///   `system` is derived from the auth collection's built-in columns.
+/// - `indexes`/`viewQuery`/`viewOrigin`/`viewBuilder` are the top-level
+///   conveniences `main` provided. Custom indexes and view collections are not
+///   implemented here yet, so they stay empty/null rather than disappearing.
+/// - `created`/`updated` are rendered as RFC 3339. Serde would otherwise render the
+///   `SystemTime`s as `{secs_since_epoch, nanos_since_epoch}`, which is not what a
+///   client parses.
 fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiError> {
     let mut value = serde_json::to_value(collection).map_err(|err| {
         ApiError::new(Error::internal(format!(
@@ -335,8 +460,98 @@ fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiEr
             collection.name
         )))
     })?;
+
     value["system"] = json!(system);
+
+    let schema: Vec<Value> = collection
+        .fields
+        .iter()
+        .map(|field| {
+            json!({
+                "name": field.name,
+                "type": field.field_type.as_str(),
+                "required": field.required,
+                "unique": field.is_unique,
+                "default": null,
+                "options": field.options,
+                "indexed": false,
+            })
+        })
+        .collect();
+    value["schema"] = json!(schema);
+
+    if let Some(fields) = value.get_mut("fields").and_then(Value::as_array_mut) {
+        for (entry, field) in fields.iter_mut().zip(&collection.fields) {
+            let Some(object) = entry.as_object_mut() else {
+                continue;
+            };
+            object.insert(
+                "hidden".to_string(),
+                json!(option_bool(&field.options, "hidden")),
+            );
+            object.insert(
+                "system".to_string(),
+                json!(is_auth_system_field(collection, &field.name)),
+            );
+            object.insert("indexed".to_string(), json!(false));
+        }
+    }
+
+    value["indexes"] = collection
+        .options
+        .get("indexes")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let is_view = collection.collection_type == CollectionType::View;
+    value["viewQuery"] = if is_view {
+        collection
+            .options
+            .get("view_query")
+            .cloned()
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+    value["viewOrigin"] = if is_view {
+        collection
+            .options
+            .get("view_origin")
+            .cloned()
+            .unwrap_or_else(|| json!("sql"))
+    } else {
+        Value::Null
+    };
+    value["viewBuilder"] = if is_view {
+        collection
+            .options
+            .get("view_builder")
+            .cloned()
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+
+    value["created"] = json!(rfc3339(collection.created));
+    value["updated"] = json!(rfc3339(collection.updated));
+
     Ok(value)
+}
+
+/// Whether a field is one of an auth collection's built-in columns.
+fn is_auth_system_field(collection: &Collection, name: &str) -> bool {
+    collection.collection_type.is_auth()
+        && types::auth_system_fields()
+            .iter()
+            .any(|(field, ..)| *field == name)
+}
+
+/// A `SystemTime` as RFC 3339, in UTC.
+fn rfc3339(time: SystemTime) -> String {
+    let seconds = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    lazypock_db::backup::format_rfc3339(seconds)
 }
 
 use axum::Extension;

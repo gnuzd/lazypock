@@ -570,13 +570,17 @@ pub fn validate_first(
 
 /// The server-managed columns an auth-collection write needs.
 ///
-/// `password` is not a column: it is hashed *here*, which is why the record layer
+/// The password is not a column: it is hashed *here*, which is why the record layer
 /// is handed the result rather than doing the hashing itself — hashing lives in
 /// the auth crate, and that crate depends on the database layer, so the inverse
-/// would be a cycle.
+/// would be a cycle. It is read under either spelling the client may use —
+/// PocketBase's `password` or the collection's own password field name — by
+/// [`Collection::password_input`].
 ///
-/// A new password also rotates the account's token key, so every access token
-/// issued before it stops being valid at the next refresh.
+/// A new password also rotates the account's `token_key`. What ends the tokens
+/// issued before it is the caller revoking the account's sessions
+/// (`sessions::revoke_for_user`), which is what makes the old refresh token fail; the
+/// rotation itself is carried into the next access token but never verified.
 pub fn auth_columns(
     collection: &Collection,
     input: &Value,
@@ -584,13 +588,20 @@ pub fn auth_columns(
     if !collection.collection_type.is_auth() {
         return Ok(Vec::new());
     }
-    let Some(password) = input.get("password").and_then(Value::as_str) else {
+    let Some(password) = input
+        .as_object()
+        .and_then(|body| collection.password_input(body))
+        .and_then(Value::as_str)
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(field) = collection.password_field() else {
         return Ok(Vec::new());
     };
 
     Ok(vec![
         (
-            "password_hash".to_string(),
+            field.name.clone(),
             Some(lazypock_auth::password::hash(password).map_err(ApiError::new)?),
         ),
         (

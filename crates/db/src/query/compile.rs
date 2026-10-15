@@ -125,7 +125,14 @@ impl FilterContext {
                     field.name
                 ))
             })?;
-            let target = all.iter().find(|candidate| candidate.id == target_id);
+            // By id **or name**: PocketBase stores the target's id, but the Studio's
+            // relation editor sends `options.collection` with a name, and that is
+            // what is stored. Resolving by id alone left the field out of `relations`
+            // entirely, so `expand=author` was refused as "not a relation field" and
+            // the Studio's record list never loaded.
+            let target = all
+                .iter()
+                .find(|candidate| candidate.id == target_id || candidate.name == target_id);
             let Some(target) = target else {
                 // A dangling relation means the schema is inconsistent; the
                 // field itself is still usable as a plain column.
@@ -790,6 +797,35 @@ mod tests {
 
         // Ordering on text is allowed: Postgres orders text meaningfully.
         let expr = filter::parse("title > 1").unwrap();
+        assert!(compile(&expr, &context, &AuthContext::default()).is_ok());
+    }
+
+    #[test]
+    fn a_relation_may_name_its_target_instead_of_identifying_it() {
+        // The Studio sends `{"collection": "users"}`, a name; the field must still
+        // land in `relations`, or `expand` refuses it and the record list fails.
+        let posts = collection(
+            "c_posts",
+            "posts",
+            vec![field(
+                "author",
+                FieldType::Relation,
+                json!({"collection": "users"}),
+            )],
+        );
+        let users = collection(
+            "c_users",
+            "users",
+            vec![field("name", FieldType::Text, json!({}))],
+        );
+        let all = vec![users, posts.clone()];
+        let context = FilterContext::for_collection(&posts, &all).unwrap();
+
+        assert!(
+            context.relations.contains_key("author"),
+            "a name-targeted relation must be resolvable"
+        );
+        let expr = filter::parse("author.name = \"x\"").unwrap();
         assert!(compile(&expr, &context, &AuthContext::default()).is_ok());
     }
 

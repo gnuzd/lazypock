@@ -61,7 +61,18 @@ impl FieldSelection {
                     "too many `fields` entries (maximum {MAX_FIELD_ENTRIES})"
                 )));
             }
-            let path: Vec<String> = split_path(raw)?;
+            let mut path: Vec<String> = split_path(raw)?;
+            // PocketBase addresses an expanded relation as
+            // `expand.<relation>[.<field>]`; `expand` is a namespace, not a column.
+            // The Studio sends `fields=*,author,expand.author`, and reading `expand`
+            // as a relation made every record list that has a relation fail with
+            // "`expand` is not a relation field".
+            if path.len() > 1
+                && path[0] == "expand"
+                && context.relations.contains_key(path[1].as_str())
+            {
+                path.remove(0);
+            }
             selection.insert_path(&path, context)?;
         }
 
@@ -370,6 +381,30 @@ mod tests {
             selection.nested_for("comments").unwrap().columns,
             vec!["body"]
         );
+    }
+
+    #[test]
+    fn fields_accept_the_expand_namespace() {
+        // The Studio sends `fields=*,author,expand.author`; `expand.<relation>` (and
+        // `expand.<relation>.<field>`) names the expanded relation's fields. Reading
+        // `expand` as a relation made every list that has one 400.
+        let context = fixture();
+
+        let selection = FieldSelection::parse(Some("*,author,expand.author"), &context).unwrap();
+        assert!(selection.all_columns);
+        assert!(selection.columns.contains(&"author".to_string()));
+
+        let selection = FieldSelection::parse(Some("id,expand.author.name"), &context).unwrap();
+        assert_eq!(selection.columns, vec!["id"]);
+        assert_eq!(
+            selection.nested_for("author").unwrap().columns,
+            vec!["name"]
+        );
+
+        // A bare `expand`, or `expand.` on something that is not a relation, is still
+        // a mistake rather than a silently empty selection.
+        assert!(FieldSelection::parse(Some("expand"), &context).is_err());
+        assert!(FieldSelection::parse(Some("expand.title"), &context).is_err());
     }
 
     #[test]

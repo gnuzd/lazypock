@@ -190,6 +190,7 @@ fn object_expression(
         ));
     }
 
+    let mut expand_pairs: Vec<String> = Vec::new();
     for relation_name in expand.relations_to_expand(context) {
         let relation = context.relations.get(relation_name).ok_or_else(|| {
             Error::invalid(format!(
@@ -248,9 +249,20 @@ fn object_expression(
             )
         };
 
-        pairs.push(format!(
+        expand_pairs.push(format!(
             "{}, {expression}",
             sql_string_literal(relation_name)
+        ));
+    }
+
+    // Expanded relations live under `expand`, and the relation's own key keeps the
+    // id — PocketBase's shape, and what the Studio reads (`record.expand[field]`).
+    // Writing the object at the relation's key replaced the id and hid the
+    // expansion from the Studio, which then rendered the raw object.
+    if !expand_pairs.is_empty() {
+        pairs.push(format!(
+            "'expand', jsonb_build_object({})",
+            expand_pairs.join(", ")
         ));
     }
 
@@ -412,6 +424,36 @@ mod tests {
             built
                 .sql
                 .contains("from \"users\" r1 where r1.\"id\" = p.\"author\" limit 1"),
+            "{}",
+            built.sql
+        );
+    }
+
+    #[test]
+    fn expanded_relations_are_nested_under_expand() {
+        let context = fixture();
+        let built = build_list(
+            &query(
+                FieldSelection::parse(Some("id,author"), &context).unwrap(),
+                ExpandSpec::parse(Some("author"), &context).unwrap(),
+                None,
+            ),
+            &context,
+            &AuthContext::default(),
+        )
+        .unwrap();
+
+        // The relation's own key keeps the id, and the object goes under `expand` —
+        // PocketBase's shape, which is what the Studio reads.
+        assert!(
+            built.sql.contains("'author', p.\"author\""),
+            "{}",
+            built.sql
+        );
+        assert!(
+            built
+                .sql
+                .contains("'expand', jsonb_build_object('author', (select "),
             "{}",
             built.sql
         );

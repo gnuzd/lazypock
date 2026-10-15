@@ -99,6 +99,46 @@ async function createCollectionViaApi(name: string, field = 'title'): Promise<vo
 	expect(response.status, await response.text()).toBe(201);
 }
 
+/** Create an auth collection (one text field) through the superuser API. */
+async function createAuthCollectionViaApi(name: string): Promise<void> {
+	const response = await fetch(`${API}/collections`, {
+		method: 'POST',
+		headers: authed(),
+		body: JSON.stringify({
+			name,
+			type: 'auth',
+			fields: [{ name: 'name', type: 'text' }],
+			listRule: '',
+			viewRule: '',
+			createRule: '',
+			updateRule: '',
+			deleteRule: '',
+			indexes: []
+		})
+	});
+	expect(response.status, await response.text()).toBe(201);
+}
+
+/** Create a base collection with the given fields through the superuser API. */
+async function createCollectionWithFields(name: string, fields: unknown[]): Promise<void> {
+	const response = await fetch(`${API}/collections`, {
+		method: 'POST',
+		headers: authed(),
+		body: JSON.stringify({
+			name,
+			type: 'base',
+			fields,
+			listRule: '',
+			viewRule: '',
+			createRule: '',
+			updateRule: '',
+			deleteRule: '',
+			indexes: []
+		})
+	});
+	expect(response.status, await response.text()).toBe(201);
+}
+
 /** Remove a collection through the superuser API. */
 async function deleteCollectionViaApi(name: string): Promise<void> {
 	await fetch(`${API}/collections/${name}`, { method: 'DELETE', headers: authed() });
@@ -221,6 +261,34 @@ test('the Studio loads, logs in, and renders the collections page', async ({ pag
 	await expect(page.getByRole('button', { name: /New Collection/ })).toBeVisible();
 });
 
+test('the collections sidebar counts columns and lists the system collections', async ({ page }) => {
+	await signIn(page);
+	const name = `e2e_cols_${Date.now().toString(36)}`;
+	// One text field, so the sidebar count is deterministic.
+	await createCollectionViaApi(name);
+	try {
+		await page.goto(`/_/collections?collection=${name}`);
+
+		// The sidebar row is the collection name followed by its column count.
+		// The server has to serve the field list for that count: before it did,
+		// every collection rendered "0". Asserting a positive number is what
+		// catches the regression, so the check is on the number, not the name.
+		const row = page.locator('div[role="button"]').filter({ hasText: name }).first();
+		await expect(row).toContainText(name);
+		await expect(row.locator('span').last()).toHaveText(/^[1-9]\d*$/);
+
+		// The server presents the PocketBase system collections under System.
+		await page.getByText(/^System \(/).click();
+		for (const system of ['_superusers', '_auth_origins', '_external_auths', '_mfas', '_otps']) {
+			await expect(page.getByText(system, { exact: true })).toBeVisible();
+		}
+		// The registry is not one of them.
+		await expect(page.getByText('_collections', { exact: true })).toHaveCount(0);
+	} finally {
+		await deleteCollectionViaApi(name);
+	}
+});
+
 test('every Studio page loads for a superuser', async ({ page }) => {
 	await signIn(page);
 
@@ -264,6 +332,65 @@ test('a collection can be created through the UI', async ({ page }) => {
 	}
 });
 
+test('a relation field can be added to a collection through the UI', async ({ page }) => {
+	await signIn(page);
+	const target = `e2e_tgt_${Date.now().toString(36)}`;
+	const name = `e2e_rel_${Date.now().toString(36)}`;
+	await createCollectionViaApi(target);
+	try {
+		await page.goto('/_/collections/new');
+		await page.fill('#coll-name', name);
+
+		// A text field, then a relation field pointing at the target collection.
+		await page.getByRole('button', { name: 'New field' }).last().click();
+		await page.getByRole('button', { name: 'Plain text' }).click();
+		await page.getByRole('button', { name: 'New field' }).last().click();
+		await page.getByRole('button', { name: 'Relation' }).click();
+
+		await page.getByRole('button', { name: 'Select collection*' }).last().click();
+		await page.getByRole('button', { name: target, exact: true }).last().click();
+
+		await page.getByRole('button', { name: 'Create', exact: true }).click();
+		await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+	} finally {
+		await deleteCollectionViaApi(name);
+		await deleteCollectionViaApi(target);
+	}
+});
+
+test('a relation column shows the expanded record, not raw JSON', async ({ page }) => {
+	await signIn(page);
+	const target = `e2e_tgt_${Date.now().toString(36)}`;
+	const name = `e2e_exp_${Date.now().toString(36)}`;
+	await createCollectionViaApi(target);
+	await createCollectionWithFields(name, [
+		{ name: 'title', type: 'text' },
+		{ name: 'author', type: 'relation', options: { collection: target, maxSelect: 1 } }
+	]);
+	try {
+		const aliceResponse = await fetch(`${API}/collections/${target}/records`, {
+			method: 'POST',
+			headers: authed(),
+			body: JSON.stringify({ title: 'Alice' })
+		});
+		const alice = (await aliceResponse.json()) as { id: string };
+		await fetch(`${API}/collections/${name}/records`, {
+			method: 'POST',
+			headers: authed(),
+			body: JSON.stringify({ title: 'Post one', author: alice.id })
+		});
+
+		await page.goto(`/_/collections?collection=${name}`);
+		// The table renders the expanded relation's label. Before `expand` was nested
+		// under its own key the request 400'd, and before that the relation column held
+		// the raw object.
+		await expect(page.getByText(/Alice/).first()).toBeVisible();
+	} finally {
+		await deleteCollectionViaApi(name);
+		await deleteCollectionViaApi(target);
+	}
+});
+
 test('a record can be created through the UI', async ({ page }) => {
 	await signIn(page);
 	const name = `e2e_rec_${Date.now().toString(36)}`;
@@ -280,6 +407,65 @@ test('a record can be created through the UI', async ({ page }) => {
 		await expect(page.getByText('hello from the tour')).toBeVisible();
 	} finally {
 		await deleteCollectionViaApi(name);
+	}
+});
+
+test('a record can be created in an auth collection through the UI', async ({ page }) => {
+	await signIn(page);
+	const name = `e2e_auth_${Date.now().toString(36)}`;
+	await createAuthCollectionViaApi(name);
+	try {
+		await page.goto(`/_/collections?collection=${name}`);
+		await page
+			.getByRole('button', { name: /New Record/ })
+			.first()
+			.click();
+		await page.locator('#f_email').fill('e2e@example.com');
+		// The Studio's record form is generated from the collection's fields, so the
+		// password input is named after the field (`password_hash`). The server has to
+		// accept the password under that name, not only PocketBase's `password`, or the
+		// save fails with "A password is required".
+		await page.locator('input[type="password"]').first().fill('e2e-password-123');
+		await page.getByRole('button', { name: 'Create', exact: true }).click();
+
+		await expect(page.getByText('e2e@example.com')).toBeVisible();
+	} finally {
+		await deleteCollectionViaApi(name);
+	}
+});
+
+test('optional fields left or cleared empty do not block a record create', async ({ page }) => {
+	await signIn(page);
+	const target = `e2e_tgt_${Date.now().toString(36)}`;
+	const name = `e2e_empty_${Date.now().toString(36)}`;
+	await createCollectionViaApi(target);
+	await createCollectionWithFields(name, [
+		{ name: 'title', type: 'text' },
+		{ name: 'contact', type: 'email' },
+		{ name: 'site', type: 'url' },
+		{ name: 'author', type: 'relation', options: { collection: target, maxSelect: 1 } }
+	]);
+	try {
+		await page.goto(`/_/collections?collection=${name}`);
+		await page
+			.getByRole('button', { name: /New Record/ })
+			.first()
+			.click();
+
+		// Fill the optional text-like fields then clear them: the form posts the empty
+		// string, which the server has to treat as "no value" rather than rejecting it
+		// as an invalid email/url. Leave the relation unselected.
+		await page.locator('#f_title').fill('kept');
+		await page.locator('#f_contact').fill('x@example.com');
+		await page.locator('#f_contact').fill('');
+		await page.locator('#f_site').fill('https://example.com');
+		await page.locator('#f_site').fill('');
+
+		await page.getByRole('button', { name: 'Create', exact: true }).click();
+		await expect(page.getByText('kept')).toBeVisible();
+	} finally {
+		await deleteCollectionViaApi(name);
+		await deleteCollectionViaApi(target);
 	}
 });
 
