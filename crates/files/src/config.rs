@@ -48,6 +48,14 @@ pub struct FilesConfig {
     pub access_key: Option<String>,
     /// S3 secret.
     pub secret_key: Option<String>,
+    /// An external image service to resize in, instead of this process.
+    ///
+    /// Empty (the default) means "resize here": the `image` codecs run inside the
+    /// API process. Setting it moves that work — and its peak memory — to the
+    /// service; see [`crate::image_service`] for the contract.
+    pub image_service_url: Option<String>,
+    /// Shared secret sent to the image service as a bearer token.
+    pub image_service_token: Option<String>,
 }
 
 impl FilesConfig {
@@ -88,6 +96,8 @@ impl FilesConfig {
                 .unwrap_or_else(|| Self::DEFAULT_REGION.to_string()),
             access_key: optional("LAZYPOCK_S3_ACCESS_KEY"),
             secret_key: optional("LAZYPOCK_S3_SECRET_KEY"),
+            image_service_url: optional("LAZYPOCK_IMAGE_SERVICE_URL"),
+            image_service_token: optional("LAZYPOCK_IMAGE_SERVICE_TOKEN"),
         };
 
         if let Some(url) = &config.public_base_url {
@@ -96,6 +106,21 @@ impl FilesConfig {
                     "LAZYPOCK_FILES_PUBLIC_URL must start with http:// or https://, got {url:?}"
                 )));
             }
+        }
+
+        if let Some(url) = &config.image_service_url {
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Err(Error::config(format!(
+                    "LAZYPOCK_IMAGE_SERVICE_URL must start with http:// or https://, got {url:?}"
+                )));
+            }
+        } else if config.image_service_token.is_some() {
+            // A token with nothing to send it to reads as "the service is configured
+            // and authenticated" while resizing still happens in this process.
+            return Err(Error::config(
+                "LAZYPOCK_IMAGE_SERVICE_TOKEN is set but LAZYPOCK_IMAGE_SERVICE_URL is not: \
+                 the token would never be sent",
+            ));
         }
 
         // An incomplete S3 configuration is refused here rather than failing on
@@ -132,6 +157,16 @@ impl FilesConfig {
             (
                 "s3_secret_key",
                 if self.secret_key.is_some() {
+                    "(set)".to_string()
+                } else {
+                    "(unset)".to_string()
+                },
+            ),
+            // The URL, never the token: it is a credential too.
+            ("image_service", self.or_unset(&self.image_service_url)),
+            (
+                "image_service_token",
+                if self.image_service_token.is_some() {
                     "(set)".to_string()
                 } else {
                     "(unset)".to_string()
@@ -176,6 +211,56 @@ mod tests {
         assert_eq!(config.directory, FilesConfig::DEFAULT_DIRECTORY);
         assert_eq!(config.region, FilesConfig::DEFAULT_REGION);
         assert!(config.public_base_url.is_none());
+        // Resizing happens in this process until a service is configured.
+        assert!(config.image_service_url.is_none());
+    }
+
+    #[test]
+    fn the_image_service_url_must_be_http() {
+        let err = config(&[("LAZYPOCK_IMAGE_SERVICE_URL", "ftp://images.example.com")])
+            .expect_err("refused");
+        assert!(
+            err.message().contains("LAZYPOCK_IMAGE_SERVICE_URL"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_token_without_a_service_is_refused() {
+        // Otherwise it reads as "the service is configured and authenticated" while
+        // every thumbnail is still produced here.
+        let err = config(&[("LAZYPOCK_IMAGE_SERVICE_TOKEN", "s3cret")]).expect_err("refused");
+        assert!(
+            err.message().contains("LAZYPOCK_IMAGE_SERVICE_URL"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_image_service_is_summarised_without_its_token() {
+        let config = config(&[
+            (
+                "LAZYPOCK_IMAGE_SERVICE_URL",
+                "https://images.example.com/resize",
+            ),
+            ("LAZYPOCK_IMAGE_SERVICE_TOKEN", "s3cret"),
+        ])
+        .expect("configured");
+
+        let summary = config.summary();
+        let value = |key: &str| {
+            summary
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(value("image_service"), "https://images.example.com/resize");
+        assert_eq!(value("image_service_token"), "(set)");
+        assert!(
+            !summary.iter().any(|(_, value)| value.contains("s3cret")),
+            "{summary:?}"
+        );
     }
 
     #[test]

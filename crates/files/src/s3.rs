@@ -759,6 +759,8 @@ mod transport_tests {
             region: "auto".into(),
             access_key: Some("AKIDEXAMPLE".into()),
             secret_key: Some("secret".into()),
+            image_service_url: None,
+            image_service_token: None,
         })
         .expect("storage")
     }

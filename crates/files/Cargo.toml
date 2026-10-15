@@ -9,10 +9,17 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[features]
+default = ["local-image-codecs"]
+# In-process image decoding, resizing and encoding. Without it a build carries no
+# codecs at all: thumbnails then need `LAZYPOCK_IMAGE_SERVICE_URL`, and asking for a
+# local one fails loudly rather than silently producing nothing.
+local-image-codecs = ["dep:image"]
+
 [dependencies]
 bytes = "1.12.1"
 hmac = "0.13.0"
-image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp", "avif"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp", "avif"], optional = true }
 lazypock-core.workspace = true
 lazypock-db.workspace = true
 reqwest = { version = "0.13.5" }

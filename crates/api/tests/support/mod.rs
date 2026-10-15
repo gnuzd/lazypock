@@ -188,6 +188,8 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
             region: "auto".into(),
             access_key: None,
             secret_key: None,
+            image_service_url: None,
+            image_service_token: None,
         })
         .expect("files"),
     );

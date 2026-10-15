@@ -231,15 +231,23 @@ async fn serve_path(
         ))
     })?;
 
-    let bytes = thumbnail::resize(thumbnail::ResizeRequest {
-        source: &source.body,
-        source_format,
-        width: preset.width,
-        height: preset.height,
-        mode: preset.mode,
-        format: preset.format,
-        quality: preset.quality,
-    })
+    let bytes = thumbnail::resize(
+        thumbnail::ResizeRequest {
+            source: &source.body,
+            source_format,
+            width: preset.width,
+            height: preset.height,
+            mode: preset.mode,
+            format: preset.format,
+            quality: preset.quality,
+        },
+        // The configured image service, when there is one: the resize then happens
+        // out of this process. A service that refuses the work is an error, never a
+        // quiet fallback to the local codecs — the deployment asked for the CPU to
+        // be elsewhere.
+        state.files.image_service(),
+    )
+    .await
     .map_err(ApiError::new)?;
 
     let content_type = preset.format.content_type().to_string();

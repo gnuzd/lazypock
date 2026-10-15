@@ -51,7 +51,7 @@ The `lazypock` (npm) and GitHub repo names, and the MIT license, are preserved.
 | Permissions | **Postgres RLS** (Studio rule editor generates policies) |
 | Hooks | **TypeScript, auto-loaded, no recompile** (QuickJS) |
 | Studio | SvelteKit (**bun**), `adapter-static`, **embedded in the binary** |
-| Image scaling | **Separate service** (imgproxy), outside the main server |
+| Image scaling | **In-process by default**, with an **optional external service** (`LAZYPOCK_IMAGE_SERVICE_URL`) — and a `--no-default-features` build that carries no image codecs at all (section 10.3) |
 | File storage | S3-compatible (Cloudflare R2) + local adapter; CDN optional |
 | Postgres driver | **`tokio-postgres` + `deadpool-postgres`** (no sqlx) |
 | Multi-tenant | **One database per tenant** (+ one process per tenant), section 14 |
@@ -110,14 +110,22 @@ stated reference. They are cheap to change now and expensive later:
                └─────────────┘
 ```
 
+> The image service in that diagram is **optional**: with no `LAZYPOCK_IMAGE_SERVICE_URL` the server
+> resizes in-process, which is what a single-binary install does. Point it at a service (and build
+> `--no-default-features` to leave the codecs out) when resizing should not share the API's memory
+> (section 10.3).
+
 Core principles:
 
 1. **Stateless nodes.** All state lives in Postgres (or S3). Adding a node = starting a process.
 2. **Postgres is the message bus** for realtime, the job queue and cron locks. No Redis by
    default (less RAM, less complexity) — but abstracted behind a trait (section 8.8).
 3. **One binary** contains: API, Auth, Realtime, Hooks runtime, Studio (embedded), migrations, CLI.
-4. **Image processing never runs in the main server** — it causes RAM/CPU spikes and can OOM
-   the process that serves the API.
+4. **Image processing can be moved out of the main server** — it causes RAM/CPU spikes and can OOM
+   the process that serves the API. `LAZYPOCK_IMAGE_SERVICE_URL` sends every resize to a service
+   instead, and `cargo build --no-default-features` leaves the codecs out of the binary entirely. The
+   default build resizes in-process, so a single binary still produces thumbnails with no sidecar
+   (section 10.3).
 
 ---
 
@@ -625,9 +633,19 @@ Docker deployment story. That is why it is deferred rather than adopted now.
 Why separate: resizing needs peak RAM/CPU; isolating it lets you cap it with cgroups, scale it
 independently, and keeps the API server from OOMing.
 
-Choice: **imgproxy** (Go + libvips) in `docker-compose`, R2 as origin, CDN in front. Tune
-`IMGPROXY_MAX_SRC_RESOLUTION`, `IMGPROXY_CONCURRENCY`, container memory limits. A custom Rust
-service is only worth it if imgproxy falls short.
+**Implemented:** the process resizes **in-process by default**, behind
+`LAZYPOCK_IMAGE_SERVICE_URL` an HTTP seam that moves the work out (the contract is in
+`crates/files/src/image_service.rs`: `POST <url>?width=&height=&fit=&format=&quality=` with the source
+as the body, the encoded image back), and a `local-image-codecs` cargo feature that a
+`--no-default-features` build turns off — so a deployment can run a thin API and a service, and a
+single-binary install still gets thumbnails with nothing extra to deploy. A configured service that
+fails is an error, never a quiet fallback to local codecs: the setting exists to keep the CPU
+elsewhere.
+
+**Still open:** a service to point at, and the CDN path. imgproxy (Go + libvips) behind
+`/img/{sig}/{preset}/{path}` with R2 as origin remains the plan for that — tune
+`IMGPROXY_MAX_SRC_RESOLUTION` and `IMGPROXY_CONCURRENCY`, cap the container, and sign the URLs so
+arbitrary resizes are not free. The presets in `_image_presets` are the parameters either way.
 
 ```
 Client ─► CDN ─(miss)─► Image service ─► R2 (origin) ─► resize ─► respond + Cache-Control: immutable
@@ -865,7 +883,7 @@ somebody else's database.
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
 | E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections (a password is optional, matching `main`, so OAuth/OTP/invite-only accounts exist), and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). A password change revokes the account's `_sessions` and rotates its `token_key`; the revocation is what ends the refresh tokens issued before it. |
 | F. Realtime | done — the change-event trigger plus `_rt_log`, the `EventBus` seam with a Postgres `LISTEN` implementation, RLS-filtered fan-out with connection-id echo suppression, and SSE at `/api/realtime` with `lastEventId` resume. The Redis backend, event batching and logical replication are deliberately deferred (section 8.8). |
-| G. Files & images | **done** — upload validation, the key layout, local and S3 backends, the delete outbox, the HTTP upload/serve/delete routes, image presets with cached thumbnails, a superuser-gated CRUD API for them, and an orphan sweeper (**resized in-process, so no `imgproxy` sidecar and no extra artifact to ship — a deliberate change from section 10**). Two known limits: AVIF output is refused loudly because the schema allows it and the encoder cannot write it, and the S3 path has **not** been exercised against a live bucket (signing and listing are unit-tested; a live round-trip needs credentials and a bucket). |
+| G. Files & images | **done** — upload validation, the key layout, local and S3 backends, the delete outbox, the HTTP upload/serve/delete routes, image presets with cached thumbnails, a superuser-gated CRUD API for them, and an orphan sweeper (**resized in-process by default, so no sidecar and no extra artifact to ship, with `LAZYPOCK_IMAGE_SERVICE_URL` to move resizing to a service and a `local-image-codecs` feature to leave the codecs out of a thin build — section 10.3**). Two known limits: AVIF output is refused loudly because the schema allows it and the encoder cannot write it, and the S3 path has **not** been exercised against a live bucket (signing and listing are unit-tested; a live round-trip needs credentials and a bucket). |
 | H. Hooks | **partly** — the thread-owned worker, the six events, TypeScript stripping, the loader with hot reload and the `RecordHooks` seam are in, and **create, update and delete all run their before-hooks and after-hooks** (before runs before validation so a hook can supply a field; after runs post-commit; a before-delete hook can refuse by throwing). Remaining: the `$db`/`$http`/`$app` bindings — see the note below on why `$db` is not a small change. |
 | I. Jobs & ops | **partly** — request logs are in end to end: `_logs` aligned by migration 0007, a recorder middleware that redacts credential keys and captures error messages, and `GET /api/logs`, `/logs/stats`, `/logs/collections`, `/logs/retention`, `PATCH /logs/retention`, and `DELETE /logs?all=true` and `DELETE /logs?days=n`. The cron **admin API** is in too (`GET/POST/PATCH/DELETE /api/crons`, `POST /crons/validate`, and `POST /crons/{id}` run-now for `sql`/`http`; a `hook` job refuses loudly). Remaining: the cron **scheduler** that fires on `next_run_at`, the job queue, mailer and rate limits. |
 | J–K. Studio, SDK | **done except the JSON import body.** The SDK is ported and its live integration test passes; the collection admin API exists and serves the shape the Studio reads (`schema` alongside `fields`, per-field `hidden`/`system`/`indexed`, RFC 3339 `created`/`updated`, top-level `indexes`/`view*`); the PocketBase system collections (`_superusers`, `_auth_origins`, `_external_auths`, `_mfas`, `_otps`) are listed as locked entries — synthesised, so they stay out of the schema cache; an auth record's password is accepted under PocketBase's `password` **or** the password field's own name, which is what the Studio's generated form sends, and is hashed either way; `GET /api/export` serves the single-document JSON; logs, crons, API keys (`GET/POST/DELETE /api/settings/api-keys`, hashed, scoped, shown once) and `GET /api/import/status` / `POST /api/import/rollback` exist; and backup/restore is complete end to end — `GET /api/export/archive`, `POST /api/import`, `GET /api/import/preflight` — with the documented archive format and both safety invariants enforced server-side: an import applies the definitions the payload declares (fields, rules, options) and deletes nothing unless the caller sets `deleteMissing`, which drops the **user** collections and fields the payload leaves out — the Studio's switch of the same name, off by default — and never writes or drops a `_`-prefixed system collection or a built-in column. `POST /api/import` accepts both an archive upload and the JSON body a downloaded JSON backup is restored with, and `POST /api/import/rollback` undoes the destructive half too: the pre-import checkpoint holds definitions as well as rows, so a dropped collection is recreated and a pruned field comes back with its values. |

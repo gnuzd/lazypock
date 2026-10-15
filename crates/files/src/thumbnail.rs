@@ -1,15 +1,25 @@
 //! Thumbnail generation.
 //!
-//! Decoding, resizing and re-encoding happen in-process: no sidecar and no
-//! external `imgproxy`, which keeps the binary self-contained.
+//! Two ways to produce one, and the configuration picks between them:
+//!
+//! * **In this process** (the default): decoding, resizing and re-encoding with the
+//!   `image` codecs, compiled in behind the `local-image-codecs` feature. No sidecar
+//!   and no external service, which is what keeps the binary self-contained.
+//! * **An external service**, when `LAZYPOCK_IMAGE_SERVICE_URL` is set. The CPU and
+//!   the peak memory then belong to that service — see [`crate::image_service`] for
+//!   the contract, and build with `--no-default-features` to drop the codecs from
+//!   this binary entirely.
 //!
 //! The `fit` vocabulary is the one `_image_presets.fit` stores, so a value an
 //! operator writes by hand means here what it means in the schema.
 
+#[cfg(feature = "local-image-codecs")]
 use image::imageops::FilterType;
+#[cfg(feature = "local-image-codecs")]
 use image::{DynamicImage, ImageEncoder};
 use lazypock_core::error::{Error, Result};
 
+use crate::image_service::ImageService;
 use crate::validation::ImageFormat;
 
 /// How a source image is fitted to the target box.
@@ -134,7 +144,9 @@ impl OutputFormat {
 /// The filter used for every resize.
 ///
 /// Lanczos is the slowest option and the only one that stays sharp on a large
-/// downscale, which is what a thumbnail is.
+/// downscale, which is what a thumbnail is. Only the in-process codecs have it:
+/// a service configured through `LAZYPOCK_IMAGE_SERVICE_URL` picks its own.
+#[cfg(feature = "local-image-codecs")]
 const FILTER: FilterType = FilterType::Lanczos3;
 
 /// What to produce.
@@ -159,14 +171,37 @@ pub struct ResizeRequest<'a> {
     pub quality: u8,
 }
 
-/// Resize and re-encode.
-pub fn resize(request: ResizeRequest<'_>) -> Result<Vec<u8>> {
-    if !(1..=100).contains(&request.quality) {
+/// The quality range every path enforces.
+///
+/// Shared so a preset cannot be valid in one deployment and refused in another:
+/// the local codecs and an external service both go through this.
+fn check_quality(quality: u8) -> Result<()> {
+    if !(1..=100).contains(&quality) {
         return Err(Error::config(format!(
-            "thumbnail quality {} is out of range; expected 1-100",
-            request.quality
+            "thumbnail quality {quality} is out of range; expected 1-100"
         )));
     }
+    Ok(())
+}
+
+/// Resize and re-encode.
+///
+/// The configured service does the work when there is one; otherwise the local
+/// codecs do. Both paths are checked against the same rules (the quality range), so
+/// a preset cannot be valid in one deployment and refused in another.
+pub async fn resize(request: ResizeRequest<'_>, service: Option<&ImageService>) -> Result<Vec<u8>> {
+    check_quality(request.quality)?;
+
+    match service {
+        Some(service) => service.resize(&request).await,
+        None => resize_local(request),
+    }
+}
+
+/// The in-process path.
+#[cfg(feature = "local-image-codecs")]
+fn resize_local(request: ResizeRequest<'_>) -> Result<Vec<u8>> {
+    check_quality(request.quality)?;
 
     let decoded =
         image::load_from_memory_with_format(request.source, decode_format(request.source_format))
@@ -191,7 +226,21 @@ pub fn resize(request: ResizeRequest<'_>) -> Result<Vec<u8>> {
     encode(&output, request.format, request.quality)
 }
 
+/// The in-process path in a build without codecs: a loud refusal.
+///
+/// It names both ways out instead of returning something empty, because a thumbnail
+/// that silently does not happen is discovered by a user staring at a broken image,
+/// and "no image codecs in this build" is the actual cause.
+#[cfg(not(feature = "local-image-codecs"))]
+fn resize_local(_request: ResizeRequest<'_>) -> Result<Vec<u8>> {
+    Err(Error::config(
+        "this build was compiled without image codecs (`local-image-codecs`): set \
+         LAZYPOCK_IMAGE_SERVICE_URL to an image service, or rebuild with the default features",
+    ))
+}
+
 /// The box to fit the source into, deriving a missing dimension from the source.
+#[cfg(feature = "local-image-codecs")]
 fn resolve_box(
     source_width: u32,
     source_height: u32,
@@ -227,6 +276,7 @@ fn resolve_box(
 }
 
 /// Apply the fit mode against an already-resolved box.
+#[cfg(feature = "local-image-codecs")]
 fn fit(
     source: &DynamicImage,
     (box_width, box_height): (u32, u32),
@@ -283,6 +333,7 @@ fn fit(
 }
 
 /// Encode to the requested format.
+#[cfg(feature = "local-image-codecs")]
 fn encode(image: &DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>> {
     let mut output = Vec::new();
 
@@ -332,6 +383,7 @@ fn encode(image: &DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec
     Ok(output)
 }
 
+#[cfg(feature = "local-image-codecs")]
 fn decode_format(format: ImageFormat) -> image::ImageFormat {
     match format {
         ImageFormat::Png => image::ImageFormat::Png,
@@ -341,7 +393,7 @@ fn decode_format(format: ImageFormat) -> image::ImageFormat {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local-image-codecs"))]
 mod tests {
     use super::*;
     use crate::validation::{dimensions, sniff, validate, UploadLimits};
@@ -372,7 +424,7 @@ mod tests {
     }
 
     fn run(source: &[u8], width: Option<u32>, height: Option<u32>, mode: ResizeMode) -> Vec<u8> {
-        resize(ResizeRequest {
+        resize_local(ResizeRequest {
             source,
             source_format: ImageFormat::Png,
             width,
@@ -523,7 +575,7 @@ mod tests {
 
     #[test]
     fn a_preset_with_no_dimensions_is_refused() {
-        let err = resize(ResizeRequest {
+        let err = resize_local(ResizeRequest {
             source: &solid(64, 64),
             source_format: ImageFormat::Png,
             width: None,
@@ -543,7 +595,7 @@ mod tests {
             (Some(10), Some(0)),
             (Some(99999), Some(10)),
         ] {
-            let err = resize(ResizeRequest {
+            let err = resize_local(ResizeRequest {
                 source: &solid(64, 64),
                 source_format: ImageFormat::Png,
                 width,
@@ -571,7 +623,7 @@ mod tests {
             (OutputFormat::Jpeg, ImageFormat::Jpeg),
             (OutputFormat::Webp, ImageFormat::Webp),
         ] {
-            let bytes = resize(ResizeRequest {
+            let bytes = resize_local(ResizeRequest {
                 source: &solid(64, 64),
                 source_format: ImageFormat::Png,
                 width: Some(32),
@@ -588,7 +640,7 @@ mod tests {
 
     #[test]
     fn avif_is_refused_loudly_rather_than_substituted() {
-        let err = resize(ResizeRequest {
+        let err = resize_local(ResizeRequest {
             source: &solid(64, 64),
             source_format: ImageFormat::Png,
             width: Some(32),
@@ -604,7 +656,7 @@ mod tests {
     #[test]
     fn an_out_of_range_quality_is_refused() {
         for quality in [0u8, 200] {
-            let err = resize(ResizeRequest {
+            let err = resize_local(ResizeRequest {
                 source: &solid(64, 64),
                 source_format: ImageFormat::Png,
                 width: Some(32),
@@ -620,7 +672,7 @@ mod tests {
 
     #[test]
     fn garbage_is_refused_without_panicking() {
-        let err = resize(ResizeRequest {
+        let err = resize_local(ResizeRequest {
             source: b"not an image at all",
             source_format: ImageFormat::Png,
             width: Some(32),
@@ -660,6 +712,37 @@ mod tests {
         assert_eq!(
             OutputFormat::from_source(ImageFormat::Gif),
             OutputFormat::Png
+        );
+    }
+}
+
+/// A build with `--no-default-features`, which carries no image codecs at all.
+#[cfg(all(test, not(feature = "local-image-codecs")))]
+mod without_codecs {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_local_resize_names_the_two_ways_out() {
+        let request = ResizeRequest {
+            source: b"not an image",
+            source_format: ImageFormat::Png,
+            width: Some(64),
+            height: Some(64),
+            mode: ResizeMode::Cover,
+            format: OutputFormat::Webp,
+            quality: 80,
+        };
+
+        let err = resize(request, None).await.expect_err("no codecs");
+        assert!(
+            err.message().contains("LAZYPOCK_IMAGE_SERVICE_URL"),
+            "{}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("local-image-codecs"),
+            "{}",
+            err.message()
         );
     }
 }
