@@ -47,6 +47,13 @@ pub trait Storage: Send + Sync {
     /// Used by the orphan sweeper, which is the one caller that needs to see what
     /// is actually there rather than what something asked for.
     fn list<'a>(&'a self, prefix: &'a str) -> StorageFuture<'a, Vec<String>>;
+
+    /// A URL a client can `PUT` an object to directly, when the backend can offer one.
+    ///
+    /// `None` means it cannot — a local directory has no HTTP endpoint of its own — and
+    /// the client uploads through the API instead. Not an error: it is the reason the
+    /// SDK falls back to a plain upload.
+    fn presign_put(&self, key: &str, expires_seconds: i64) -> Option<String>;
 }
 
 /// The local filesystem backend.
@@ -215,6 +222,11 @@ impl Storage for LocalStorage {
                 ))
             })
         })
+    }
+
+    fn presign_put(&self, _key: &str, _expires_seconds: i64) -> Option<String> {
+        // A directory is not an HTTP endpoint, so there is nothing to hand out.
+        None
     }
 }
 

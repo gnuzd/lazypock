@@ -300,6 +300,58 @@ pub async fn insert(runner: &dyn QueryRunner, new: &NewFile) -> Result<FileRow> 
         .ok_or_else(|| Error::internal("the file row vanished immediately after insert"))
 }
 
+/// What an upload turned out to be, once its bytes were read.
+///
+/// Measured on the server, never taken from the client: a size, a type and a checksum a
+/// caller asserts are claims, and this is what a reservation is corrected with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Measured {
+    /// Size in bytes.
+    pub size: i64,
+    /// Sniffed content type.
+    pub mime_type: String,
+    /// Extension without the dot.
+    pub extension: String,
+    /// Pixel width, for an image.
+    pub width: Option<i32>,
+    /// Pixel height, for an image.
+    pub height: Option<i32>,
+    /// SHA-256 of the bytes, hex.
+    pub checksum: String,
+}
+
+/// Record what actually arrived, once an upload's object has been verified.
+///
+/// The presign path writes a row before the bytes exist, carrying what the client
+/// *claimed*; this is where the size, the sniffed type and the image's dimensions become
+/// real. A row that is gone by then is reported as `None` rather than recreated.
+pub async fn finalise(
+    runner: &dyn QueryRunner,
+    id: &str,
+    measured: &Measured,
+) -> Result<Option<FileRow>> {
+    let updated = runner
+        .run_execute(
+            "update _files set size = $2::text::bigint, mime_type = $3::text,              extension = $4::text, width = $5::text::integer, height = $6::text::integer,              checksum = $7::text, updated_at = now() where id = $1::text",
+            &[
+                &id.to_string(),
+                &measured.size.to_string(),
+                &measured.mime_type,
+                &measured.extension,
+                &measured.width.map(|value| value.to_string()),
+                &measured.height.map(|value| value.to_string()),
+                &measured.checksum,
+            ],
+        )
+        .await
+        .map_err(db_error)?;
+
+    if updated == 0 {
+        return Ok(None);
+    }
+    get(runner, id).await
+}
+
 /// One file, by id.
 pub async fn get(runner: &dyn QueryRunner, id: &str) -> Result<Option<FileRow>> {
     let sql = format!("select {COLUMNS} from _files where id = $1::text");

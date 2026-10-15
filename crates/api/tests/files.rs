@@ -1294,3 +1294,176 @@ async fn an_unreadable_rule_denies_instead_of_allowing() {
 
     app.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_backend_without_direct_upload_says_so_and_drops_the_reservation() {
+    let Some(app) = test_app("http_files_presign_local").await else {
+        return;
+    };
+    seed(&app).await;
+    let superuser = token(&app).await;
+
+    // The local adapter has no HTTP endpoint of its own, so a direct upload is refused
+    // with a reason — and the row reserved for it goes, because a file nobody can upload
+    // is a leak.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({
+            "filename": "photo.png",
+            "size": 4096,
+            "mime": "image/png",
+            "collection_name": "posts",
+            "field_name": "cover",
+            "record_id": "p1"
+        })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::NOT_IMPLEMENTED,
+        "{:?}",
+        reply.body
+    );
+    let body = reply.body.expect("a refusal");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("message")
+            .contains("/api/files"),
+        "the refusal should say what to do instead: {body}"
+    );
+
+    let body = listing(&app, &superuser, "").await;
+    assert_eq!(
+        body["total"],
+        json!(0),
+        "the reservation should be gone: {body}"
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_direct_upload_is_validated_before_it_is_reserved() {
+    let Some(app) = test_app("http_files_presign_guards").await else {
+        return;
+    };
+    seed(&app).await;
+    let superuser = token(&app).await;
+
+    // Unauthenticated: refused.
+    let reply = call(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({ "filename": "photo.png", "size": 10, "mime": "image/png" })),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    // Not an image the server can read: refused, as the multipart route refuses it. The
+    // declared type is the first of two gates, so it has to be one of the four.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({ "filename": "script.sh", "size": 10, "mime": "text/x-sh" })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+
+    // A size that cannot be true: refused before anything is reserved.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({ "filename": "huge.png", "size": 1024 * 1024 * 1024, "mime": "image/png" })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+
+    // A record that is not there: refused, so an upload cannot be reserved for a record
+    // the reaper would immediately consider gone.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/presign",
+        Some(json!({
+            "filename": "photo.png", "size": 4096, "mime": "image/png",
+            "collection_name": "posts", "record_id": "nope"
+        })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{:?}", reply.body);
+
+    // And nothing was left behind by any of them.
+    let body = listing(&app, &superuser, "").await;
+    assert_eq!(body["total"], json!(0), "{body}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn completing_an_upload_verifies_the_object_and_finishes_the_row() {
+    let Some(app) = test_app("http_files_complete").await else {
+        return;
+    };
+    seed(&app).await;
+    let superuser = token(&app).await;
+
+    // An upload that went through the API stands in for the object a presigned PUT would
+    // have placed: completing it rewrites the row from what is actually stored.
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"posts"),
+            ("record", None, b"p1"),
+            ("file", Some("photo.png"), &png(40, 20)),
+        ],
+        Some(&superuser),
+    )
+    .await;
+    let id = reply.body.expect("body")["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        &format!("/api/files/{id}/complete?variants=thumb"),
+        Some(json!({})),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("a file");
+    assert_eq!(body["id"], json!(id), "{body}");
+    assert_eq!(body["mime_type"], json!("image/png"), "{body}");
+    assert_eq!(body["width"], json!(40), "{body}");
+    assert_eq!(body["height"], json!(20), "{body}");
+    assert!(
+        body["variants"]["thumb"].is_string(),
+        "the asked-for variant is offered: {body}"
+    );
+
+    // An id with no object behind it is dropped rather than left as a file that can never
+    // be served.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/files/doesNotExist123/complete",
+        Some(json!({})),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{:?}", reply.body);
+
+    app.cleanup().await;
+}

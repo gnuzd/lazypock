@@ -75,6 +75,10 @@ pub fn router(state: AppState) -> Router {
             get(files::serve_thumbnail),
         )
         .route("/api/files/sweep", post(files::sweep))
+        // Direct upload: reserve an object, PUT it straight to the bucket, then ask the
+        // server to verify it. A backend that cannot presign answers 501.
+        .route("/api/files/presign", post(files::presign))
+        .route("/api/files/{id}/complete", post(files::complete))
         // The id-addressed pair: what a client holding a file field's value (or the id
         // an upload returned) uses. A key is three segments, so this does not overlap
         // the routes above, and the query carries the variant (`?preset=`, `?thumb=`).

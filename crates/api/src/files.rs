@@ -197,30 +197,10 @@ pub async fn upload(
     .map_err(ApiError::new)?;
 
     // `variants=content,thumb` asks for those presets to exist *now*, which is the
-    // difference between an editor showing a thumbnail immediately and showing one
-    // after its first request. The keys are remembered on the row so the reaper can
-    // remove them with the source.
+    // difference between an editor showing a thumbnail immediately and showing one after
+    // its first request.
     if !requested_variants.is_empty() {
-        let mut generated = file.variants.clone();
-        for name in &requested_variants {
-            let preset = presets::find(&client, name)
-                .await
-                .map_err(ApiError::new)?
-                .ok_or_else(|| {
-                    ApiError::new(Error::not_found(format!("no image preset named {name:?}")))
-                })?;
-            variant_bytes(&state, &file.storage_path, &preset).await?;
-            if let Some(object) = generated.as_object_mut() {
-                object.insert(
-                    preset.name.clone(),
-                    json!(preset.thumbnail_key(&file.storage_path)),
-                );
-            }
-        }
-        store::set_variants(&client, &file.id, &generated)
-            .await
-            .map_err(ApiError::new)?;
-        file.variants = generated;
+        file = generate_variants(&state, &client, file, &requested_variants).await?;
     }
 
     let presets = presets::load(&client).await.map_err(ApiError::new)?;
@@ -290,6 +270,40 @@ fn file_json_with(file: &store::FileRow, files: &Files, presets: &[ImagePreset])
     })
 }
 
+/// Generate the requested variants and remember their keys on the row.
+///
+/// Remembering them is what lets the reaper remove a variant with its source; without it
+/// the thumbnail outlives the file in the bucket.
+async fn generate_variants(
+    state: &AppState,
+    client: &lazypock_db::deadpool_postgres::Client,
+    mut file: store::FileRow,
+    requested: &[String],
+) -> Result<store::FileRow, ApiError> {
+    let mut generated = file.variants.clone();
+    for name in requested {
+        let preset = presets::find(client, name)
+            .await
+            .map_err(ApiError::new)?
+            .ok_or_else(|| {
+                ApiError::new(Error::not_found(format!("no image preset named {name:?}")))
+            })?;
+        variant_bytes(state, &file.storage_path, &preset).await?;
+        if let Some(object) = generated.as_object_mut() {
+            object.insert(
+                preset.name.clone(),
+                json!(preset.thumbnail_key(&file.storage_path)),
+            );
+        }
+    }
+
+    store::set_variants(client, &file.id, &generated)
+        .await
+        .map_err(ApiError::new)?;
+    file.variants = generated;
+    Ok(file)
+}
+
 /// The bytes and content type of one variant, generating and caching it if needed.
 ///
 /// One implementation for every path that needs a resized image: the key-addressed
@@ -357,6 +371,268 @@ fn hex(bytes: &[u8]) -> String {
         out.push_str(&format!("{byte:02x}"));
     }
     out
+}
+
+/// The body `POST /api/files/presign` accepts — the SDK's own field names.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PresignBody {
+    /// The name the client will upload under.
+    pub filename: String,
+    /// The size it will upload, in bytes.
+    pub size: i64,
+    /// The declared content type.
+    #[serde(default)]
+    pub mime: Option<String>,
+    /// The collection the file will belong to, when it is known yet.
+    #[serde(default, alias = "collectionName")]
+    pub collection_name: Option<String>,
+    /// The field it will belong to.
+    #[serde(default, alias = "fieldName")]
+    pub field_name: Option<String>,
+    /// The record it will belong to, when it already exists.
+    #[serde(default, alias = "recordId")]
+    pub record_id: Option<String>,
+    /// Where the upload came from: `field`, `editor` or `library`.
+    #[serde(default)]
+    pub origin: Option<String>,
+}
+
+/// How long a presigned URL is good for.
+///
+/// Short: the URL authorizes a `PUT` to one key, so the window in which a leaked one is
+/// useful should be small. Fifteen minutes is enough for a slow connection to start an
+/// upload.
+const PRESIGN_TTL_SECONDS: i64 = 15 * 60;
+
+/// `POST /api/files/presign` — reserve an object and hand out a URL to `PUT` it to.
+///
+/// The row is written **before** the bytes arrive, so a completed direct upload is a file
+/// like any other the moment it lands. What the client *claims* is checked here — the
+/// size, the declared type, the collection and the record — and what actually arrived is
+/// checked at `/complete`. A presigned URL authorizes a PUT to one key, never a content
+/// type or a size.
+///
+/// A backend with no HTTP endpoint of its own (the local one) answers `501` **and drops
+/// the reservation**: a row for a file nobody can upload is a leak, and the SDK reads the
+/// status as "no direct upload here" and posts the bytes to `POST /api/files` instead.
+pub async fn presign(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Json(body): Json<PresignBody>,
+) -> Result<Response, ApiError> {
+    let Some(user_id) = principal.user_id() else {
+        return Err(ApiError::new(Error::forbidden(
+            "uploading requires an authenticated request",
+        )));
+    };
+
+    // Images only, as the multipart route is: the declared type is the first gate, the
+    // bytes at `/complete` are the second.
+    let declared = body.mime.clone().unwrap_or_default();
+    let subtype = declared.split('/').nth(1).unwrap_or_default();
+    // `ImageFormat::parse`'s own error is a *config* one (it reads a field's options),
+    // which would answer 500 for a client's bad content type. This is the client's
+    // problem, so it is reported as one.
+    let format = lazypock_files::ImageFormat::parse(subtype).map_err(|_| {
+        ApiError::new(Error::invalid(format!(
+            "unsupported image type {declared:?}; supported: png, jpeg, gif and webp"
+        )))
+    })?;
+
+    let max_bytes = state.files.limits().max_bytes as i64;
+    if body.size <= 0 || body.size > max_bytes {
+        return Err(ApiError::new(Error::invalid(format!(
+            "size must be between 1 and {max_bytes} bytes, got {}",
+            body.size
+        ))));
+    }
+
+    let collection = body
+        .collection_name
+        .clone()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let record_id = body
+        .record_id
+        .clone()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if !collection.is_empty() && state.schema.snapshot().get(&collection).is_none() {
+        return Err(ApiError::new(Error::not_found(format!(
+            "no collection named {collection:?}"
+        ))));
+    }
+    if !record_id.is_empty() {
+        if collection.is_empty() {
+            return Err(ApiError::new(Error::invalid(
+                "a `record_id` without a `collection_name` does not say where the file belongs",
+            )));
+        }
+        if !record_exists(&state, &collection, &record_id).await? {
+            return Err(ApiError::new(Error::not_found(format!(
+                "no record {record_id:?} in the collection {collection:?}"
+            ))));
+        }
+    }
+
+    let key = if collection.is_empty() || record_id.is_empty() {
+        keys::pending_key(&body.filename)
+    } else {
+        keys::storage_key(&collection, &record_id, &body.filename).map_err(ApiError::new)?
+    };
+    let origin =
+        Origin::parse(body.origin.as_deref().unwrap_or_default()).map_err(ApiError::new)?;
+    let stored_name = key.rsplit('/').next().unwrap_or_default().to_string();
+
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let file = store::insert(
+        &client,
+        &NewFile {
+            filename: stored_name,
+            // The claimed values, replaced at `/complete` by what the bytes say.
+            extension: format.as_str().to_string(),
+            mime_type: format.content_type().to_string(),
+            size: body.size,
+            storage_path: key.clone(),
+            storage_backend: state.files.backend_name().to_string(),
+            collection_name: collection,
+            record_id,
+            field_name: body.field_name.clone().unwrap_or_default(),
+            origin,
+            uploaded_by: user_id.to_string(),
+            original_name: Some(body.filename.clone()),
+            width: None,
+            height: None,
+            checksum: None,
+        },
+    )
+    .await
+    .map_err(ApiError::new)?;
+
+    match state.files.storage().presign_put(&key, PRESIGN_TTL_SECONDS) {
+        Some(url) => Ok((
+            StatusCode::OK,
+            Json(json!({
+                "id": file.id,
+                "key": key,
+                "method": "PUT",
+                "url": url,
+                "headers": { "content-type": format.content_type() },
+            })),
+        )
+            .into_response()),
+        None => {
+            store::delete(&client, &file.id)
+                .await
+                .map_err(ApiError::new)?;
+            Ok((
+                StatusCode::NOT_IMPLEMENTED,
+                Json(json!({
+                    "status": 501,
+                    "message": "this backend cannot take a direct upload: a local                                 directory has no HTTP endpoint, so the file has to be                                 POSTed to /api/files (direct upload needs                                 LAZYPOCK_FILES_ADAPTER=s3)",
+                    "data": {},
+                })),
+            )
+                .into_response())
+        }
+    }
+}
+
+/// The query `/complete` accepts.
+#[derive(Debug, Default, Deserialize)]
+pub struct CompleteQuery {
+    /// Presets to generate before responding, as the SDK sends them.
+    #[serde(default)]
+    pub variants: Option<String>,
+}
+
+/// `POST /api/files/{id}/complete` — verify what arrived and finish the row.
+///
+/// This is where a presigned upload is *validated*: the client could have PUT anything,
+/// so the bytes decide the type and the size, the same validator the multipart route
+/// uses is applied, and the row is rewritten from what is actually there. An id with no
+/// object behind it is dropped rather than left as a file that can never be served.
+pub async fn complete(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+    Query(query): Query<CompleteQuery>,
+) -> Result<Response, ApiError> {
+    if principal.user_id().is_none() {
+        return Err(ApiError::new(Error::forbidden(
+            "completing an upload requires an authenticated request",
+        )));
+    }
+
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let file = store::get(&client, &id)
+        .await
+        .map_err(ApiError::new)?
+        .ok_or_else(|| ApiError::new(Error::not_found(format!("no file {id:?}"))))?;
+
+    let object = state
+        .files
+        .storage()
+        .get(&file.storage_path)
+        .await
+        .map_err(ApiError::new)?
+        .ok_or_else(|| {
+            // The reservation is useless without an object: drop it rather than leave a
+            // file that can never be served.
+            tracing::warn!(id = %id, "an upload was completed with no object behind it");
+            ApiError::new(Error::not_found(format!(
+                "nothing was uploaded for the file {id:?}"
+            )))
+        })?;
+
+    let format = lazypock_files::validation::validate(
+        &object.body,
+        &object.content_type,
+        state.files.limits(),
+    )
+    .map_err(ApiError::new)?;
+    let dimensions = lazypock_files::validation::dimensions(&object.body, format);
+    let checksum = hex(&Sha256::digest(&object.body));
+
+    let mut file = store::finalise(
+        &client,
+        &id,
+        &store::Measured {
+            size: object.body.len() as i64,
+            mime_type: format.content_type().to_string(),
+            extension: format.as_str().to_string(),
+            width: dimensions.map(|(width, _)| width as i32),
+            height: dimensions.map(|(_, height)| height as i32),
+            checksum,
+        },
+    )
+    .await
+    .map_err(ApiError::new)?
+    .ok_or_else(|| ApiError::new(Error::not_found(format!("no file {id:?}"))))?;
+
+    if let Some(requested) = &query.variants {
+        let names: Vec<String> = requested
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect();
+        if !names.is_empty() {
+            file = generate_variants(&state, &client, file, &names).await?;
+        }
+    }
+
+    let presets = presets::load(&client).await.map_err(ApiError::new)?;
+    tracing::info!(id = %file.id, key = %file.storage_path, "direct upload completed");
+    Ok((
+        StatusCode::OK,
+        Json(file_json_with(&file, &state.files, &presets)),
+    )
+        .into_response())
 }
 
 /// `GET /api/files/{id}`
