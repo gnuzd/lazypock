@@ -1,5 +1,5 @@
 import { createClient } from './lazypock.types';
-import { wsUrlFromBaseUrl, type HttpClient } from 'lazypock';
+import { sseUrlFromBaseUrl, type HttpClient } from 'lazypock';
 
 // The studio SPA is served by the core Phoenix app, which proxies the
 // Lazypock API under `/api`.
@@ -36,9 +36,8 @@ function createConnectionId(): string {
 	}) as typeof http.request;
 }
 
-// Advertise the connection id on the realtime socket so the server can
-// match socket ↔ HTTP requests from the same tab. The SDK appends
-// ?token=... itself on (re)connect.
-client.realtime.setUrl(
-	wsUrlFromBaseUrl('/api') + '?connectionId=' + encodeURIComponent(connectionId)
-);
+// Advertise the connection id on the realtime stream so the server can
+// match stream ↔ HTTP requests from the same tab. The SDK sends the
+// bearer token and the connection id itself on (re)connect.
+client.realtime.setUrl(sseUrlFromBaseUrl('/api'));
+client.realtime.setConnectionId(connectionId);
