@@ -72,6 +72,11 @@ impl ResizeMode {
     }
 
     /// Whether this mode can enlarge a source smaller than the box.
+    ///
+    /// Only `fit` asks, and `fit` is compiled out without the codecs, so the
+    /// attribute keeps a thin build free of dead code rather than suppressing
+    /// the warning it would otherwise raise.
+    #[cfg(feature = "local-image-codecs")]
     fn enlarges(self) -> bool {
         matches!(
             self,
