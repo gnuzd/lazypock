@@ -739,6 +739,11 @@ at the Rust API and swaps the realtime transport to SSE.
   superuser-only, read-only (SELECT/EXPLAIN/WITH) endpoint; the storage test needs a real
   backend round-trip. `studio/e2e/studio.spec.ts` carries the SQL console as a `test.fixme`
   until the endpoint exists.
+- **Deleting a referenced collection.** `DELETE /api/collections/{c}` drops the table with `drop table
+  if exists` (no `CASCADE`), so a collection another collection's relation points at fails with a raw
+  500 instead of a clean error. `main` used `DROP TABLE ... CASCADE`, which succeeds and silently
+  drops the referencing foreign key. Decide which is wanted (a 409 naming the dependants is the
+  least surprising) before changing it.
 - **Passwordless auth accounts.** `main` dropped the password requirement (`20261101000000_hide_password_fields`:
   "accounts can exist without a password"), so an account could be created with none — OAuth-only
   users and invite flows. The Rust server still requires `password` on an auth-collection create,

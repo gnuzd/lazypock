@@ -514,10 +514,16 @@ async fn expanding_a_single_relation_nests_its_document() {
     let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
     let rows = records(&client, &built).await;
 
-    assert_eq!(rows[0]["author"]["name"], json!("Alice"));
-    assert_eq!(rows[1]["author"]["name"], json!("Bob"));
+    // The expansion lives under `expand`; the relation's own key keeps the id —
+    // PocketBase's shape, which the SDK and the Studio read.
+    assert_eq!(rows[0]["expand"]["author"]["name"], json!("Alice"));
+    assert_eq!(rows[1]["expand"]["author"]["name"], json!("Bob"));
+    assert!(
+        rows[0].get("author").is_none(),
+        "`fields` did not select the id"
+    );
     // The nested `fields` entry narrows the expanded record to one key.
-    assert_eq!(rows[0]["author"].as_object().unwrap().len(), 1);
+    assert_eq!(rows[0]["expand"]["author"].as_object().unwrap().len(), 1);
 
     test.cleanup().await;
 }
@@ -542,10 +548,10 @@ async fn expanding_a_multi_relation_produces_an_array() {
     let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
     let rows = records(&client, &built).await;
 
-    assert_eq!(rows[0]["reviewers"], json!([{ "name": "Bob" }]));
-    assert_eq!(rows[1]["reviewers"].as_array().unwrap().len(), 2);
+    assert_eq!(rows[0]["expand"]["reviewers"], json!([{ "name": "Bob" }]));
+    assert_eq!(rows[1]["expand"]["reviewers"].as_array().unwrap().len(), 2);
     // No related rows is an empty array, never null.
-    assert_eq!(rows[2]["reviewers"], json!([]));
+    assert_eq!(rows[2]["expand"]["reviewers"], json!([]));
 
     test.cleanup().await;
 }
@@ -563,9 +569,9 @@ async fn expanding_everything_covers_the_relations_one_level_deep() {
     let built = read::build_list(&query, &context, &AuthContext::default()).expect("build");
     let rows = records(&client, &built).await;
 
-    assert_eq!(rows[0]["author"]["name"], json!("Alice"));
-    assert!(rows[0]["reviewers"].is_array());
-    // Only the selected top-level key plus the expanded relations.
+    assert_eq!(rows[0]["expand"]["author"]["name"], json!("Alice"));
+    assert!(rows[0]["expand"]["reviewers"].is_array());
+    // Only the selected top-level key plus `expand`.
     assert!(rows[0].get("title").is_none());
 
     test.cleanup().await;

@@ -428,7 +428,12 @@ async fn a_fetched_record_can_be_expanded() {
         .expect("present");
 
     assert_eq!(fetched["id"], json!(id));
-    assert_eq!(fetched["author"]["name"], json!("Alice"));
+    // The expansion is nested under `expand` and the relation key keeps the id.
+    assert_eq!(fetched["expand"]["author"]["name"], json!("Alice"));
+    assert!(
+        fetched.get("author").is_none(),
+        "`fields` did not select the id"
+    );
     assert!(fetched.get("title").is_none(), "projection was not applied");
 
     test.cleanup().await;

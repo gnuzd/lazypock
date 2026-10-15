@@ -126,9 +126,24 @@ pub fn validate(
             continue;
         }
 
-        match input.get(&field.name) {
+        // An empty string is **no value**: its validators do not run, and on a
+        // required field it is a missing value. PocketBase short-circuits its
+        // validators the same way, and the Studio relies on it — a cleared optional
+        // email, url or relation posts `""`, which otherwise failed as malformed
+        // ("must be a record id") and blocked the whole record.
+        let raw = input.get(&field.name);
+        let value = match raw {
+            Some(Value::String(text)) if text.is_empty() => None,
+            other => other,
+        };
+
+        match value {
             None => {
-                if field.required && !partial {
+                // An explicit `""` is an attempt to clear the field, so on a required
+                // one it is missing even in a partial update; an *absent* field means
+                // "leave it alone" there.
+                let cleared = raw.is_some();
+                if field.required && (cleared || !partial) {
                     errors.insert(
                         &field.name,
                         "validation_required",
@@ -571,6 +586,12 @@ pub fn encode_value(field: &Field, value: &Value) -> Result<Option<String>> {
     if value.is_null() {
         return Ok(None);
     }
+    // An empty string is an absent value for a non-text field, exactly as in
+    // `validate`, so the column is written as SQL null rather than `''` (which a
+    // number, boolean, date, array or jsonb column would reject).
+    if value.as_str().is_some_and(str::is_empty) && !is_text_like(field.field_type) {
+        return Ok(None);
+    }
 
     let encoded = match field.field_type {
         FieldType::Text
@@ -718,6 +739,68 @@ mod tests {
         ok(&collection, json!({}), true);
         // ... but an explicit null is still an attempt to clear it.
         assert!(validate(&collection, &input(json!({"title": null})), true).is_err());
+    }
+
+    #[test]
+    fn an_empty_string_is_no_value() {
+        let fields = collection(vec![
+            field("title", FieldType::Text, json!({"min": 3}), false),
+            field("contact", FieldType::Email, json!({}), false),
+            field("site", FieldType::Url, json!({}), false),
+            field(
+                "author",
+                FieldType::Relation,
+                json!({"collection": "authors"}),
+                false,
+            ),
+            field("views", FieldType::Number, json!({}), false),
+            field(
+                "tags",
+                FieldType::Select,
+                json!({"values": ["a"], "maxSelect": 3}),
+                false,
+            ),
+        ]);
+
+        // A cleared optional field is absent, so its validators do not run: `""` is
+        // not "too short", not an invalid email/url, not an invalid relation.
+        ok(
+            &fields,
+            json!({
+                "title": "",
+                "contact": "",
+                "site": "",
+                "author": "",
+                "views": "",
+                "tags": "",
+            }),
+            false,
+        );
+
+        // A non-text field encodes to SQL null so the column is cleared rather than
+        // holding `""`; text keeps its empty string.
+        assert_eq!(
+            encode_value(fields.field("author").expect("author"), &json!("")).expect("encode"),
+            None
+        );
+        assert_eq!(
+            encode_value(fields.field("title").expect("title"), &json!("")).expect("encode"),
+            Some(String::new())
+        );
+
+        // A *required* field is still missing when cleared — on an update too, where
+        // an explicit `""` clears and an absent field means "leave it alone".
+        let required = collection(vec![field(
+            "author",
+            FieldType::Relation,
+            json!({"collection": "authors"}),
+            true,
+        )]);
+        let failures = errors(&required, json!({"author": ""}), false);
+        assert_eq!(failures.fields["author"].code, "validation_required");
+        let failures = errors(&required, json!({"author": ""}), true);
+        assert_eq!(failures.fields["author"].code, "validation_required");
+        ok(&required, json!({}), true);
     }
 
     #[test]
