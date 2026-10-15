@@ -723,6 +723,14 @@ at the Rust API and swaps the realtime transport to SSE.
 - Batch API, transactions in hooks.
 - Webhooks / outbound events.
 - Settings import/export + versioning.
+- **Studio ↔ server endpoint gaps** (surfaced by the e2e tour, section 15): the Studio
+  calls `POST /api/sql/query` (SQL Console), `POST /api/collections/meta/dry-run-view` and
+  `POST /api/collections/meta/preview-view-builder` (view-builder preview), and
+  `POST /api/settings/storage/test` (Files → "Test connection") — none of which the Rust
+  server implements yet, so the page renders but the action 404s. The SQL console needs a
+  superuser-only, read-only (SELECT/EXPLAIN/WITH) endpoint; the storage test needs a real
+  backend round-trip. `studio/e2e/studio.spec.ts` carries the SQL console as a `test.fixme`
+  until the endpoint exists.
 - PocketBase data importer.
 - View collection builder (no-code) + ERD.
 - Audit log for admin actions.
