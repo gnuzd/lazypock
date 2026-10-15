@@ -76,16 +76,21 @@ pub enum ImportAction {
 ///
 /// `schema` and `fields` are both accepted because the published format uses
 /// `schema` (PocketBase's older spelling) while this server's own wire format uses
-/// `fields`; a file written by either is valid.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `fields`; a file written by either is valid. A file written by *this* server's
+/// Studio export carries **both**, because that export is the objects
+/// `GET /api/collections` serves, and those serve the derived `schema` beside
+/// `fields`. When both are there, `fields` wins: it is the spelling the API keeps,
+/// and the `schema` beside it is derived from it and carries less (`id`,
+/// `collectionId` and `sort_order` are not in it).
+#[derive(Debug, Clone, Serialize)]
 pub struct ArchiveCollection {
     /// Table name.
     pub name: String,
     /// `base`, `auth` or `view`.
     #[serde(default, rename = "type")]
     pub collection_type: Option<String>,
-    /// Field definitions, under either spelling.
-    #[serde(default, alias = "fields")]
+    /// Field definitions, under either spelling (see the type's docs).
+    #[serde(default)]
     pub schema: Vec<Value>,
     /// Access rules.
     #[serde(default)]
@@ -96,6 +101,50 @@ pub struct ArchiveCollection {
     /// Records to upsert, by `id`.
     #[serde(default)]
     pub records: Vec<Value>,
+}
+
+impl<'de> Deserialize<'de> for ArchiveCollection {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Hand-written rather than `alias = "fields"`, because an alias makes the two
+        // keys mutually exclusive: `{"fields": [...], "schema": [...]}` is then read
+        // as the same field twice and refused with "duplicate field `schema`", which
+        // is exactly what this server's own collection payload contains.
+        #[derive(Deserialize)]
+        struct Wire {
+            name: String,
+            #[serde(default, rename = "type")]
+            collection_type: Option<String>,
+            #[serde(default)]
+            schema: Option<Vec<Value>>,
+            #[serde(default)]
+            fields: Option<Vec<Value>>,
+            #[serde(default)]
+            rules: Option<Value>,
+            #[serde(default)]
+            options: Option<Value>,
+            #[serde(default)]
+            records: Vec<Value>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let fields = wire.fields.unwrap_or_default();
+        let schema = wire.schema.unwrap_or_default();
+
+        Ok(ArchiveCollection {
+            name: wire.name,
+            collection_type: wire.collection_type,
+            // A populated `fields` is the authority; an empty one is silence rather
+            // than a definition of zero columns, so the `schema` beside it still
+            // counts.
+            schema: if fields.is_empty() { schema } else { fields },
+            rules: wire.rules,
+            options: wire.options,
+            records: wire.records,
+        })
+    }
 }
 
 /// The canonical JSON an archive's `schema.json` holds.
@@ -1307,6 +1356,88 @@ mod tests {
         .expect("this server's spelling");
         assert_eq!(server.collections[0].schema.len(), 1);
         assert_eq!(published.collections[0].name, server.collections[0].name);
+    }
+
+    #[test]
+    fn an_empty_fields_list_does_not_hide_the_schema() {
+        // `fields` is preferred only when it actually carries something: an empty
+        // list beside a populated `schema` is not a definition of zero columns.
+        let parsed: ArchiveSchema = serde_json::from_str(
+            r#"{"collections":[{"name":"posts","fields":[],"schema":[{"name":"title","type":"text"}]}]}"#,
+        )
+        .expect("parses");
+        assert_eq!(parsed.collections[0].schema.len(), 1);
+    }
+
+    #[test]
+    fn a_studio_export_carrying_both_spellings_still_imports() {
+        // What the Studio's "Export Collections" button writes is the objects
+        // `GET /api/collections` serves, and since this server serves the derived
+        // `schema` beside `fields` those objects carry both spellings. They used to be
+        // rejected with "duplicate field `schema`", so the exporter's own output could
+        // not be imported. This is that file, in miniature.
+        let exported = serde_json::json!([
+            {
+                "id": "users",
+                "name": "users",
+                "type": "auth",
+                "system": false,
+                "created": "2026-10-15T12:36:26Z",
+                "updated": "2026-10-15T12:36:26Z",
+                "fields": [{
+                    "id": "users_email",
+                    "collectionId": "users",
+                    "name": "email",
+                    "type": "email",
+                    "required": true,
+                    "unique": true,
+                    "hidden": false,
+                    "system": false,
+                    "indexed": false,
+                    "sort_order": 0,
+                    "options": {}
+                }],
+                "schema": [{
+                    "name": "email",
+                    "type": "email",
+                    "required": true,
+                    "unique": true,
+                    "indexed": false,
+                    "default": null,
+                    "options": {}
+                }],
+                "rules": {},
+                "indexes": [],
+                "viewQuery": "",
+                "viewOrigin": "",
+                "viewBuilder": null,
+                "options": {}
+            },
+            {
+                // The Studio exports the system collections too, and they must still be
+                // skipped rather than written.
+                "name": "_superusers",
+                "type": "auth",
+                "system": true,
+                "fields": [{"name": "email", "type": "email"}],
+                "schema": [{"name": "email", "type": "email"}]
+            }
+        ]);
+
+        let archive = archive_from_payload(&exported).expect("the Studio's own export must import");
+        assert_eq!(archive.schema.collections.len(), 2);
+
+        let users = &archive.schema.collections[0];
+        assert_eq!(users.name, "users");
+        assert_eq!(users.collection_type.as_deref(), Some("auth"));
+        assert_eq!(users.schema.len(), 1);
+        // `fields` is what both spellings mean, and it is the richer of the two: the
+        // derived `schema` beside it has no id, collectionId or sort_order.
+        assert_eq!(users.schema[0]["id"], serde_json::json!("users_email"));
+
+        let plan = archive.plan(&["users".to_string()]);
+        assert_eq!(plan.actions[0].1, ImportAction::Update);
+        assert_eq!(plan.skipped().count(), 1, "{plan:?}");
     }
 
     #[test]
