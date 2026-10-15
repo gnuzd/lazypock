@@ -19,18 +19,21 @@
 //!
 //! Two rules, enforced here rather than left to a client:
 //!
-//! 1. **An import never deletes.** A collection or record that the archive does not
-//!    mention is left exactly as it is. Without this, importing a partial file
-//!    would silently drop everything it did not contain — which is a real defect
-//!    the documentation already records against the Studio import page, whose
-//!    `deleteMissing` defaults to *true*.
-//! 2. **An import never writes a system collection.** The `_`-prefixed tables are
+//! 1. **An import deletes only what it was asked to.** A collection or record the
+//!    archive does not mention is left exactly as it is, unless the caller set
+//!    [`ImportOptions::delete_missing`] — what the Studio's "Delete missing
+//!    collections and schema fields" switch sends. That option drops **user**
+//!    collections and fields the payload leaves out; without it, importing a
+//!    partial file cannot remove anything.
+//! 2. **An import never writes or drops a system collection, and never drops a
+//!    built-in column.** The `_`-prefixed tables and the built-in columns are
 //!    lazypock's own machinery: users, password hashes, signing keys, migration
 //!    state. A restore that touched them could lock everyone out or corrupt the
 //!    ledger, so they are refused and reported, not applied.
 //!
-//! Neither rule is a default or a flag. A destructive restore is a different
-//! operation from a restore, and it is not this one.
+//! Rule 1 is a flag the caller sets. Rule 2 never is. The restore that destroys
+//! without being asked to is a different operation ([`restore_snapshot`], reachable
+//! only as a password-confirmed rollback), and it is not this one.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -434,37 +437,26 @@ pub fn archive_from_payload(payload: &Value) -> Result<Archive> {
 pub async fn restore_snapshot(client: &mut Client, payload: &Value) -> Result<ImportReport> {
     let archive = archive_from_payload(payload)?;
 
-    let wanted: std::collections::HashSet<String> = archive
+    // In archive order, and computed rather than iterated from a set: the rows phase
+    // below reports collections in the order the snapshot holds them.
+    let names: Vec<String> = archive
         .schema
         .collections
         .iter()
         .map(|collection| collection.name.clone())
         .filter(|name| !is_system_collection(name))
         .collect();
+    let wanted: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+
+    // Everything the database holds now, read once: the drops below are about what
+    // the snapshot does not have, and the report is about what this restore removed.
+    let current = collections::list(client).await?;
 
     // Drop every user collection the snapshot does not know about: those are the
     // ones an import created.
-    let existing: Vec<String> = collections::list(client)
-        .await?
-        .into_iter()
-        .map(|collection| collection.name)
-        .filter(|name| !is_system_collection(name))
-        .collect();
-    for name in &existing {
-        if !wanted.contains(name) {
-            collections::delete(client, name, true).await?;
-        }
-    }
-
-    // Recreate any collection the snapshot has and the database has lost.
-    let current: std::collections::HashSet<String> = collections::list(client)
-        .await?
-        .into_iter()
-        .map(|collection| collection.name)
-        .collect();
-    for name in &wanted {
-        if !current.contains(name) {
-            create_collection(client, &archive, name).await?;
+    for collection in &current {
+        if !is_system_collection(&collection.name) && !wanted.contains(collection.name.as_str()) {
+            collections::delete(client, &collection.name, true).await?;
         }
     }
 
@@ -472,9 +464,40 @@ pub async fn restore_snapshot(client: &mut Client, payload: &Value) -> Result<Im
         imported: Vec::new(),
         skipped: Vec::new(),
         errors: Vec::new(),
+        removed: current
+            .iter()
+            .filter(|collection| !is_system_collection(&collection.name))
+            .filter(|collection| !wanted.contains(collection.name.as_str()))
+            .map(|collection| collection.name.clone())
+            .collect(),
     };
 
-    let names: Vec<String> = wanted.iter().cloned().collect();
+    // Then every definition the snapshot holds: a collection it lost is recreated,
+    // and one that still exists gets its fields back. Without the second half a
+    // pruned column would survive the rollback that exists to undo the pruned
+    // import — the definition is the thing that says the column belongs.
+    let existing_now: std::collections::HashSet<String> = collections::list(client)
+        .await?
+        .into_iter()
+        .map(|collection| collection.name)
+        .collect();
+    let mut fields_removed: Vec<(String, Vec<String>)> = Vec::new();
+    for name in &names {
+        if !existing_now.contains(name) {
+            create_collection(client, &archive, name).await?;
+            continue;
+        }
+        // Read before the update, so the answer is about the collection as it is.
+        let dropped = current
+            .iter()
+            .find(|collection| &collection.name == name)
+            .map(|collection| undeclared_fields(&archive, name, collection))
+            .transpose()?
+            .unwrap_or_default();
+        apply_definition(client, &archive, name, true).await?;
+        fields_removed.push((name.clone(), dropped));
+    }
+
     let transaction = client.transaction().await.map_err(db_error)?;
     for name in &names {
         let table = crate::ddl::quote_ident(name);
@@ -492,9 +515,16 @@ pub async fn restore_snapshot(client: &mut Client, payload: &Value) -> Result<Im
     }
     for name in &names {
         apply_records(&transaction, &archive, name).await?;
-        report
-            .imported
-            .push(imported_of(&archive, name, &ImportAction::Update));
+        report.imported.push(imported_of(
+            &archive,
+            name,
+            &ImportAction::Update,
+            fields_removed
+                .iter()
+                .find(|(collection, _)| collection == name)
+                .map(|(_, fields)| fields.clone())
+                .unwrap_or_default(),
+        ));
     }
     for name in &names {
         let table = crate::ddl::quote_ident(name);
@@ -507,6 +537,7 @@ pub async fn restore_snapshot(client: &mut Client, payload: &Value) -> Result<Im
 
     tracing::info!(
         collections = report.imported.len(),
+        removed = report.removed.len(),
         "restored an import snapshot"
     );
     Ok(report)
@@ -846,6 +877,16 @@ pub struct ImportOptions {
     pub confirm: bool,
     /// The record count above which confirmation is required.
     pub confirm_threshold: u64,
+    /// Whether the collections and fields the payload leaves out are dropped.
+    ///
+    /// Off by default, and off in the Studio. This is the one import option that
+    /// destroys data, so a payload that omits a collection or a field is otherwise
+    /// read as "leave it alone" — which is what makes importing a partial file safe.
+    ///
+    /// It is the caller's to ask for, and the payload has to have been *read*, not
+    /// merely not written by this server: a collection it names is never dropped,
+    /// system collections and built-in columns never are.
+    pub delete_missing: bool,
 }
 
 impl Default for ImportOptions {
@@ -856,6 +897,7 @@ impl Default for ImportOptions {
             atomic: AtomicMode::Batch,
             confirm: false,
             confirm_threshold: 10_000,
+            delete_missing: false,
         }
     }
 }
@@ -884,6 +926,10 @@ pub struct ImportedCollection {
     /// Records written, which is `records_imported` on the wire.
     #[serde(rename = "records_imported")]
     pub records_imported: u64,
+    /// Fields dropped, because the caller set `deleteMissing` and the payload did
+    /// not declare them. Empty otherwise, and never a built-in column.
+    #[serde(default, rename = "fields_removed")]
+    pub fields_removed: Vec<String>,
 }
 
 /// What an import did.
@@ -896,6 +942,12 @@ pub struct ImportReport {
     /// Collections that failed, with the reason. Only ever non-empty under
     /// [`AtomicMode::Continue`], which is the point of that mode.
     pub errors: Vec<(String, String)>,
+    /// User collections dropped, because the caller set `deleteMissing` and the
+    /// payload did not declare them. Reported rather than left to be discovered,
+    /// since it is the one thing an import can do that a client cannot undo from the
+    /// response alone. Never a system collection.
+    #[serde(default)]
+    pub removed: Vec<String>,
 }
 
 /// The result of asking to import.
@@ -952,18 +1004,19 @@ pub fn preflight(archive: &Archive, options: &ImportOptions) -> Preflight {
 
 /// Apply an archive.
 ///
-/// The two safety rules hold here regardless of mode, of what the file says, or of
-/// what a client sends: a collection the archive omits is never touched, and a
-/// system collection is never written.
+/// Rule 1 holds unless the caller asked otherwise: [`ImportOptions::delete_missing`]
+/// drops the user collections and fields the payload leaves out, and nothing else
+/// does. Rule 2 holds regardless of mode, of what the file says, or of what a client
+/// sends: a system collection is never written, and never dropped.
 pub async fn import(
     client: &mut Client,
     archive: &Archive,
     options: &ImportOptions,
 ) -> Result<ImportOutcome> {
-    let existing: Vec<String> = collections::list(client)
-        .await?
-        .into_iter()
-        .map(|collection| collection.name)
+    let current = collections::list(client).await?;
+    let existing: Vec<String> = current
+        .iter()
+        .map(|collection| collection.name.clone())
         .collect();
     let import_plan = archive.plan(&existing);
 
@@ -976,28 +1029,62 @@ pub async fn import(
         imported: Vec::new(),
         skipped: preflight.skipped.clone(),
         errors: Vec::new(),
+        removed: Vec::new(),
     };
 
-    // `batch` runs the whole archive in one transaction, so borrow the client once
-    // and let the transaction back it. The other modes drive their own.
-    // Definitions first, outside the data phase: `collections::create` manages its
-    // own transaction and cannot join an outer one, so a collection's table is not
-    // created inside the batch transaction below. Stated rather than glossed,
-    // because it means `batch` covers the records, not the table creation.
+    // Definitions first, outside the data phase: `collections::create` and
+    // `collections::update` manage their own transactions and cannot join the batch
+    // transaction below, so a table — or a column added or dropped — is never created
+    // inside it. Stated rather than glossed, because it means `batch` covers the
+    // records, not the schema.
+    let mut fields_removed: Vec<(String, Vec<String>)> = Vec::new();
     for (name, action) in import_plan.writable() {
-        if matches!(action, ImportAction::Create) {
-            create_collection(client, archive, name).await?;
+        match action {
+            ImportAction::Create => create_collection(client, archive, name).await?,
+            // Records-only was the first version of this, and it made an import lie:
+            // an existing collection was "updated" and its definition — fields, rules,
+            // options — was silently ignored, so a payload that changed a collection
+            // changed nothing but its rows.
+            ImportAction::Update => {
+                let dropped = if options.delete_missing {
+                    current
+                        .iter()
+                        .find(|collection| &collection.name == name)
+                        .map(|collection| undeclared_fields(archive, name, collection))
+                        .transpose()?
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                apply_definition(client, archive, name, options.delete_missing).await?;
+                fields_removed.push((name.clone(), dropped));
+            }
+            // `writable()` filters these out — the skipped ones are reported in the
+            // preflight — so this arm is unreachable. It is here because the
+            // iterator's type cannot say that.
+            ImportAction::Skip(_) => {}
         }
     }
+
+    let removed_for = |name: &str| -> Vec<String> {
+        fields_removed
+            .iter()
+            .find(|(collection, _)| collection == name)
+            .map(|(_, fields)| fields.clone())
+            .unwrap_or_default()
+    };
 
     match options.atomic {
         AtomicMode::Batch => {
             let transaction = client.transaction().await.map_err(db_error)?;
             for (name, _) in import_plan.writable() {
                 apply_records(&transaction, archive, name).await?;
-                report
-                    .imported
-                    .push(imported_of(archive, name, &ImportAction::Update));
+                report.imported.push(imported_of(
+                    archive,
+                    name,
+                    &ImportAction::Update,
+                    removed_for(name),
+                ));
             }
             transaction.commit().await.map_err(db_error)?;
         }
@@ -1009,7 +1096,12 @@ pub async fn import(
                 let transaction = client.transaction().await.map_err(db_error)?;
                 match apply_records(&transaction, archive, name).await {
                     Ok(()) => match transaction.commit().await {
-                        Ok(()) => report.imported.push(imported_of(archive, name, action)),
+                        Ok(()) => report.imported.push(imported_of(
+                            archive,
+                            name,
+                            action,
+                            removed_for(name),
+                        )),
                         Err(err) => report.errors.push((name.clone(), err.to_string())),
                     },
                     Err(err) => {
@@ -1038,10 +1130,19 @@ pub async fn import(
         }
     }
 
+    // Drops last, and only when they were asked for: every definition the payload
+    // carries has been applied by now, so a relation it (re)declared still points at
+    // a table that exists, and the drop cascades away the referencing foreign key
+    // rather than the referencing table.
+    if options.delete_missing {
+        report.removed = drop_undeclared_collections(client, &current, archive).await?;
+    }
+
     tracing::info!(
         imported = report.imported.len(),
         skipped = report.skipped.len(),
         errors = report.errors.len(),
+        removed = report.removed.len(),
         atomic = options.atomic.as_str(),
         "applied a backup archive"
     );
@@ -1050,7 +1151,12 @@ pub async fn import(
 }
 
 /// What one collection will report.
-fn imported_of(archive: &Archive, name: &str, _action: &ImportAction) -> ImportedCollection {
+fn imported_of(
+    archive: &Archive,
+    name: &str,
+    _action: &ImportAction,
+    fields_removed: Vec<String>,
+) -> ImportedCollection {
     ImportedCollection {
         name: name.to_string(),
         collection_type: archive
@@ -1065,7 +1171,134 @@ fn imported_of(archive: &Archive, name: &str, _action: &ImportAction) -> Importe
             .find(|(collection, _)| collection == name)
             .map(|(_, records)| records.len() as u64)
             .unwrap_or(0),
+        fields_removed,
     }
+}
+
+/// The definition an archive carries for one collection.
+fn definition_of<'a>(archive: &'a Archive, name: &str) -> Result<&'a ArchiveCollection> {
+    archive
+        .schema
+        .collections
+        .iter()
+        .find(|collection| collection.name == name)
+        .ok_or_else(|| Error::invalid(format!("the archive has no definition for {name:?}")))
+}
+
+/// The field names a payload declares for a collection.
+///
+/// Every entry counts, including the built-in ones the input mapping strips: a
+/// field the payload *names* is not missing, and naming it is what protects it from
+/// a `deleteMissing` prune. A PocketBase export naming its own `id`/`passwordHash`
+/// fields therefore keeps lazypock's columns of those names.
+fn declared_field_names(definition: &ArchiveCollection) -> std::collections::HashSet<&str> {
+    definition
+        .schema
+        .iter()
+        .filter_map(|field| field.get("name").and_then(Value::as_str))
+        .collect()
+}
+
+/// The columns a `deleteMissing` import would drop from a collection: the ones it
+/// has, that the payload does not declare, and that are not lazypock's own.
+fn undeclared_fields(
+    archive: &Archive,
+    name: &str,
+    collection: &collections::Collection,
+) -> Result<Vec<String>> {
+    let declared = declared_field_names(definition_of(archive, name)?);
+    Ok(collections::undeclared_fields(collection, &declared)
+        .into_iter()
+        .map(|field| field.name.clone())
+        .collect())
+}
+
+/// Map a definition's fields onto the data layer's create/update input.
+///
+/// Built-in columns are left out: the docs promise that a `system` field is stripped
+/// on import, and a PocketBase export carries its own `id`, `created` and `tokenKey`
+/// that way — declaring them would either collide with lazypock's columns or fail
+/// validation. A field of the same *name* in a payload is still counted as declared
+/// (see [`declared_field_names`]), so stripping it here never makes it a prune
+/// candidate.
+fn declared_fields(
+    definition: &ArchiveCollection,
+    collection_type: crate::types::CollectionType,
+) -> Result<Vec<crate::collections::CreateField>> {
+    let mut fields = Vec::with_capacity(definition.schema.len());
+    for field in &definition.schema {
+        if let Some(field) = field_to_create(field, collection_type)? {
+            fields.push(field);
+        }
+    }
+    Ok(fields)
+}
+
+/// Apply an existing collection's definition: its fields, rules and options.
+///
+/// A view's columns come from its query, so its `schema` is informational — applying
+/// it would try to declare columns the view does not have. Everything else in the
+/// definition is applied either way.
+async fn apply_definition(
+    client: &mut Client,
+    archive: &Archive,
+    name: &str,
+    delete_missing: bool,
+) -> Result<()> {
+    let definition = definition_of(archive, name)?;
+    let collection_type = parse_collection_type(definition.collection_type.as_deref())?;
+
+    let fields = if collection_type.is_table() {
+        Some(declared_fields(definition, collection_type)?)
+    } else {
+        None
+    };
+
+    collections::update(
+        client,
+        name,
+        collections::UpdateCollection {
+            rules: definition.rules.clone(),
+            options: definition.options.clone(),
+            fields,
+            delete_missing_fields: delete_missing,
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Drop the user collections the payload leaves out.
+///
+/// `current` is every collection read **before** the import applied anything, so a
+/// collection the import itself created is not a candidate. System collections are
+/// never candidates, whatever the payload says.
+async fn drop_undeclared_collections(
+    client: &mut Client,
+    current: &[collections::Collection],
+    archive: &Archive,
+) -> Result<Vec<String>> {
+    let incoming: std::collections::HashSet<&str> = archive
+        .schema
+        .collections
+        .iter()
+        .map(|collection| collection.name.as_str())
+        .collect();
+
+    let mut dropped = Vec::new();
+    for collection in current {
+        if is_system_collection(&collection.name) || incoming.contains(collection.name.as_str()) {
+            continue;
+        }
+        // A failure here is reported, not swallowed: the collection the payload left
+        // out is still there, and a client that asked for it to be dropped has to
+        // hear that it was not.
+        collections::delete(client, &collection.name, true).await?;
+        dropped.push(collection.name.clone());
+    }
+
+    Ok(dropped)
 }
 
 /// Create a collection from its archive definition.
@@ -1074,24 +1307,15 @@ fn imported_of(archive: &Archive, name: &str, _action: &ImportAction) -> Importe
 /// into the data layer's, because the two spellings differ (`schema` versus
 /// `fields`) and a silent mismatch would create a collection with no columns.
 async fn create_collection(client: &mut Client, archive: &Archive, name: &str) -> Result<()> {
-    let definition = archive
-        .schema
-        .collections
-        .iter()
-        .find(|collection| collection.name == name)
-        .ok_or_else(|| Error::invalid(format!("the archive has no definition for {name:?}")))?;
-
-    let mut fields = Vec::with_capacity(definition.schema.len());
-    for field in &definition.schema {
-        fields.push(field_to_create(field)?);
-    }
+    let definition = definition_of(archive, name)?;
+    let collection_type = parse_collection_type(definition.collection_type.as_deref())?;
 
     crate::collections::create(
         client,
         crate::collections::CreateCollection {
             name: name.to_string(),
-            collection_type: parse_collection_type(definition.collection_type.as_deref())?,
-            fields,
+            collection_type,
+            fields: declared_fields(definition, collection_type)?,
             rules: definition
                 .rules
                 .clone()
@@ -1122,11 +1346,39 @@ async fn apply_records(
         return Ok(());
     };
 
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    // The columns the table really has. A record may carry keys for columns this
+    // database does not have — a field the import just pruned, a system field the
+    // mapping strips, a PocketBase field with no equivalent here. `jsonb_populate_record`
+    // ignores those on insert, but the `update set` list is built from the record's own
+    // keys, so one unknown key made the whole statement fail: "column body of relation
+    // demo does not exist". Read once per collection, not per record.
+    let columns = table_columns(runner, name).await?;
+
     for record in records {
-        upsert(runner, name, record).await?;
+        upsert(runner, name, record, &columns).await?;
     }
 
     Ok(())
+}
+
+/// The columns a table has, by name, in the current schema.
+async fn table_columns(
+    runner: &dyn crate::runner::QueryRunner,
+    table: &str,
+) -> Result<std::collections::HashSet<String>> {
+    let rows = runner
+        .run_query(
+            "select column_name from information_schema.columns \
+             where table_name = $1 and table_schema = current_schema()",
+            &[&table],
+        )
+        .await
+        .map_err(db_error)?;
+    Ok(rows.into_iter().map(|row| row.get(0)).collect())
 }
 
 /// Insert or update one record by `id`.
@@ -1138,6 +1390,7 @@ async fn upsert(
     runner: &dyn crate::runner::QueryRunner,
     table: &str,
     record: &Value,
+    table_columns: &std::collections::HashSet<String>,
 ) -> Result<()> {
     let Some(object) = record.as_object() else {
         return Err(Error::invalid(format!(
@@ -1150,11 +1403,14 @@ async fn upsert(
         )));
     }
 
-    // Every column except `id` is updated from the incoming row, so a restore is a
-    // faithful copy rather than a merge that keeps stale values.
+    // Every column the table has, except `id`, is updated from the incoming row, so a
+    // restore is a faithful copy rather than a merge that keeps stale values. A key
+    // the table does not have is left out of the update rather than sent to Postgres
+    // as a column that does not exist.
     let columns: Vec<&String> = object
         .keys()
         .filter(|column| column.as_str() != "id")
+        .filter(|column| table_columns.contains(column.as_str()))
         .collect();
     let assignments = columns
         .iter()
@@ -1186,17 +1442,34 @@ async fn upsert(
 }
 
 /// Map an archive's field object onto the data layer's input.
-fn field_to_create(value: &Value) -> Result<crate::collections::CreateField> {
+///
+/// `None` for a field lazypock owns: a definition marked `system` (a PocketBase
+/// export carries its own `id`, `tokenKey`, `passwordHash` that way) or one named
+/// after a built-in column. The published docs promise those are stripped, and
+/// without this a PocketBase export would try to declare `id` as a text column.
+fn field_to_create(
+    value: &Value,
+    collection_type: crate::types::CollectionType,
+) -> Result<Option<crate::collections::CreateField>> {
     let name = value
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::invalid("an archive field has no name"))?;
+
+    let system = value
+        .get("system")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if system || collections::is_builtin_column(collection_type, name) {
+        return Ok(None);
+    }
+
     let field_type = value
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::invalid(format!("the field {name:?} has no type")))?;
 
-    Ok(crate::collections::CreateField {
+    Ok(Some(crate::collections::CreateField {
         name: name.to_string(),
         field_type: FieldType::parse(field_type)?,
         required: value
@@ -1211,7 +1484,7 @@ fn field_to_create(value: &Value) -> Result<crate::collections::CreateField> {
             .get("options")
             .cloned()
             .unwrap_or_else(|| serde_json::json!({})),
-    })
+    }))
 }
 
 /// Map an archive's collection type onto this server's.
@@ -1438,6 +1711,62 @@ mod tests {
         let plan = archive.plan(&["users".to_string()]);
         assert_eq!(plan.actions[0].1, ImportAction::Update);
         assert_eq!(plan.skipped().count(), 1, "{plan:?}");
+    }
+
+    #[test]
+    fn a_system_field_is_stripped_from_the_fields_an_import_declares() {
+        // A PocketBase export carries its own `id`/`tokenKey` marked `system`, and the
+        // published docs promise those are stripped: declaring `id` as a text column
+        // would either collide with lazypock's own column or fail validation.
+        use crate::types::CollectionType;
+
+        let id = serde_json::json!({"name": "id", "type": "text", "system": true});
+        assert!(field_to_create(&id, CollectionType::Base)
+            .expect("maps")
+            .is_none());
+        let token = serde_json::json!({"name": "tokenKey", "type": "text", "system": true});
+        assert!(field_to_create(&token, CollectionType::Base)
+            .expect("maps")
+            .is_none());
+
+        // `email` is a built-in column on an auth collection only. A base collection
+        // is free to have one, and it has to survive: dropping every field whose name
+        // is on the auth list would quietly lose a column from a legitimate payload.
+        let email = serde_json::json!({"name": "email", "type": "email"});
+        assert!(field_to_create(&email, CollectionType::Auth)
+            .expect("maps")
+            .is_none());
+        assert!(field_to_create(&email, CollectionType::Base)
+            .expect("maps")
+            .is_some());
+
+        let title = serde_json::json!({"name": "title", "type": "text"});
+        assert!(field_to_create(&title, CollectionType::Base)
+            .expect("maps")
+            .is_some());
+    }
+
+    #[test]
+    fn a_field_the_payload_names_is_declared_even_when_it_is_skipped() {
+        // Naming is what protects a built-in column from a `deleteMissing` prune: the
+        // payload says the column belongs there, so its absence from the create/update
+        // input is not the same as its absence from the payload.
+        let definition = ArchiveCollection {
+            name: "users".into(),
+            collection_type: Some("auth".into()),
+            schema: vec![
+                serde_json::json!({"name": "email", "type": "email", "system": true}),
+                serde_json::json!({"name": "name", "type": "text"}),
+            ],
+            rules: None,
+            options: None,
+            records: Vec::new(),
+        };
+
+        let declared = declared_field_names(&definition);
+        assert_eq!(declared.len(), 2, "{declared:?}");
+        assert!(declared.contains("email"));
+        assert!(declared.contains("name"));
     }
 
     #[test]

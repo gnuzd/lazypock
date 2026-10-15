@@ -629,8 +629,9 @@ async fn update_field(
 
 /// Input for updating a collection's metadata.
 ///
-/// Only rules and options: changing a table's shape is a field operation, which
-/// goes through `add_field`/`delete_field` so the DDL stays in one place.
+/// Rules and options are replaced as given, and `fields` is a declaration the
+/// collection's columns are reconciled against: named fields are added or updated,
+/// and undeclared ones are only dropped when the caller says so.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateCollection {
@@ -638,11 +639,22 @@ pub struct UpdateCollection {
     pub rules: Option<Value>,
     /// Replacement type-specific settings, when given.
     pub options: Option<Value>,
-    /// Fields to add or update. Fields **absent** from this list are left alone, so
-    /// a payload that omits one does not drop its column; removing a field stays an
-    /// explicit `delete_field`.
+    /// Fields to add or update. Fields **absent** from this list are left alone by
+    /// default, so a payload that omits one does not drop its column; removing a
+    /// field stays an explicit `delete_field`.
     #[serde(default)]
     pub fields: Option<Vec<CreateField>>,
+    /// Drop the fields this collection has and `fields` did not declare.
+    ///
+    /// This is the destructive half of an import: a collection definition that
+    /// names some columns and *omits* others is a statement about the whole column
+    /// set, and the caller that sent it asked for the omission to be applied.
+    /// Off by default, and not reachable from a request body (`serde(skip)`), so a
+    /// client cannot ask for a column drop through the update endpoint — the Studio
+    /// removes a field with an explicit `delete_field`. Built-in columns are never
+    /// dropped, whatever this says.
+    #[serde(skip)]
+    pub delete_missing_fields: bool,
 }
 
 /// Update a collection's rules and options.
@@ -679,6 +691,15 @@ pub async fn update(
                     update_field(client, &existing.name, current, field).await?;
                 }
             }
+        }
+    }
+
+    // After the incoming fields are in place, so a drop can never see a column the
+    // payload was about to (re)declare as missing.
+    if input.delete_missing_fields {
+        if let Some(fields) = &input.fields {
+            let declared: HashSet<&str> = fields.iter().map(|field| field.name.as_str()).collect();
+            drop_undeclared_fields(client, &existing, &declared).await?;
         }
     }
 
@@ -859,6 +880,82 @@ pub async fn delete_field(
 
     tracing::info!(collection = %collection.name, field = %field.name, "field deleted");
     Ok(field)
+}
+
+/// Whether a column is lazypock's own and must never be dropped.
+///
+/// `email` is only built-in on an auth collection: a base collection is free to have
+/// a column of that name, and dropping it on request is not the same act.
+pub fn is_builtin_column(collection_type: CollectionType, name: &str) -> bool {
+    types::SYSTEM_COLUMNS.contains(&name)
+        || (collection_type == CollectionType::Auth && types::AUTH_SYSTEM_COLUMNS.contains(&name))
+}
+
+/// The fields a declarative update would drop: the collection has them, `declared`
+/// does not name them, and they are not lazypock's own columns.
+///
+/// Public because an import has to be able to say what it is about to drop *before*
+/// it drops it — the report it returns names them — and the rule for what counts is
+/// not something a second caller should be free to restate.
+pub fn undeclared_fields<'a>(
+    collection: &'a Collection,
+    declared: &HashSet<&str>,
+) -> Vec<&'a Field> {
+    collection
+        .fields
+        .iter()
+        .filter(|field| !declared.contains(field.name.as_str()))
+        .filter(|field| !is_builtin_column(collection.collection_type, &field.name))
+        .collect()
+}
+
+/// Drop every column `existing` has that `declared` does not name.
+///
+/// One transaction for the whole set, and one notification at the end: a caller
+/// applying a declaration drops a column *because* it is absent from that
+/// declaration, so the set is a single schema change and subscribers should reload
+/// once. Built-in columns are skipped rather than dropped, which is what keeps an
+/// auth collection's `email`/`verified`/`password_hash` (rows in `_fields`, but
+/// lazypock's own columns) out of reach of an import.
+///
+/// Returns the names dropped.
+async fn drop_undeclared_fields(
+    client: &mut Client,
+    existing: &Collection,
+    declared: &HashSet<&str>,
+) -> Result<Vec<String>> {
+    let doomed = undeclared_fields(existing, declared);
+
+    if doomed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let transaction = client.transaction().await.map_err(db_error)?;
+    for field in &doomed {
+        transaction
+            .batch_execute(&ddl::drop_column_statement(&existing.name, &field.name)?)
+            .await
+            .map_err(|err| {
+                Error::internal(format!(
+                    "failed to drop {:?}.{:?}: {err}",
+                    existing.name, field.name
+                ))
+            })?;
+        transaction
+            .execute("delete from _fields where id = $1", &[&field.id])
+            .await
+            .map_err(db_error)?;
+    }
+    notify_schema_changed(&transaction).await?;
+    transaction.commit().await.map_err(db_error)?;
+
+    let dropped: Vec<String> = doomed.iter().map(|field| field.name.clone()).collect();
+    tracing::info!(
+        collection = %existing.name,
+        fields = ?dropped,
+        "undeclared fields dropped"
+    );
+    Ok(dropped)
 }
 
 async fn insert_field(transaction: &tokio_postgres::Transaction<'_>, field: &Field) -> Result<()> {

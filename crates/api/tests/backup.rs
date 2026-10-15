@@ -125,6 +125,247 @@ async fn import(
     }
 }
 
+/// The single-document JSON `GET /api/export` serves — what a Studio export is.
+async fn export_json(app: &TestApp, token: &str) -> serde_json::Value {
+    let reply = call_authed(&router(app).await, Method::GET, "/api/export", None, token).await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    reply.body.expect("an export")
+}
+
+/// Post a JSON import body and return the reply.
+async fn import_json(app: &TestApp, token: &str, body: &serde_json::Value) -> support::Reply {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/import")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(body).expect("body")))
+        .expect("request");
+    let response = router(app).await.oneshot(request).await.expect("response");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024 * 1024)
+        .await
+        .expect("body");
+    support::Reply {
+        status,
+        headers: Default::default(),
+        body: if bytes.is_empty() {
+            None
+        } else {
+            serde_json::from_slice(&bytes).ok()
+        },
+    }
+}
+
+/// A `demo` collection (with a `body` column to prune) and an `orders` collection
+/// (to drop), each with a row.
+async fn add_demo_and_orders(app: &TestApp) {
+    let mut client = app.client().await;
+    for (name, fields) in [
+        (
+            "demo",
+            vec![
+                CreateField {
+                    name: "title".into(),
+                    field_type: FieldType::Text,
+                    required: false,
+                    unique: false,
+                    options: json!({}),
+                },
+                CreateField {
+                    name: "body".into(),
+                    field_type: FieldType::Text,
+                    required: false,
+                    unique: false,
+                    options: json!({}),
+                },
+            ],
+        ),
+        (
+            "orders",
+            vec![CreateField {
+                name: "total".into(),
+                field_type: FieldType::Text,
+                required: false,
+                unique: false,
+                options: json!({}),
+            }],
+        ),
+    ] {
+        collections::create(
+            &mut client,
+            CreateCollection {
+                name: name.into(),
+                collection_type: CollectionType::Base,
+                fields,
+                rules: json!({}),
+                options: json!({}),
+                adopt_existing_table: false,
+            },
+        )
+        .await
+        .expect("create");
+    }
+    app.reload_schema().await;
+    sql(
+        app,
+        "insert into demo (id, title, body) values ('d1', 'one', 'text to lose'); \
+         insert into orders (id, total) values ('o1', '10');",
+    )
+    .await;
+}
+
+/// The Studio's flow, in miniature: export the collections, edit the file (drop the
+/// `body` field, leave `orders` out entirely), import it back.
+fn edited_export(export: &serde_json::Value) -> serde_json::Value {
+    let mut collections = export["collections"]
+        .as_array()
+        .expect("collections")
+        .clone();
+    collections.retain(|collection| collection["name"] != json!("orders"));
+    for collection in collections.iter_mut() {
+        if collection["name"] == json!("demo") {
+            let fields = collection["schema"].as_array_mut().expect("schema");
+            fields.retain(|field| field["name"] != json!("body"));
+        }
+    }
+    json!({ "collections": collections })
+}
+
+async fn has_table(app: &TestApp, table: &str) -> bool {
+    app.client()
+        .await
+        .query_one("select to_regclass($1) is not null", &[&table])
+        .await
+        .expect("table")
+        .get(0)
+}
+
+async fn has_column(app: &TestApp, table: &str, column: &str) -> bool {
+    app.client()
+        .await
+        .query_one(
+            // `current_schema()`, because `information_schema` is database-wide: every
+            // test schema has a `demo` table, and matching by name alone would find
+            // another test's column.
+            "select exists (select 1 from information_schema.columns \
+             where table_name = $1 and column_name = $2 and table_schema = current_schema())",
+            &[&table, &column],
+        )
+        .await
+        .expect("column")
+        .get(0)
+}
+
+#[tokio::test]
+async fn delete_missing_drops_the_collections_and_fields_the_payload_omits() {
+    let Some(app) = test_app("backup_delete_missing").await else {
+        return;
+    };
+    seed(&app).await;
+    add_demo_and_orders(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let export = export_json(&app, &token).await;
+    let mut body = edited_export(&export);
+    body["deleteMissing"] = json!(true);
+
+    let reply = import_json(&app, &token, &body).await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let report = reply.body.expect("a report");
+    assert_eq!(report["removed"], json!(["orders"]));
+    let demo = report["imported"]
+        .as_array()
+        .expect("imported")
+        .iter()
+        .find(|collection| collection["name"] == json!("demo"))
+        .expect("demo was imported");
+    assert_eq!(demo["fields_removed"], json!(["body"]));
+
+    assert!(
+        !has_table(&app, "orders").await,
+        "the omitted table is gone"
+    );
+    assert!(
+        !has_column(&app, "demo", "body").await,
+        "the omitted column is gone"
+    );
+    assert!(has_column(&app, "demo", "title").await);
+    assert!(has_table(&app, "posts").await);
+    // A collection the export does not carry at all — every `_`-prefixed table — is
+    // not something an import may drop.
+    assert!(has_table(&app, "_superusers").await);
+    let demo_rows: i64 = app
+        .client()
+        .await
+        .query_one("select count(*) from demo", &[])
+        .await
+        .expect("demo")
+        .get(0);
+    assert_eq!(demo_rows, 1, "the remaining column keeps its row");
+
+    // And the rollback takes it all back, values included.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/import/rollback",
+        Some(json!({ "password": "correct-horse" })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    assert!(has_table(&app, "orders").await, "a rollback recreates it");
+    assert!(
+        has_column(&app, "demo", "body").await,
+        "a rollback re-adds the pruned column"
+    );
+    let body: Option<String> = app
+        .client()
+        .await
+        .query_one("select body from demo where id = 'd1'", &[])
+        .await
+        .expect("row")
+        .get(0);
+    assert_eq!(body.as_deref(), Some("text to lose"));
+    let orders: i64 = app
+        .client()
+        .await
+        .query_one("select count(*) from orders", &[])
+        .await
+        .expect("orders")
+        .get(0);
+    assert_eq!(orders, 1, "and its rows");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_import_without_delete_missing_leaves_the_rest_alone() {
+    let Some(app) = test_app("backup_no_delete_missing").await else {
+        return;
+    };
+    seed(&app).await;
+    add_demo_and_orders(&app).await;
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let export = export_json(&app, &token).await;
+    // The same edited payload, imported without the switch: the omitted collection
+    // and the omitted field are statements nobody made.
+    let body = edited_export(&export);
+
+    let reply = import_json(&app, &token, &body).await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let report = reply.body.expect("a report");
+    assert_eq!(report["removed"], json!([]));
+    assert!(report["imported"][0]["fields_removed"] == json!([]));
+
+    assert!(has_table(&app, "orders").await);
+    assert!(has_column(&app, "demo", "body").await);
+
+    app.cleanup().await;
+}
+
 #[tokio::test]
 async fn backup_and_restore_need_a_superuser() {
     let Some(app) = test_app("backup_auth").await else {
@@ -236,9 +477,9 @@ async fn the_import_endpoint_accepts_the_studio_options_and_reports_what_it_igno
     let archive = export(&app, &token).await;
 
     // Studio sends `deleteMissing` and `password` with every archive upload. The
-    // server never deletes on import and the password confirms a rollback, so both
-    // are accepted, and `deleteMissing` is reported back as ignored rather than
-    // silently dropped or rejected.
+    // password confirms a rollback, so it is accepted and reported back as ignored;
+    // `deleteMissing` is honoured, and here there is nothing to drop because the
+    // archive was just exported from this database.
     let reply = import(
         &app,
         &token,
@@ -249,7 +490,8 @@ async fn the_import_endpoint_accepts_the_studio_options_and_reports_what_it_igno
     assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
     let body = reply.body.expect("a report");
     assert_eq!(body["imported"][0]["name"], json!("posts"));
-    assert_eq!(body["ignoredOptions"], json!(["deleteMissing"]));
+    assert_eq!(body["ignoredOptions"], json!(["password"]));
+    assert_eq!(body["removed"], json!([]));
 
     // A genuinely unknown option is still refused.
     let reply = import(&app, &token, &archive, &[("nonsense", "1")]).await;
@@ -309,7 +551,7 @@ async fn a_json_backup_can_be_imported_over_the_same_endpoint() {
         String::from_utf8_lossy(&bytes)
     );
     let report: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-    assert_eq!(report["ignoredOptions"], json!(["deleteMissing"]));
+    assert_eq!(report["ignoredOptions"], json!(["password"]));
 
     let count: i64 = app
         .client()
