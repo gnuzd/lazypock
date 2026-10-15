@@ -155,6 +155,12 @@ jobs:
       - name: Build
         working-directory: studio
         run: bun run build
+      # Hand the SPA to the embed crate the way the release image does, so the
+      # handoff is checked rather than assumed.
+      - name: Embed the built Studio
+        run: >-
+          LAZYPOCK_STUDIO_DIR=studio/build/studio
+          cargo test -p lazypock-studio-embed
 
   size:
     name: binary size

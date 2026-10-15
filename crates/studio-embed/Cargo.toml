@@ -1,0 +1,13 @@
+[package]
+name = "lazypock-studio-embed"
+description = "The Studio SPA, embedded into the server binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+rust-embed = "8"
