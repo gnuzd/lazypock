@@ -18,7 +18,7 @@ use lazypock_db::collections::Collection;
 use lazypock_db::query::compile::AuthContext;
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
 use lazypock_db::records;
-use lazypock_db::rls::context::RequestContext;
+use lazypock_db::rls::context::{Action, RequestContext};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -88,7 +88,11 @@ impl Principal {
     /// restricted role with its identity attached; anyone else is anonymous, so
     /// `@request.auth.*` resolves to nothing and a rule depending on it matches
     /// nothing.
-    pub fn request_context(&self) -> RequestContext {
+    ///
+    /// `action` is the record operation the request performs, so a `SELECT` is
+    /// matched against that operation's rule rather than the OR of `listRule`
+    /// and `viewRule` (see [`Action`]).
+    pub fn request_context(&self, action: Action) -> RequestContext {
         let context = match &self.claims {
             Some(claims) if claims.typ.is_superuser() => RequestContext::owner(),
             Some(claims) => {
@@ -96,7 +100,9 @@ impl Principal {
             }
             None => RequestContext::anonymous(),
         };
-        context.with_connection_id(self.connection_id.clone())
+        context
+            .with_connection_id(self.connection_id.clone())
+            .with_action(action)
     }
 
     /// The verified claims, when there are any.

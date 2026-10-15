@@ -12,6 +12,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::{stream, StreamExt};
 use lazypock_core::error::Error;
+use lazypock_db::rls::context::{Action, RequestContext};
 use lazypock_realtime::{Delivered, Hub, Subscription};
 use serde::Deserialize;
 use serde_json::json;
@@ -44,7 +45,9 @@ pub async fn realtime(
     Query(params): Query<RealtimeParams>,
     Extension(principal): Extension<Principal>,
 ) -> Result<Response, ApiError> {
-    let context = principal.request_context();
+    // The base context; each subscription overrides its action (list for a
+    // collection, view for a record) before it is stored.
+    let context = principal.request_context(Action::List);
     let connection_id = context.connection_id.clone();
 
     let requested = match params.subscribe.as_deref().map(str::trim) {
@@ -56,7 +59,7 @@ pub async fn realtime(
         Some(value) => value,
     };
 
-    let mut subscriptions: Vec<Subscription> = Vec::new();
+    let mut subscriptions: Vec<(Subscription, RequestContext)> = Vec::new();
     for spec in requested.split(',') {
         let spec = spec.trim();
         if spec.is_empty() {
@@ -68,12 +71,22 @@ pub async fn realtime(
             )));
         }
         for (collection, record_id) in expand(&state, spec)? {
-            subscriptions.push(state.hub.subscribe(
+            // A collection-wide subscription is a list; a record-specific one is
+            // a view. They must not share an action, or a public `viewRule`
+            // would widen a subscription to the whole collection.
+            let action = if record_id.is_some() {
+                Action::View
+            } else {
+                Action::List
+            };
+            let context = context.clone().with_action(action);
+            let subscription = state.hub.subscribe(
                 collection,
                 record_id,
                 context.clone(),
                 connection_id.clone(),
-            ));
+            );
+            subscriptions.push((subscription, context));
         }
     }
 
@@ -86,10 +99,10 @@ pub async fn realtime(
     // Replay first, so a resuming client is caught up before live events arrive.
     let mut replay: Vec<Event> = Vec::new();
     if let Some(since) = params.last_event_id {
-        for subscription in &subscriptions {
+        for (subscription, context) in &subscriptions {
             for delivery in state
                 .hub
-                .replay(subscription.collection(), since, &context)
+                .replay(subscription.collection(), since, context)
                 .await
             {
                 replay.push(to_sse(&delivery));
@@ -101,7 +114,7 @@ pub async fn realtime(
     // and these are built from async blocks.
     let streams: Vec<EventStream> = subscriptions
         .into_iter()
-        .map(|subscription| -> EventStream {
+        .map(|(subscription, _context)| -> EventStream {
             Box::pin(subscription_stream(state.hub.clone(), subscription))
         })
         .collect();

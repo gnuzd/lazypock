@@ -4,7 +4,7 @@ mod support;
 
 use std::time::Duration;
 
-use lazypock_db::rls::context::RequestContext;
+use lazypock_db::rls::context::{Action, RequestContext};
 use lazypock_realtime::{ChangeEvent, ChangeOp, Delivered, Hub, Subscription, REGISTRY_TOPIC};
 use serde_json::json;
 
@@ -67,7 +67,10 @@ async fn seed(test: &support::Fixture, id: &str, author: &str) {
 }
 
 fn user(id: &str) -> RequestContext {
+    // These are collection-wide subscriptions, so the visibility check is a
+    // list (`listRule`) — the same action `GET /records` sets.
     RequestContext::authenticated(id, format!("{id}@example.com"), "c1", "users")
+        .with_action(Action::List)
 }
 
 #[tokio::test]
@@ -152,9 +155,12 @@ async fn row_level_security_filters_what_a_subscriber_receives() {
 
     let allowed = test.hub.subscribe("posts", None, user("u1"), "conn1");
     let denied = test.hub.subscribe("posts", None, user("u2"), "conn2");
-    let anonymous = test
-        .hub
-        .subscribe("posts", None, RequestContext::anonymous(), "conn3");
+    let anonymous = test.hub.subscribe(
+        "posts",
+        None,
+        RequestContext::anonymous().with_action(Action::List),
+        "conn3",
+    );
 
     // The row belongs to u1, so only u1 may be told about it.
     let mut allowed = allowed;

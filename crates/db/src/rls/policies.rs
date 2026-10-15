@@ -19,15 +19,40 @@ use super::policy;
 /// user-facing request is bound by the policies.
 const ROLES: &str = "lazypock_anon, lazypock_authenticated";
 
-/// The rule keys a collection may define, with the policy name and action each
-/// maps to.
-const RULES: &[(&str, &str, &str)] = &[
-    ("listRule", "lazypock_list", "select"),
-    ("viewRule", "lazypock_view", "select"),
-    ("createRule", "lazypock_create", "insert"),
-    ("updateRule", "lazypock_update", "update"),
-    ("deleteRule", "lazypock_delete", "delete"),
+/// The rule keys a collection may define, with the policy name, the action each
+/// maps to, and — for the two that become a `SELECT` policy — the
+/// `request.action` value that selects it. Reads and writes must be kept
+/// apart: Postgres OR-combines permissive `SELECT` policies, so without the
+/// guard a public `viewRule` would widen a filtered `listRule` (and the other
+/// way round).
+const RULES: &[(&str, &str, &str, Option<&str>)] = &[
+    ("listRule", "lazypock_list", "select", Some("list")),
+    ("viewRule", "lazypock_view", "select", Some("view")),
+    ("createRule", "lazypock_create", "insert", None),
+    ("updateRule", "lazypock_update", "update", None),
+    ("deleteRule", "lazypock_delete", "delete", None),
 ];
+
+/// The [`SELECT`](RULES) mirrors an update or delete needs.
+///
+/// Postgres applies the `SELECT` policies to the rows an `UPDATE`/`DELETE`
+/// reads to locate its target, so a write that had only its write policy would
+/// silently match nothing. Each mirror carries the rule's own predicate,
+/// guarded by the write action, so a row is visible to a write exactly when
+/// that write's rule allows it — and never to a list or view.
+const SELECT_MIRRORS: &[(&str, &str, &str)] = &[
+    ("updateRule", "lazypock_update_select", "update"),
+    ("deleteRule", "lazypock_delete_select", "delete"),
+];
+
+/// Every policy name this module creates and drops.
+fn policy_names() -> impl Iterator<Item = &'static str> {
+    RULES
+        .iter()
+        .map(|(_, name, _, _)| *name)
+        .chain(SELECT_MIRRORS.iter().map(|(_, name, _)| *name))
+        .chain(std::iter::once(MANAGE_POLICY))
+}
 
 /// The policy a `manageRule` becomes.
 const MANAGE_POLICY: &str = "lazypock_manage";
@@ -55,30 +80,7 @@ pub async fn apply(
     collection: &Collection,
     context: &FilterContext,
 ) -> Result<Vec<String>> {
-    let table = quote_ident(&collection.name);
-    let mut statements = vec![format!("alter table {table} enable row level security")];
-
-    for (_, name, _) in RULES {
-        statements.push(format!(
-            "drop policy if exists {} on {table}",
-            quote_ident(name)
-        ));
-    }
-    statements.push(format!(
-        "drop policy if exists {} on {table}",
-        quote_ident(MANAGE_POLICY)
-    ));
-
-    // `manageRule` grants every action, so it becomes one `for all` policy.
-    if let Some(predicate) = predicate_of(rule_of(&collection.rules, "manageRule")?, context)? {
-        statements.push(policy_statement(MANAGE_POLICY, &table, "all", &predicate));
-    }
-
-    for (key, name, action) in RULES {
-        if let Some(predicate) = predicate_of(rule_of(&collection.rules, key)?, context)? {
-            statements.push(policy_statement(name, &table, action, &predicate));
-        }
-    }
+    let statements = statements(collection, context)?;
 
     runner
         .run_batch_execute(&statements.join(";\n"))
@@ -99,17 +101,63 @@ pub async fn apply(
     Ok(statements)
 }
 
+/// Build the statements that (re)create a collection's policies.
+///
+/// Split out from [`apply`] so the tests can assert the generated SQL without a
+/// database, and so the two can never drift.
+pub fn statements(collection: &Collection, context: &FilterContext) -> Result<Vec<String>> {
+    let table = quote_ident(&collection.name);
+    let mut statements = vec![format!("alter table {table} enable row level security")];
+
+    for name in policy_names() {
+        statements.push(format!(
+            "drop policy if exists {} on {table}",
+            quote_ident(name)
+        ));
+    }
+
+    // `manageRule` grants every action, so it becomes one `for all` policy. It
+    // is deliberately not action-guarded: matching it lets both reads and
+    // writes through, which is what "manage" means.
+    if let Some(predicate) = predicate_of(rule_of(&collection.rules, "manageRule")?, context)? {
+        statements.push(policy_statement(
+            MANAGE_POLICY,
+            &table,
+            "all",
+            &predicate,
+            None,
+        ));
+    }
+
+    for (key, name, action, guard) in RULES {
+        if let Some(predicate) = predicate_of(rule_of(&collection.rules, key)?, context)? {
+            statements.push(policy_statement(name, &table, action, &predicate, *guard));
+        }
+    }
+
+    // The `SELECT` a write needs to find its row: the same predicate, keyed to
+    // the write action.
+    for (key, name, action) in SELECT_MIRRORS {
+        if let Some(predicate) = predicate_of(rule_of(&collection.rules, key)?, context)? {
+            statements.push(policy_statement(
+                name,
+                &table,
+                "select",
+                &predicate,
+                Some(action),
+            ));
+        }
+    }
+
+    Ok(statements)
+}
+
 /// Remove every policy this module manages from a collection's table.
 pub async fn clear(runner: &dyn QueryRunner, collection: &Collection) -> Result<Vec<String>> {
     let table = quote_ident(&collection.name);
-    let mut statements: Vec<String> = RULES
-        .iter()
-        .map(|(_, name, _)| format!("drop policy if exists {} on {table}", quote_ident(name)))
+    let mut statements: Vec<String> = policy_names()
+        .map(|name| format!("drop policy if exists {} on {table}", quote_ident(name)))
         .collect();
-    statements.push(format!(
-        "drop policy if exists {} on {table}",
-        quote_ident(MANAGE_POLICY)
-    ));
     statements.push(format!("alter table {table} disable row level security"));
 
     runner
@@ -144,11 +192,25 @@ fn predicate_of(rule: Rule, context: &FilterContext) -> Result<Option<String>> {
     })
 }
 
-fn policy_statement(name: &str, table: &str, action: &str, predicate: &str) -> String {
+fn policy_statement(
+    name: &str,
+    table: &str,
+    action: &str,
+    predicate: &str,
+    guard: Option<&str>,
+) -> String {
     let name = quote_ident(name);
+    // Only the two `SELECT` rules carry a guard, and its value comes from a
+    // closed set, never from a request.
+    let guarded = match guard {
+        Some(action) => {
+            format!("current_setting('request.action', true) = '{action}' and ({predicate})")
+        }
+        None => predicate.to_string(),
+    };
     match action {
         "select" => {
-            format!("create policy {name} on {table} for select to {ROLES} using ({predicate})")
+            format!("create policy {name} on {table} for select to {ROLES} using ({guarded})")
         }
         "insert" => {
             format!(
@@ -164,7 +226,7 @@ fn policy_statement(name: &str, table: &str, action: &str, predicate: &str) -> S
         }
         _ => format!(
             "create policy {name} on {table} for all to {ROLES} \
-             using ({predicate}) with check ({predicate})"
+             using ({guarded}) with check ({guarded})"
         ),
     }
 }
@@ -213,32 +275,8 @@ mod tests {
             created: SystemTime::now(),
             updated: SystemTime::now(),
         };
-        // Building the statement list does not need a database.
-        let table = quote_ident(&collection.name);
-        let mut out = vec![format!("alter table {table} enable row level security")];
-        for (_, name, _) in RULES {
-            out.push(format!(
-                "drop policy if exists {} on {table}",
-                quote_ident(name)
-            ));
-        }
-        out.push(format!(
-            "drop policy if exists {} on {table}",
-            quote_ident(MANAGE_POLICY)
-        ));
-        if let Some(predicate) =
-            predicate_of(rule_of(&collection.rules, "manageRule").unwrap(), &context).unwrap()
-        {
-            out.push(policy_statement(MANAGE_POLICY, &table, "all", &predicate));
-        }
-        for (key, name, action) in RULES {
-            if let Some(predicate) =
-                predicate_of(rule_of(&collection.rules, key).unwrap(), &context).unwrap()
-            {
-                out.push(policy_statement(name, &table, action, &predicate));
-            }
-        }
-        out
+        // The same builder `apply` runs, so the tests cannot drift from it.
+        super::statements(&collection, &context).unwrap()
     }
 
     #[test]
@@ -263,25 +301,69 @@ mod tests {
         let statements = statements(json!({}));
         assert_eq!(
             statements.len(),
-            7,
-            "one enable plus six drops: {statements:?}"
+            9,
+            "one enable plus eight drops: {statements:?}"
         );
         assert!(!statements.iter().any(|sql| sql.contains("create policy")));
     }
 
     #[test]
-    fn a_public_rule_allows_everyone() {
+    fn a_public_list_rule_allows_everyone_only_for_a_list() {
         let statements = statements(json!({"listRule": ""}));
         let policy = statements
             .iter()
             .find(|sql| sql.contains("create policy"))
             .expect("a policy");
         assert!(policy.contains("for select"), "{policy}");
-        assert!(policy.contains("using (true)"), "{policy}");
+        assert!(
+            policy.contains("current_setting('request.action', true) = 'list'"),
+            "{policy}"
+        );
+        assert!(policy.contains("(true)"), "{policy}");
         assert!(
             policy.contains("to lazypock_anon, lazypock_authenticated"),
             "{policy}"
         );
+    }
+
+    #[test]
+    fn a_public_view_rule_does_not_widen_a_filtered_list_rule() {
+        // The bug this guards: both rules become `FOR SELECT` policies and
+        // Postgres OR-combines permissive policies, so a public `viewRule`
+        // used to make a filtered `listRule` readable by everyone.
+        let statements = statements(json!({
+            "listRule": "author = @request.auth.id",
+            "viewRule": "",
+        }));
+        let created: Vec<&String> = statements
+            .iter()
+            .filter(|sql| sql.contains("create policy"))
+            .collect();
+        assert_eq!(created.len(), 2, "{statements:?}");
+
+        let list = created
+            .iter()
+            .find(|sql| sql.contains("lazypock_list"))
+            .expect("the list policy");
+        let view = created
+            .iter()
+            .find(|sql| sql.contains("lazypock_view"))
+            .expect("the view policy");
+
+        assert!(
+            list.contains("current_setting('request.action', true) = 'list'"),
+            "{list}"
+        );
+        assert!(list.contains("(\"author\" = auth.uid()::text)"), "{list}");
+        assert!(
+            !list.contains("(true)"),
+            "the public view rule must not leak into the list policy: {list}"
+        );
+        assert!(
+            view.contains("current_setting('request.action', true) = 'view'"),
+            "{view}"
+        );
+        assert!(view.contains("(true)"), "{view}");
     }
 
     #[test]
@@ -292,7 +374,11 @@ mod tests {
             .find(|sql| sql.contains("create policy"))
             .expect("a policy");
         assert!(
-            policy.contains("using (\"author\" = auth.uid()::text)"),
+            policy.contains("current_setting('request.action', true) = 'list'"),
+            "{policy}"
+        );
+        assert!(
+            policy.contains("(\"author\" = auth.uid()::text)"),
             "{policy}"
         );
     }
@@ -308,14 +394,46 @@ mod tests {
             .iter()
             .filter(|sql| sql.contains("create policy"))
             .collect();
-        assert_eq!(created.len(), 3, "{statements:?}");
-        assert!(created[0].contains("for insert") && created[0].contains("with check"));
-        assert!(created[1].contains("for update") && created[1].contains("using"));
+        assert_eq!(created.len(), 5, "{statements:?}");
+
+        let find = |needle: &str| {
+            created
+                .iter()
+                .find(|sql| sql.contains(needle))
+                .unwrap_or_else(|| panic!("no {needle} policy: {statements:?}"))
+        };
+
+        let insert = find("lazypock_create");
+        assert!(insert.contains("for insert") && insert.contains("with check"));
+
+        // The trailing quote keeps `lazypock_update"` from matching the
+        // `lazypock_update_select` mirror.
+        let update = find("lazypock_update\"");
+        assert!(update.contains("for update") && update.contains("using"));
         assert!(
-            created[1].contains("with check"),
+            update.contains("with check"),
             "an update needs both clauses"
         );
-        assert!(created[2].contains("for delete") && created[2].contains("using"));
+
+        let delete = find("lazypock_delete\"");
+        assert!(delete.contains("for delete") && delete.contains("using"));
+
+        // The `SELECT` a write needs to find its row must carry the write's own
+        // rule, keyed to the write action — never the list or view rule.
+        let update_select = find("lazypock_update_select");
+        assert!(
+            update_select.contains("for select")
+                && update_select.contains("current_setting('request.action', true) = 'update'")
+                && update_select.contains("(\"author\" = auth.uid()::text)"),
+            "{update_select}"
+        );
+        let delete_select = find("lazypock_delete_select");
+        assert!(
+            delete_select.contains("for select")
+                && delete_select.contains("current_setting('request.action', true) = 'delete'")
+                && delete_select.contains("(\"author\" = auth.uid()::text)"),
+            "{delete_select}"
+        );
     }
 
     #[test]

@@ -210,7 +210,8 @@ async fn an_adopted_table_is_not_readable_by_a_restricted_role() {
     // else's rows through the records API.
     let mut client = db.client().await;
     let transaction = client.transaction().await.expect("transaction");
-    let anonymous = lazypock_db::rls::context::RequestContext::anonymous();
+    let anonymous = lazypock_db::rls::context::RequestContext::anonymous()
+        .with_action(lazypock_db::rls::context::Action::List);
     lazypock_db::rls::context::apply(&transaction, &anonymous)
         .await
         .expect("apply the anonymous context");
