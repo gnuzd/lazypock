@@ -181,7 +181,10 @@ async fn importing_a_partial_archive_leaves_the_other_tables_untouched() {
         .await
         .expect("count")
         .get(0);
-    assert_eq!(count, 2, "an import never deletes");
+    assert_eq!(
+        count, 2,
+        "an import without deleteMissing never deletes, even a record the archive omits"
+    );
 
     db.cleanup().await;
 }
@@ -265,6 +268,7 @@ async fn a_large_import_needs_confirmation_before_it_applies() {
         atomic: AtomicMode::Batch,
         confirm: false,
         confirm_threshold: 0,
+        delete_missing: false,
     };
     match backup::import(&mut client, &read_back, &unconfirmed)
         .await
@@ -327,7 +331,186 @@ async fn the_atomic_modes_are_named_the_way_the_import_form_sends_them() {
         AtomicMode::Continue
     );
     assert!(AtomicMode::parse("maybe").is_err());
-    // The default is the safest one.
+    // The default is the safest one, including about deleting.
     assert_eq!(ImportOptions::default().atomic, AtomicMode::Batch);
+    assert!(!ImportOptions::default().delete_missing);
     assert_eq!(ARCHIVE_FORMAT, "lazypock-archive");
+}
+
+/// Whether a table holds a column.
+async fn has_column(
+    client: &lazypock_db::tokio_postgres::Client,
+    table: &str,
+    column: &str,
+) -> bool {
+    client
+        .query_one(
+            // `current_schema()`, because `information_schema` is database-wide: the
+            // test schemas share table names, so a name match alone is not an answer.
+            "select exists (select 1 from information_schema.columns \
+             where table_name = $1 and column_name = $2 and table_schema = current_schema())",
+            &[&table, &column],
+        )
+        .await
+        .expect("columns")
+        .get(0)
+}
+
+/// Whether a table exists at all.
+async fn has_table(client: &lazypock_db::tokio_postgres::Client, table: &str) -> bool {
+    client
+        .query_one("select to_regclass($1) is not null", &[&table])
+        .await
+        .expect("table")
+        .get(0)
+}
+
+#[tokio::test]
+async fn an_import_applies_a_collections_definition_not_only_its_records() {
+    let Some(db) = migrated_test_db("backup_definition").await else {
+        return;
+    };
+    let mut client = db.client().await;
+    fixture(&mut client).await;
+
+    // A payload that declares `posts` afresh: a new `body` field and a list rule,
+    // with no records at all. Records-only was the first version of this, and the
+    // whole definition was ignored — the field never appeared and the rule was never
+    // enforced.
+    let payload = json!({
+        "collections": [{
+            "name": "posts",
+            "type": "base",
+            "schema": [
+                {"name": "title", "type": "text"},
+                {"name": "body", "type": "text"}
+            ],
+            "rules": {"listRule": "id != ''"}
+        }]
+    });
+    let archive = backup::archive_from_payload(&payload).expect("payload");
+
+    match backup::import(&mut client, &archive, &ImportOptions::default())
+        .await
+        .expect("import")
+    {
+        ImportOutcome::Applied(report) => {
+            assert_eq!(report.imported.len(), 1);
+            assert!(
+                report.removed.is_empty(),
+                "nothing may be dropped without deleteMissing: {report:?}"
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    assert!(
+        has_column(&client, "posts", "body").await,
+        "an import must add the fields the payload declares"
+    );
+    let rules: serde_json::Value = client
+        .query_one("select rules from _collections where name = 'posts'", &[])
+        .await
+        .expect("rules")
+        .get(0);
+    assert_eq!(rules["listRule"], json!("id != ''"), "the rule was applied");
+
+    // `orders` is not in the payload. Omitted means left alone, not deleted.
+    assert!(has_table(&client, "orders").await);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn delete_missing_drops_the_collections_and_fields_the_payload_omits() {
+    let Some(db) = migrated_test_db("backup_delete_missing").await else {
+        return;
+    };
+    let mut client = db.client().await;
+    fixture(&mut client).await;
+
+    // A column the payload will not declare, holding a value the rollback has to
+    // bring back.
+    collections::add_field(&mut client, "posts", field("note", FieldType::Text))
+        .await
+        .expect("add note");
+    client
+        .batch_execute("update posts set note = 'kept' where id = 'p1'")
+        .await
+        .expect("seed note");
+
+    // The undo checkpoint, exactly as the API takes it: definitions and rows.
+    let snapshot = backup::to_payload(&backup::export(&client).await.expect("export"));
+
+    let payload = json!({
+        "collections": [{
+            "name": "posts",
+            "type": "base",
+            "schema": [{"name": "title", "type": "text"}]
+        }]
+    });
+    let archive = backup::archive_from_payload(&payload).expect("payload");
+    let options = ImportOptions {
+        delete_missing: true,
+        ..Default::default()
+    };
+
+    match backup::import(&mut client, &archive, &options)
+        .await
+        .expect("import")
+    {
+        ImportOutcome::Applied(report) => {
+            assert_eq!(report.removed, vec!["orders".to_string()]);
+            assert_eq!(report.imported.len(), 1);
+            assert_eq!(
+                report.imported[0].fields_removed,
+                vec!["note".to_string()],
+                "the report has to name what it dropped"
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    assert!(
+        !has_table(&client, "orders").await,
+        "a user collection the payload omits is dropped when deleteMissing is set"
+    );
+    assert!(!has_column(&client, "posts", "note").await);
+    assert!(has_column(&client, "posts", "title").await);
+    let posts: i64 = client
+        .query_one("select count(*) from posts", &[])
+        .await
+        .expect("posts")
+        .get(0);
+    assert_eq!(
+        posts, 2,
+        "records are still upserted, not touched by the drop"
+    );
+    assert!(
+        has_table(&client, "_superusers").await,
+        "a system collection is never dropped, however absent from the payload"
+    );
+
+    // The rollback undoes both halves: the collection and the column, with the value
+    // the pruned column held.
+    backup::restore_snapshot(&mut client, &snapshot)
+        .await
+        .expect("restore");
+
+    assert!(has_table(&client, "orders").await);
+    assert!(has_column(&client, "posts", "note").await);
+    let note: Option<String> = client
+        .query_one("select note from posts where id = 'p1'", &[])
+        .await
+        .expect("note")
+        .get(0);
+    assert_eq!(note.as_deref(), Some("kept"));
+    let orders: i64 = client
+        .query_one("select count(*) from orders", &[])
+        .await
+        .expect("orders")
+        .get(0);
+    assert_eq!(orders, 1);
+
+    db.cleanup().await;
 }

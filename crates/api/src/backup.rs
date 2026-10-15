@@ -137,7 +137,10 @@ pub struct JsonImport {
     /// Whether a gated import is confirmed.
     #[serde(default)]
     pub confirm: Option<bool>,
-    /// Accepted and ignored: the server never deletes on import.
+    /// Whether the import drops collections and fields the payload leaves out.
+    ///
+    /// The Studio's "Delete missing collections and schema fields" switch. Off when
+    /// absent, which is what makes importing a partial file safe.
     #[serde(default)]
     pub delete_missing: Option<bool>,
     /// Accepted and ignored: this confirms a rollback, not an import.
@@ -148,10 +151,11 @@ pub struct JsonImport {
 /// `POST /api/import`
 ///
 /// Two shapes: a multipart archive upload, or the single-document JSON a client
-/// downloaded from `GET /api/export`. Both accept `deleteMissing` and `password` so
-/// a Studio request is not rejected, but the server never deletes on import and the
-/// password is not consumed here — an ignored option is reported back rather than
-/// silently dropped.
+/// downloaded from `GET /api/export`. Both accept `deleteMissing` and `password`;
+/// `deleteMissing` is honoured (it drops user collections and fields the payload
+/// leaves out) and the password is not consumed here, because it confirms a
+/// rollback rather than an import. An option that *is* ignored is reported back
+/// rather than silently dropped.
 pub async fn import(
     State(state): State<AppState>,
     _: Superuser,
@@ -164,7 +168,9 @@ pub async fn import(
         .unwrap_or_default()
         .to_string();
 
-    let (archive, atomic, confirm, ignored) = if content_type.starts_with("application/json") {
+    let (archive, atomic, confirm, delete_missing, ignored) = if content_type
+        .starts_with("application/json")
+    {
         let bytes = axum::body::to_bytes(request.into_body(), MAX_ARCHIVE_BYTES)
             .await
             .map_err(|err| ApiError::new(Error::invalid(format!("cannot read the body: {err}"))))?;
@@ -190,9 +196,11 @@ pub async fn import(
             archive,
             atomic,
             body.confirm.unwrap_or(false),
-            body.delete_missing
-                .unwrap_or(false)
-                .then(|| "deleteMissing".to_string()),
+            body.delete_missing.unwrap_or(false),
+            // The password confirms a rollback, not an import, so a JSON restore
+            // that carries one is told it went unused rather than left to think it
+            // did something.
+            body.password.is_some().then(|| "password".to_string()),
         )
     } else {
         let multipart = Multipart::from_request(request, &state)
@@ -213,6 +221,7 @@ pub async fn import(
         atomic,
         confirm,
         confirm_threshold: confirm_threshold()?,
+        delete_missing,
     };
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
@@ -261,10 +270,11 @@ pub async fn import(
 /// Read the multipart archive upload, returning the archive and its options.
 async fn parse_multipart(
     mut multipart: Multipart,
-) -> Result<(backup::Archive, String, bool, Option<String>), ApiError> {
+) -> Result<(backup::Archive, String, bool, bool, Option<String>), ApiError> {
     let mut file: Option<bytes::Bytes> = None;
     let mut atomic = String::new();
     let mut confirm = false;
+    let mut delete_missing = false;
     let mut ignored: Option<String> = None;
 
     while let Some(field) = multipart
@@ -288,23 +298,22 @@ async fn parse_multipart(
                 let value = field.text().await.map_err(|err| {
                     ApiError::new(Error::invalid(format!("cannot read `confirm`: {err}")))
                 })?;
-                confirm = matches!(value.trim(), "true" | "1" | "yes" | "on");
+                confirm = is_true(&value);
             }
-            // Accepted and ignored rather than rejected: Studio sends both, and the
-            // server never deletes on import (the password confirms a rollback, not an
-            // import). What was ignored is reported back, so it is not silent.
             "deleteMissing" => {
                 let value = field.text().await.map_err(|err| {
                     ApiError::new(Error::invalid(format!(
                         "cannot read `deleteMissing`: {err}"
                     )))
                 })?;
-                if matches!(value.trim(), "true" | "1" | "yes" | "on") {
-                    ignored = Some("deleteMissing".to_string());
-                }
+                delete_missing = is_true(&value);
             }
+            // Accepted and ignored rather than rejected: Studio sends it, and it
+            // confirms a rollback, not an import. What was ignored is reported back,
+            // so it is not silent.
             "password" => {
                 let _ = field.text().await;
+                ignored = Some("password".to_string());
             }
             other => {
                 return Err(ApiError::new(Error::invalid(format!(
@@ -316,7 +325,12 @@ async fn parse_multipart(
 
     let file = file.ok_or_else(|| ApiError::new(Error::invalid("a `file` part is required")))?;
     let archive = backup::read(&file).map_err(ApiError::new)?;
-    Ok((archive, atomic, confirm, ignored))
+    Ok((archive, atomic, confirm, delete_missing, ignored))
+}
+
+/// Whether a form field or query value spells "true".
+fn is_true(value: &str) -> bool {
+    matches!(value.trim(), "true" | "1" | "yes" | "on")
 }
 
 /// `GET /api/import/status`

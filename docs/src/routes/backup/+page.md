@@ -95,6 +95,20 @@ accepts either a `.zip` archive or the JSON file.
 Field-name semantics are identical to the JSON format: names are kept **verbatim** (`tagColor` stays
 `tagColor`), and records are upserted by `id`.
 
+An import is a **declaration**, not a patch. A collection the payload names is created, or updated to
+match it — its fields, rules and options — and the records it carries are upserted by `id`. A record
+or collection the payload leaves out is left exactly as it is, unless you ask for the difference to
+be applied: **`deleteMissing`** drops the user collections *and* fields the payload does not declare,
+which is what the Studio's **Delete missing collections and schema fields** switch sends. It is off by
+default, in the Studio and on the API, because it is the one import option that destroys data: a
+column it drops takes its contents with it.
+
+Two things are never dropped, whatever the payload or the option says: a system collection (any
+`_`-prefixed table) and a built-in column — `id`, `created`, `updated`, and on an auth collection
+`email`, `password_hash`, `verified`, `emailVisibility` and `token_key`. A payload may name them (a
+PocketBase export names its own); naming them keeps them, and a field marked `"system": true` is
+stripped from the fields an import creates or alters rather than declared.
+
 ### Undo, and what happens on large databases
 
 Before an import, Lazypock writes an automatic undo checkpoint (itself an NDJSON archive) so the last
@@ -105,6 +119,11 @@ size.
 Above the threshold the checkpoint is skipped, and instead of silently losing rollback the import
 stops and asks for explicit confirmation (a dialog in the Studio, a `--no-undo-checkpoint` flag or
 interactive prompt on the CLI, a `409` with `requires_confirmation: true` from HTTP).
+
+The checkpoint holds collection definitions as well as rows, which is what lets the rollback undo the
+destructive half of an import too: a collection `deleteMissing` dropped is recreated, and a field it
+pruned comes back with its column *and* its values, because the rows are restored from the snapshot
+after the column is.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -300,8 +319,9 @@ A PocketBase export imports as-is. Differences the importer normalizes for you:
 - Including a system `id` field in `schema` → stripped (harmless), but do not rely on it.
 - Using `geoPoint`/`multiSelect` style names from the Studio UI — use the canonical `geo` /
   `multi_select` types.
-- `deleteMissing` (**destructive**) drops any user collection missing from the file. Leave it `false`
-  when importing a partial file.
+- `deleteMissing` (**destructive**) drops every user collection **and field** the file does not
+  declare. Leave it `false` when importing a partial file. System collections and built-in columns are
+  never dropped.
 
 ## For AI assistants
 
