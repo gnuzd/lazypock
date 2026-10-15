@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use lazypock_db::collections::{self, CreateCollection, CreateField, UpdateCollection};
 use lazypock_db::pool::Db;
-use lazypock_db::rls::context::{apply, missing_roles, RequestContext};
+use lazypock_db::rls::context::{apply, missing_roles, Action, RequestContext};
 use lazypock_db::rls::policies;
 use lazypock_db::types::{CollectionType, FieldType};
 
@@ -49,11 +49,27 @@ async fn seed(test: &TestDb, rules: Value) {
         .expect("seed rows");
 }
 
-/// The ids visible to a request running under `context`.
+/// The ids a **list** request running under `context` may see.
+///
+/// The action is forced so the call sites read as what they assert: the rules
+/// these tests set are `listRule`s. [`viewable`] is the single-record
+/// counterpart, and the divergence between the two is exactly what the action
+/// claim has to keep apart.
 async fn visible(db: &Db, context: &RequestContext) -> Vec<String> {
+    ids_under(db, context, Action::List).await
+}
+
+/// The ids a **single-record read** running under `context` may see.
+async fn viewable(db: &Db, context: &RequestContext) -> Vec<String> {
+    ids_under(db, context, Action::View).await
+}
+
+/// Every id in `posts`, read under `context` performing `action`.
+async fn ids_under(db: &Db, context: &RequestContext, action: Action) -> Vec<String> {
     let mut client = db.client().await.expect("client");
     let transaction = client.transaction().await.expect("transaction");
-    apply(&transaction, context).await.expect("apply context");
+    let context = context.clone().with_action(action);
+    apply(&transaction, &context).await.expect("apply context");
 
     let rows = transaction
         .query(r#"select "id" from "posts" order by "id""#, &[])
@@ -154,6 +170,66 @@ async fn an_empty_rule_is_public() {
     assert_eq!(
         visible(&test.db, &RequestContext::anonymous()).await,
         vec!["p1", "p2", "p3"]
+    );
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_public_view_rule_does_not_widen_a_filtered_list_rule() {
+    let Some(test) = migrated_test_db("rls_list_view_divergence").await else {
+        return;
+    };
+    // `listRule` and `viewRule` both become `FOR SELECT` policies. Before the
+    // action claim, Postgres OR-combined them and this public `viewRule` made
+    // the filtered list readable by everyone.
+    seed(
+        &test,
+        json!({
+            "listRule": "author = @request.auth.id",
+            "viewRule": "",
+        }),
+    )
+    .await;
+
+    // The list stays filtered.
+    assert_eq!(visible(&test.db, &user("u1")).await, vec!["p1", "p2"]);
+    assert_eq!(
+        visible(&test.db, &RequestContext::anonymous()).await,
+        Vec::<String>::new(),
+        "a public viewRule must not make the list public"
+    );
+
+    // The single-record read really is public, so the rule is enforced — not
+    // merely ignored in the other direction.
+    assert_eq!(
+        viewable(&test.db, &RequestContext::anonymous()).await,
+        vec!["p1", "p2", "p3"]
+    );
+
+    test.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_public_list_rule_does_not_widen_a_filtered_view_rule() {
+    let Some(test) = migrated_test_db("rls_view_list_divergence").await else {
+        return;
+    };
+    seed(
+        &test,
+        json!({
+            "listRule": "",
+            "viewRule": "author = @request.auth.id",
+        }),
+    )
+    .await;
+
+    assert_eq!(visible(&test.db, &user("u1")).await, vec!["p1", "p2", "p3"]);
+    assert_eq!(viewable(&test.db, &user("u1")).await, vec!["p1", "p2"]);
+    assert_eq!(
+        viewable(&test.db, &RequestContext::anonymous()).await,
+        Vec::<String>::new(),
+        "a public listRule must not make a single-record read public"
     );
 
     test.cleanup().await;
@@ -263,7 +339,9 @@ async fn writes_are_checked_as_well_as_reads() {
     // Updating someone else's row touches nothing.
     {
         let transaction = client.transaction().await.expect("tx");
-        apply(&transaction, &user("u1")).await.expect("context");
+        apply(&transaction, &user("u1").with_action(Action::Update))
+            .await
+            .expect("context");
         let updated = transaction
             .execute(
                 r#"update "posts" set "author" = 'u1' where "id" = 'p3'"#,
@@ -275,15 +353,49 @@ async fn writes_are_checked_as_well_as_reads() {
         transaction.commit().await.expect("commit");
     }
 
+    // ... but their own row is. `Action::Update` is the action the API sets;
+    // the `lazypock_update_select` mirror is what lets Postgres find the row.
+    {
+        let transaction = client.transaction().await.expect("tx");
+        apply(&transaction, &user("u1").with_action(Action::Update))
+            .await
+            .expect("context");
+        let updated = transaction
+            .execute(
+                r#"update "posts" set "author" = 'u1' where "id" = 'p1'"#,
+                &[],
+            )
+            .await
+            .expect("update own row");
+        assert_eq!(updated, 1, "the owner must be able to update their own row");
+        transaction.commit().await.expect("commit");
+    }
+
     // Deleting someone else's row removes nothing.
     {
         let transaction = client.transaction().await.expect("tx");
-        apply(&transaction, &user("u1")).await.expect("context");
+        apply(&transaction, &user("u1").with_action(Action::Delete))
+            .await
+            .expect("context");
         let deleted = transaction
             .execute(r#"delete from "posts" where "id" = 'p3'"#, &[])
             .await
             .expect("delete");
         assert_eq!(deleted, 0, "another owner's row must not be deletable");
+        transaction.commit().await.expect("commit");
+    }
+
+    // ... but their own row is, through the `lazypock_delete_select` mirror.
+    {
+        let transaction = client.transaction().await.expect("tx");
+        apply(&transaction, &user("u1").with_action(Action::Delete))
+            .await
+            .expect("context");
+        let deleted = transaction
+            .execute(r#"delete from "posts" where "id" = 'p1'"#, &[])
+            .await
+            .expect("delete own row");
+        assert_eq!(deleted, 1, "the owner must be able to delete their own row");
         transaction.commit().await.expect("commit");
     }
 

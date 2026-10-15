@@ -4,8 +4,10 @@
 //! `{page, perPage, totalItems, totalPages, items}`, a single record *is* the
 //! record document, delete is `204`, and errors are `{status, message, data}`.
 //!
-//! Authentication and access rules are not wired in yet, so every request is
-//! treated as anonymous for now (Track E).
+//! Access rules are enforced by Postgres row-level security: every request runs
+//! under the restricted role with its identity and its record action in the
+//! transaction, so a list is matched against `listRule` and a single-record read
+//! against `viewRule`.
 
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -31,6 +33,7 @@ use lazypock_db::query::read::{self, BuiltQuery, ReadQuery};
 use lazypock_db::query::sort::{self, SortSpec};
 use lazypock_db::records;
 use lazypock_db::rls;
+use lazypock_db::rls::context::Action;
 use lazypock_db::runner::QueryRunner;
 use lazypock_db::schema::Schema;
 
@@ -129,7 +132,7 @@ pub async fn list_records(
     let built = read::build_list(&read_query, &resolved.context, &auth).map_err(ApiError::new)?;
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
-    let transaction = scoped(&mut client, &principal).await?;
+    let transaction = scoped(&mut client, &principal, Action::List).await?;
 
     let rows = run_list(&transaction, &built).await?;
 
@@ -182,7 +185,7 @@ pub async fn view_record(
         ExpandSpec::parse(params.expand.as_deref(), &resolved.context).map_err(ApiError::new)?;
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
-    let transaction = scoped(&mut client, &principal).await?;
+    let transaction = scoped(&mut client, &principal, Action::View).await?;
 
     let record = records::get_one(
         &transaction,
@@ -246,7 +249,7 @@ pub async fn create_record(
     let extra = crate::auth::auth_columns(&resolved.collection, &body)?;
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
-    let transaction = scoped(&mut client, &principal).await?;
+    let transaction = scoped(&mut client, &principal, Action::Write).await?;
 
     let record = records::create_with(
         &transaction,
@@ -292,7 +295,7 @@ pub async fn update_record(
     // One transaction, so a password change and the session revocation that must
     // accompany it either both happen or neither does.
     let mut client = state.db.client().await.map_err(ApiError::new)?;
-    let transaction = scoped(&mut client, &principal).await?;
+    let transaction = scoped(&mut client, &principal, Action::Update).await?;
 
     crate::auth::validate_first(&resolved.collection, &body, true)?;
     let extra = crate::auth::auth_columns(&resolved.collection, &body)?;
@@ -351,7 +354,11 @@ pub async fn delete_record(
     let (_schema, resolved) = resolve(&state, &collection)?;
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
-    let transaction = scoped(&mut client, &principal).await?;
+    // The before-hook below reads the record first, and the delete itself makes
+    // Postgres read the row to find its target. Both reads are governed by
+    // `Action::Delete`, whose `SELECT` mirror carries `deleteRule` — so the row
+    // a request may delete is exactly the row its before-hook sees.
+    let transaction = scoped(&mut client, &principal, Action::Delete).await?;
 
     // A before-delete hook sees the record that is about to go, so it can act on
     // its contents — deleting the files a row pointed at, say — or refuse by
@@ -414,12 +421,13 @@ pub async fn delete_record(
 async fn scoped<'a>(
     client: &'a mut lazypock_db::deadpool_postgres::Client,
     principal: &Principal,
+    action: Action,
 ) -> Result<lazypock_db::deadpool_postgres::Transaction<'a>, ApiError> {
     let transaction = client
         .transaction()
         .await
         .map_err(|err| ApiError::new(db_error(err)))?;
-    rls::context::apply(&transaction, &principal.request_context())
+    rls::context::apply(&transaction, &principal.request_context(action))
         .await
         .map_err(ApiError::new)?;
     Ok(transaction)

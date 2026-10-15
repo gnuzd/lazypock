@@ -27,6 +27,7 @@ use lazypock_db::pool::db_error;
 use lazypock_db::query::compile::FilterContext;
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
 use lazypock_db::records;
+use lazypock_db::rls::context::Action;
 use lazypock_db::runner::QueryRunner;
 use lazypock_db::schema::Schema;
 
@@ -200,10 +201,19 @@ async fn run(
 ) -> Result<Vec<Value>, (usize, ApiError)> {
     let mut results = Vec::with_capacity(steps.len());
     for (index, step) in steps.iter().enumerate() {
+        // A sub-request declares its own action: a `GET` is a single-record
+        // read, and an `UPDATE`/`DELETE` needs its rule's `SELECT` mirror to
+        // find the row it writes.
+        let action = match step.method.as_str() {
+            "GET" => Action::View,
+            "PATCH" | "PUT" => Action::Update,
+            "DELETE" => Action::Delete,
+            _ => Action::Write,
+        };
         // Re-applied for every sub-request: a write hands the transaction back to
         // the owner so it can read the stored row back, so without this the next
         // one would run unrestricted.
-        lazypock_db::rls::context::apply(runner, &principal.request_context())
+        lazypock_db::rls::context::apply(runner, &principal.request_context(action))
             .await
             .map_err(|error| (index, ApiError::new(error)))?;
 

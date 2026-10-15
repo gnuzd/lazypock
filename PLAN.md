@@ -333,6 +333,7 @@ SET LOCAL ROLE app_authenticated;                      -- or app_anon, app_servi
 SELECT set_config('request.auth.id',     $1, true);
 SELECT set_config('request.auth.claims', $2, true);    -- JSON claims
 SELECT set_config('request.connection_id', $3, true);  -- for realtime (8.7)
+SELECT set_config('request.action',      $4, true);  -- list | view | update | delete | write
 -- the user's query runs here (RLS applies automatically)
 COMMIT;
 ```
@@ -341,9 +342,41 @@ COMMIT;
   `SET LOCAL ROLE` also resets at commit, so it is safe with PgBouncer transaction pooling.
 - The server connects with a dedicated **non-superuser** role that is a member of
   `app_anon`, `app_authenticated`, `app_service`. `app_service` bypasses RLS and is internal.
-- Tables are created with `ENABLE ROW LEVEL SECURITY` **and `FORCE ROW LEVEL SECURITY`** so
-  the owning role is also subject to policies.
+- Tables are created with `ENABLE ROW LEVEL SECURITY` but **not** `FORCE ROW LEVEL SECURITY`:
+  forcing it would subject the schema owner to the policies too and break the server's own
+  internal reads (the login lookup is the obvious one). The owner *is* the service identity —
+  internal work and superusers run as it and bypass policies, while every user-facing request
+  runs as a restricted role. Migration `0003_rls.sql` carries the same note.
 - SQL helpers: `auth.uid()`, `auth.claim('role')` reading `current_setting`.
+
+**Implementation note.** The names in this section are the design's; the code uses
+`lazypock_anon` / `lazypock_authenticated` (`migrations/0003_rls.sql`) and models the service
+bypass as the connecting **owner** role rather than a separate `app_service`.
+
+**`request.action` and the list/view divergence (resolved).** `listRule` and `viewRule` both
+compile to a `SELECT` policy, and Postgres OR-combines permissive policies — so a public
+`viewRule` used to widen a filtered `listRule` (and vice versa). Each `SELECT` policy is now
+guarded by `request.action`, set per request from the operation the endpoint performs. Two
+consequences worth stating:
+
+- `updateRule` and `deleteRule` also get a `SELECT` mirror keyed to their action
+  (`lazypock_update_select` / `lazypock_delete_select`), because Postgres applies the `SELECT`
+  policies to the rows an `UPDATE`/`DELETE` reads to find its target. The mirror carries the
+  rule's own predicate, so a row is writable exactly when its rule says so — and never because
+  of a wider `listRule`/`viewRule`.
+- `write` is the default action and matches no `SELECT` policy: a read that forgets to declare
+  itself is **denied** rather than silently matching a different rule. Every restricted-role
+  `SELECT` path must set `list`, `view`, `update` or `delete` explicitly (records endpoints,
+  batch sub-requests, and realtime subscriptions — a collection subscription is a `list`, a
+  record subscription a `view`).
+
+**Known divergence: expanded relations.** `expand` resolves relations with correlated
+subqueries inside the same statement, so a `list` request's expanded rows are filtered by the
+related collection's **`listRule`**, not its `viewRule` (the reference resolves each expanded
+record through its `viewRule`). The old behaviour ORed list+view, so this is *narrower*, not a
+leak — but it is a real semantic difference. Fixing it needs the expand subqueries to run with
+a view action, which a single statement-wide claim cannot express; that is a separate piece of
+work.
 
 ### 6.2 Superuser and `manageRule` mapping (resolved)
 
@@ -363,7 +396,7 @@ conditional, plus a `manageRule` that grants all actions.
 - Pick collection → action (list/view/create/update/delete) → build the condition via UI or a
   simple expression (`author = @auth.id`).
 - The server compiles it to `CREATE POLICY ... USING (...) WITH CHECK (...)`, stores the source
-  in `_collections.rules`, and applies `ENABLE` + `FORCE ROW LEVEL SECURITY`.
+  in `_collections.rules`, and applies `ENABLE ROW LEVEL SECURITY` (not `FORCE`; see 6.1).
 - "Advanced" mode edits the policy SQL directly.
 - Templates: public read, owner only, authenticated only, role-based.
 - **View collections** are created `WITH (security_invoker = true)`; otherwise the view owner's
@@ -698,6 +731,14 @@ at the Rust API and swaps the realtime transport to SSE.
 - Batch API, transactions in hooks.
 - Webhooks / outbound events.
 - Settings import/export + versioning.
+- **Studio ↔ server endpoint gaps** (surfaced by the e2e tour, section 15): the Studio
+  calls `POST /api/sql/query` (SQL Console), `POST /api/collections/meta/dry-run-view` and
+  `POST /api/collections/meta/preview-view-builder` (view-builder preview), and
+  `POST /api/settings/storage/test` (Files → "Test connection") — none of which the Rust
+  server implements yet, so the page renders but the action 404s. The SQL console needs a
+  superuser-only, read-only (SELECT/EXPLAIN/WITH) endpoint; the storage test needs a real
+  backend round-trip. `studio/e2e/studio.spec.ts` carries the SQL console as a `test.fixme`
+  until the endpoint exists.
 - PocketBase data importer.
 - View collection builder (no-code) + ERD.
 - Audit log for admin actions.

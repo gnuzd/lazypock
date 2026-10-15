@@ -30,11 +30,58 @@ impl Role {
     }
 }
 
+/// The record action a restricted request performs.
+///
+/// `listRule` and `viewRule` are separate in PocketBase, but both compile to a
+/// Postgres `SELECT` policy and permissive policies are OR-combined — so
+/// without an explicit action a public `viewRule` would widen a filtered
+/// `listRule` (and vice versa). The action is set per request in
+/// `request.action` and read by the generated `SELECT` policy, so each rule
+/// applies to exactly the operation it names.
+///
+/// `Update` and `Delete` exist because Postgres applies the `SELECT` policies
+/// to the rows an `UPDATE`/`DELETE` reads to find its target: without a
+/// `SELECT` mirror keyed to those actions the write would silently match no
+/// rows. The mirror carries the rule's own predicate, so a row is writable
+/// exactly when its `updateRule`/`deleteRule` says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Action {
+    /// A collection list: `GET /api/collections/{c}/records`, and a
+    /// collection-wide realtime subscription.
+    List,
+    /// A single-record read: `GET /api/collections/{c}/records/{id}`, a
+    /// record-specific realtime subscription, and a batch `GET`.
+    View,
+    /// An update, including the read Postgres makes to locate the row.
+    Update,
+    /// A delete, including the read Postgres makes to locate the row.
+    Delete,
+    /// A create, or any other request that reads no record. No `SELECT` rule
+    /// is keyed to it, so a stray read under it matches nothing — the
+    /// fail-closed default.
+    Write,
+}
+
+impl Action {
+    /// The value the policies read from `request.action`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::View => "view",
+            Self::Update => "update",
+            Self::Delete => "delete",
+            Self::Write => "write",
+        }
+    }
+}
+
 /// Everything a request tells the database about itself.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RequestContext {
     /// The role to switch to.
     pub role: Role,
+    /// The record action the request performs.
+    pub action: Action,
     /// The authenticated record id; empty when anonymous.
     pub auth_id: String,
     /// The authenticated record's email.
@@ -55,6 +102,7 @@ impl RequestContext {
     pub fn anonymous() -> Self {
         Self {
             role: Role::Anon,
+            action: Action::Write,
             auth_id: String::new(),
             auth_email: String::new(),
             auth_collection_id: String::new(),
@@ -80,6 +128,7 @@ impl RequestContext {
     ) -> Self {
         Self {
             role: Role::Authenticated,
+            action: Action::Write,
             auth_id: id.into(),
             auth_email: email.into(),
             auth_collection_id: collection_id.into(),
@@ -91,6 +140,15 @@ impl RequestContext {
     /// Attach the client's connection id.
     pub fn with_connection_id(mut self, connection_id: impl Into<String>) -> Self {
         self.connection_id = connection_id.into();
+        self
+    }
+
+    /// Set the record action the policies read.
+    ///
+    /// The default is [`Action::Write`], so a read that forgets to declare
+    /// itself is denied rather than silently matching a different rule.
+    pub fn with_action(mut self, action: Action) -> Self {
+        self.action = action;
         self
     }
 }
@@ -188,13 +246,15 @@ pub async fn apply(runner: &dyn QueryRunner, context: &RequestContext) -> Result
                     set_config('request.auth.email', $2::text, true), \
                     set_config('request.auth.collection_id', $3::text, true), \
                     set_config('request.auth.collection_name', $4::text, true), \
-                    set_config('request.connection_id', $5::text, true)",
+                    set_config('request.connection_id', $5::text, true), \
+                    set_config('request.action', $6::text, true)",
             &[
                 &context.auth_id,
                 &context.auth_email,
                 &context.auth_collection_id,
                 &context.auth_collection_name,
                 &context.connection_id,
+                &context.action.name(),
             ],
         )
         .await
@@ -240,5 +300,20 @@ mod tests {
         let context = RequestContext::owner();
         assert_eq!(context.role, Role::Owner);
         assert!(context.auth_id.is_empty());
+    }
+
+    #[test]
+    fn the_default_action_is_write_and_can_be_overridden() {
+        // Write is the fail-closed default: a read that never declares itself
+        // must not accidentally match `listRule` or `viewRule`.
+        assert_eq!(RequestContext::anonymous().action, Action::Write);
+        assert_eq!(RequestContext::owner().action, Action::Write);
+        let list = RequestContext::anonymous().with_action(Action::List);
+        assert_eq!(list.action, Action::List);
+        assert_eq!(Action::List.name(), "list");
+        assert_eq!(Action::View.name(), "view");
+        assert_eq!(Action::Update.name(), "update");
+        assert_eq!(Action::Delete.name(), "delete");
+        assert_eq!(Action::Write.name(), "write");
     }
 }

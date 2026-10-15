@@ -10,4 +10,4 @@ pub mod context;
 pub mod policies;
 pub mod policy;
 
-pub use context::{RequestContext, Role};
+pub use context::{Action, RequestContext, Role};
