@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use lazypock_core::error::{Error, Result};
 use lazypock_db::pool::db_error;
+use lazypock_db::query::compile::CompiledFilter;
 use lazypock_db::runner::QueryRunner;
 
 /// Where an upload came from.
@@ -332,6 +333,11 @@ pub struct ListQuery {
     pub status: Option<Status>,
     /// Only files uploaded by this identity.
     pub uploaded_by: Option<String>,
+    /// An extra predicate the rows must match, from `files.rules.listRule`.
+    ///
+    /// Compiled by [`crate::rules`] against the caller's identity; `None` means the
+    /// listing is not restricted by a rule (a public rule, or a superuser).
+    pub restriction: Option<CompiledFilter>,
 }
 
 /// The rows a filter matches: `(where clauses, parameters)`.
@@ -411,7 +417,20 @@ fn filters(query: &ListQuery) -> (Vec<String>, Vec<String>) {
 
 /// One page of the library, newest first, with the total the filter matches.
 pub async fn list(runner: &dyn QueryRunner, query: &ListQuery) -> Result<(Vec<FileRow>, i64)> {
-    let (clauses, parameters) = filters(query);
+    let (mut clauses, mut parameters) = filters(query);
+
+    // The rule's predicate is compiled on its own, so its placeholders start at $1 and
+    // have to move past the filters' parameters. Getting that wrong would compare a
+    // rule against the wrong value — hence the shift helper and its tests.
+    if let Some(restriction) = &query.restriction {
+        let offset = parameters.len();
+        clauses.push(format!(
+            "({})",
+            crate::rules::shift_placeholders(&restriction.sql, offset)
+        ));
+        parameters.extend(restriction.params.iter().cloned());
+    }
+
     let where_clause = if clauses.is_empty() {
         String::new()
     } else {
@@ -971,6 +990,7 @@ mod tests {
             origin: Some(Origin::Editor),
             status: Some(Status::Pending),
             uploaded_by: Some("u1".into()),
+            restriction: None,
         };
 
         let (clauses, parameters) = filters(&query);

@@ -13,7 +13,9 @@ use bytes::Bytes;
 use lazypock_core::error::Error;
 use lazypock_db::pool::db_error;
 use lazypock_db::runner::QueryRunner;
+use lazypock_db::tokio_postgres::types::ToSql;
 use lazypock_db::types::validate_identifier;
+use lazypock_files::rules::{shift_placeholders, FileRules};
 use lazypock_files::storage::Files;
 use lazypock_files::store::{self, NewFile, Origin};
 use lazypock_files::{keys, outbox, presets, thumbnail, ImagePreset};
@@ -535,10 +537,40 @@ pub async fn delete_by_id(
         .map_err(ApiError::new)?
         .ok_or_else(|| ApiError::new(Error::not_found(format!("no file {id:?}"))))?;
 
-    if !principal.is_superuser() && file.uploaded_by != user_id {
-        return Err(ApiError::new(Error::forbidden(
-            "only the uploader or a superuser may delete this file",
-        )));
+    // `files.rules.deleteRule` decides who may: a filter is asked about *this* file, the
+    // empty string opens it, and an absent rule leaves it to superusers. A superuser
+    // bypasses it, and every unreadable rule denies.
+    if !principal.is_superuser() {
+        let rules = file_rules(&client).await?;
+        match rules.delete_predicate(&principal.auth_context()) {
+            Ok(None) => {}
+            Ok(Some(predicate)) => {
+                let sql = format!(
+                    "select 1 from _files where id = $1::text and ({})",
+                    shift_placeholders(&predicate.sql, 1)
+                );
+                let mut parameters: Vec<&(dyn ToSql + Sync)> = vec![&id];
+                for value in &predicate.params {
+                    parameters.push(value);
+                }
+                let allowed = client
+                    .run_query_opt(&sql, &parameters)
+                    .await
+                    .map_err(|err| ApiError::new(db_error(err)))?
+                    .is_some();
+                if !allowed {
+                    tracing::info!(
+                        id = %id,
+                        user = %user_id,
+                        "file deleteRule does not match this file"
+                    );
+                    return Err(ApiError::new(Error::forbidden(
+                        "Access denied by file deleteRule",
+                    )));
+                }
+            }
+            Err(err) => return Err(ApiError::new(err)),
+        }
     }
 
     let usage = store::refs_for_file(&client, &id)
@@ -559,7 +591,12 @@ pub async fn delete_by_id(
     }
 
     store::delete(&client, &id).await.map_err(ApiError::new)?;
-    tracing::info!(id = %id, forced = query.force, "file deleted");
+    tracing::info!(
+        id = %id,
+        key = %file.storage_path,
+        forced = query.force,
+        "file deleted"
+    );
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -709,6 +746,22 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// The file rules, read from the `files` setting the Studio's Media page writes.
+///
+/// Read per request rather than cached: a settings change takes effect on the next
+/// request, and a rule that is enforced one request late is a rule nobody can reason
+/// about.
+async fn file_rules(
+    client: &lazypock_db::deadpool_postgres::Client,
+) -> Result<FileRules, ApiError> {
+    let row = client
+        .query_opt("select value from _settings where key = 'files'", &[])
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+    let setting = row.map(|row| row.get::<_, Value>(0)).unwrap_or(Value::Null);
+    Ok(FileRules::from_setting(&setting))
+}
+
 /// Whether a record row exists.
 async fn record_exists(state: &AppState, collection: &str, record: &str) -> Result<bool, ApiError> {
     // Already validated as an identifier by the caller; quoted here so a name that
@@ -849,22 +902,36 @@ const MAX_PER_PAGE: i64 = 200;
 /// type says `total`, PocketBase's lists say `totalItems`, and the Studio falls back to
 /// the page length when it finds neither — silently paginating to a single page.
 ///
-/// Superuser-only: this is everything anyone has uploaded.
+/// `files.rules.listRule` decides who may: a filter narrows the listing to the rows it
+/// matches, the empty string opens it, and an absent rule leaves it to superusers. A
+/// superuser always sees everything, which is what keeps the Studio's media library
+/// working once an operator has locked the API down.
 pub async fn list(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    if !principal.is_superuser() {
-        return Err(ApiError::new(Error::forbidden(
-            "listing stored files requires a superuser token",
-        )));
-    }
-
     let per_page = query.per_page.clamp(1, MAX_PER_PAGE);
     let page = query.page.max(1);
 
     let client = state.db.client().await.map_err(ApiError::new)?;
+    let rules = file_rules(&client).await?;
+    let restriction = match rules.list_predicate(&principal.auth_context()) {
+        Ok(predicate) => predicate,
+        // A superuser bypasses the rule rather than being exempted from reading it: an
+        // unreadable rule must not stop the operator who has to fix it.
+        Err(err) if principal.is_superuser() => {
+            tracing::debug!(error = %err, "file listRule does not allow this request; superuser");
+            None
+        }
+        Err(err) => return Err(ApiError::new(err)),
+    };
+    let restriction = if principal.is_superuser() {
+        None
+    } else {
+        restriction
+    };
+
     let (files, total) = store::list(
         &client,
         &store::ListQuery {
@@ -878,6 +945,7 @@ pub async fn list(
             origin: None,
             status: None,
             uploaded_by: None,
+            restriction,
         },
     )
     .await

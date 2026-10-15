@@ -1068,3 +1068,229 @@ async fn a_generated_variant_is_removed_with_its_source() {
 
     app.cleanup().await;
 }
+
+/// Register an auth user and return a token for them.
+///
+/// The `users` collection is created on the app's own boot (idempotently), so a test
+/// that needs an ordinary identity makes sure of it first.
+async fn user_token(app: &TestApp, email: &str) -> String {
+    let mut client = app.client().await;
+    lazypock_db::defaults::ensure_users(&mut client)
+        .await
+        .expect("the users collection");
+    app.reload_schema().await;
+
+    let reply = call(
+        &router(app).await,
+        Method::POST,
+        "/api/collections/users/records",
+        Some(json!({ "email": email, "password": "user-password-123" })),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    let reply = call(
+        &router(app).await,
+        Method::POST,
+        "/api/collections/users/auth-with-password",
+        Some(json!({ "identity": email, "password": "user-password-123" })),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    reply.body.expect("auth")["token"]
+        .as_str()
+        .expect("token")
+        .to_string()
+}
+
+/// Write the file rules the way the Studio's Settings → Media page does.
+async fn set_file_rules(app: &TestApp, superuser: &str, rules: serde_json::Value) {
+    let reply = call_authed(
+        &router(app).await,
+        Method::PATCH,
+        "/api/settings",
+        Some(json!({ "files": { "rules": rules } })),
+        superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+}
+
+/// Upload one file as the given identity, returning its id.
+async fn upload_as(app: &TestApp, token: &str, filename: &str) -> String {
+    let reply = upload(
+        app,
+        &[
+            ("file", Some(filename), &png(16, 16)),
+            ("origin", None, b"library"),
+        ],
+        Some(token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    reply.body.expect("body")["id"]
+        .as_str()
+        .expect("id")
+        .to_string()
+}
+
+#[tokio::test]
+async fn an_absent_file_rule_leaves_the_library_to_superusers() {
+    let Some(app) = test_app("http_files_rules_absent").await else {
+        return;
+    };
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+
+    // Nothing configured is the safe reading: a rule that does not exist does not grant.
+    let reply = call_authed(&router(&app).await, Method::GET, "/api/files", None, &user).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+    assert!(
+        reply.body.expect("refusal")["message"]
+            .as_str()
+            .expect("message")
+            .contains("listRule"),
+        "the refusal should name the rule"
+    );
+
+    // The operator's own view is unaffected, which is what keeps the Studio working.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/files",
+        None,
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_list_rule_narrows_the_library_to_the_rows_it_matches() {
+    let Some(app) = test_app("http_files_rules_list").await else {
+        return;
+    };
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+
+    upload_as(&app, &user, "mine.png").await;
+    upload_as(&app, &superuser, "theirs.png").await;
+
+    // A public rule opens the listing to anyone.
+    set_file_rules(
+        &app,
+        &superuser,
+        json!({ "listRule": "", "deleteRule": null }),
+    )
+    .await;
+    let body = listing(&app, &user, "").await;
+    assert_eq!(body["total"], json!(2), "{body}");
+
+    // A filter shows only the rows it matches, per caller.
+    set_file_rules(
+        &app,
+        &superuser,
+        json!({ "listRule": "uploaded_by = @request.auth.id", "deleteRule": null }),
+    )
+    .await;
+
+    let body = listing(&app, &user, "").await;
+    assert_eq!(body["total"], json!(1), "only their own file: {body}");
+    assert_eq!(body["items"][0]["filename"], json!("mine.png"), "{body}");
+
+    // A superuser bypasses the rule and sees everything.
+    let body = listing(&app, &superuser, "").await;
+    assert_eq!(body["total"], json!(2), "{body}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_delete_rule_decides_whose_files_may_go() {
+    let Some(app) = test_app("http_files_rules_delete").await else {
+        return;
+    };
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+    let other = user_token(&app, "other@example.com").await;
+
+    let mine = upload_as(&app, &user, "mine.png").await;
+    let theirs = upload_as(&app, &other, "theirs.png").await;
+
+    set_file_rules(
+        &app,
+        &superuser,
+        json!({ "listRule": "", "deleteRule": "uploaded_by = @request.auth.id" }),
+    )
+    .await;
+
+    // The rule is asked about *this* file: uploader-owns-it means exactly that.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{theirs}"),
+        None,
+        &user,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{mine}"),
+        None,
+        &user,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    // A superuser is not bound by it.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{theirs}"),
+        None,
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_unreadable_rule_denies_instead_of_allowing() {
+    let Some(app) = test_app("http_files_rules_broken").await else {
+        return;
+    };
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+
+    // Whitespace is not the empty string, and a number is not a rule: both deny rather
+    // than quietly meaning "public".
+    set_file_rules(
+        &app,
+        &superuser,
+        json!({ "listRule": "   ", "deleteRule": 7 }),
+    )
+    .await;
+
+    let reply = call_authed(&router(&app).await, Method::GET, "/api/files", None, &user).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    // The operator can still get in, or they could not fix the rule.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/files",
+        None,
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
