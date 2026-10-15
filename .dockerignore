@@ -1,0 +1,32 @@
+# Everything the image build does not need. `target/` alone is hundreds of
+# megabytes, and `node_modules` is reinstalled from the lockfile inside the
+# build stage.
+
+# Build output
+/target
+**/*.rs.bk
+
+# The Studio's own build inputs and output: the stage installs and builds from
+# the lockfile, and `build.rs` copies the result into place itself.
+studio/node_modules
+studio/build
+studio/.svelte-kit
+studio/.vite
+crates/studio-embed/dist
+
+# Version control and local state
+.git
+.gitignore
+.DS_Store
+data
+hooks
+.env
+.env.*
+
+# Local tooling
+.pi
+.pi-subagents
+.repowise
+.claude
+.vscode
+docs

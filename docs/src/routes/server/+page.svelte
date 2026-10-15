@@ -439,44 +439,68 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
   <!-- PRODUCTION -->
   <section id="production" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
-      Production release (single binary)
+      Production deployment
     </h2>
     <p class="mt-2 text-base-content/80 leading-relaxed">
-      Lazypock ships as a single binary via <a
-        class="text-primary underline"
-        href="https://github.com/burrito-elixir/burrito"
-        target="_blank"
-        rel="noreferrer">Burrito</a
-      >:
+      Lazypock is one binary: the API and the Studio together. The repository
+      root has a <code class="doc-inline px-1 py-0.5">Dockerfile</code> that
+      builds it, and a <code class="doc-inline px-1 py-0.5">compose.yml</code>
+      that runs it next to Postgres:
     </p>
     <CodeBlock
       lang="bash"
-      code={`cd core
-MIX_ENV=prod mix release
-# Binary: core/burrito_out/lazypock_macos_silicon`}
+      code={`docker compose up --build
+# Studio: http://localhost:4000/_/`}
     />
     <p class="mt-3 text-base-content/80 leading-relaxed">
-      Minimal production run example:
+      Two variables have to be set before the stack is reachable from anywhere:
     </p>
-    <CodeBlock
-      lang="bash"
-      code={`export LAZYPOCK_DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
-export SECRET_KEY_BASE="$(mix phx.gen.secret)"
-export PHX_HOST="localhost"
-LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \\
-  ./core/burrito_out/lazypock_macos_silicon`}
-    />
+    <ul
+      class="mt-2 space-y-1 text-base-content/80 leading-relaxed list-disc pl-5"
+    >
+      <li>
+        <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code> — a
+        <strong>direct</strong> connection. A transaction-mode pooler such as
+        PgBouncer, and the pooled endpoint managed providers offer, are not
+        supported: realtime needs
+        <code class="doc-inline px-1 py-0.5">LISTEN/NOTIFY</code> on the direct
+        endpoint, and a prepared statement has to survive a pool checkout.
+      </li>
+      <li>
+        <code class="doc-inline px-1 py-0.5">LAZYPOCK_SECRET_KEY</code> — 32
+        bytes as hex (<code class="doc-inline px-1 py-0.5"
+          >openssl rand -hex 32</code
+        >). It encrypts the secrets stored in the database, so losing it means
+        those can no longer be decrypted.
+      </li>
+    </ul>
     <p class="mt-3 text-sm text-base-content/70">
-      The HTTP server is <strong>always started</strong> — no
-      <code class="doc-inline px-1 py-0.5">PHX_SERVER</code>
-      needed; just run the binary (or
-      <code class="doc-inline px-1 py-0.5">bin/lazypock start</code>).
+      Setting <code class="doc-inline px-1 py-0.5">LAZYPOCK_SIGNING_KEY</code>
+      is optional, and it keeps the token signing key out of the database — and
+      therefore out of every dump and replica. Left unset, it is generated on
+      first run and kept there.
     </p>
     <p class="mt-3 text-sm text-base-content/70">
-      The release runs with <code class="doc-inline px-1 py-0.5"
-        >RUNTIME_CONFIG=false</code
-      >, so config is baked in at build time; environment variables are still
-      read at boot via the Elixir config provider.
+      The image runs as a non-root user and writes only to
+      <code class="doc-inline px-1 py-0.5">/data</code>, which compose mounts as
+      a volume. It needs no
+      <code class="doc-inline px-1 py-0.5">ImageMagick</code>: thumbnails and
+      scaled images are produced in-process. A health check is built in
+      (<code class="doc-inline px-1 py-0.5">lazypock healthcheck</code>), and
+      <code class="doc-inline px-1 py-0.5"
+        >docker run … superuser create</code
+      >
+      works for first-time setup.
+    </p>
+    <p class="mt-3 text-sm text-base-content/70">
+      On <a
+        class="text-primary underline"
+        href="https://coolify.io"
+        target="_blank"
+        rel="noreferrer">Coolify</a
+      >, point a resource at this repository and let it build the Dockerfile, or
+      deploy the published image. Coolify terminates TLS in front, and schedules
+      database and volume backups.
     </p>
   </section>
 
