@@ -36,6 +36,7 @@ use lazypock_db::rls;
 use lazypock_db::rls::context::Action;
 use lazypock_db::runner::QueryRunner;
 use lazypock_db::schema::Schema;
+use lazypock_files::store;
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -262,6 +263,11 @@ pub async fn create_record(
     .await
     .map_err(ApiError::from)?;
 
+    // The record's file fields are attached and its editor references recorded in the
+    // same transaction, so a record cannot exist without its files being claimed and a
+    // failed write cannot leave a reference behind.
+    sync_files(&transaction, &resolved.collection, &record).await?;
+
     transaction
         .commit()
         .await
@@ -321,6 +327,13 @@ pub async fn update_record(
         lazypock_auth::sessions::revoke_for_user(&transaction, &resolved.collection.id, &id)
             .await
             .map_err(ApiError::new)?;
+    }
+
+    // A file added to the record is attached and a file removed from its text stops
+    // counting as a reference — otherwise a delete of the latter would be refused for
+    // a reference that no longer exists.
+    if let Some(record) = &record {
+        sync_files(&transaction, &resolved.collection, record).await?;
     }
 
     transaction
@@ -392,6 +405,14 @@ pub async fn delete_record(
         .await
         .map_err(ApiError::from)?;
 
+    // The files this record owned go with it — the `_files_deleted` trigger queues each
+    // object in this transaction, so storage catches up afterwards — and its references
+    // are dropped. Doing it here rather than in the reaper is what makes "delete the
+    // record and its files are gone" true the moment the response is sent.
+    if removed {
+        release_files(&transaction, &resolved.collection, &id, existing.as_ref()).await?;
+    }
+
     transaction
         .commit()
         .await
@@ -413,6 +434,74 @@ pub async fn delete_record(
     } else {
         Err(not_found(&collection, &id))
     }
+}
+
+/// Record what a record's file fields own and reference.
+///
+/// Runs inside the write's transaction, so the attachments and the row they describe
+/// commit together.
+async fn sync_files(
+    runner: &dyn QueryRunner,
+    collection: &Collection,
+    record: &Value,
+) -> Result<(), ApiError> {
+    let Some(record_id) = record.get("id").and_then(Value::as_str) else {
+        return Ok(());
+    };
+
+    let mut references: Vec<(String, String)> = Vec::new();
+    for found in store::file_links_in(collection, record) {
+        match found.link {
+            // A file field's upload belongs to this record now, which is what takes it
+            // out of the reaper's reach and what a delete of the file is guarded against.
+            store::FileLink::Owner => {
+                store::attach(runner, &found.id, &collection.name, record_id, &found.field)
+                    .await
+                    .map_err(ApiError::new)?;
+            }
+            store::FileLink::Reference => references.push((found.id, found.field)),
+        }
+    }
+
+    // Replaced rather than merged: a file removed from the text must stop counting as a
+    // reference, or the delete guard would refuse a delete that is in fact safe.
+    store::sync_refs(runner, &collection.name, record_id, &references)
+        .await
+        .map_err(ApiError::new)?;
+    Ok(())
+}
+
+/// Let go of what a deleted record owned and referenced.
+async fn release_files(
+    runner: &dyn QueryRunner,
+    collection: &Collection,
+    record_id: &str,
+    record: Option<&Value>,
+) -> Result<(), ApiError> {
+    // Everything owned by (collection, record). The row's deletion queues its object
+    // through the trigger, in this transaction.
+    store::delete_for_record(runner, &collection.name, record_id)
+        .await
+        .map_err(ApiError::new)?;
+
+    // A file field whose upload never got attached is not found by the call above, so
+    // the ids the record itself names go too — but only the *owned* ones: an editor
+    // upload may be embedded by another record as well.
+    if let Some(record) = record {
+        let owned: Vec<String> = store::file_links_in(collection, record)
+            .into_iter()
+            .filter(|found| found.link == store::FileLink::Owner)
+            .map(|found| found.id)
+            .collect();
+        store::delete_for_ids(runner, &owned)
+            .await
+            .map_err(ApiError::new)?;
+    }
+
+    store::delete_refs_for_record(runner, &collection.name, record_id)
+        .await
+        .map_err(ApiError::new)?;
+    Ok(())
 }
 
 /// Begin a transaction with the request's row-level-security context applied.

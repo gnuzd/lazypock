@@ -35,7 +35,7 @@ pub use keys::{safe_filename, storage_key};
 pub use presets::ImagePreset;
 pub use reaper::Reaper;
 pub use storage::{Files, LocalStorage, Storage, StoredObject};
-pub use store::{FileRef, FileRow, NewFile, Origin, Status};
+pub use store::{FileLink, FileRef, FileRow, FoundFile, NewFile, Origin, Status};
 pub use sweep::{SweepOptions, SweepReport};
 pub use thumbnail::{OutputFormat, ResizeMode};
 pub use validation::{sniff, ImageFormat, UploadLimits};

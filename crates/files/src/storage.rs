@@ -224,6 +224,9 @@ pub struct Files {
     limits: UploadLimits,
     public_base_url: Option<String>,
     image_service: Option<crate::image_service::ImageService>,
+    /// `local` or `s3`, as `_files.storage_backend` records it: a key is only unique
+    /// within one backend, so the reaper has to know which store it owns.
+    backend: &'static str,
 }
 
 impl std::fmt::Debug for Files {
@@ -248,9 +251,9 @@ impl Files {
     /// loudly instead of quietly falling back to the local disk, which would put
     /// objects somewhere the operator is not looking.
     pub fn from_config(config: &FilesConfig) -> Result<Self> {
-        let storage: Arc<dyn Storage> = match config.adapter {
-            StorageAdapter::Local => Arc::new(LocalStorage::new(&config.directory)),
-            StorageAdapter::S3 => Arc::new(crate::s3::S3Storage::new(config)?),
+        let (storage, backend): (Arc<dyn Storage>, &'static str) = match config.adapter {
+            StorageAdapter::Local => (Arc::new(LocalStorage::new(&config.directory)), "local"),
+            StorageAdapter::S3 => (Arc::new(crate::s3::S3Storage::new(config)?), "s3"),
         };
 
         // Built at boot, so a bad URL is a startup error rather than the first
@@ -268,6 +271,7 @@ impl Files {
             limits: UploadLimits::default(),
             public_base_url: config.public_base_url.clone(),
             image_service,
+            backend,
         })
     }
 
@@ -277,6 +281,11 @@ impl Files {
     /// `local-image-codecs` feature, that no thumbnail can be produced at all.
     pub fn image_service(&self) -> Option<&crate::image_service::ImageService> {
         self.image_service.as_ref()
+    }
+
+    /// The backend's name, as `_files.storage_backend` stores it.
+    pub fn backend_name(&self) -> &'static str {
+        self.backend
     }
 
     /// The backend.
@@ -308,6 +317,20 @@ impl Files {
     /// route.
     pub fn url(&self, collection: &str, record_id: &str, filename: &str) -> String {
         let path = format!("api/files/{collection}/{record_id}/{filename}");
+        match &self.public_base_url {
+            Some(base) => format!("{}/{}", base.trim_end_matches('/'), path),
+            None => format!("/{path}"),
+        }
+    }
+
+    /// The URL a client fetches a file from when all it holds is the file's id.
+    ///
+    /// The id is what a client stores in a file field, so this is the shape the API
+    /// hands out — and the one an editor's markdown embeds, which is how a reference
+    /// to an editor upload is found again. The public base URL applies here too, the
+    /// same rule as [`Self::url`].
+    pub fn file_url(&self, id: &str) -> String {
+        let path = format!("api/files/{id}");
         match &self.public_base_url {
             Some(base) => format!("{}/{}", base.trim_end_matches('/'), path),
             None => format!("/{path}"),

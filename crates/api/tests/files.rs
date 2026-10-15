@@ -165,12 +165,28 @@ async fn a_file_can_be_uploaded_served_and_deleted() {
     assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
     let body = reply.body.expect("body");
     assert_eq!(body["type"], json!("png"));
-    let url = body["url"].as_str().expect("url").to_string();
-    assert!(url.ends_with("_holiday.png"), "{url}");
-    assert!(
-        url.starts_with("/api/files/posts/p1/"),
-        "the key groups by collection and record: {url}"
+    assert_eq!(body["mime_type"], json!("image/png"));
+    assert_eq!(body["width"], json!(64));
+    assert_eq!(body["height"], json!(48));
+    assert_eq!(
+        body["status"],
+        json!("ready"),
+        "an upload that names a record arrives attached"
     );
+    assert_eq!(body["origin"], json!("field"));
+
+    // The URL is id-addressed, because the id is what a client stores in a file field;
+    // the storage key travels with it for a client that addresses objects directly.
+    let url = body["url"].as_str().expect("url").to_string();
+    assert!(url.starts_with("/api/files/"), "{url}");
+    assert_eq!(
+        url.rsplit('/').next(),
+        body["id"].as_str(),
+        "the URL ends in the file's id: {url}"
+    );
+    let key = body["key"].as_str().expect("key").to_string();
+    assert!(key.starts_with("posts/p1/"), "{key}");
+    assert!(key.ends_with("_holiday.png"), "{key}");
 
     // Serving returns the exact bytes, with a content type and a cache header.
     let (status, served) = fetch(&app, &url).await;
@@ -712,6 +728,343 @@ async fn a_generated_thumbnail_is_not_listed_as_its_own_file() {
     let body = listing(&app, &token, "").await;
     assert_eq!(body["totalItems"], json!(1), "{body}");
     assert!(body["items"][0]["variants"]["thumb"].is_string(), "{body}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_sdk_spellings_of_the_upload_parts_are_accepted() {
+    let Some(app) = test_app("http_files_sdk_parts").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = token(&app).await;
+
+    // Exactly the parts `lazypock-ts`'s `files.upload` sends. Spelling them
+    // `collection`/`record` — this route's original names — meant a Studio upload was
+    // rejected with "a `collection` part is required", which looks like a broken editor.
+    let reply = upload(
+        &app,
+        &[
+            ("file", Some("cover.png"), &png(20, 20)),
+            ("collection_name", None, b"posts"),
+            ("record_id", None, b"p1"),
+            ("field_name", None, b"cover"),
+            ("origin", None, b"field"),
+        ],
+        Some(&token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let body = reply.body.expect("body");
+    assert_eq!(body["collection_name"], json!("posts"), "{body}");
+    assert_eq!(body["record_id"], json!("p1"), "{body}");
+    assert_eq!(body["field_name"], json!("cover"), "{body}");
+    assert_eq!(body["status"], json!("ready"), "{body}");
+    assert!(
+        body["key"].as_str().expect("key").starts_with("posts/p1/"),
+        "{body}"
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_upload_with_no_record_is_pending_and_the_library_lists_it() {
+    let Some(app) = test_app("http_files_library_upload").await else {
+        return;
+    };
+    let token = token(&app).await;
+
+    // The editor's and the media library's case: bytes with no record to belong to. A
+    // listing of the storage backend could not show this at all — it has no record to be
+    // filed under — which is why the library could not offer an upload nobody had used.
+    let reply = upload(
+        &app,
+        &[
+            ("file", Some("diagram.png"), &png(20, 10)),
+            ("origin", None, b"library"),
+        ],
+        Some(&token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let body = reply.body.expect("body");
+    assert_eq!(body["status"], json!("pending"), "{body}");
+    assert_eq!(body["origin"], json!("library"), "{body}");
+    assert_eq!(body["collection_name"], json!(""), "{body}");
+    assert!(
+        body["key"].as_str().expect("key").starts_with("library/"),
+        "{body}"
+    );
+
+    let listed = listing(&app, &token, "").await;
+    assert_eq!(listed["total"], json!(1), "{listed}");
+    assert_eq!(listed["items"][0]["id"], body["id"], "{listed}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn deleting_a_record_removes_its_files() {
+    let Some(app) = test_app("http_files_record_delete").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = token(&app).await;
+
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"posts"),
+            ("record", None, b"p1"),
+            ("file", Some("cover.png"), &png(20, 20)),
+        ],
+        Some(&token),
+    )
+    .await;
+    let body = reply.body.expect("body");
+    let id = body["id"].as_str().expect("id").to_string();
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        "/api/collections/posts/records/p1",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    // The row is gone with the record: the library no longer lists it, and even serving
+    // it by id is a 404 — the object outlives the row only until the reaper runs.
+    let listed = listing(&app, &token, "").await;
+    assert_eq!(listed["total"], json!(0), "{listed}");
+    let (status, _) = fetch(&app, &format!("/api/files/{id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // And the object was queued for removal in the transaction that deleted the row.
+    let client = app.client().await;
+    let queued: i64 = client
+        .query_one(
+            "select count(*) from _file_deletions where file_id = $1::text",
+            &[&id],
+        )
+        .await
+        .expect("queued")
+        .get(0);
+    assert_eq!(queued, 1, "the object should be queued for the reaper");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_file_a_record_still_references_is_guarded_until_forced() {
+    let Some(app) = test_app("http_files_refs_guard").await else {
+        return;
+    };
+    // A collection with an editor field: that is where a reference comes from, since a
+    // rich text holds `/api/files/<id>` URLs.
+    let mut client = app.client().await;
+    collections::create(
+        &mut client,
+        CreateCollection {
+            name: "notes".into(),
+            collection_type: CollectionType::Base,
+            fields: vec![CreateField {
+                name: "body".into(),
+                field_type: FieldType::Editor,
+                required: false,
+                unique: false,
+                options: json!({}),
+            }],
+            rules: json!({
+                "listRule": "", "viewRule": "", "createRule": "",
+                "updateRule": "", "deleteRule": "",
+            }),
+            options: json!({}),
+            adopt_existing_table: false,
+        },
+    )
+    .await
+    .expect("create notes");
+    app.reload_schema().await;
+
+    let token = token(&app).await;
+
+    // An editor upload, then a record that embeds it.
+    let reply = upload(
+        &app,
+        &[
+            ("file", Some("inline.png"), &png(16, 16)),
+            ("origin", None, b"editor"),
+        ],
+        Some(&token),
+    )
+    .await;
+    let body = reply.body.expect("body");
+    let id = body["id"].as_str().expect("id").to_string();
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections/notes/records",
+        Some(json!({ "body": format!("<p>look <img src=\"/api/files/{id}\"></p>") })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    // Deleting it would leave that record pointing at nothing, so it is refused with the
+    // list of what still uses it — the shape the Studio's media library renders.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{id}"),
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT, "{:?}", reply.body);
+    let body = reply.body.expect("a refusal");
+    assert_eq!(
+        body["data"]["usage"][0]["collection"],
+        json!("notes"),
+        "{body}"
+    );
+    assert_eq!(body["data"]["usage"][0]["field"], json!("body"), "{body}");
+
+    // A superuser can break the reference deliberately.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        &format!("/api/files/{id}?force=true"),
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_reaper_reclaims_an_abandoned_upload_and_queued_objects() {
+    let Some(app) = test_app("http_files_reaper").await else {
+        return;
+    };
+    let token = token(&app).await;
+
+    let reply = upload(
+        &app,
+        &[
+            ("file", Some("abandoned.png"), &png(12, 12)),
+            ("origin", None, b"library"),
+        ],
+        Some(&token),
+    )
+    .await;
+    let body = reply.body.expect("body");
+    let key = body["key"].as_str().expect("key").to_string();
+    let id = body["id"].as_str().expect("id").to_string();
+
+    // A TTL of zero makes it instantly reclaimable. `_files` rows go first — which is
+    // what queues the object — and the pass that removes it is the next one.
+    let reaper = lazypock_files::Reaper::new(app.state.files.storage().clone(), "local")
+        .with_unattached_ttl(0);
+    let client = app.client().await;
+    let first = reaper.run(&client).await.expect("reaper pass");
+    assert_eq!(first.reclaimed, 1, "{first:?}");
+
+    let second = reaper.run(&client).await.expect("reaper pass");
+    assert_eq!(
+        second.deleted, 1,
+        "the queued object goes on the next pass: {second:?}"
+    );
+
+    let listed = listing(&app, &token, "").await;
+    assert_eq!(listed["total"], json!(0), "{listed}");
+    assert!(
+        app.state
+            .files
+            .storage()
+            .get(&key)
+            .await
+            .expect("storage")
+            .is_none(),
+        "the object should be gone from the backend"
+    );
+    let _ = id;
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_generated_variant_is_removed_with_its_source() {
+    let Some(app) = test_app("http_files_variant_cleanup").await else {
+        return;
+    };
+    seed(&app).await;
+    let token = token(&app).await;
+    let url = uploaded_png(&app, &token, 64, 48).await;
+    let id = url.rsplit('/').next().expect("id").to_string();
+
+    // Generate a thumbnail lazily, through the id-addressed route.
+    let (status, _) = fetch(&app, &format!("/api/files/{id}?preset=thumb")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // It is recorded on the row. Without that the row can be deleted, the source object
+    // queued, and the thumbnail left in the bucket with nothing pointing at it.
+    let client = app.client().await;
+    let source_key: String = client
+        .query_one(
+            "select storage_path from _files where id = $1::text",
+            &[&id],
+        )
+        .await
+        .expect("row")
+        .get(0);
+    let thumb_key: String = client
+        .query_one(
+            "select variants ->> 'thumb' from _files where id = $1::text",
+            &[&id],
+        )
+        .await
+        .expect("row")
+        .get(0);
+    assert_ne!(thumb_key, source_key);
+    assert!(
+        thumb_key.contains("/thumbs/") && thumb_key.ends_with("thumb_webp"),
+        "{thumb_key}"
+    );
+
+    // Deleting the record queues both objects, and one pass removes both.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        "/api/collections/posts/records/p1",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+
+    let reaper = lazypock_files::Reaper::new(app.state.files.storage().clone(), "local");
+    let report = reaper.run(&client).await.expect("reaper pass");
+    assert_eq!(report.deleted, 1, "one queue entry: {report:?}");
+
+    for key in [&source_key, &thumb_key] {
+        assert!(
+            app.state
+                .files
+                .storage()
+                .get(key)
+                .await
+                .expect("storage")
+                .is_none(),
+            "{key} should be gone"
+        );
+    }
 
     app.cleanup().await;
 }

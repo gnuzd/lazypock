@@ -491,10 +491,13 @@ pub async fn attach(
 
 /// Record the generated variants for a file.
 pub async fn set_variants(runner: &dyn QueryRunner, id: &str, variants: &Value) -> Result<()> {
+    // The `Value` is sent as a parameter rather than as a string: a `text` parameter for
+    // a `jsonb` placeholder is not an input Postgres can parse ("error serializing
+    // parameter", which reaches the caller as a bare 500).
     runner
         .run_execute(
-            "update _files set variants = $2::jsonb, updated_at = now() where id = $1::text",
-            &[&id.to_string(), &variants.to_string()],
+            "update _files set variants = $2, updated_at = now() where id = $1::text",
+            &[&id.to_string(), variants],
         )
         .await
         .map_err(db_error)?;
@@ -605,26 +608,58 @@ pub async fn delete_for_ids(runner: &dyn QueryRunner, ids: &[String]) -> Result<
     Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
-/// Every `(file id, field)` a record's values reference.
+/// What a file id found in a record is doing there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileLink {
+    /// A `file` field's value: the file belongs to this record and this field.
+    Owner,
+    /// An id inside an editor field's markdown: the record references the file, which
+    /// may belong to no record at all (an editor upload is stored before it is used).
+    Reference,
+}
+
+/// One file a record points at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundFile {
+    /// The file's id.
+    pub id: String,
+    /// The field that names it.
+    pub field: String,
+    /// Whether the field owns the file or merely references it.
+    pub link: FileLink,
+}
+
+/// Every file a record's values point at.
 ///
 /// A `file` field holds the ids outright — one, or a list when the field allows
-/// several. An `editor` field holds markdown, so its references are the ids inside the
-/// `/api/files/<id>` URLs it contains, which is the shape this server hands out: an
-/// editor upload is referenced by the text that embeds it.
+/// several — and **owns** them. An `editor` field holds markdown, so its ids are
+/// whatever `/api/files/<id>` URLs it contains, which is the shape this server hands
+/// out; those are references, because an editor upload exists before it is used and
+/// two records may embed it.
 ///
 /// An id that no longer exists simply matches no row when the caller deletes, so this
 /// is a pure parse with no database round trip.
-pub fn file_ids_in(
+pub fn file_links_in(
     collection: &lazypock_db::collections::Collection,
     record: &Value,
-) -> Vec<(String, String)> {
+) -> Vec<FoundFile> {
     use lazypock_db::types::FieldType;
 
     let Some(object) = record.as_object() else {
         return Vec::new();
     };
 
-    let mut found: Vec<(String, String)> = Vec::new();
+    let mut found: Vec<FoundFile> = Vec::new();
+    let mut push = |id: String, field: &str, link: FileLink| {
+        if !id.is_empty() {
+            found.push(FoundFile {
+                id,
+                field: field.to_string(),
+                link,
+            });
+        }
+    };
+
     for field in &collection.fields {
         let Some(value) = object.get(&field.name) else {
             continue;
@@ -632,15 +667,11 @@ pub fn file_ids_in(
 
         match field.field_type {
             FieldType::File => match value {
-                Value::String(id) if !id.is_empty() => {
-                    found.push((id.clone(), field.name.clone()));
-                }
+                Value::String(id) => push(id.clone(), &field.name, FileLink::Owner),
                 Value::Array(values) => {
                     for value in values {
                         if let Some(id) = value.as_str() {
-                            if !id.is_empty() {
-                                found.push((id.to_string(), field.name.clone()));
-                            }
+                            push(id.to_string(), &field.name, FileLink::Owner);
                         }
                     }
                 }
@@ -649,7 +680,7 @@ pub fn file_ids_in(
             FieldType::Editor => {
                 if let Some(text) = value.as_str() {
                     for id in ids_in_text(text) {
-                        found.push((id, field.name.clone()));
+                        push(id, &field.name, FileLink::Reference);
                     }
                 }
             }
@@ -658,8 +689,10 @@ pub fn file_ids_in(
     }
 
     // The same file can be named twice (a text embeds it, a field repeats it), and one
-    // reference is all the table holds.
-    found.sort();
+    // entry is all a caller can act on.
+    found.sort_by(|left, right| {
+        (&left.id, &left.field, left.link as u8).cmp(&(&right.id, &right.field, right.link as u8))
+    });
     found.dedup();
     found
 }
@@ -1037,14 +1070,30 @@ mod tests {
             "title": "not a file"
         });
 
-        let ids = file_ids_in(&collection, &record);
+        let found = file_links_in(&collection, &record);
         assert_eq!(
-            ids,
+            found,
             vec![
-                ("AbcDef123456789".to_string(), "cover".to_string()),
-                ("EditorId1234567".to_string(), "body".to_string()),
-                ("NestedId123456".to_string(), "body".to_string()),
-                ("SecondId1234567".to_string(), "gallery".to_string()),
+                FoundFile {
+                    id: "AbcDef123456789".into(),
+                    field: "cover".into(),
+                    link: FileLink::Owner,
+                },
+                FoundFile {
+                    id: "EditorId1234567".into(),
+                    field: "body".into(),
+                    link: FileLink::Reference,
+                },
+                FoundFile {
+                    id: "NestedId123456".into(),
+                    field: "body".into(),
+                    link: FileLink::Reference,
+                },
+                FoundFile {
+                    id: "SecondId1234567".into(),
+                    field: "gallery".into(),
+                    link: FileLink::Owner,
+                },
             ]
         );
     }
@@ -1079,8 +1128,12 @@ mod tests {
         });
 
         assert_eq!(
-            file_ids_in(&collection, &record),
-            vec![("SameId123456789".to_string(), "body".to_string())]
+            file_links_in(&collection, &record),
+            vec![FoundFile {
+                id: "SameId123456789".into(),
+                field: "body".into(),
+                link: FileLink::Reference,
+            }]
         );
     }
 

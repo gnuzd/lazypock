@@ -242,6 +242,12 @@ pub async fn delete(
         return Err(not_found(&name));
     }
 
+    // A dropped collection's uploads go with it. The rows are removed first so each
+    // object is queued by the `_files_deleted` trigger while the table still exists.
+    lazypock_files::store::delete_for_collection(&client, &name)
+        .await
+        .map_err(ApiError::new)?;
+
     let collection = collections::delete(&mut client, &name, drop_data)
         .await
         .map_err(ApiError::new)?;
