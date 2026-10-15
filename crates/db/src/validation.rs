@@ -234,18 +234,14 @@ fn validate_auth_keys(
         }
     }
 
-    let password = collection.password_input(input);
-    match password {
-        // Omitting the password on an update leaves it alone.
-        None if partial => {}
-        None | Some(Value::Null) => {
-            errors.insert(
-                "password",
-                "validation_required",
-                "A password is required when creating an account.",
-            );
-        }
-        Some(value) => match value.as_str() {
+    // The password is **optional**: an account may exist without one (OAuth-only,
+    // invite flow, OTP), which is what `main` did — its `users.password_hash` is
+    // nullable and its field is not required. Only a value that is actually
+    // supplied is validated; an absent, null or empty one leaves the column alone.
+    let supplied = collection.password_input(input);
+    let password = supplied.filter(|value| !value.is_null() && value.as_str() != Some(""));
+    if let Some(value) = password {
+        match value.as_str() {
             Some(text) if text.chars().count() >= MIN_PASSWORD_LEN => {}
             Some(_) => {
                 errors.insert(
@@ -261,7 +257,7 @@ fn validate_auth_keys(
                     "The password must be a string.",
                 );
             }
-        },
+        }
     }
 
     // PocketBase's confirmation field: when it is sent, it must match.

@@ -739,16 +739,16 @@ at the Rust API and swaps the realtime transport to SSE.
   superuser-only, read-only (SELECT/EXPLAIN/WITH) endpoint; the storage test needs a real
   backend round-trip. `studio/e2e/studio.spec.ts` carries the SQL console as a `test.fixme`
   until the endpoint exists.
-- **Deleting a referenced collection.** `DELETE /api/collections/{c}` drops the table with `drop table
-  if exists` (no `CASCADE`), so a collection another collection's relation points at fails with a raw
-  500 instead of a clean error. `main` used `DROP TABLE ... CASCADE`, which succeeds and silently
-  drops the referencing foreign key. Decide which is wanted (a 409 naming the dependants is the
-  least surprising) before changing it.
-- **Passwordless auth accounts.** `main` dropped the password requirement (`20261101000000_hide_password_fields`:
-  "accounts can exist without a password"), so an account could be created with none — OAuth-only
-  users and invite flows. The Rust server still requires `password` on an auth-collection create,
-  which is stricter. Confirm whether to keep the requirement or match `main` before changing it:
-  relaxing it lets an unverified account exist with no credential.
+- **`token_key` — keep or drop?** The Rust rewrite records a hidden `token_key` column on auth
+  collections (and `_superusers`); `main` had none and could not revoke a token at all (`Auth.Token`:
+  "Tokens are stateless and cannot be revoked before they expire"). Ours rotates it on a password
+  change, which ends outstanding refresh tokens — PocketBase's `tokenKey`, and the reason the column
+  exists. Dropping it would remove that revocation. Open: keep it (and hide it in the Studio, which
+  renders it as an editable text input because it does not honour `hidden`), or drop it for exact
+  `main` parity and lose revocation.
+- **Invalid-credentials status.** `main` answers **400** on a failed `auth-with-password`; this server
+  answers **401** (pinned by `a_malformed_login_body_is_rejected_clearly`). 401 is more correct HTTP,
+  but it is a client-visible difference. Confirm before changing.
 - **Auth system collections are presented, not stored.** `_auth_origins`, `_external_auths`, `_mfas` and
   `_otps` are synthesised in the admin list for Studio parity; their tables do not exist yet because
   OAuth2, MFA and OTP are not ported (section 7.1). When those land, create the tables and register
@@ -865,7 +865,7 @@ somebody else's database.
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS is implemented (rustls + system trust store): `sslmode=require`/`verify-ca`/`verify-full` and the `ssl=require` spelling are honoured with **certificate verification**, verified against Neon. |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
-| E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections, and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). |
+| E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections (a password is optional, matching `main`, so OAuth/OTP/invite-only accounts exist), and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). A password change rotates the account's `token_key`, which ends its outstanding sessions. |
 | F. Realtime | done — the change-event trigger plus `_rt_log`, the `EventBus` seam with a Postgres `LISTEN` implementation, RLS-filtered fan-out with connection-id echo suppression, and SSE at `/api/realtime` with `lastEventId` resume. The Redis backend, event batching and logical replication are deliberately deferred (section 8.8). |
 | G. Files & images | **done** — upload validation, the key layout, local and S3 backends, the delete outbox, the HTTP upload/serve/delete routes, image presets with cached thumbnails, a superuser-gated CRUD API for them, and an orphan sweeper (**resized in-process, so no `imgproxy` sidecar and no extra artifact to ship — a deliberate change from section 10**). Two known limits: AVIF output is refused loudly because the schema allows it and the encoder cannot write it, and the S3 path has **not** been exercised against a live bucket (signing and listing are unit-tested; a live round-trip needs credentials and a bucket). |
 | H. Hooks | **partly** — the thread-owned worker, the six events, TypeScript stripping, the loader with hot reload and the `RecordHooks` seam are in, and **create, update and delete all run their before-hooks and after-hooks** (before runs before validation so a hook can supply a field; after runs post-commit; a before-delete hook can refuse by throwing). Remaining: the `$db`/`$http`/`$app` bindings — see the note below on why `$db` is not a small change. |

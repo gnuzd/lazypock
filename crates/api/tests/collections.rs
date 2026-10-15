@@ -466,6 +466,76 @@ async fn deleting_a_collection_drops_its_table_by_default() {
 }
 
 #[tokio::test]
+async fn deleting_a_collection_another_relation_points_at_cascades() {
+    let Some(app) = test_app("collections_drop_cascade").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    for body in [
+        definition("authors"),
+        json!({
+            "name": "posts",
+            "type": "base",
+            "fields": [
+                { "name": "title", "type": "text" },
+                { "name": "author", "type": "relation",
+                  "options": { "collection": "authors", "maxSelect": 1 } }
+            ],
+            "rules": {},
+            "options": {}
+        }),
+    ] {
+        let reply = call_authed(
+            &router(&app).await,
+            Method::POST,
+            "/api/collections",
+            Some(body),
+            &token,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    }
+
+    // `authors` is referenced by `posts.author`. The drop cascades, so the delete
+    // succeeds and the referencing table survives with its foreign key gone —
+    // `main` dropped with `CASCADE` too.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        "/api/collections/authors",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    let exists: bool = app
+        .client()
+        .await
+        .query_one("select to_regclass('posts') is not null", &[])
+        .await
+        .expect("check")
+        .get(0);
+    assert!(
+        exists,
+        "the referencing table must survive, not be dropped by the cascade"
+    );
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/collections/authors",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
 async fn deleting_a_collection_can_keep_the_data_when_asked() {
     let Some(app) = test_app("collections_keep_data").await else {
         return;

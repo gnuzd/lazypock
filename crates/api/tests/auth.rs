@@ -449,11 +449,6 @@ async fn registration_is_validated() {
 
     let cases: &[(Value, &str, &str)] = &[
         (
-            json!({"email": "a@example.com"}),
-            "password",
-            "validation_required",
-        ),
-        (
             json!({"email": "a@example.com", "password": "short"}),
             "password",
             "validation_min_text",
@@ -490,6 +485,44 @@ async fn registration_is_validated() {
             "for {body}: {response}"
         );
     }
+
+    app.cleanup().await;
+}
+
+/// A password is optional: an account may exist without one (OAuth-only, invite
+/// flow, OTP), which is what `main` allowed — its `users.password_hash` is
+/// nullable and its field is not required.
+#[tokio::test]
+async fn an_account_can_be_created_without_a_password() {
+    let Some(app) = test_app("http_auth_register_passwordless").await else {
+        return;
+    };
+    seed_auth_collection(&app).await;
+
+    let reply = register(&app, json!({"email": "oauth@example.com"})).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let record = reply.body.expect("body");
+    assert_eq!(record["email"], json!("oauth@example.com"));
+    // The credential never appears, in any form.
+    let serialized = record.to_string();
+    for secret in ["password_hash", "token_key"] {
+        assert!(
+            !serialized.contains(secret),
+            "leaked {secret}: {serialized}"
+        );
+    }
+
+    // With no password set there is nothing to log in with, and the failure is the
+    // ordinary invalid-credentials one (`main` answers 400 here; this server's
+    // established behaviour, pinned in `a_malformed_login_body_is_rejected_clearly`,
+    // is 401).
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/users/auth-with-password",
+        json!({ "identity": "oauth@example.com", "password": "anything" }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
 
     app.cleanup().await;
 }
