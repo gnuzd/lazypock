@@ -261,7 +261,9 @@ test('the Studio loads, logs in, and renders the collections page', async ({ pag
 	await expect(page.getByRole('button', { name: /New Collection/ })).toBeVisible();
 });
 
-test('the collections sidebar counts columns and lists the system collections', async ({ page }) => {
+test('the collections sidebar counts columns and lists the system collections', async ({
+	page
+}) => {
 	await signIn(page);
 	const name = `e2e_cols_${Date.now().toString(36)}`;
 	// One text field, so the sidebar count is deterministic.
@@ -327,6 +329,55 @@ test('a collection can be created through the UI', async ({ page }) => {
 
 		// Saving closes the editor and the new collection becomes active.
 		await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+	} finally {
+		await deleteCollectionViaApi(name);
+	}
+});
+
+test('deleting the selected collection through the UI moves the pane off it', async ({ page }) => {
+	await signIn(page);
+	const keep = `e2e_keep_${Date.now().toString(36)}`;
+	const doomed = `e2e_gone_${Date.now().toString(36)}`;
+	await createCollectionViaApi(keep);
+	await createCollectionViaApi(doomed);
+
+	try {
+		// Select it the way the sidebar does, then delete it from its editor pane.
+		const selected = (url: URL) => url.searchParams.get('collection') === doomed;
+		await page.goto(`/_/collections?collection=${doomed}`);
+		await expect(page).toHaveURL(selected);
+		await page.getByTitle('Edit collection').click();
+		await page.getByTitle('Delete collection').click();
+		await page.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click();
+
+		// The URL must stop naming it: navigating back to the collection that was just
+		// deleted is what left the table (and the URL) pointing at something gone.
+		await expect(page).not.toHaveURL(selected);
+	} finally {
+		await deleteCollectionViaApi(doomed);
+		await deleteCollectionViaApi(keep);
+	}
+});
+
+test('a collection deleted outside this tab clears the pane and the URL', async ({ page }) => {
+	await signIn(page);
+	const name = `e2e_outofband_${Date.now().toString(36)}`;
+	await createCollectionViaApi(name);
+
+	try {
+		const selected = (url: URL) => url.searchParams.get('collection') === name;
+		await page.goto(`/_/collections?collection=${name}`);
+		await expect(page).toHaveURL(selected);
+
+		// Deleted by something other than a click in this tab — an import with
+		// `deleteMissing`, another client, the API. Reported as: the sidebar row went
+		// away while the right pane kept rendering the collection and the URL kept
+		// `?collection=<deleted>`, because the guard that noticed the collection was
+		// gone returned early instead of clearing the selection.
+		await deleteCollectionViaApi(name);
+
+		await expect(page).not.toHaveURL(selected);
+		await expect(page.getByText(name, { exact: true })).toHaveCount(0);
 	} finally {
 		await deleteCollectionViaApi(name);
 	}

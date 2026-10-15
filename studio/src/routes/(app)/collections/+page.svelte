@@ -5,7 +5,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
+	import { base, resolve } from '$app/paths';
 	import { ArrowDown, ArrowUp, Search, Settings, Plus, Trash, X } from '@lucide/svelte';
 	import { getThumbUrl } from 'lazypock';
 	import type { FilterString, ListOptions, SortString } from 'lazypock';
@@ -254,11 +254,31 @@
 		const name = page.url.searchParams.get('collection') ?? $activeName;
 		if (!name) return;
 
-		// A deleted collection can linger in the URL/activeName until the
-		// navigation below lands. The store has already been refreshed, so skip
-		// it instead of re-rendering a table for a collection that is gone.
+		// A collection that is gone cannot be the one the pane shows. The store has
+		// already been refreshed when this runs, so put the selection and the state
+		// back in agreement with it instead of leaving the table, the URL and
+		// `activeName` describing a collection that no longer exists — which is what
+		// an early `return` here did: the sidebar lost the row and the right pane
+		// kept rendering it, with `?collection=<deleted>` still in the URL.
 		const list = $collections;
-		if (list.length > 0 && !list.some((c) => c.name === name)) return;
+		if (list.length > 0 && !list.some((c) => c.name === name)) {
+			lastHandledName = '';
+			$activeName = '';
+			collection = null;
+			rows = [];
+			totalItems = 0;
+			totalPages = 1;
+			if (unsubRecordEvents) {
+				unsubRecordEvents();
+				unsubRecordEvents = null;
+			}
+			void goto(resolve('/collections'), {
+				replaceState: true,
+				keepFocus: true,
+				noScroll: true
+			});
+			return;
+		}
 
 		if (name !== $activeName) {
 			$activeName = name;
@@ -627,10 +647,16 @@
 		onDeleted={async () => {
 			showCollectionPane = false;
 
-			// The deleted collection is already gone from the store. Move to the
-			// first remaining user collection so the table stops showing the one
-			// that was just removed.
-			const next = ($collections.find((c) => !c.system)?.name as string) ?? '';
+			// The deleted collection is already gone from the store. Move to the first
+			// remaining user collection so the table stops showing the one that was just
+			// removed. The deleted name is excluded by identity, not assumed absent: the
+			// store is refreshed by the realtime `delete` event, which may not have landed
+			// yet, and `find(c => !c.system)` would then hand back the collection that was
+			// just deleted — navigating straight back to it, which is how the table and the
+			// URL ended up pointing at a collection that no longer exists.
+			const deleted = collectionEditName;
+			const next =
+				($collections.find((c) => !c.system && c.name !== deleted)?.name as string) ?? '';
 
 			if (next) {
 				// eslint-disable-next-line svelte/no-navigation-without-resolve
