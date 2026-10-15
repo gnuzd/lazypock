@@ -209,6 +209,13 @@ An incomplete S3 configuration is refused at boot rather than on the first uploa
 backend is health-checked. With a public base URL the URLs a client is handed point at the
 CDN; without one they point at this server.
 
+**Settings → Files** shows this configuration — `GET /api/settings/storage`, with the secret
+reported only as "set" — and its **Test connection** button probes the backend
+(`POST /api/settings/storage/test`). Saving from there is refused with the variables to
+change, because the storage configuration is environment-only: a credential stored in the
+database would travel in every backup, replica and SQL console dump, and a form that saved
+nothing would be harder to notice than a refusal that says why.
+
 ### Deletion and the reaper
 
 Deleting a file — through the API, by deleting the record that owns it, or by dropping the

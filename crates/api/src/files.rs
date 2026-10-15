@@ -403,7 +403,7 @@ pub struct PresignBody {
 /// Short: the URL authorizes a `PUT` to one key, so the window in which a leaked one is
 /// useful should be small. Fifteen minutes is enough for a slow connection to start an
 /// upload.
-const PRESIGN_TTL_SECONDS: i64 = 15 * 60;
+pub const PRESIGN_TTL_SECONDS: i64 = 15 * 60;
 
 /// `POST /api/files/presign` — reserve an object and hand out a URL to `PUT` it to.
 ///

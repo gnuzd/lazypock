@@ -52,6 +52,27 @@
 		return envLocked.includes(field);
 	}
 
+	/** Every field the form submits, so "all locked" means "nothing to save". */
+	const submitFields = [
+		'backend',
+		'endpoint',
+		'region',
+		'bucket',
+		'access_key_id',
+		'secret_access_key',
+		'prefix',
+		'public_base_url',
+		'force_path_style',
+		'presign_ttl'
+	];
+
+	/**
+	 * Whether the environment owns all of it. Then the form is a report: the fields are
+	 * disabled by `locked()`, saving is refused by the server anyway, and offering a
+	 * button that cannot work is worse than not offering one.
+	 */
+	let envManaged = $derived(submitFields.every((field) => envLocked.includes(field)));
+
 	function apply(view: StorageView | null) {
 		if (!view) return;
 		useS3 = view.backend === 's3';
@@ -89,7 +110,7 @@
 		notice = '';
 		steps = [];
 
-			try {
+		try {
 			const payload: Record<string, unknown> = {
 				backend: useS3 ? 's3' : 'local',
 				endpoint: form.endpoint,
@@ -155,7 +176,19 @@
 			void save();
 		}}
 	>
-		<Switch class="mb-4" bind:checked={useS3}>Use S3-compatible storage</Switch>
+		{#if envManaged}
+			<p
+				class="mb-4 rounded-field border border-base-300 bg-base-200/50 p-3 text-xs text-base-content/80"
+			>
+				Storage is configured by the environment, so this page shows the running configuration and
+				can test it, but cannot change it. Set
+				<code>LAZYPOCK_FILES_*</code> / <code>LAZYPOCK_S3_*</code> and restart the server.
+			</p>
+		{/if}
+
+		<Switch class="mb-4" bind:checked={useS3} disabled={locked('backend')}
+			>Use S3-compatible storage</Switch
+		>
 
 		{#if useS3}
 			<div transition:slide={{ duration: 150 }}>
@@ -191,7 +224,9 @@
 						placeholder="lazypock/my-app/"
 						bind:value={form.prefix}
 						disabled={locked('prefix')}
-						help="Objects are stored under <prefix><file id>/"
+						help={locked('prefix')
+							? 'Not configurable: objects are keyed by collection, record and filename'
+							: 'Objects are stored under <prefix><file id>/'}
 					/>
 				</div>
 
@@ -211,7 +246,7 @@
 						bind:value={form.secret_access_key}
 						disabled={locked('secret_access_key')}
 						help={locked('secret_access_key')
-							? 'Set by LAZYPOCK_S3_SECRET'
+							? 'Set by LAZYPOCK_S3_SECRET_KEY'
 							: secretSet
 								? 'Leave blank to keep the stored secret'
 								: ''}
@@ -231,7 +266,8 @@
 						label="Presign TTL (seconds)"
 						type="number"
 						value={String(form.presign_ttl)}
-						oninput={(e) => (form.presign_ttl = Number((e.target as HTMLInputElement).value) || 900)}
+						oninput={(e) =>
+							(form.presign_ttl = Number((e.target as HTMLInputElement).value) || 900)}
 						help="Lifetime of direct-upload and protected-file URLs"
 					/>
 				</div>
@@ -268,7 +304,9 @@
 					Test connection
 				</Button>
 			{/if}
-			<Button class="btn-primary" loading={saving} type="submit">Save changes</Button>
+			<Button class="btn-primary" loading={saving} type="submit" disabled={envManaged}
+				>Save changes</Button
+			>
 		</div>
 	</form>
 {/if}

@@ -49,6 +49,15 @@ pub fn router(state: AppState) -> Router {
         // Settings. Superuser-only: they hold SMTP credentials and storage keys.
         .route("/api/settings", get(settings::get).patch(settings::update))
         .route("/api/settings/refresh-cors", post(settings::refresh_cors))
+        // The Studio's Files Storage page: show and test the active configuration. A
+        // write is refused with the variables to change instead — storage is
+        // environment-only (PLAN section 10), and a page that silently saved nothing
+        // would be worse than one that says so.
+        .route(
+            "/api/settings/storage",
+            get(settings::storage_get).patch(settings::storage_update),
+        )
+        .route("/api/settings/storage/test", post(settings::storage_test))
         .route(
             "/api/settings/api-keys",
             get(settings::list_api_keys).post(settings::generate_api_key),

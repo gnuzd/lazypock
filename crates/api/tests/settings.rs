@@ -225,3 +225,141 @@ async fn the_signing_key_is_neither_exposed_nor_writable() {
 
     app.cleanup().await;
 }
+
+#[tokio::test]
+async fn the_files_storage_page_reads_the_running_configuration() {
+    let Some(app) = test_app("settings_storage_read").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // The Studio's Files Storage page calls this on mount; a 404 there reads as a broken
+    // server rather than as a configuration that lives in the environment.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/settings/storage",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("a view");
+
+    assert_eq!(body["backend"], json!("local"), "{body}");
+    // The secret is never echoed, only whether there is one.
+    assert_eq!(body["secret_access_key"], json!(""), "{body}");
+    assert_eq!(body["secret_set"], json!(false), "{body}");
+    // Every field is environment-managed, which is what locks the form.
+    let locked = body["configured_from_env"].as_array().expect("a list");
+    for field in [
+        "backend",
+        "endpoint",
+        "bucket",
+        "region",
+        "access_key_id",
+        "secret_access_key",
+        "prefix",
+        "public_base_url",
+    ] {
+        assert!(
+            locked.contains(&json!(field)),
+            "{field} should be listed as environment-managed: {body}"
+        );
+    }
+    assert_eq!(body["presign_ttl"], json!(900), "{body}");
+
+    // Superuser-only, like the rest of the settings surface.
+    let reply = call(
+        &router(&app).await,
+        Method::GET,
+        "/api/settings/storage",
+        None,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn saving_storage_settings_is_refused_with_the_variables_to_change() {
+    let Some(app) = test_app("settings_storage_write").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // Accepting this and storing nothing would be worse than refusing it, so the refusal
+    // names every variable that has to change instead.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/settings/storage",
+        Some(json!({ "backend": "s3", "bucket": "media" })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT, "{:?}", reply.body);
+
+    let message = reply.body.expect("a refusal")["message"]
+        .as_str()
+        .expect("a message")
+        .to_string();
+    for variable in [
+        "LAZYPOCK_FILES_ADAPTER",
+        "LAZYPOCK_S3_ENDPOINT",
+        "LAZYPOCK_S3_BUCKET",
+        "LAZYPOCK_S3_ACCESS_KEY",
+        "LAZYPOCK_S3_SECRET_KEY",
+        "LAZYPOCK_FILES_PUBLIC_URL",
+    ] {
+        assert!(
+            message.contains(variable),
+            "{variable} missing from {message}"
+        );
+    }
+
+    // And nothing was written: the setting the page would have saved is absent.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/settings",
+        None,
+        &token,
+    )
+    .await;
+    let body = reply.body.expect("settings");
+    assert!(
+        body.get("storage").is_none(),
+        "the storage setting must not be stored: {body}"
+    );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_storage_test_round_trips_against_the_configured_backend() {
+    let Some(app) = test_app("settings_storage_test").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // A real probe — the local adapter creates and checks its directory — reported as a
+    // step, so the page says which part failed rather than "the connection failed".
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/settings/storage/test",
+        Some(json!({})),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("a report");
+    assert_eq!(body["ok"], json!(true), "{body}");
+    let steps = body["steps"].as_array().expect("steps");
+    assert_eq!(steps[0]["step"], json!("local"), "{body}");
+    assert_eq!(steps[0]["ok"], json!(true), "{body}");
+
+    app.cleanup().await;
+}

@@ -239,6 +239,12 @@ pub struct Files {
     /// `local` or `s3`, as `_files.storage_backend` records it: a key is only unique
     /// within one backend, so the reaper has to know which store it owns.
     backend: &'static str,
+    /// The configuration this service was built from.
+    ///
+    /// Kept so the settings API can report the configuration the server is *running*
+    /// with — which is not necessarily what the environment says a restarted process
+    /// would use — without re-reading it.
+    config: FilesConfig,
 }
 
 impl std::fmt::Debug for Files {
@@ -284,6 +290,7 @@ impl Files {
             public_base_url: config.public_base_url.clone(),
             image_service,
             backend,
+            config: config.clone(),
         })
     }
 
@@ -298,6 +305,11 @@ impl Files {
     /// The backend's name, as `_files.storage_backend` stores it.
     pub fn backend_name(&self) -> &'static str {
         self.backend
+    }
+
+    /// The configuration this service was built from.
+    pub fn config(&self) -> &FilesConfig {
+        &self.config
     }
 
     /// The backend.

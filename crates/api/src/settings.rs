@@ -11,8 +11,11 @@
 //! this is configuration, not content.
 
 use axum::extract::{Json, Path, State};
+use axum::http::StatusCode;
 use axum::response::Json as ResponseJson;
+use axum::response::{IntoResponse, Response};
 use lazypock_core::error::Error;
+use lazypock_files::FilesConfig;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -125,6 +128,116 @@ const INTERNAL_PREFIX: &str = "auth.";
 /// Whether a key belongs to lazypock rather than to the application.
 fn is_internal(key: &str) -> bool {
     key.starts_with(INTERNAL_PREFIX)
+}
+
+/// Why a storage write is refused, naming every variable that has to change.
+const STORAGE_IS_ENVIRONMENT_ONLY: &str = "storage is configured by the environment, not in the \
+     database: set LAZYPOCK_FILES_ADAPTER, LAZYPOCK_FILES_DIR, LAZYPOCK_S3_ENDPOINT, \
+     LAZYPOCK_S3_BUCKET, LAZYPOCK_S3_REGION, LAZYPOCK_S3_ACCESS_KEY, LAZYPOCK_S3_SECRET_KEY \
+     and LAZYPOCK_FILES_PUBLIC_URL, then restart. Keeping a storage credential out of the \
+     database is deliberate: a backup, a replica or the SQL console would otherwise carry it.";
+
+/// `GET /api/settings/storage`
+///
+/// The storage configuration the server is **running with**. The Studio's Files Storage
+/// page reads this, and a 404 there reads as a broken server rather than as a design.
+///
+/// The secret is reported as `secret_set` and never echoed, and `configured_from_env`
+/// names every field, which is what tells the page to show the active configuration
+/// rather than a form whose save would do nothing.
+pub async fn storage_get(
+    State(state): State<AppState>,
+    _: Superuser,
+) -> Result<ResponseJson<Value>, ApiError> {
+    Ok(ResponseJson(storage_view(
+        state.files.config(),
+        state.files.backend_name(),
+    )))
+}
+
+/// `PATCH /api/settings/storage`
+///
+/// Refused, loudly, with the variables that have to change instead. Accepting a write
+/// that changed nothing would be the one outcome worse than refusing it.
+pub async fn storage_update(_: Superuser) -> Result<ResponseJson<Value>, ApiError> {
+    Err(ApiError::new(Error::conflict(STORAGE_IS_ENVIRONMENT_ONLY)))
+}
+
+/// `POST /api/settings/storage/test`
+///
+/// A real round trip against the configured backend — the local adapter creates and
+/// probes its directory, S3 lists the bucket — reported as steps, so the page can say
+/// which part failed instead of "the connection failed".
+pub async fn storage_test(
+    State(state): State<AppState>,
+    _: Superuser,
+) -> Result<Response, ApiError> {
+    let backend = state.files.backend_name();
+
+    match state.files.storage().health().await {
+        Ok(()) => Ok((
+            StatusCode::OK,
+            ResponseJson(json!({
+                "ok": true,
+                "steps": [{ "step": backend, "ok": true, "error": Value::Null }],
+            })),
+        )
+            .into_response()),
+        Err(err) => {
+            let message = format!("the {backend} backend is not usable: {}", err.message());
+            tracing::warn!(backend, error = %err, "storage test failed");
+            let steps = json!([{ "step": backend, "ok": false, "error": err.message() }]);
+            // The steps are carried at both levels: the page's error path reads them from
+            // the body it holds, and the body's own shape is the API's `{message, data}`
+            // envelope.
+            Ok((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ResponseJson(json!({
+                    "status": 422,
+                    "message": message,
+                    "steps": steps,
+                    "data": { "steps": steps, "message": message },
+                })),
+            )
+                .into_response())
+        }
+    }
+}
+
+/// The storage configuration as the Studio's page reads it.
+fn storage_view(config: &FilesConfig, backend: &str) -> Value {
+    json!({
+        "backend": backend,
+        "endpoint": config.endpoint.clone().unwrap_or_default(),
+        "region": config.region.clone(),
+        "bucket": config.bucket.clone().unwrap_or_default(),
+        "access_key_id": config.access_key.clone().unwrap_or_default(),
+        // Never the secret, only whether there is one: the page has a field for it and a
+        // blank one means "unchanged".
+        "secret_access_key": "",
+        "secret_set": config.secret_key.is_some(),
+        // There is no prefix: an object's key is `{collection}/{record}/{filename}`, and
+        // saying so is better than accepting one and ignoring it.
+        "prefix": "",
+        "public_base_url": config.public_base_url.clone().unwrap_or_default(),
+        // Path style always: a URL is built as `<endpoint>/<bucket>/<key>`.
+        "force_path_style": true,
+        "presign_ttl": crate::files::PRESIGN_TTL_SECONDS,
+        // Every field, because every one comes from the environment. The page locks what
+        // this names, which is what turns a form into a report.
+        "configured_from_env": [
+            "backend",
+            "endpoint",
+            "region",
+            "bucket",
+            "access_key_id",
+            "secret_access_key",
+            "prefix",
+            "public_base_url",
+            "force_path_style",
+            "presign_ttl",
+        ],
+    })
 }
 
 /// `POST /api/settings/refresh-cors`
