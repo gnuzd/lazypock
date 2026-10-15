@@ -299,7 +299,9 @@ pub async fn update_record(
 
     crate::auth::validate_first(&resolved.collection, &body, true)?;
     let extra = crate::auth::auth_columns(&resolved.collection, &body)?;
-    let changed_password = extra.iter().any(|(name, _)| name == "password_hash");
+    // `auth_columns` returns a value only when a password was supplied (it hashes
+    // it and rotates the token key), so a non-empty result *is* a password change.
+    let changed_password = !extra.is_empty();
 
     let record = records::update_with(
         &transaction,

@@ -1,8 +1,8 @@
 //! HTTP-level tests for the authentication endpoints.
 //!
-//! Auth *collections* cannot have records created yet (the password/email
-//! columns are not writable), so these cover the superuser flow, which is
-//! complete end to end: `superuser create` → login → bearer → refresh.
+//! These cover both halves: the superuser flow (`superuser create` → login →
+//! bearer → refresh) and accounts in an auth collection, which the records API
+//! creates with the password hashed on the way in.
 
 mod support;
 
@@ -397,6 +397,45 @@ async fn an_account_can_be_registered_and_used_to_log_in() {
         with_bearer(&app, "/api/health", &token).await,
         StatusCode::OK
     );
+
+    app.cleanup().await;
+}
+
+/// The Studio's record form is generated from the collection's fields, so it sends
+/// the password under the field's own name (`password_hash`) rather than PocketBase's
+/// `password`. `main` accepted both, so accepting only the canonical key made an
+/// account created through the Studio fail with "A password is required".
+#[tokio::test]
+async fn an_account_can_be_registered_with_the_password_field_name() {
+    let Some(app) = test_app("http_auth_register_field_name").await else {
+        return;
+    };
+    seed_auth_collection(&app).await;
+
+    let reply = register(
+        &app,
+        json!({
+            "email": "bob@example.com",
+            "password_hash": "correct-horse",
+            "name": "Bob",
+        }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let record = reply.body.expect("body");
+    assert!(
+        !record.to_string().contains("correct-horse"),
+        "the password was echoed back: {record}"
+    );
+
+    // It really is the password: the account can log in with it.
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/users/auth-with-password",
+        json!({ "identity": "bob@example.com", "password": "correct-horse" }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
 
     app.cleanup().await;
 }

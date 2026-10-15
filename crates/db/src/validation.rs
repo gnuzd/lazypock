@@ -19,9 +19,12 @@ pub const SERVER_MANAGED_KEYS: &[&str] = &["created", "updated", "collectionId",
 /// Keys an **auth** collection accepts that are columns rather than
 /// user-defined fields.
 ///
-/// `password` is deliberately not a column: it is hashed into `password_hash` by
-/// the caller, which owns the hashing. `password_hash` and `token_key` are never
-/// accepted from a client.
+/// `password` is deliberately not a column: it is hashed into the password field by
+/// the caller, which owns the hashing. That field (`password_hash`) is also accepted
+/// as the password input — the Studio's form is generated from the fields, so it
+/// sends the field's name — but its value is hashed, never written through (see
+/// [`Collection::password_input`]). `token_key` is the server's, and is neither
+/// written nor rotated from input.
 pub const AUTH_INPUT_KEYS: &[&str] = &["email", "verified", "password", "passwordConfirm"];
 
 /// Shortest password accepted for an auth-collection account.
@@ -160,7 +163,7 @@ pub fn validate(
     }
 
     if is_auth {
-        validate_auth_keys(input, partial, &mut errors);
+        validate_auth_keys(collection, input, partial, &mut errors);
     }
 
     if errors.is_empty() {
@@ -173,8 +176,15 @@ pub fn validate(
 /// Validate the built-in keys of an auth collection.
 ///
 /// These are columns rather than user-defined fields, so the field loop above
-/// never sees them.
-fn validate_auth_keys(input: &Map<String, Value>, partial: bool, errors: &mut ValidationErrors) {
+/// never sees them. `collection` is here for the password: it may arrive under
+/// PocketBase's `password` key or under the field's own name (see
+/// [`Collection::password_input`]).
+fn validate_auth_keys(
+    collection: &Collection,
+    input: &Map<String, Value>,
+    partial: bool,
+    errors: &mut ValidationErrors,
+) {
     match input.get("email") {
         None if partial => {}
         None | Some(Value::Null) => {
@@ -209,7 +219,7 @@ fn validate_auth_keys(input: &Map<String, Value>, partial: bool, errors: &mut Va
         }
     }
 
-    let password = input.get("password");
+    let password = collection.password_input(input);
     match password {
         // Omitting the password on an update leaves it alone.
         None if partial => {}

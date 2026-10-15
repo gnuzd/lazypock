@@ -99,6 +99,26 @@ async function createCollectionViaApi(name: string, field = 'title'): Promise<vo
 	expect(response.status, await response.text()).toBe(201);
 }
 
+/** Create an auth collection (one text field) through the superuser API. */
+async function createAuthCollectionViaApi(name: string): Promise<void> {
+	const response = await fetch(`${API}/collections`, {
+		method: 'POST',
+		headers: authed(),
+		body: JSON.stringify({
+			name,
+			type: 'auth',
+			fields: [{ name: 'name', type: 'text' }],
+			listRule: '',
+			viewRule: '',
+			createRule: '',
+			updateRule: '',
+			deleteRule: '',
+			indexes: []
+		})
+	});
+	expect(response.status, await response.text()).toBe(201);
+}
+
 /** Remove a collection through the superuser API. */
 async function deleteCollectionViaApi(name: string): Promise<void> {
 	await fetch(`${API}/collections/${name}`, { method: 'DELETE', headers: authed() });
@@ -306,6 +326,30 @@ test('a record can be created through the UI', async ({ page }) => {
 		await page.getByRole('button', { name: 'Create', exact: true }).click();
 
 		await expect(page.getByText('hello from the tour')).toBeVisible();
+	} finally {
+		await deleteCollectionViaApi(name);
+	}
+});
+
+test('a record can be created in an auth collection through the UI', async ({ page }) => {
+	await signIn(page);
+	const name = `e2e_auth_${Date.now().toString(36)}`;
+	await createAuthCollectionViaApi(name);
+	try {
+		await page.goto(`/_/collections?collection=${name}`);
+		await page
+			.getByRole('button', { name: /New Record/ })
+			.first()
+			.click();
+		await page.locator('#f_email').fill('e2e@example.com');
+		// The Studio's record form is generated from the collection's fields, so the
+		// password input is named after the field (`password_hash`). The server has to
+		// accept the password under that name, not only PocketBase's `password`, or the
+		// save fails with "A password is required".
+		await page.locator('input[type="password"]').first().fill('e2e-password-123');
+		await page.getByRole('button', { name: 'Create', exact: true }).click();
+
+		await expect(page.getByText('e2e@example.com')).toBeVisible();
 	} finally {
 		await deleteCollectionViaApi(name);
 	}

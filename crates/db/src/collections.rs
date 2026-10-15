@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 use lazypock_core::error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio_postgres::Client;
 
 use crate::ddl;
@@ -72,6 +72,28 @@ impl Collection {
     /// Field lookup by name.
     pub fn field(&self, name: &str) -> Option<&Field> {
         self.fields.iter().find(|field| field.name == name)
+    }
+
+    /// The collection's password field, when it has one.
+    ///
+    /// An auth collection always does — `password_hash` — and its name is what the
+    /// Studio's generated form sends a password under, so the password write path
+    /// resolves the column through here rather than assuming the name.
+    pub fn password_field(&self) -> Option<&Field> {
+        self.fields
+            .iter()
+            .find(|field| field.field_type == FieldType::Password)
+    }
+
+    /// The password value in an incoming body, under either spelling.
+    ///
+    /// PocketBase's canonical write-only key is `password`; the Studio's form is
+    /// generated from the collection's fields, so it sends the field's own name
+    /// (`password_hash`). `main` accepted both, so accepting only the canonical one
+    /// made a Studio-created account fail with "A password is required".
+    pub fn password_input<'a>(&self, input: &'a Map<String, Value>) -> Option<&'a Value> {
+        let field = self.password_field()?;
+        input.get("password").or_else(|| input.get(&field.name))
     }
 }
 
