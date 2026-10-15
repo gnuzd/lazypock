@@ -28,6 +28,13 @@ use crate::event::{ChangeEvent, ChangeOp};
 /// or every other client on it.
 pub const CLIENT_QUEUE: usize = 256;
 
+/// The subscription topic that reports changes to the collection registry itself.
+///
+/// Not a table: the SSE endpoint accepts it as a special topic, and every
+/// subscriber is a superuser, so a collection definition — which carries its access
+/// rules — is not delivered to an ordinary client.
+pub const REGISTRY_TOPIC: &str = "collections";
+
 /// How many recently delivered record ids are remembered per subscription.
 ///
 /// Needed for deletes: by the time the event arrives the row is gone, so its
@@ -282,6 +289,42 @@ impl Hub {
                         subscriber.seen.pop_front();
                     }
                 }
+            }
+        }
+    }
+
+    /// Tell every subscriber of the collection **registry** topic that the set of
+    /// collections changed.
+    ///
+    /// The registry is not backed by a table, so it does not go through
+    /// [`Hub::dispatch`]: there is no record whose visibility could be checked and
+    /// no `_rt_log` row. It is published from the schema watcher, so every node
+    /// tells its own clients after a reload, whichever node made the change.
+    pub fn notify_collections_changed(&self) {
+        let delivery = Delivered {
+            event: ChangeEvent {
+                log_id: 0,
+                collection: REGISTRY_TOPIC.to_string(),
+                op: ChangeOp::Update,
+                record_id: String::new(),
+                origin: None,
+            },
+            record: Some(Value::Object(serde_json::Map::new())),
+        };
+
+        let Ok(mut guard) = self.subscribers.lock() else {
+            return;
+        };
+        let Some(list) = guard.get_mut(REGISTRY_TOPIC) else {
+            return;
+        };
+        for subscriber in list.iter() {
+            match subscriber.sender.try_send(delivery.clone()) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    self.dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {}
             }
         }
     }

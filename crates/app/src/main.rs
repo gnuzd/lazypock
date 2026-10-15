@@ -197,10 +197,27 @@ async fn serve(config: Config) -> Result<()> {
     }
     tracing::info!(collections = schema.snapshot().len(), "schema loaded");
 
+    // Realtime: every node listens on its own connection and fans out to its own
+    // clients. A node that cannot listen still serves the API, but says so loudly.
+    // Created before the schema watcher so the watcher can announce a registry
+    // change to this node's clients.
+    let hub = lazypock_realtime::Hub::new(db.clone(), schema.clone());
+
     // Keep the cache fresh while the node runs: every schema mutation emits
     // NOTIFY lazypock_schema_changed at commit. The watcher holds its own
-    // dedicated connection and reconnects on its own if it drops.
-    let _watcher = watch_schema(schema.clone(), db.clone(), config.database_url.clone());
+    // dedicated connection and reconnects on its own if it drops. After each
+    // reload it also tells the realtime registry subscribers, so a client's
+    // collection list refreshes after a change made on any node.
+    let registry_notifier = {
+        let hub = hub.clone();
+        Arc::new(move || hub.notify_collections_changed())
+    };
+    let _watcher = watch_schema(
+        schema.clone(),
+        db.clone(),
+        config.database_url.clone(),
+        Some(registry_notifier),
+    );
 
     // Load the token signing key before serving: a node whose key is missing
     // would reject every token, so it must fail at boot instead.
@@ -225,9 +242,7 @@ async fn serve(config: Config) -> Result<()> {
         }
     }
 
-    // Realtime: every node listens on its own connection and fans out to its own
-    // clients. A node that cannot listen still serves the API, but says so loudly.
-    let hub = lazypock_realtime::Hub::new(db.clone(), schema.clone());
+    // Realtime is listening on this node now (see the watcher above).
     match lazypock_realtime::PgBus::connect(&config.database_url).await {
         Ok(bus) => {
             tokio::spawn(hub.clone().run(bus));

@@ -62,6 +62,11 @@ pub async fn realtime(
         if spec.is_empty() {
             continue;
         }
+        if spec == lazypock_realtime::REGISTRY_TOPIC && !principal.is_superuser() {
+            return Err(ApiError::new(Error::forbidden(
+                "the collection registry is only available to superusers",
+            )));
+        }
         for (collection, record_id) in expand(&state, spec)? {
             subscriptions.push(state.hub.subscribe(
                 collection,
@@ -111,6 +116,14 @@ pub async fn realtime(
 
 /// Turn one subscription specifier into concrete subscriptions.
 fn expand(state: &AppState, spec: &str) -> Result<Vec<(String, Option<String>)>, ApiError> {
+    // The collection **registry** is a topic, not a table: it reports changes to the
+    // collection definitions themselves, and is what the Studio subscribes to so its
+    // sidebar and record table refresh. It is gated to superusers where it is
+    // expanded, because the payload is a collection's definition (its rules).
+    if spec == lazypock_realtime::REGISTRY_TOPIC {
+        return Ok(vec![(lazypock_realtime::REGISTRY_TOPIC.to_string(), None)]);
+    }
+
     if spec == "*" {
         let schema = state.schema.snapshot();
         return Ok(schema

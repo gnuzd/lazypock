@@ -5,7 +5,7 @@ mod support;
 use std::time::Duration;
 
 use lazypock_db::rls::context::RequestContext;
-use lazypock_realtime::{ChangeEvent, ChangeOp, Delivered, Hub, Subscription};
+use lazypock_realtime::{ChangeEvent, ChangeOp, Delivered, Hub, Subscription, REGISTRY_TOPIC};
 use serde_json::json;
 
 use support::fixture;
@@ -26,6 +26,30 @@ fn event(op: ChangeOp, id: &str, origin: Option<&str>) -> ChangeEvent {
         record_id: id.into(),
         origin: origin.map(str::to_string),
     }
+}
+
+#[tokio::test]
+async fn the_collection_registry_reaches_its_subscribers_and_nobody_else() {
+    let Some(test) = fixture("rt_registry", json!({ "listRule": "" })).await else {
+        return;
+    };
+
+    let mut registry = test
+        .hub
+        .subscribe(REGISTRY_TOPIC, None, test.owner.clone(), "conn1");
+    // A record subscription must not receive a registry event.
+    let mut posts = test
+        .hub
+        .subscribe("posts", None, test.owner.clone(), "conn2");
+
+    test.hub.notify_collections_changed();
+
+    let delivered = try_recv(&mut registry).await.expect("a registry event");
+    assert_eq!(delivered.event.collection, REGISTRY_TOPIC);
+    assert_eq!(delivered.event.op, ChangeOp::Update);
+    assert!(try_recv(&mut posts).await.is_none());
+
+    test.cleanup().await;
 }
 
 /// Insert a row, so a change event has something whose visibility can be checked.

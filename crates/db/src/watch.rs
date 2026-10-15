@@ -44,10 +44,20 @@ impl Drop for SchemaWatcher {
 }
 
 /// Watch for schema changes and refresh `cache` whenever one lands.
-pub fn watch_schema(cache: Arc<SchemaCache>, db: Db, url: String) -> SchemaWatcher {
+///
+/// `on_reload` runs after every successful reload, on the watcher task. The app uses
+/// it to tell the realtime registry subscribers that the collection set may have
+/// changed — every node reloads on its own connection, so every node announces it
+/// locally, whichever node made the change.
+pub fn watch_schema(
+    cache: Arc<SchemaCache>,
+    db: Db,
+    url: String,
+    on_reload: Option<Arc<dyn Fn() + Send + Sync>>,
+) -> SchemaWatcher {
     let handle = tokio::spawn(async move {
         loop {
-            if let Err(err) = watch_once(&cache, &db, &url).await {
+            if let Err(err) = watch_once(&cache, &db, &url, on_reload.as_deref()).await {
                 // A dropped LISTEN connection must never take the node down:
                 // the cache keeps serving the last good snapshot while we retry.
                 tracing::warn!(error = %err, "schema watcher disconnected; reconnecting");
@@ -58,7 +68,12 @@ pub fn watch_schema(cache: Arc<SchemaCache>, db: Db, url: String) -> SchemaWatch
     SchemaWatcher { handle }
 }
 
-async fn watch_once(cache: &SchemaCache, db: &Db, url: &str) -> Result<()> {
+async fn watch_once(
+    cache: &SchemaCache,
+    db: &Db,
+    url: &str,
+    on_reload: Option<&(dyn Fn() + Send + Sync)>,
+) -> Result<()> {
     let (client, mut connection) = tokio_postgres::connect(url, NoTls)
         .await
         .map_err(|err| Error::internal(format!("schema watcher cannot connect: {err}")))?;
@@ -101,9 +116,15 @@ async fn watch_once(cache: &SchemaCache, db: &Db, url: &str) -> Result<()> {
     // window between the boot-time load and `LISTEN` in which a schema change
     // would be missed, leaving the node on a stale snapshot until the next one.
     reload(cache, db).await;
+    if let Some(on_reload) = on_reload {
+        on_reload();
+    }
 
     while receiver.recv().await.is_some() {
         reload(cache, db).await;
+        if let Some(on_reload) = on_reload {
+            on_reload();
+        }
     }
 
     drop(session);

@@ -68,7 +68,7 @@ async fn the_cache_refreshes_while_a_node_runs() {
     }
     assert!(cache.snapshot().get("posts").is_none());
 
-    let watcher = watch_schema(cache.clone(), test.db.clone(), test.admin_url.clone());
+    let watcher = watch_schema(cache.clone(), test.db.clone(), test.admin_url.clone(), None);
 
     // The create happens on a connection other than the watcher's own, and emits
     // NOTIFY lazypock_schema_changed at commit.
@@ -100,7 +100,7 @@ async fn changes_arrive_without_waiting_for_a_reconnect() {
     };
 
     let cache = Arc::new(SchemaCache::new());
-    let watcher = watch_schema(cache.clone(), test.db.clone(), test.admin_url.clone());
+    let watcher = watch_schema(cache.clone(), test.db.clone(), test.admin_url.clone(), None);
     let mut client = test.client().await;
 
     // The first change may legitimately be picked up by the reload the watcher
