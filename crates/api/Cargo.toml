@@ -9,6 +9,12 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[features]
+default = ["local-image-codecs"]
+# Forwards to `lazypock-files`: without it, thumbnails come from
+# `LAZYPOCK_IMAGE_SERVICE_URL` and this build carries no image codecs.
+local-image-codecs = ["lazypock-files/local-image-codecs"]
+
 [dependencies]
 arc-swap = "1.9.2"
 axum = { version = "0.8.9", features = ["multipart"] }
@@ -21,7 +27,7 @@ getrandom = "0.3"
 lazypock-auth = { version = "0.1.0", path = "../auth" }
 lazypock-core.workspace = true
 lazypock-db = { version = "0.1.0", path = "../db" }
-lazypock-files = { version = "0.1.0", path = "../files" }
+lazypock-files = { version = "0.1.0", path = "../files", default-features = false }
 lazypock-hooks = { version = "0.1.0", path = "../hooks" }
 lazypock-realtime = { version = "0.1.0", path = "../realtime" }
 reqwest = { version = "0.13.5" }

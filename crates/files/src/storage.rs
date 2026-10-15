@@ -223,6 +223,7 @@ pub struct Files {
     storage: Arc<dyn Storage>,
     limits: UploadLimits,
     public_base_url: Option<String>,
+    image_service: Option<crate::image_service::ImageService>,
 }
 
 impl std::fmt::Debug for Files {
@@ -230,6 +231,11 @@ impl std::fmt::Debug for Files {
         f.debug_struct("Files")
             .field("limits", &self.limits)
             .field("public_base_url", &self.public_base_url)
+            // The service's URL, never its token.
+            .field(
+                "image_service",
+                &self.image_service.as_ref().map(|service| service.url()),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -247,11 +253,30 @@ impl Files {
             StorageAdapter::S3 => Arc::new(crate::s3::S3Storage::new(config)?),
         };
 
+        // Built at boot, so a bad URL is a startup error rather than the first
+        // thumbnail's problem.
+        let image_service = match &config.image_service_url {
+            Some(url) => Some(crate::image_service::ImageService::new(
+                url.clone(),
+                config.image_service_token.clone(),
+            )?),
+            None => None,
+        };
+
         Ok(Self {
             storage,
             limits: UploadLimits::default(),
             public_base_url: config.public_base_url.clone(),
+            image_service,
         })
+    }
+
+    /// The external image service, when one is configured.
+    ///
+    /// `None` means resizing happens in this process — or, in a build without the
+    /// `local-image-codecs` feature, that no thumbnail can be produced at all.
+    pub fn image_service(&self) -> Option<&crate::image_service::ImageService> {
+        self.image_service.as_ref()
     }
 
     /// The backend.
@@ -315,6 +340,8 @@ mod tests {
             region: "auto".into(),
             access_key: None,
             secret_key: None,
+            image_service_url: None,
+            image_service_token: None,
         })
     }
 
@@ -379,6 +406,8 @@ mod tests {
             region: "auto".into(),
             access_key: None,
             secret_key: None,
+            image_service_url: None,
+            image_service_token: None,
         })
         .expect("service");
 

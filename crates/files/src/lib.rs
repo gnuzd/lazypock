@@ -8,8 +8,14 @@
 //! Object deletion goes through `_file_outbox` rather than happening in the
 //! transaction that removed the record: an object deleted before the transaction
 //! committed would be gone even if the transaction rolled back.
+//!
+//! Image resizing runs in this process by default. Setting
+//! `LAZYPOCK_IMAGE_SERVICE_URL` moves it to an external service instead, and a build
+//! without the `local-image-codecs` feature cannot resize locally at all — see
+//! [`image_service`] and [`thumbnail`].
 
 pub mod config;
+pub mod image_service;
 pub mod keys;
 pub mod outbox;
 pub mod presets;
@@ -20,6 +26,7 @@ pub mod thumbnail;
 pub mod validation;
 
 pub use config::{FilesConfig, StorageAdapter};
+pub use image_service::ImageService;
 pub use keys::{safe_filename, storage_key};
 pub use presets::ImagePreset;
 pub use storage::{Files, LocalStorage, Storage, StoredObject};
