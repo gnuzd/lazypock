@@ -91,6 +91,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "import_snapshots",
         sql: include_str!("../../../migrations/0009_import_snapshots.sql"),
     },
+    Migration {
+        version: 10,
+        name: "token_key_is_not_a_field",
+        sql: include_str!("../../../migrations/0010_token_key_is_not_a_field.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

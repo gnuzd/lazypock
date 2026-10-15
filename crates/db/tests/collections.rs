@@ -164,6 +164,7 @@ async fn auth_collections_get_the_auth_columns() {
         .await
         .expect("create");
 
+    // The credential columns exist on the table...
     let columns = test.columns("users").await;
     for expected in ["email", "password_hash", "verified", "token_key"] {
         assert!(
@@ -171,6 +172,26 @@ async fn auth_collections_get_the_auth_columns() {
             "missing {expected}: {columns:?}"
         );
     }
+
+    // ...but `token_key` is not a **field**: it is server-managed, so it is not part
+    // of the definition a client (and the Studio) reads. `password_hash` stays a
+    // field because the Studio renders its password input from it.
+    let collection = collections::find(&client, "users")
+        .await
+        .expect("find")
+        .expect("users");
+    let fields: Vec<&str> = collection
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect();
+    for expected in ["email", "password_hash", "emailVisibility", "verified"] {
+        assert!(
+            fields.contains(&expected),
+            "missing field {expected}: {fields:?}"
+        );
+    }
+    assert!(!fields.contains(&"token_key"), "{fields:?}");
 
     test.cleanup().await;
 }

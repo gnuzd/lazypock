@@ -428,7 +428,12 @@ conditional, plus a `manageRule` that grants all actions.
 - Short-lived JWT access token (e.g. 15 min, EdDSA) + refresh token stored as a **hash** in
   `_sessions` (rotation, reuse detection).
 - Signing keys in settings, rotation supported (JWKS with multiple `kid`s).
-- Revocation: per-user `token_key`; changing it invalidates all old tokens.
+- Revocation: refresh tokens live in `_sessions` (rotation, reuse detection), and a password change
+  revokes the account's sessions — that is what ends the tokens issued before it. `token_key` is a
+  per-account column (PocketBase's `tokenKey`) that is rotated on a password change and carried in the
+  access token as its `tkey` claim, but nothing verifies it: an access token is checked by signature
+  until it expires, and refresh is keyed on `_sessions`, not on the key. It is therefore **not a
+  field** (migration 0010) — a client, and the Studio, never sees it.
 
 ### 7.3 External auth (bring your own IdP)
 
@@ -739,13 +744,6 @@ at the Rust API and swaps the realtime transport to SSE.
   superuser-only, read-only (SELECT/EXPLAIN/WITH) endpoint; the storage test needs a real
   backend round-trip. `studio/e2e/studio.spec.ts` carries the SQL console as a `test.fixme`
   until the endpoint exists.
-- **`token_key` — keep or drop?** The Rust rewrite records a hidden `token_key` column on auth
-  collections (and `_superusers`); `main` had none and could not revoke a token at all (`Auth.Token`:
-  "Tokens are stateless and cannot be revoked before they expire"). Ours rotates it on a password
-  change, which ends outstanding refresh tokens — PocketBase's `tokenKey`, and the reason the column
-  exists. Dropping it would remove that revocation. Open: keep it (and hide it in the Studio, which
-  renders it as an editable text input because it does not honour `hidden`), or drop it for exact
-  `main` parity and lose revocation.
 - **Invalid-credentials status.** `main` answers **400** on a failed `auth-with-password`; this server
   answers **401** (pinned by `a_malformed_login_body_is_rejected_clearly`). 401 is more correct HTTP,
   but it is a client-visible difference. Confirm before changing.
@@ -865,7 +863,7 @@ somebody else's database.
 | B. Data plane | done — pool, advisory-locked + checksummed migration runner, `_`-prefixed system tables, field types/validation, DDL engine, collections repository, `ArcSwap` schema cache. TLS is implemented (rustls + system trust store): `sslmode=require`/`verify-ca`/`verify-full` and the `ssl=require` spelling are honoured with **certificate verification**, verified against Neon. |
 | C. Query plane | done — filter lexer/parser, schema-whitelisted parameterized compiler, `sort`, `fields`, `expand`, offset + keyset paging, and a complete record `SELECT` with Postgres-built JSON. |
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
-| E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections (a password is optional, matching `main`, so OAuth/OTP/invite-only accounts exist), and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). A password change rotates the account's `token_key`, which ends its outstanding sessions. |
+| E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections (a password is optional, matching `main`, so OAuth/OTP/invite-only accounts exist), and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). A password change revokes the account's `_sessions` and rotates its `token_key`; the revocation is what ends the refresh tokens issued before it. |
 | F. Realtime | done — the change-event trigger plus `_rt_log`, the `EventBus` seam with a Postgres `LISTEN` implementation, RLS-filtered fan-out with connection-id echo suppression, and SSE at `/api/realtime` with `lastEventId` resume. The Redis backend, event batching and logical replication are deliberately deferred (section 8.8). |
 | G. Files & images | **done** — upload validation, the key layout, local and S3 backends, the delete outbox, the HTTP upload/serve/delete routes, image presets with cached thumbnails, a superuser-gated CRUD API for them, and an orphan sweeper (**resized in-process, so no `imgproxy` sidecar and no extra artifact to ship — a deliberate change from section 10**). Two known limits: AVIF output is refused loudly because the schema allows it and the encoder cannot write it, and the S3 path has **not** been exercised against a live bucket (signing and listing are unit-tested; a live round-trip needs credentials and a bucket). |
 | H. Hooks | **partly** — the thread-owned worker, the six events, TypeScript stripping, the loader with hot reload and the `RecordHooks` seam are in, and **create, update and delete all run their before-hooks and after-hooks** (before runs before validation so a hook can supply a field; after runs post-commit; a before-delete hook can refuse by throwing). Remaining: the `$db`/`$http`/`$app` bindings — see the note below on why `$db` is not a small change. |

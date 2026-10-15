@@ -217,8 +217,11 @@ impl AuthService {
 
     /// Exchange a refresh token for a new token pair.
     ///
-    /// The account is re-read, so a deleted record, a removed collection or a
-    /// changed token key ends the session here rather than at access-token expiry.
+    /// The account is re-read, so a deleted record or a removed collection ends the
+    /// session here rather than at access-token expiry. The account's `token_key` is
+    /// carried into the new access token but is **not** checked against anything: a
+    /// password change ends sessions by revoking them (`sessions::revoke_for_user`),
+    /// not by rotating the key.
     pub async fn refresh(
         &self,
         refresh_token: &str,
@@ -253,8 +256,8 @@ impl AuthService {
 
     /// Re-read the account a session belongs to.
     ///
-    /// Done on every refresh, so a deleted record, a removed collection or a
-    /// changed token key ends the session here rather than at access-token expiry.
+    /// Done on every refresh, so a deleted record or a removed collection ends the
+    /// session here rather than at access-token expiry.
     async fn account_for(
         &self,
         client: &lazypock_db::deadpool_postgres::Client,

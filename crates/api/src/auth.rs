@@ -577,8 +577,10 @@ pub fn validate_first(
 /// PocketBase's `password` or the collection's own password field name — by
 /// [`Collection::password_input`].
 ///
-/// A new password also rotates the account's token key, so every access token
-/// issued before it stops being valid at the next refresh.
+/// A new password also rotates the account's `token_key`. What ends the tokens
+/// issued before it is the caller revoking the account's sessions
+/// (`sessions::revoke_for_user`), which is what makes the old refresh token fail; the
+/// rotation itself is carried into the next access token but never verified.
 pub fn auth_columns(
     collection: &Collection,
     input: &Value,
