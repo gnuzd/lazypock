@@ -1,0 +1,74 @@
+# A minimal LazyPock deployment: the server and its database.
+#
+# This is the shape a Coolify compose deployment takes, and it is also what
+# `docker compose up` needs locally. Two things are deliberately NOT here:
+#
+#   * No backup service. Coolify schedules database and volume backups itself,
+#     so a second mechanism inside the app would be a duplicate that nobody
+#     maintains. On a plain VPS, back up the `db-data` and `lazypock-data`
+#     volumes with whatever the host already uses.
+#   * No reverse proxy or TLS. Coolify terminates TLS in front of this; on a
+#     bare VPS, Caddy in front of port 4000 is the shortest path.
+#
+# Every value marked `change-me` must be set before this is reachable from
+# anywhere. The server refuses to start on a malformed `LAZYPOCK_SECRET_KEY`
+# rather than running with a key it cannot use.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lazypock
+      POSTGRES_PASSWORD: change-me
+      POSTGRES_DB: lazypock
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lazypock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  lazypock:
+    build:
+      context: .
+    image: lazypock:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # A DIRECT connection. PgBouncer in transaction mode, and the pooled
+      # endpoint managed providers offer, are unsupported: realtime needs
+      # LISTEN/NOTIFY on the direct endpoint, and a named prepared statement has
+      # to survive a pool checkout. See PLAN.md risk 1.
+      LAZYPOCK_DATABASE_URL: postgres://lazypock:change-me@db:5432/lazypock
+
+      # 32 bytes as hex: `openssl rand -hex 32`. It encrypts the secrets stored
+      # in `_settings` (the storage secret today). Losing it means those values
+      # cannot be decrypted, so keep it with your other deployment secrets.
+      LAZYPOCK_SECRET_KEY: change-me
+
+      # Optional. Left unset, the server generates a signing key on first run
+      # and keeps it in `_settings`, so the key travels in every dump and
+      # replica. Setting it keeps the key out of all of them:
+      #   openssl rand -base64 32
+      # LAZYPOCK_SIGNING_KEY: change-me
+
+      LAZYPOCK_ENV: production
+      # One connection per node is held for LISTEN. Keep this small: total
+      # connections = nodes x (pool + 1), and the database has a limit.
+      LAZYPOCK_POOL_SIZE: "5"
+    ports:
+      # Coolify or a reverse proxy in front. Nothing but that proxy should
+      # reach this port.
+      - "4000:4000"
+    volumes:
+      # Holds local file uploads, hooks and anything else the server writes.
+      # Point LAZYPOCK_FILES_DIR at S3 instead and only hooks remain here.
+      - lazypock-data:/data
+
+volumes:
+  db-data:
+  lazypock-data:

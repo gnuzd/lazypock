@@ -1,0 +1,210 @@
+name: CI
+
+# Gates every change to the Rust server.
+#
+# The Elixir pipeline that used to gate this repository (`test.yml` and
+# `release.yml` on `main`, which still holds the Elixir implementation and
+# its Burrito builds) does not apply to the rewrite, so this replaces it
+# rather than sitting alongside it.
+#
+# `push` is pinned to the long-lived branches: a bare `push` also fires for
+# every branch that has a PR open — branches live in this repository, not in
+# a fork — so the whole suite ran twice for the same commit. `pull_request`
+# is the gate; the post-merge run keeps the branch state known-good.
+
+on:
+  push:
+    branches: [feat/rust-rewrite, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Off on purpose: the cache should make a rebuild fast, not incremental
+  # state that can hide a warning the gate exists to catch.
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # The job never pushes, so leaving the token in .git/config only
+          # gives a later step something to leak.
+          persist-credentials: false
+      - name: Install the toolchain pinned by rust-toolchain.toml
+        run: |
+          rustup show
+          rustup component add rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install the toolchain pinned by rust-toolchain.toml
+        run: |
+          rustup show
+          rustup component add clippy
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      # `--all-targets` matters: tests and benches are code too, and a lint
+      # that fires only in them is still a lint.
+      - name: Lint
+        run: >-
+          cargo clippy --workspace --all-targets --all-features
+          -- -D warnings
+
+  thin:
+    name: thin build (no image codecs)
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install the toolchain pinned by rust-toolchain.toml
+        run: rustup show
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      # The `local-image-codecs` feature exists so a deployment can leave the
+      # codecs out and take thumbnails from `LAZYPOCK_IMAGE_SERVICE_URL`
+      # instead. No other job builds that configuration, so without this one
+      # a change that only breaks the thin build would ship.
+      - name: Check without the codecs
+        run: >-
+          RUSTFLAGS="-D warnings"
+          cargo check --workspace --no-default-features
+
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lazypock_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Every test creates its own randomly named schema, so one database
+      # serves them all. The value matches the tests' own default, so an
+      # unset variable cannot silently point them somewhere else.
+      LAZYPOCK_TEST_DATABASE_URL: >-
+        postgres://postgres:postgres@localhost:5432/lazypock_dev
+      # Without this the integration tests log "Postgres unreachable" and
+      # *pass*, so a service container that never came up would read as a
+      # green suite that tested nothing. This makes that case a failure.
+      LAZYPOCK_REQUIRE_DB_TESTS: "1"
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install the toolchain pinned by rust-toolchain.toml
+        run: rustup show
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - run: cargo test --workspace
+
+  studio:
+    name: studio build
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      # The SDK is a published package (`lazypock`), so nothing outside this
+      # repository is needed to build the Studio.
+      # oven-sh/setup-bun v2.2.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: latest
+      - name: Install
+        working-directory: studio
+        run: bun install --frozen-lockfile
+      # `vite build` does not type-check, so without this a broken import —
+      # `sseUrlFromBaseUrl` renamed in the SDK, say — would build cleanly and
+      # then fail in the browser.
+      - name: Type-check
+        working-directory: studio
+        run: bun run check
+      - name: Build
+        working-directory: studio
+        run: bun run build
+      # Hand the SPA to the embed crate the way the release image does, so the
+      # handoff is checked rather than assumed.
+      - name: Embed the built Studio
+        run: >-
+          LAZYPOCK_STUDIO_DIR=studio/build/studio
+          cargo test -p lazypock-studio-embed
+
+  size:
+    name: binary size
+    # The release profile is `lto = "fat"` with `codegen-units = 1`, so this
+    # is the slowest job here. It runs on the long-lived branches rather than
+    # on every PR so PR feedback stays quick, which is still enough to notice
+    # drift.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install the toolchain pinned by rust-toolchain.toml
+        run: rustup show
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - run: cargo build --release --bin lazypock
+      - name: Measure
+        # PLAN.md risk 9: the binary carries the embedded Studio, oxc and
+        # rquickjs, so its size is a thing to watch rather than discover at
+        # release time. The ceiling is deliberately loose — a tripwire for a
+        # real regression, not a budget ordinary growth trips. Raise it in
+        # the commit that explains the increase.
+        run: |
+          set -euo pipefail
+          binary=target/release/lazypock
+          bytes=$(stat -c%s "$binary")
+          mib=$((bytes / 1024 / 1024))
+          limit=$((40 * 1024 * 1024))
+          limit_mib=$((limit / 1024 / 1024))
+          echo "release binary: ${bytes} bytes (${mib} MiB)"
+          echo "ceiling: ${limit_mib} MiB"
+          {
+            echo "### release binary size"
+            echo ""
+            echo "| measurement | bytes | MiB |"
+            echo "| --- | --- | --- |"
+            echo "| lazypock | ${bytes} | ${mib} |"
+            echo "| ceiling | ${limit} | ${limit_mib} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -gt "$limit" ]; then
+            msg="binary is ${mib} MiB, over the ${limit_mib} MiB ceiling"
+            echo "::error::${msg}"
+            exit 1
+          fi

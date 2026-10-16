@@ -1,0 +1,144 @@
+name: Release
+
+# Builds the container image and publishes it to GHCR, so a deployment can pull
+# a built artifact instead of building one. Coolify supports either.
+#
+# Each architecture is built on a **native** runner rather than under QEMU. A
+# Rust release build here is `lto = "fat"` with `codegen-units = 1`, and
+# emulating that for arm64 costs far more than the build itself does; the Elixir
+# pipeline this replaced chose native runners for the same reason.
+#
+# `workflow_dispatch` re-runs a publish without needing a new commit.
+
+on:
+  push:
+    branches: [feat/rust-rewrite]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Deliberately not `cancel-in-progress`: cancelling a publish half-way is how
+  # a tag ends up pointing at one architecture.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    name: build (${{ matrix.platform }})
+    # Granted per job rather than workflow-wide, so a job that only reads the
+    # repository is not able to publish anything.
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      # docker/setup-buildx-action v3.12.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      # docker/login-action v3.7.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        # docker/build-push-action v6.19.2
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          # Pushed by digest only. The `publish` job attaches the names, because
+          # naming it here would race the other architecture for the same tag.
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          # The Rust build is the expensive part, so the layer cache matters
+          # more than usual. Scoped per architecture: the two caches hold
+          # different binaries and must not be mixed.
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      - name: Collect the digest
+        env:
+          # Passed through the environment rather than interpolated into the
+          # script: a step output is data, and this way it cannot be read as
+          # shell syntax.
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      # actions/upload-artifact v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: publish
+    needs: image
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      # actions/download-artifact v4.3.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+      # docker/setup-buildx-action v3.12.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      # docker/login-action v3.7.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        # docker/metadata-action v5.10.0
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/feat/rust-rewrite' }}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+      - name: Create the manifest list
+        # One tag that resolves to whichever architecture is pulling it.
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ${{ env.IMAGE }}
+        run: |
+          set -euo pipefail
+          # The image name belongs in the format string rather than the argument
+          # list, or each digest would be prefixed with the previous one.
+          format="${IMAGE}@sha256:%s "
+          docker buildx imagetools create \
+            $(jq -r '.tags | map("-t " + .) | join(" ")' \
+              <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$format" *)
+      - name: Inspect what was published
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"

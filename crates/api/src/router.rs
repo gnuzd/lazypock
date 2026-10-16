@@ -22,6 +22,7 @@ use crate::realtime;
 use crate::records;
 use crate::settings;
 use crate::state::AppState;
+use crate::studio;
 use crate::superusers;
 
 /// The full application router.
@@ -173,6 +174,13 @@ pub fn router(state: AppState) -> Router {
                 .patch(records::update_record)
                 .delete(records::delete_record),
         )
+        // The Studio, embedded in the binary. Registered before the layers like
+        // every other route, and outside `/api/` so the request logger and the
+        // auth middleware stay out of serving a static page.
+        .route("/", get(studio::root))
+        .route("/_", get(studio::index))
+        .route("/_/", get(studio::index))
+        .route("/_/{*path}", get(studio::asset))
         .fallback(not_found)
         // Authentication wraps every route, so any handler can read the caller.
         .layer(middleware::from_fn_with_state(
