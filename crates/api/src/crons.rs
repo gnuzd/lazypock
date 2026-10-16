@@ -1,9 +1,8 @@
 //! Persisted cron jobs: the admin API over `_crons`.
 //!
 //! This is the surface Studio's cron page uses — list, create, update, delete, a
-//! validation/preview helper, and run-now. The **scheduler** that fires jobs when
-//! `next_run_at` arrives is deliberately not here; it belongs with the job queue
-//! (PLAN.md Track I), and `next_run_at` is written so it has the time to fire on.
+//! validation/preview helper, run-now — and the scheduler that fires a job once
+//! `next_run_at` arrives ([`run_due`], driven by a ticker in the binary).
 //!
 //! Superuser-only throughout. Running a job executes an operator-supplied SQL
 //! statement or HTTP request, so it can never be reachable without a superuser
@@ -39,6 +38,16 @@ const SELECT: &str = "select id, name, expression, timezone, enabled, action, co
      to_char(created at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') as created, \
      to_char(updated at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') as updated \
      from _crons";
+
+/// Moves a job's schedule forward. Shared by the manual run and the scheduler, so
+/// a manual run moves the schedule exactly as an automatic one does.
+const ADVANCE_SCHEDULE: &str =
+    "update _crons set next_run_at = to_timestamp($2), updated = now() where id = $1";
+
+/// Records what a completed run did. Shared by both paths so they cannot drift in
+/// what they write.
+const RECORD_RUN: &str = "update _crons set last_run_at = now(), last_status = $2, \
+     last_duration_ms = $3, last_error = $4, updated = now() where id = $1";
 
 /// What a create or update sends.
 #[derive(Debug, Default, Deserialize)]
@@ -78,12 +87,29 @@ pub struct ValidateBody {
 
 /// The stored fields an update needs to merge against and a run needs to execute.
 struct Job {
+    /// The row's id, which a run needs in order to record its outcome.
+    id: String,
     name: String,
     expression: String,
     timezone: String,
     enabled: bool,
     action: String,
     config: Value,
+}
+
+impl Job {
+    /// Read the columns every query in this module selects.
+    fn from_row(row: &lazypock_db::tokio_postgres::Row) -> Self {
+        Self {
+            id: row.get("id"),
+            name: row.get("name"),
+            expression: row.get("expression"),
+            timezone: row.get("timezone"),
+            enabled: row.get("enabled"),
+            action: row.get("action"),
+            config: row.get("config"),
+        }
+    }
 }
 
 /// `GET /api/crons`
@@ -258,12 +284,11 @@ pub async fn run_now(
     let next = next_run_at(&job.expression, &job.timezone).ok();
 
     client
-        .execute(
-            "update _crons set last_run_at = now(), last_status = $2, last_duration_ms = $3, \
-                    last_error = $4, next_run_at = to_timestamp($5), updated = now() \
-              where id = $1",
-            &[&id, &status, &duration_ms, &error, &next],
-        )
+        .execute(ADVANCE_SCHEDULE, &[&id, &next])
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+    client
+        .execute(RECORD_RUN, &[&id, &status, &duration_ms, &error])
         .await
         .map_err(|err| ApiError::new(db_error(err)))?;
 
@@ -272,6 +297,80 @@ pub async fn run_now(
         .await?
         .ok_or_else(|| not_found(&id))?;
     Ok(Json(job_json(&row)))
+}
+
+/// Fire every cron whose `next_run_at` has arrived, returning how many ran.
+///
+/// Claiming and advancing the schedule happen in one transaction *before* any
+/// action runs, which is what stops two nodes firing the same job: the row is
+/// locked with `for update skip locked` while the claim is decided, and the claim
+/// is committed before the action starts. The trade is that a crash between that
+/// commit and the action loses one run — the alternative is a job that fires twice,
+/// which is worse for anything with a side effect.
+///
+/// A job that cannot run is recorded as an error rather than skipped, so the
+/// schedule never advances with nothing to show for it.
+pub async fn run_due(state: &AppState, limit: i64) -> Result<usize, ApiError> {
+    let due = claim_due(state, limit).await?;
+    let ran = due.len();
+
+    for job in due {
+        let started = Instant::now();
+        let (status, error) = match execute(state, &job).await {
+            Ok(outcome) => outcome,
+            Err(err) => ("error".to_string(), Some(err.error.message().to_string())),
+        };
+        let duration_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
+
+        let client = state.db.client().await.map_err(ApiError::new)?;
+        client
+            .execute(RECORD_RUN, &[&job.id, &status, &duration_ms, &error])
+            .await
+            .map_err(|err| ApiError::new(db_error(err)))?;
+
+        tracing::info!(cron = %job.name, status = %status, "cron job fired on schedule");
+    }
+
+    Ok(ran)
+}
+
+/// Take the jobs that are due and move their schedules forward.
+async fn claim_due(state: &AppState, limit: i64) -> Result<Vec<Job>, ApiError> {
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
+    let rows = transaction
+        .query(
+            "select id, name, expression, timezone, enabled, action, config from _crons \
+              where enabled and next_run_at <= now() \
+              order by next_run_at \
+              limit $1 \
+              for update skip locked",
+            &[&limit],
+        )
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
+    let mut claimed = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let job = Job::from_row(row);
+        let next = next_run_at(&job.expression, &job.timezone).ok();
+        transaction
+            .execute(ADVANCE_SCHEDULE, &[&job.id, &next])
+            .await
+            .map_err(|err| ApiError::new(db_error(err)))?;
+        claimed.push(job);
+    }
+
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
+    Ok(claimed)
 }
 
 /// Execute a job's action, returning its status and optional error message.
@@ -475,14 +574,7 @@ async fn fetch_job(client: &Client, id: &str) -> Result<Option<Job>, ApiError> {
         .await
         .map_err(|err| ApiError::new(db_error(err)))?;
 
-    Ok(row.map(|row| Job {
-        name: row.get("name"),
-        expression: row.get("expression"),
-        timezone: row.get("timezone"),
-        enabled: row.get("enabled"),
-        action: row.get("action"),
-        config: row.get("config"),
-    }))
+    Ok(row.map(|row| Job::from_row(&row)))
 }
 
 /// A row with every column the client reads.

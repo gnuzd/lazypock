@@ -46,6 +46,12 @@ use cli::{Cli, Command, SuperuserCommand};
 /// Timeout for a single `healthcheck` probe.
 const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How many due cron jobs a single scheduling pass will fire.
+///
+/// A bound rather than "all of them", so a backlog cannot hold a pass open
+/// indefinitely. The next tick picks up whatever this one left.
+const CRON_BATCH: i64 = 16;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // Best-effort .env loading; real deployments inject the environment.
@@ -349,7 +355,7 @@ async fn serve(config: Config) -> Result<()> {
             .map_err(|err| Error::config(format!("cannot load the CORS allowlist: {err}")))?;
     }
 
-    let app = router(AppState::new(
+    let state = AppState::new(
         config,
         db,
         schema,
@@ -360,7 +366,38 @@ async fn serve(config: Config) -> Result<()> {
             hooks,
             cors,
         },
-    ));
+    );
+
+    // The cron scheduler. `next_run_at` has been written since the admin API
+    // landed, but nothing ever fired on it: a job only ran if an operator pressed
+    // "run now", so a schedule looked live and did nothing. Before the state is
+    // handed to the router, so a tick cannot race the first request.
+    {
+        let interval = cron_interval()?;
+        if interval.is_zero() {
+            tracing::warn!("LAZYPOCK_CRON_INTERVAL=0: scheduled jobs never fire");
+        } else {
+            tracing::info!(every_seconds = interval.as_secs(), "cron scheduler started");
+            let state = state.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    ticker.tick().await;
+                    match lazypock_api::crons::run_due(&state, CRON_BATCH).await {
+                        Ok(0) => {}
+                        Ok(ran) => tracing::info!(ran, "cron schedule fired"),
+                        Err(err) => tracing::warn!(
+                            error = %err.error,
+                            "a cron scheduling pass failed"
+                        ),
+                    }
+                }
+            });
+        }
+    }
+
+    let app = router(state);
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -439,6 +476,25 @@ fn file_reaper_interval() -> Result<std::time::Duration> {
         Ok(raw) => raw.trim().parse::<u64>().map_err(|_| {
             Error::config(format!(
                 "LAZYPOCK_FILE_REAPER_INTERVAL must be a whole number of seconds, got {raw:?}"
+            ))
+        })?,
+    };
+    Ok(std::time::Duration::from_secs(seconds))
+}
+
+/// How often the cron scheduler looks for jobs that are due.
+///
+/// A pass with nothing due is one indexed query, so this can be frequent. The
+/// granularity of a cron expression is a minute, so the default is half of that:
+/// a job fires within thirty seconds of its time rather than up to a minute late.
+/// `0` disables the scheduler — loudly, because a disabled scheduler means
+/// `next_run_at` is written and never acted on, which is the bug this fixes.
+fn cron_interval() -> Result<std::time::Duration> {
+    let seconds = match std::env::var("LAZYPOCK_CRON_INTERVAL") {
+        Err(_) => 30,
+        Ok(raw) => raw.trim().parse::<u64>().map_err(|_| {
+            Error::config(format!(
+                "LAZYPOCK_CRON_INTERVAL must be a whole number of seconds, got {raw:?}"
             ))
         })?,
     };
