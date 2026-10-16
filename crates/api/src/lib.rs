@@ -12,6 +12,7 @@ pub mod client;
 pub mod collections;
 pub mod cors;
 pub mod crons;
+pub mod emails;
 pub mod error;
 pub mod files;
 pub mod jobs;

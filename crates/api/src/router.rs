@@ -15,6 +15,7 @@ use crate::batch;
 use crate::collections as admin;
 use crate::cors;
 use crate::crons;
+use crate::emails;
 use crate::error::ApiError;
 use crate::files;
 use crate::logs;
@@ -198,6 +199,33 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/collections/{collection}/auth-methods",
             get(auth::auth_methods),
+        )
+        // The email flows. The request half is public by necessity — a client calls
+        // it before it can log in — and always answers 204; the confirm half applies
+        // the change the token names.
+        .route(
+            "/api/collections/{collection}/request-verification",
+            post(emails::request_verification),
+        )
+        .route(
+            "/api/collections/{collection}/confirm-verification",
+            post(emails::confirm_verification),
+        )
+        .route(
+            "/api/collections/{collection}/request-password-reset",
+            post(emails::request_password_reset),
+        )
+        .route(
+            "/api/collections/{collection}/confirm-password-reset",
+            post(emails::confirm_password_reset),
+        )
+        .route(
+            "/api/collections/{collection}/request-email-change",
+            post(emails::request_email_change),
+        )
+        .route(
+            "/api/collections/{collection}/confirm-email-change",
+            post(emails::confirm_email_change),
         )
         .route(
             "/api/collections/{collection}/records",
