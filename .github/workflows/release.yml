@@ -64,9 +64,13 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          # Pushed by digest only. The `publish` job attaches the names, because
-          # naming it here would race the other architecture for the same tag.
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          # Pushed by digest only. The `publish` job attaches the tags, because
+          # naming a tag here would race the other architecture for it. The
+          # repository name is still required: `push-by-digest` needs to know
+          # where the digest goes, and buildx fails with `tag is needed when
+          # pushing to registry` without it.
+          outputs: >-
+            type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           # The Rust build is the expensive part, so the layer cache matters
           # more than usual. Scoped per architecture: the two caches hold
           # different binaries and must not be mixed.
