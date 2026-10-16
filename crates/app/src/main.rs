@@ -52,6 +52,12 @@ const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// indefinitely. The next tick picks up whatever this one left.
 const CRON_BATCH: i64 = 16;
 
+/// How many due jobs a single queue pass will run.
+///
+/// Bounded for the same reason as [`CRON_BATCH`], and so one slow job cannot hold
+/// up every job behind it.
+const JOB_BATCH: i64 = 16;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // Best-effort .env loading; real deployments inject the environment.
@@ -397,6 +403,41 @@ async fn serve(config: Config) -> Result<()> {
         }
     }
 
+    // The job queue. `_jobs` and its claim index have existed since migration 1
+    // and nothing wrote to them; this is the worker. Nothing enqueues yet — the
+    // mailer and the "after" hooks are the callers it was built for — so it is
+    // idle until one of them lands.
+    {
+        let interval = job_interval()?;
+        let lease = job_lease_seconds()?;
+        if interval.is_zero() {
+            tracing::warn!("LAZYPOCK_JOB_INTERVAL=0: queued jobs never run");
+        } else {
+            let worker = lazypock_core::id::new_id();
+            tracing::info!(
+                every_seconds = interval.as_secs(),
+                lease_seconds = lease,
+                "job queue worker started"
+            );
+            let state = state.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    ticker.tick().await;
+                    match lazypock_api::jobs::run_due(&state, &worker, JOB_BATCH, lease).await {
+                        Ok(0) => {}
+                        Ok(ran) => tracing::info!(ran, "job queue ran"),
+                        Err(err) => tracing::warn!(
+                            error = %err.error,
+                            "a job queue pass failed"
+                        ),
+                    }
+                }
+            });
+        }
+    }
+
     let app = router(state);
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -501,7 +542,45 @@ fn cron_interval() -> Result<std::time::Duration> {
     Ok(std::time::Duration::from_secs(seconds))
 }
 
-/// How long an unattached editor or library upload is kept.
+/// How often the job queue worker looks for work.
+///
+/// A pass with nothing to do is one indexed query, so this can be frequent.
+/// Five seconds keeps a busy queue feeling immediate without polling hard when it
+/// is empty. `0` disables the worker — loudly, because enqueued work would
+/// otherwise sit there forever with nothing to say so.
+fn job_interval() -> Result<std::time::Duration> {
+    let seconds = match std::env::var("LAZYPOCK_JOB_INTERVAL") {
+        Err(_) => 5,
+        Ok(raw) => raw.trim().parse::<u64>().map_err(|_| {
+            Error::config(format!(
+                "LAZYPOCK_JOB_INTERVAL must be a whole number of seconds, got {raw:?}"
+            ))
+        })?,
+    };
+    Ok(std::time::Duration::from_secs(seconds))
+}
+
+/// How long a claim on a job is trusted before the job is handed back.
+///
+/// A worker that dies mid-job leaves the row `running`, and this is how long the
+/// next pass waits before assuming that happened. Long enough that a slow job is
+/// not taken away from a worker still running it.
+fn job_lease_seconds() -> Result<f64> {
+    let seconds = match std::env::var("LAZYPOCK_JOB_LEASE") {
+        Err(_) => 300.0,
+        Ok(raw) => raw.trim().parse::<f64>().map_err(|_| {
+            Error::config(format!(
+                "LAZYPOCK_JOB_LEASE must be a number of seconds, got {raw:?}"
+            ))
+        })?,
+    };
+    if seconds <= 0.0 {
+        return Err(Error::config(
+            "LAZYPOCK_JOB_LEASE must be greater than zero".to_string(),
+        ));
+    }
+    Ok(seconds)
+}
 ///
 /// Read from the `files` setting the Studio's Media page writes
 /// (`files.rules.unattached_ttl_ms`), falling back to a day. An upload that arrived
