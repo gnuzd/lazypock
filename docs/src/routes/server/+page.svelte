@@ -684,6 +684,42 @@ cargo build --release --no-default-features`}
       <code class="doc-inline px-1 py-0.5">.env.example</code>.
     </p>
 
+    <div class="mt-5 rounded-box border border-base-300 bg-base-200/40 p-4">
+      <p class="font-semibold">The environment supplies defaults; the database overrides them</p>
+      <p class="mt-2 text-sm text-base-content/80 leading-relaxed">
+        There are three kinds of setting, and they behave differently:
+      </p>
+      <ul class="mt-2 space-y-2 text-sm text-base-content/80 list-disc list-inside">
+        <li>
+          <strong>Bootstrap.</strong> The database URL, listen address, pool size,
+          log level and the secrets. There is no other source — these are read
+          from the environment and nowhere else.
+        </li>
+        <li>
+          <strong>Defaults for a setting the database also holds.</strong> File
+          storage is the one case today:
+          <code class="doc-inline px-1 py-0.5">LAZYPOCK_FILES_*</code>,
+          <code class="doc-inline px-1 py-0.5">LAZYPOCK_S3_*</code> and
+          <code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_SERVICE_*</code>
+          supply the starting configuration, and a value saved in <strong>Studio →
+          Settings → Storage</strong> <em>wins over all of them</em> — and takes
+          effect without a restart. Leave them unset and configure storage in the
+          UI once, or set them so a deployment is reproducible from its
+          environment alone.
+        </li>
+        <li>
+          <strong>Database only.</strong> CORS origins, SMTP credentials, cron
+          jobs, API keys, collection rules and image presets have no environment
+          variable at all; they are edited in the Studio.
+        </li>
+      </ul>
+      <p class="mt-2 text-sm text-base-content/80 leading-relaxed">
+        One direction only: the environment is the default, the database is the
+        override. <code class="doc-inline px-1 py-0.5">deploy/compose.example.yml</code>
+        is a worked deployment showing how they fit together.
+      </p>
+    </div>
+
     <h3 class="mt-6 text-lg font-semibold">Core</h3>
     <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
       <table class="w-full text-sm">
