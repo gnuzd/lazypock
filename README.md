@@ -10,8 +10,8 @@ lazypock is a **PocketBase-compatible** backend framework written in **Rust**, o
 realtime subscriptions, file storage and auth — with TypeScript hooks, Postgres RLS
 permissions and zero boilerplate.
 
-**Status: early rewrite.** This branch (`feat/rust-rewrite`) replaces an earlier
-Elixir/Phoenix implementation with a from-scratch Rust build. See
+**Status: early rewrite.** `main` is a from-scratch Rust build that replaced an
+earlier Elixir/Phoenix implementation. See
 [`PLAN.md`](PLAN.md) for the architecture, tracks and roadmap, and
 [`docs/legacy/`](docs/legacy/) for design notes carried over from the Elixir era.
 

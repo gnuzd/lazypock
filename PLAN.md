@@ -1,6 +1,6 @@
 # PLAN: lazypock — a PocketBase-style BaaS in Rust + Postgres
 
-> Project name: **lazypock** · License: **MIT** · Branch: `feat/rust-rewrite`
+> Project name: **lazypock** · License: **MIT** · Branch: `main`
 >
 > Top priorities: **small binary, low RAM, lowest possible API latency**; many instances on a
 > small VPS (2 vCPU / 2 GB); horizontal scaling; solid realtime.

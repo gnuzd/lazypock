@@ -12,7 +12,7 @@ name: Release
 
 on:
   push:
-    branches: [feat/rust-rewrite]
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -124,7 +124,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/feat/rust-rewrite' }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,format=short
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
       - name: Create the manifest list
