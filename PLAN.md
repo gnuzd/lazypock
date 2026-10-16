@@ -796,8 +796,10 @@ Not built now, but the design must not block it:
   end-to-end, hooks sandbox, S3 via a local mock (MinIO).
 - **Property/fuzz tests**: `proptest`/`cargo-fuzz` for the filter parser and upload validator.
 - **Benchmarks**: `criterion` for parser/builder; `k6`/`oha` for the API; N-connection realtime.
-- **Track** binary size, idle RAM, RAM under load N, p50/p99 latency — **wired into CI as
-  regression thresholds** against a recorded baseline.
+- **Measure** binary size, idle RAM, RAM under load N, p50/p99 latency. Only size is automated,
+  and it runs **on demand** (`gh workflow run size.yml`) because the release-profile build is the
+  slowest in the repository. There is no recorded baseline and no regression threshold: the size
+  job carries a loose ceiling that a real regression trips, and the rest are collected by hand.
 - **CI**: `cargo fmt --check`, `cargo clippy -D warnings` (fix at the root, no blanket allows),
   `cargo deny` (license/CVE), `cargo test`, multi-arch builds (x86_64/aarch64 musl), releases.
 - Known CI trap to avoid: pipelines must fail on test failure (no `| tee` without `pipefail`).
