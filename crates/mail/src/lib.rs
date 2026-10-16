@@ -422,33 +422,30 @@ fn builtin(name: &str, part: Part) -> Option<&'static str> {
         ("verification", Part::Subject) => "Confirm your email for {{ app_name }}",
         ("verification", Part::Html) => {
             "<p>Hi {{ name }},</p>\
-             <p>Confirm this email address for {{ app_name }}:</p>\
-             <p><a href=\"{{ url }}\">Confirm email</a></p>\
-             <p>Or use this code: <code>{{ token }}</code></p>"
+             <p>Confirm this email address for {{ app_name }}.</p>\
+             <p>Use this code: <code>{{ token }}</code></p>"
         }
         ("verification", Part::Text) => {
-            "Hi {{ name }},\n\nConfirm this email address for {{ app_name }}:\n{{ url }}\n\nOr use this code: {{ token }}\n"
+            "Hi {{ name }},\n\nConfirm this email address for {{ app_name }}.\n\nUse this code: {{ token }}\n"
         }
         ("password_reset", Part::Subject) => "Reset your {{ app_name }} password",
         ("password_reset", Part::Html) => {
             "<p>Hi {{ name }},</p>\
              <p>Somebody asked to reset the password for this {{ app_name }} account.</p>\
-             <p><a href=\"{{ url }}\">Choose a new password</a></p>\
-             <p>Or use this code: <code>{{ token }}</code></p>\
+             <p>Use this code: <code>{{ token }}</code></p>\
              <p>If this was not you, nothing has changed.</p>"
         }
         ("password_reset", Part::Text) => {
-            "Hi {{ name }},\n\nSomebody asked to reset the password for this {{ app_name }} account.\n{{ url }}\n\nOr use this code: {{ token }}\n\nIf this was not you, nothing has changed.\n"
+            "Hi {{ name }},\n\nSomebody asked to reset the password for this {{ app_name }} account.\n\nUse this code: {{ token }}\n\nIf this was not you, nothing has changed.\n"
         }
         ("email_change", Part::Subject) => "Confirm your new {{ app_name }} email",
         ("email_change", Part::Html) => {
             "<p>Hi {{ name }},</p>\
-             <p>Confirm {{ email }} as the new address for your {{ app_name }} account:</p>\
-             <p><a href=\"{{ url }}\">Confirm the new email</a></p>\
-             <p>Or use this code: <code>{{ token }}</code></p>"
+             <p>Confirm {{ email }} as the new address for your {{ app_name }} account.</p>\
+             <p>Use this code: <code>{{ token }}</code></p>"
         }
         ("email_change", Part::Text) => {
-            "Hi {{ name }},\n\nConfirm {{ email }} as the new address for your {{ app_name }} account:\n{{ url }}\n\nOr use this code: {{ token }}\n"
+            "Hi {{ name }},\n\nConfirm {{ email }} as the new address for your {{ app_name }} account.\n\nUse this code: {{ token }}\n"
         }
         ("otp", Part::Subject) => "Your {{ app_name }} sign-in code",
         ("otp", Part::Html) => {
@@ -597,7 +594,7 @@ mod tests {
                 "verification",
                 "Ada",
                 "ada@example.com",
-                &json!({ "url": "https://app.example/verify?t=abc", "token": "abc" }),
+                &json!({ "token": "abc" }),
             )
             .await
             .expect("deliver");
@@ -607,13 +604,8 @@ mod tests {
         assert_eq!(sent[0].to, "ada@example.com");
         // `name` and `app_name` are filled in from the mailer.
         assert_eq!(sent[0].subject, "Confirm your email for My App");
-        // Autoescaping is on (it is what stops a display name injecting markup),
-        // so the URL's slashes are entities — assert on the part that is not.
-        assert!(
-            sent[0].html.contains("verify?t=abc"),
-            "html={}",
-            sent[0].html
-        );
+        // The token is what the email carries; the app builds the link around it.
+        assert!(sent[0].html.contains("abc"), "html={}", sent[0].html);
         assert!(sent[0].text.contains("abc"), "text={}", sent[0].text);
     }
 }

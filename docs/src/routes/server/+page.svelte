@@ -358,6 +358,41 @@ POST /api/collections/users/auth-with-oauth2
     </p>
   </section>
 
+  <!-- EMAIL FLOWS -->
+  <section id="email-flows" class="scroll-mt-20 mb-10">
+    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
+      Email verification, password reset and email change
+    </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      Six endpoints on an auth collection, all backed by one-time tokens in
+      <code class="doc-inline px-1 py-0.5">_otps</code>. The <em>request</em> half
+      queues an email through the mailer; the <em>confirm</em> half applies the
+      change:
+    </p>
+    <CodeBlock
+      lang="http"
+      code={`POST /api/collections/users/request-verification  { "email": "..." }
+POST /api/collections/users/confirm-verification  { "token": "..." }
+
+POST /api/collections/users/request-password-reset { "email": "..." }
+POST /api/collections/users/confirm-password-reset { "token", "password", "passwordConfirm" }
+
+# these two need a signed-in account
+POST /api/collections/users/request-email-change { "newEmail": "..." }
+POST /api/collections/users/confirm-email-change { "token", "password" }`}
+    />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      The request half always answers
+      <code class="doc-inline px-1 py-0.5">204</code>, whether or not the address
+      has an account, so it cannot be used to find out which addresses exist. A
+      token is 32 random bytes, valid for 24 hours and
+      <strong>single-use</strong>. Confirming a password reset also revokes the
+      account's sessions, and an email change additionally requires the current
+      password and is applied to the address the token was mailed to, not to any
+      the caller supplies.
+    </p>
+  </section>
+
   <!-- FILTERS -->
   <section id="filters" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">

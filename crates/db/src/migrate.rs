@@ -106,6 +106,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "oauth2",
         sql: include_str!("../../../migrations/0012_oauth2.sql"),
     },
+    Migration {
+        version: 13,
+        name: "otps",
+        sql: include_str!("../../../migrations/0013_otps.sql"),
+    },
 ];
 
 /// Outcome of a migration run.
