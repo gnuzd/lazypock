@@ -29,6 +29,17 @@ fn reflect_existing() -> Result<bool> {
 fn hooks_directory() -> String {
     std::env::var("LAZYPOCK_HOOKS_DIR").unwrap_or_else(|_| "hooks".to_string())
 }
+
+/// Where mail template overrides live, from `LAZYPOCK_MAIL_TEMPLATES_DIR`.
+///
+/// Unset means the built-in templates only, which is what a deployment that has
+/// not customised an email wants.
+fn mail_templates_directory() -> Option<std::path::PathBuf> {
+    std::env::var("LAZYPOCK_MAIL_TEMPLATES_DIR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+}
 use std::time::Duration;
 
 use clap::Parser;
@@ -361,6 +372,14 @@ async fn serve(config: Config) -> Result<()> {
             .map_err(|err| Error::config(format!("cannot load the CORS allowlist: {err}")))?;
     }
 
+    // The mail templates: the built-in defaults, with any file in the directory
+    // overriding them, so an operator changes an email without a rebuild. A syntax
+    // error is refused here rather than when the first email is sent.
+    let mail_templates = Arc::new(
+        lazypock_mail::Templates::load(mail_templates_directory().as_deref())
+            .map_err(|err| Error::config(format!("cannot load the mail templates: {err}")))?,
+    );
+
     let state = AppState::new(
         config,
         db,
@@ -370,6 +389,7 @@ async fn serve(config: Config) -> Result<()> {
             hub,
             files,
             hooks,
+            mail_templates,
             cors,
         },
     );
@@ -404,9 +424,9 @@ async fn serve(config: Config) -> Result<()> {
     }
 
     // The job queue. `_jobs` and its claim index have existed since migration 1
-    // and nothing wrote to them; this is the worker. Nothing enqueues yet — the
-    // mailer and the "after" hooks are the callers it was built for — so it is
-    // idle until one of them lands.
+    // and nothing wrote to them; this is the worker. The `mail` kind sends a
+    // templated email, and the auth flows enqueue it; the "after" hooks are the
+    // next caller.
     {
         let interval = job_interval()?;
         let lease = job_lease_seconds()?;

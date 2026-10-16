@@ -300,6 +300,64 @@ POST /api/collections/users/auth-with-oauth2
     </p>
   </section>
 
+  <!-- MAIL -->
+  <section id="mail" class="scroll-mt-20 mb-10">
+    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
+      Email
+    </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      Outbound email — verification, password reset, sign-in codes — goes through
+      SMTP configured as the <code class="doc-inline px-1 py-0.5">mail</code>
+      setting:
+    </p>
+    <CodeBlock
+      lang="bash"
+      code={`PATCH /api/settings
+{
+  "app_name": "My App",
+  "mail": {
+    "host": "smtp.example",
+    "port": 587,
+    "encryption": "starttls",
+    "username": "...",
+    "password": "...",
+    "sender_name": "My App",
+    "sender_address": "noreply@example.com"
+  }
+}`}
+    />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      <code class="doc-inline px-1 py-0.5">encryption</code> is
+      <code class="doc-inline px-1 py-0.5">none</code>,
+      <code class="doc-inline px-1 py-0.5">starttls</code> or
+      <code class="doc-inline px-1 py-0.5">tls</code>, and the port defaults from
+      it (25 / 587 / 465). The configuration is read <strong>at send time</strong>,
+      so a change applies to the next email without a restart. Sends are queued and
+      retried, never made inside a request.
+    </p>
+    <h3 class="mt-5 font-semibold">Templates</h3>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      The subject, HTML body and plain-text alternative are rendered with
+      <a
+        class="text-primary underline"
+        href="https://docs.rs/minijinja"
+        target="_blank"
+        rel="noreferrer">MiniJinja</a
+      >. Built-in templates ship for
+      <code class="doc-inline px-1 py-0.5">otp</code>,
+      <code class="doc-inline px-1 py-0.5">verification</code>,
+      <code class="doc-inline px-1 py-0.5">password_reset</code> and
+      <code class="doc-inline px-1 py-0.5">email_change</code>. A file named for
+      the part — <code class="doc-inline px-1 py-0.5">otp.subject</code>,
+      <code class="doc-inline px-1 py-0.5">otp.html</code>,
+      <code class="doc-inline px-1 py-0.5">otp.text</code> — in
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_MAIL_TEMPLATES_DIR</code>
+      replaces it, so changing an email does not need a rebuild. A template that
+      uses a variable the server did not supply fails loudly rather than sending
+      an empty code.
+    </p>
+  </section>
+
   <!-- FILTERS -->
   <section id="filters" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">

@@ -235,6 +235,9 @@ pub async fn test_app_with(label: &str, extra: &[(&str, &str)]) -> Option<TestAp
                 hub,
                 files,
                 hooks: hooks.clone(),
+                mail_templates: Arc::new(
+                    lazypock_mail::Templates::load(None).expect("mail templates"),
+                ),
                 cors: cors.clone(),
             },
         ),

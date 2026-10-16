@@ -35,3 +35,4 @@ lazypock-auth = { version = "0.1.0", path = "../auth" }
 lazypock-realtime = { version = "0.1.0", path = "../realtime" }
 lazypock-files = { version = "0.1.0", path = "../files", default-features = false }
 lazypock-hooks = { version = "0.1.0", path = "../hooks" }
+lazypock-mail = { version = "0.1.0", path = "../mail" }

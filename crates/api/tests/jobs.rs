@@ -278,3 +278,42 @@ async fn a_job_with_a_live_lease_is_left_to_its_worker() {
 
     app.cleanup().await;
 }
+
+/// The `mail` kind is wired: with no `mail` setting it fails with a reason a person
+/// can act on, rather than succeeding at doing nothing.
+#[tokio::test]
+async fn a_mail_job_without_mail_configured_fails_clearly() {
+    let Some(app) = test_app("jobs_mail_unconfigured").await else {
+        return;
+    };
+
+    let id = jobs::enqueue(
+        &app.client().await,
+        jobs::mail_job(
+            "otp",
+            "Ada",
+            "ada@example.com",
+            json!({ "code": "123456", "expires_minutes": 10 }),
+        ),
+    )
+    .await
+    .expect("enqueued");
+
+    let ran = jobs::run_due(&app.state, WORKER, 10, 300.0)
+        .await
+        .expect("a pass");
+    assert_eq!(ran, 1);
+
+    let stored = row(&app, &id).await;
+    assert_eq!(
+        stored.status, "pending",
+        "a retryable failure stays pending"
+    );
+    let error = stored.last_error.unwrap_or_default();
+    assert!(
+        error.contains("mail is not configured"),
+        "the reason must name the fix: {error}"
+    );
+
+    app.cleanup().await;
+}
