@@ -8,6 +8,7 @@ pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod batch;
+pub mod client;
 pub mod collections;
 pub mod cors;
 pub mod crons;
