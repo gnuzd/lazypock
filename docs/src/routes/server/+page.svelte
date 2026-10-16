@@ -242,6 +242,64 @@ LAZYPOCK_STUDIO_DIR=studio/build/studio cargo run -- serve`}
     </p>
   </section>
 
+  <!-- OAUTH2 -->
+  <section id="oauth2" class="scroll-mt-20 mb-10">
+    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
+      OAuth2 sign-in
+    </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      Auth collections can sign in through an external provider. Providers are
+      configured once, as an application setting, so no rebuild is needed:
+    </p>
+    <CodeBlock
+      lang="bash"
+      code={`curl -X PATCH https://your-host/api/settings \
+  -H "Authorization: Bearer <superuser token>" \
+  -H "Content-Type: application/json" \
+  -d '{"oauth2":{"providers":[{
+        "name": "google",
+        "config": {
+          "client_id": "...",
+          "client_secret": "...",
+          "redirect_uri": "https://your-host/api/oauth2-redirect"
+        }
+      }]}}'`}
+    />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      <code class="doc-inline px-1 py-0.5">google</code> and
+      <code class="doc-inline px-1 py-0.5">github</code> have built-in presets (the
+      three provider URLs and the scopes). Any other provider names
+      <code class="doc-inline px-1 py-0.5">authorize_url</code>,
+      <code class="doc-inline px-1 py-0.5">token_url</code> and
+      <code class="doc-inline px-1 py-0.5">user_url</code> explicitly. A provider
+      missing one of them is refused at use, not silently dropped.
+    </p>
+    <CodeBlock
+      lang="http"
+      code={`# what the client asks for
+GET /api/collections/users/auth-methods
+# -> oauth2.providers: [{ name, authURL, state, codeVerifier }, ...]
+
+# open authURL in a popup; the provider returns to
+GET /api/oauth2-redirect?code=...&state=...
+
+# exchange the code (the popup bridge posts it back to the app origin)
+POST /api/collections/users/auth-with-oauth2
+{ "provider": "google", "code": "...", "codeVerifier": "...",
+  "redirectUrl": "https://your-host/api/oauth2-redirect", "createData": {} }`}
+    />
+    <p class="mt-3 text-sm text-base-content/70">
+      The first sign-in creates an account in the collection (the email comes from
+      the provider and is marked verified) and links it in
+      <code class="doc-inline px-1 py-0.5">_external_auths</code>; later sign-ins
+      reuse it. <code class="doc-inline px-1 py-0.5">createData</code> may fill
+      ordinary fields, but never the email, password or
+      <code class="doc-inline px-1 py-0.5">verified</code>. The PKCE flow uses S256,
+      the pending flow is single-use and expires after 10 minutes, and the popup
+      result is posted only to the origin that started it.
+    </p>
+  </section>
+
   <!-- FILTERS -->
   <section id="filters" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">

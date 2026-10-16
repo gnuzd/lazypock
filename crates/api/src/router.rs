@@ -178,11 +178,18 @@ pub fn router(state: AppState) -> Router {
             patch(presets::update).delete(presets::delete),
         )
         .route("/.well-known/jwks.json", get(auth::jwks))
+        // The OAuth2 popup bridge. The provider redirects the popup here; the page
+        // posts the code back to the app origin the flow started from.
+        .route("/api/oauth2-redirect", get(auth::oauth2_redirect))
         // `_superusers` is handled inside the same handler, so there is no route
         // ordering to get wrong.
         .route(
             "/api/collections/{collection}/auth-with-password",
             post(auth::auth_with_password),
+        )
+        .route(
+            "/api/collections/{collection}/auth-with-oauth2",
+            post(auth::auth_with_oauth2),
         )
         .route(
             "/api/collections/{collection}/auth-refresh",

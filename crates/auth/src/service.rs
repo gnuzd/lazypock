@@ -215,6 +215,44 @@ impl AuthService {
         .await
     }
 
+    /// Issue a token pair for a record already authenticated by another mechanism.
+    ///
+    /// An OAuth2 sign-in (and later an OTP) has verified the identity without a
+    /// password; this reads the account's email and token key exactly as a
+    /// password sign-in does, so the token it mints is indistinguishable from one
+    /// issued after a password check.
+    pub async fn issue_for_record(
+        &self,
+        collection: &Collection,
+        record_id: &str,
+    ) -> Result<AuthOutcome> {
+        let client = self.db.client().await?;
+        let table = quote_ident(&collection.name);
+        let row = client
+            .run_query_opt(
+                &format!("select \"email\", \"token_key\" from {table} where \"id\" = $1::text"),
+                &[&record_id.to_string()],
+            )
+            .await
+            .map_err(db_error)?
+            .ok_or_else(|| Error::unauthorized("the account no longer exists"))?;
+
+        let email: String = row.get::<_, Option<String>>("email").unwrap_or_default();
+        let token_key: String = row
+            .get::<_, Option<String>>("token_key")
+            .unwrap_or_default();
+
+        self.issue(
+            Subject::Auth,
+            record_id,
+            &email,
+            &collection.id,
+            &collection.name,
+            &token_key,
+        )
+        .await
+    }
+
     /// Exchange a refresh token for a new token pair.
     ///
     /// The account is re-read, so a deleted record or a removed collection ends the

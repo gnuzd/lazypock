@@ -16,6 +16,7 @@ pub mod error;
 pub mod files;
 pub mod jobs;
 pub mod logs;
+pub mod oauth2;
 pub mod presets;
 pub mod rate_limit;
 pub mod realtime;
