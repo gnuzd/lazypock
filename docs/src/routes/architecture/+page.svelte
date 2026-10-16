@@ -5,100 +5,102 @@
 
 	const title = 'Architecture — Lazypock Docs';
 	const description =
-		'How Lazypock works: the schema/DDL engine, dynamic REST controller, filter compiler, realtime channels, hooks and cron.';
+		'How Lazypock works: the schema engine, the Postgres row-level-security permission model, the filter compiler, realtime over SSE, and the TypeScript hooks runtime.';
 
 	const lifecycleSteps: FlowStep[] = [
 		{
-			title: 'A request arrives at the Phoenix endpoint',
+			title: 'A request arrives at the axum router',
 			lines: [
-				{ code: 'POST /api/posts   (via the SDK, JSON body)' },
+				{ code: 'POST /api/collections/posts/records   (via the SDK, JSON body)' },
 				{
-					text: 'The SDK sends the request over HTTPS. If the user logged in, the JWT it received is attached as a Bearer token — unauthenticated requests are allowed too, because access is decided per rule, not per endpoint.',
+					text: 'The SDK sends the request over HTTPS. If the user logged in, the EdDSA access token it received is attached as a Bearer token — an unauthenticated request is allowed too, because access is decided per collection rule, not per endpoint.',
 				},
 			],
 		},
 		{
-			title: 'Plugs run — every request passes through the same chain',
+			title: 'Middleware runs — every request passes through the same stack',
 			lines: [
-				{ code: 'RequestLogger → Auth.Plug → ConnectionId → CustomRoutes' },
-				{ text: 'RequestLogger records the request to _request_logs (visible in Studio → Logs).' },
+				{ code: 'request-log → auth → rate limit → connection id' },
+				{ text: 'The request log records the call to _logs, with credential-shaped keys redacted (visible in Studio → Logs).' },
 				{
-					text: 'Auth.Plug verifies the JWT and sets the current actor: a superuser, an auth-collection user, or nobody (public).',
+					text: 'Auth verifies the token from its signature alone — no database round trip — and establishes the actor: a superuser, an auth-collection account, or nobody (public).',
 				},
 				{
-					text: 'CustomRoutes gives on_before_serve hooks the chance to serve their own endpoints before the built-in routes are evaluated.',
+					text: 'Rate limits are applied per route class (API, auth, per-account failures). Trusted proxy headers are honoured only from configured proxies.',
 				},
 			],
 		},
 		{
-			title: 'The router dispatches to a controller',
+			title: 'The router dispatches to a handler',
 			lines: [
+				{ code: '…/collections/:collection/records      → list · create' },
+				{ code: '…/collections/:collection/records/:id  → view · update · delete' },
 				{
-					code: '…/:collection        → DynamicController (list · create)',
-				},
-				{
-					code: '…/:collection/:id    → DynamicController (view · update · delete)',
-				},
-				{
-					text: 'Dynamic routes are declared last, so static prefixes (/api/files, /api/collections, /api/settings, /api/logs, /api/crons) and auth endpoints (/api/:collection/auth-*) always win. Collection names are resolved at runtime from _collections.',
+					text: 'The record routes are PocketBase-canonical, so an existing PocketBase client addresses this server unchanged. The admin routes (/api/collections, /api/settings, /api/logs, /api/crons, /api/files, /api/sql) and the auth endpoints (…/auth-with-password, …/auth-refresh, …/request-password-reset) are declared alongside them.',
 				},
 			],
 		},
 		{
-			title: 'The rule enforcer and request hooks decide access',
+			title: 'Permissions are compiled into Postgres, not evaluated in the server',
 			lines: [
 				{
-					text: 'The actor is checked against the collection’s rule for that action — listRule, viewRule, createRule, updateRule, deleteRule — with superuser and manageRule bypass.',
+					text: 'A collection rule is three-state, exactly as in PocketBase: absent means superuser-only, an empty string means public, and a filter becomes the predicate.',
 				},
 				{
-					text: 'On approval, before-hooks fire (file-based Elixir modules, in registry order). A hook can mutate the input or abort the whole request by returning an error.',
+					text: 'The filter is compiled into a CREATE POLICY and the request then runs under a restricted role — lazypock_anon or lazypock_authenticated — with its claims set per request. Postgres itself enforces the rule, so a missed check in application code cannot leak rows.',
 				},
-			],
-		},
-		{
-			title: 'The generic data layer executes the query',
-			lines: [
 				{
-					text: 'Filter/sort/expand/pagination are compiled into one Ecto query over the collection’s real Postgres table. Rule filter strings become SQL WHERE clauses with bound parameters; relation fields can be expanded with joins.',
+					text: 'On approval, before-hooks fire. A hook can mutate the input or refuse the request outright by throwing.',
 				},
 			],
 		},
 		{
-			title: 'Write, broadcast, respond',
+			title: 'The query plane builds one parameterized statement',
 			lines: [
-				{ text: 'After the write, after-hooks run, then the Realtime Broadcaster publishes the change to the collection’s channel (skipping the originating connection via its connectionId).' },
-				{ code: '{"action":"create","record":{…}}  →  topic collection:posts' },
-				{ text: 'The JSON response — the saved or updated record, expanded fields included — goes back to the SDK.' },
+				{
+					text: 'filter, sort, fields, expand and paging are compiled by an in-house builder: identifiers are checked against the schema cache and everything else is a bound parameter. There is no string interpolation of user input into SQL.',
+				},
+				{
+					text: 'Postgres builds the response JSON itself (json_agg / to_jsonb), so the server streams bytes rather than serializing row by row.',
+				},
+			],
+		},
+		{
+			title: 'Write, publish, respond',
+			lines: [
+				{ text: 'After the write commits, after-hooks run, then the change is published for realtime.' },
+				{ code: '_rt_log ← change row   +   NOTIFY lazypock_change' },
+				{ text: 'The response — the stored record, expanded fields included — goes back to the SDK. It is read back after the write rather than via RETURNING, because Postgres applies select policies to a RETURNING row and would refuse a caller allowed to create a record but not to see it.' },
 			],
 		},
 	];
 
 	const realtimeSteps: FlowStep[] = [
 		{
-			title: 'Open the WebSocket',
+			title: 'Open the event stream',
 			lines: [
-				{ code: 'wss://…/socket?token=JWT&connectionId=…' },
+				{ code: 'GET /api/realtime   (Accept: text/event-stream, Bearer token)' },
 				{
-					text: 'The socket authenticates the token — superuser, auth-collection user, or anonymous (allowed for public collections). The client-generated connectionId lets the server exclude the sender from its own broadcasts.',
+					text: 'Realtime is Server-Sent Events, not a WebSocket. The same access token used for REST authenticates the stream, so the rules apply identically to both surfaces. A client-supplied connection id lets the server exclude a subscriber from its own writes.',
 				},
 			],
 		},
 		{
-			title: 'Subscribe to a collection topic',
+			title: 'Subscribe to a collection',
 			lines: [
-				{ code: 'collection:posts         → all changes to “posts”' },
-				{ code: 'collection:posts:abc123  → changes to one record' },
+				{ code: 'collection:posts          → every change to “posts”' },
+				{ code: 'collection:posts:abc123   → one record' },
 				{
-					text: 'Subscriptions are rule-filtered: listRule/viewRule are enforced per topic, so a client can only subscribe to records it is allowed to read.',
+					text: 'Subscriptions are filtered by the same rules: a subscriber only receives rows it would be allowed to read, evaluated per subscriber rather than once per node.',
 				},
 			],
 		},
 		{
-			title: 'Every write fans out through one broadcaster',
+			title: 'Every write reaches the bus the same way',
 			lines: [
-				{ code: 'Phoenix PubSub → collection:posts → record_change' },
+				{ code: 'trigger → _rt_log + NOTIFY  →  LISTEN loop  →  EventBus  →  SSE' },
 				{
-					text: 'Writes from the SDKs, the Studio, hooks, cron jobs and imports all go through the same broadcaster — a single source of truth, so every client sees the same stream regardless of who wrote.',
+					text: 'A trigger on every collection appends to _rt_log and NOTIFYs a deliberately small payload — NOTIFY caps at 8000 bytes, so ids are sent and the row is read separately. Writes from the SDKs, the Studio, hooks, cron jobs and imports all take this one path, which is why every client sees the same stream.',
 				},
 			],
 		},
@@ -107,7 +109,7 @@
 			lines: [
 				{ code: '{"action":"create|update|delete","record":{…}}' },
 				{
-					text: 'The writing client is excluded via connectionId (no self-echo). The Studio listens on the admin “collections” channel to live-refresh its schema sidebar when collections change. Server-initiated topics (e.g. chat:room1) map to the custom channel and are broadcast from hooks.',
+					text: 'The originating connection is excluded, so a writer does not echo to itself. Because each event is numbered, a reconnect sends Last-Event-ID and replays what it missed from _rt_log instead of silently dropping changes.',
 				},
 			],
 		},
@@ -123,7 +125,7 @@
 	<section id="overview" class="scroll-mt-20 mb-14">
 		<div class="flex flex-wrap items-center gap-2">
 			<span class="rounded-field bg-info/10 text-info px-2 py-0.5 text-xs font-medium"
-				>Architecture · Elixir + Phoenix + PostgreSQL</span
+				>Architecture · Rust + PostgreSQL</span
 			>
 			<span class="rounded-field bg-success/10 text-success px-2 py-0.5 text-xs font-medium"
 				>one binary</span
@@ -131,19 +133,37 @@
 		</div>
 		<h1 class="mt-3 text-3xl font-bold tracking-tight">Architecture</h1>
 		<p class="mt-3 text-base-content/80 leading-relaxed">
-			Lazypock is a single <strong>BEAM application</strong> (Elixir + Phoenix) that ships as one
-			Burrito binary — backend plus the compiled Studio SPA — and speaks
-			PocketBase-compatible REST and realtime on top of <strong>PostgreSQL</strong>. You point it at
-			a Postgres URL, it registers every public table, and each collection instantly gets a dynamic
-			<code class="doc-inline px-1 py-0.5">/api/:collection</code> API, per-action rules, files, and
-			a realtime channel — no backend code to write.
+			Lazypock is a single <strong>Rust binary</strong> — an axum/tokio server with the compiled
+			Studio SPA embedded — that speaks PocketBase-canonical REST and realtime on top of
+			<strong>PostgreSQL</strong>. Define a collection in the Studio and it becomes a real table,
+			exposed at <code class="doc-inline px-1 py-0.5"
+				>/api/collections/&#123;collection&#125;/records</code
+			>, with per-action permissions, files and a realtime stream. There is no backend code to
+			write.
+		</p>
+		<p class="mt-3 text-base-content/80 leading-relaxed">
+			What makes it more than a REST wrapper is where the guardrails live. Permissions are
+			<strong>Postgres row-level security policies</strong> generated from the rules, so the
+			database is the security boundary rather than a check the application is trusted to
+			remember. Realtime, jobs and cron all use Postgres itself as the message bus, so a node is
+			one process with no Redis and no worker deployment.
 		</p>
 		<p class="mt-3 text-sm text-base-content/70 leading-relaxed">
-			The repo is a monorepo: <code class="doc-inline px-1 py-0.5">core/</code> (the Elixir app this
-			page is about), <code class="doc-inline px-1 py-0.5">studio/</code> (the SvelteKit admin UI,
-			built into the binary and served at <code class="doc-inline px-1 py-0.5">/_/</code>), and
-			<code class="doc-inline px-1 py-0.5">docs/</code> (this site). Official SDKs live in their own
-			repos and speak to the same HTTP + WebSocket surface.
+			The repo is a Cargo workspace: <code class="doc-inline px-1 py-0.5">crates/api</code> (the
+			axum router and handlers), <code class="doc-inline px-1 py-0.5">crates/db</code> (pool,
+			migrations, schema engine, RLS, query building), <code class="doc-inline px-1 py-0.5"
+				>crates/auth</code
+			>,
+			<code class="doc-inline px-1 py-0.5">crates/realtime</code>,
+			<code class="doc-inline px-1 py-0.5">crates/files</code>,
+			<code class="doc-inline px-1 py-0.5">crates/hooks</code>,
+			<code class="doc-inline px-1 py-0.5">crates/mail</code>,
+			<code class="doc-inline px-1 py-0.5">crates/studio-embed</code> and
+			<code class="doc-inline px-1 py-0.5">crates/app</code> (the
+			<code class="doc-inline px-1 py-0.5">lazypock</code> binary).
+			<code class="doc-inline px-1 py-0.5">studio/</code> is the SvelteKit admin UI, built into the
+			binary and served at <code class="doc-inline px-1 py-0.5">/</code>; official SDKs live in
+			their own repos and speak the same HTTP surface.
 		</p>
 	</section>
 
@@ -152,49 +172,59 @@
 		<h2 class="text-xl font-semibold border-b border-base-300 pb-2">System layers</h2>
 		<p class="mt-3 text-base-content/80 leading-relaxed">
 			Read top to bottom — every arrow is a request or event boundary. The dashed box is the
-			deliverable you download: one BEAM app with the Studio assets bundled. Postgres is the only
-			thing outside it.
+			deliverable you deploy: one statically linked binary with the Studio assets inside it.
+			Postgres is the only thing outside.
 		</p>
 
 		<figure class="mt-6 rounded-box border border-base-300 p-2 sm:p-4">
 			<ArchDiagram />
 			<figcaption class="mt-2 px-2 pb-1 text-xs text-base-content/60 leading-relaxed">
-				Each arrow is a request/event boundary. Studio and SDK apps are external clients; the BEAM
-				app + Studio assets ship as one binary (dashed box); PostgreSQL is a separate service
-				connected with <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code>.
+				Each arrow is a request/event boundary. Studio and SDK apps are external clients; the Rust
+				server + Studio assets ship as one binary (dashed box); PostgreSQL is a separate service
+				reached over <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code>.
 			</figcaption>
 		</figure>
 
 		<div class="mt-6 grid gap-3 sm:grid-cols-2">
 			<div class="rounded-box border border-base-300 p-4">
-				<p class="font-semibold">🗂️ Schema / DDL engine</p>
+				<p class="font-semibold">🗂️ Schema engine</p>
 				<p class="mt-1 text-sm text-base-content/70">
 					Collection definitions in <code class="doc-inline px-1 py-0.5">_collections</code> /
-					<code class="doc-inline px-1 py-0.5">_fields</code> become real tables, columns, indexes
-					and relations through the TypeMapper. Existing tables are auto-registered on boot.
+					<code class="doc-inline px-1 py-0.5">_fields</code> become real tables, columns,
+					indexes and relations through the DDL engine. Each node holds the schema as an
+					<code class="doc-inline px-1 py-0.5">ArcSwap</code> cache; a schema change
+					<code class="doc-inline px-1 py-0.5">NOTIFY</code>s every node to reload, so the read
+					path stays lock-free. An existing ordinary database is reflected on boot: every table
+					becomes a collection and every column a field.
+				</p>
+			</div>
+			<div class="rounded-box border border-base-300 p-4">
+				<p class="font-semibold">🛡️ Permissions as RLS</p>
+				<p class="mt-1 text-sm text-base-content/70">
+					Rules are three-state: absent = superuser only, empty = public, filter = conditional.
+					Each rule compiles to a <code class="doc-inline px-1 py-0.5">CREATE POLICY</code>, and
+					user-facing requests run under
+					<code class="doc-inline px-1 py-0.5">lazypock_anon</code> /
+					<code class="doc-inline px-1 py-0.5">lazypock_authenticated</code> with claims set per
+					request. Policies are rebuilt on every change, so a removed rule stops applying, and
+					an unreadable rule denies.
 				</p>
 			</div>
 			<div class="rounded-box border border-base-300 p-4">
 				<p class="font-semibold">🪝 Hooks engine</p>
 				<p class="mt-1 text-sm text-base-content/70">
-					~80 lifecycle events with before/after semantics and custom API routes
-					(<code class="doc-inline px-1 py-0.5">on_before_serve</code>). Hook modules are loaded
-					from a user-writable directory — no rebuild to add one.
+					TypeScript hooks run in a sandboxed QuickJS context with hard limits, on a worker
+					thread of their own, and reload on file change without a rebuild. Six record events:
+					before/after create, update and delete. Before-hooks run before validation so a hook
+					can supply a field; after-hooks run post-commit.
 				</p>
 			</div>
 			<div class="rounded-box border border-base-300 p-4">
-				<p class="font-semibold">🔐 Rule enforcer</p>
+				<p class="font-semibold">⚡ Query plane &amp; realtime</p>
 				<p class="mt-1 text-sm text-base-content/70">
-					PocketBase-compatible rules per action, evaluated three-state: absent = superuser only,
-					empty = public, filter string = conditional. Compiled to SQL WHERE with bound
-					parameters.
-				</p>
-			</div>
-			<div class="rounded-box border border-base-300 p-4">
-				<p class="font-semibold">⚡ Data layer &amp; realtime</p>
-				<p class="mt-1 text-sm text-base-content/70">
-					One generic Ecto layer serves every collection, and one Broadcaster publishes every
-					write to Phoenix Channels — rule-filtered topics with origin exclusion.
+					One generic query plane serves every collection: the filter parser feeds a
+					schema-whitelisted, fully parameterized SQL builder, and Postgres builds the JSON.
+					Realtime fans the same change events out over SSE, RLS-filtered per subscriber.
 				</p>
 			</div>
 		</div>
@@ -219,8 +249,10 @@
 	<section id="realtime" class="scroll-mt-20 mb-14">
 		<h2 class="text-xl font-semibold border-b border-base-300 pb-2">Realtime flow</h2>
 		<p class="mt-3 text-base-content/80 leading-relaxed">
-			Realtime is Phoenix Channels over a single WebSocket (long-poll fallback disabled). The same
-			JWT used for REST authenticates the socket, so rules apply consistently to both surfaces:
+			Realtime is <strong>Server-Sent Events</strong> over a single long-lived HTTP response.
+			Postgres is the event source: a trigger on each collection writes the change and notifies
+			every node, so no broker sits in the middle and events survive a node restart. The same
+			access token used for REST authenticates the stream, so rules apply consistently:
 		</p>
 
 		<div class="mt-6">
@@ -242,49 +274,59 @@
 				</thead>
 				<tbody class="divide-y divide-base-300 align-top">
 					<tr>
+						<td class="px-3 py-2 font-medium whitespace-nowrap">Language &amp; runtime</td>
+						<td class="px-3 py-2">Rust — tokio, axum, tokio-postgres</td>
+						<td class="px-3 py-2 text-base-content/70">Small binary, low idle RAM, predictable latency, and no GC pause on the realtime path</td>
+					</tr>
+					<tr>
 						<td class="px-3 py-2 font-medium whitespace-nowrap">Schema approach</td>
 						<td class="px-3 py-2">Real Postgres columns, queried dynamically (no codegen)</td>
 						<td class="px-3 py-2 text-base-content/70">Full Postgres power — types, indexes, JSONB, relations — with no runtime module compilation</td>
 					</tr>
 					<tr>
-						<td class="px-3 py-2 font-medium whitespace-nowrap">Tenancy</td>
-						<td class="px-3 py-2">Single tenant — one database is one app</td>
-						<td class="px-3 py-2 text-base-content/70">Same mental model as PocketBase’s “one SQLite file = one app”; keeps rules and auth simple</td>
+						<td class="px-3 py-2 font-medium whitespace-nowrap">Access rules</td>
+						<td class="px-3 py-2">Rules compiled to Postgres RLS policies</td>
+						<td class="px-3 py-2 text-base-content/70">The database enforces the rule, not the application — a forgotten check in a handler cannot leak rows</td>
 					</tr>
 					<tr>
-						<td class="px-3 py-2 font-medium whitespace-nowrap">Access rules</td>
-						<td class="px-3 py-2">PocketBase-compatible DSL stored per collection</td>
-						<td class="px-3 py-2 text-base-content/70">Declarative and safe — filters compile to SQL WHERE with bound parameters, no string interpolation</td>
+						<td class="px-3 py-2 font-medium whitespace-nowrap">Tenancy</td>
+						<td class="px-3 py-2">Single tenant — one database is one app</td>
+						<td class="px-3 py-2 text-base-content/70">Same mental model as PocketBase’s “one file = one app”; keeps rules and auth simple. The schema is never hard-coded to <code class="doc-inline px-1 py-0.5">public</code>, so a shared-database mode stays open</td>
+					</tr>
+					<tr>
+						<td class="px-3 py-2 font-medium whitespace-nowrap">Message bus</td>
+						<td class="px-3 py-2">Postgres <code class="doc-inline px-1 py-0.5">LISTEN</code>/<code class="doc-inline px-1 py-0.5">NOTIFY</code>, behind an EventBus trait</td>
+						<td class="px-3 py-2 text-base-content/70">No Redis to run or pay for, and events outlive a node restart. NOTIFY is capped at 8000 bytes, so payloads carry ids and the row is read separately</td>
+					</tr>
+					<tr>
+						<td class="px-3 py-2 font-medium whitespace-nowrap">Realtime transport</td>
+						<td class="px-3 py-2">SSE with numbered events and <code class="doc-inline px-1 py-0.5">Last-Event-ID</code> resume</td>
+						<td class="px-3 py-2 text-base-content/70">One direction, proxied and buffered cleanly by ordinary HTTP infrastructure, and a reconnect recovers missed events instead of dropping them</td>
 					</tr>
 					<tr>
 						<td class="px-3 py-2 font-medium whitespace-nowrap">Hooks</td>
-						<td class="px-3 py-2">~80 lifecycle events; Elixir hook modules + custom routes</td>
-						<td class="px-3 py-2 text-base-content/70">PocketBase-style extensibility — drop a module in a user-writable directory, no binary rebuild</td>
+						<td class="px-3 py-2">TypeScript in QuickJS, hot-reloaded, six record events</td>
+						<td class="px-3 py-2 text-base-content/70">PocketBase-style extensibility without a rebuild. A sandbox with limits keeps a hook from taking the server down</td>
 					</tr>
 					<tr>
 						<td class="px-3 py-2 font-medium whitespace-nowrap">Auth</td>
-						<td class="px-3 py-2">Custom JWT provider — dual token (superuser + auth user)</td>
-						<td class="px-3 py-2 text-base-content/70">One token format verified in a single plug, shared by HTTP and the realtime socket</td>
+						<td class="px-3 py-2">argon2id + EdDSA access tokens, refresh sessions with rotation and replay detection, published JWKS</td>
+						<td class="px-3 py-2 text-base-content/70">Tokens verify from the signature alone, with no database round trip on the hot path; a stolen refresh token is detected by its reuse</td>
 					</tr>
 					<tr>
-						<td class="px-3 py-2 font-medium whitespace-nowrap">Realtime</td>
-						<td class="px-3 py-2">Phoenix Channels + PubSub, one WebSocket</td>
-						<td class="px-3 py-2 text-base-content/70">Native to the platform, scales on the BEAM; rule-filtered topics and origin exclusion built in</td>
-					</tr>
-					<tr>
-						<td class="px-3 py-2 font-medium whitespace-nowrap">File storage</td>
-						<td class="px-3 py-2">Adapter-based store — local disk (default) or S3 / R2</td>
-						<td class="px-3 py-2 text-base-content/70">Pluggable backends selected per file; thumbnails and on-demand scaling via ImageMagick when present</td>
+						<td class="px-3 py-2 font-medium whitespace-nowrap">Images</td>
+						<td class="px-3 py-2">Resized in-process by default, offloadable to a service</td>
+						<td class="px-3 py-2 text-base-content/70">No sidecar to deploy in the common case; <code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_SERVICE_URL</code> moves the work out, and a build without <code class="doc-inline px-1 py-0.5">local-image-codecs</code> leaves the codecs out of the binary</td>
 					</tr>
 					<tr>
 						<td class="px-3 py-2 font-medium whitespace-nowrap">Packaging</td>
-						<td class="px-3 py-2">One Burrito binary — BEAM app + Studio SPA + migrations</td>
-						<td class="px-3 py-2 text-base-content/70">PocketBase-like “download one file and run”, while keeping Postgres external for real deployments</td>
+						<td class="px-3 py-2">One binary — server + Studio SPA + migrations</td>
+						<td class="px-3 py-2 text-base-content/70">“Download one file and run”, like PocketBase, while keeping Postgres external where a real deployment wants it</td>
 					</tr>
 					<tr>
 						<td class="px-3 py-2 font-medium whitespace-nowrap">Roadmap</td>
-						<td class="px-3 py-2">Sandboxed runtime hook evaluation (Phase 10)</td>
-						<td class="px-3 py-2 text-base-content/70">Not shipped yet — tracked in PLAN.md alongside release-polish items</td>
+						<td class="px-3 py-2">Webhooks, MFA/TOTP, and the <code class="doc-inline px-1 py-0.5">$db</code>/<code class="doc-inline px-1 py-0.5">$http</code> hook bindings</td>
+						<td class="px-3 py-2 text-base-content/70">Tracked in PLAN.md. <code class="doc-inline px-1 py-0.5">$db</code> is a semantics decision rather than plumbing — the hook thread cannot join the request’s transaction, so it would commit independently of the record write</td>
 					</tr>
 				</tbody>
 			</table>
@@ -302,8 +344,8 @@
 					target="_blank"
 					rel="noreferrer">PLAN.md</a
 				>
-				— the full architecture &amp; development plan: per-phase breakdowns of the DDL engine,
-				rule compiler, hook system, and release pipeline.
+				— the full architecture &amp; development plan: the DDL engine, the rule-to-policy
+				compiler, the hook system, the realtime design and the release pipeline.
 			</li>
 			<li>
 				<a
@@ -313,28 +355,24 @@
 					rel="noreferrer">Repository README</a
 				>
 				— feature overview and the CLI reference (<code class="doc-inline px-1 py-0.5"
-					>lazypock migrate</code
-				>, <code class="doc-inline px-1 py-0.5">seed</code>, …).
+					>lazypock serve</code
+				>, <code class="doc-inline px-1 py-0.5">migrate</code>,
+				<code class="doc-inline px-1 py-0.5">superuser</code>,
+				<code class="doc-inline px-1 py-0.5">healthcheck</code>).
 			</li>
 			<li>
-				<a
-					class="text-primary underline"
-					href="https://github.com/gnuzd/lazypock/blob/main/core/README.md"
-					target="_blank"
-					rel="noreferrer">core/README.md</a
-				>
-				— developer setup for the Elixir app: <code class="doc-inline px-1 py-0.5">mix setup</code>,
-				env vars, tests.
+				Crate docs — each crate carries its own module documentation:
+				<code class="doc-inline px-1 py-0.5">cargo doc --workspace --open</code>.
 			</li>
 			<li>
 				Module map inside the binary: <code class="doc-inline px-1 py-0.5"
-					>Lazypock.Schema</code
+					>lazypock_db::schema</code
 				>
-				(DDL/TypeMapper) · <code class="doc-inline px-1 py-0.5">Lazypock.Rules.Enforcer</code> ·
-				<code class="doc-inline px-1 py-0.5">Lazypock.Hooks.*</code> ·
-				<code class="doc-inline px-1 py-0.5">Lazypock.Realtime.Broadcaster</code> ·
-				<code class="doc-inline px-1 py-0.5">Lazypock.Files.Store</code> ·
-				<code class="doc-inline px-1 py-0.5">LazypockWeb.Router</code>.
+				(DDL + schema cache) · <code class="doc-inline px-1 py-0.5">lazypock_db::rls</code> (policy
+				generation) · <code class="doc-inline px-1 py-0.5">lazypock_hooks</code> (QuickJS runtime
+				and loader) · <code class="doc-inline px-1 py-0.5">lazypock_realtime</code> (EventBus and
+				fan-out) · <code class="doc-inline px-1 py-0.5">lazypock_files</code> ·
+				<code class="doc-inline px-1 py-0.5">lazypock_api::router</code>.
 			</li>
 		</ul>
 	</section>

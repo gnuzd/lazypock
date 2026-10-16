@@ -507,14 +507,14 @@ cargo run -- serve`}
         <code class="doc-inline px-1 py-0.5">_fields</code>,
         <code class="doc-inline px-1 py-0.5">_superusers</code>,
         <code class="doc-inline px-1 py-0.5">_settings</code>,
-        <code class="doc-inline px-1 py-0.5">_request_logs</code>, …) plus its
+        <code class="doc-inline px-1 py-0.5">_logs</code>, …) plus its
         migration bookkeeping. These are namespaced and never touch your tables.
       </li>
       <li>
         <strong>Adoption (reflection)</strong>: every table it did not create
         becomes a collection, and every column becomes a field — so your existing
         tables appear in the Studio sidebar and are served through the dynamic
-        <code class="doc-inline px-1 py-0.5">/api/:collection</code> routes
+        <code class="doc-inline px-1 py-0.5">/api/collections/&#123;collection&#125;/records</code> routes
         immediately. This is reflection, not migration: <strong>nothing alters
         the existing tables</strong>, and a column lazypock has no field type for
         becomes text with the original type kept in its options.

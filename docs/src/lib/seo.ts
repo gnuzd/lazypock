@@ -11,7 +11,7 @@
 /** Canonical origin — the host used by robots.txt and llms.txt too. */
 export const SITE_URL = "https://lazypock.gnuzd.dev";
 export const SITE_NAME = "Lazypock";
-export const SITE_TAGLINE = "PocketBase-compatible backend on PostgreSQL";
+export const SITE_TAGLINE = "Self-hosted backend-as-a-service in Rust + Postgres";
 export const REPO_URL = "https://github.com/gnuzd/lazypock";
 export const OG_IMAGE = `${SITE_URL}/og.png`;
 
