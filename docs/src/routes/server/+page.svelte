@@ -4,7 +4,7 @@
 
   const title = 'Server Guide — Lazypock Docs';
   const description =
-    'Run and operate a Lazypock server: Docker image or prebuilt binary, first-time setup, filters, production checklist, ImageMagick and every environment variable.';
+    'Run and operate a Lazypock server: Docker image or from source, first-time setup, filters, connecting an existing database, production checklist and every environment variable.';
 </script>
 
 <Seo {title} {description} />
@@ -15,99 +15,97 @@
     <div class="flex flex-wrap items-center gap-2">
       <span
         class="rounded-field bg-info/10 text-info px-2 py-0.5 text-xs font-medium"
-        >Server · Elixir + Phoenix + PostgreSQL</span
+        >Server · Rust + axum + PostgreSQL</span
       >
     </div>
     <h1 class="mt-3 text-3xl font-bold tracking-tight">Server Guide</h1>
     <p class="mt-3 text-base-content/80 leading-relaxed">
       How to run and operate a Lazypock server. The repo is a monorepo with two
       parts: the
-      <strong>core</strong> backend (Elixir + Phoenix + PostgreSQL) and the
+      <strong>core</strong> backend (Rust, axum, PostgreSQL) and the
       <strong>Studio</strong>
-      admin UI (SvelteKit, served by the backend at
+      admin UI (SvelteKit, built into the binary and served at
       <code class="doc-inline px-1 py-0.5">/_/</code>). Your app talks to the
       server through one of the
       <a class="text-primary underline" href="/sdk">SDKs</a> — no backend code required.
+    </p>
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      Everything is one binary: the API, auth, realtime, the TypeScript hooks
+      runtime, migrations and the CLI. Postgres is the source of truth and the
+      message bus (data, row-level security, jobs, realtime via
+      <code class="doc-inline px-1 py-0.5">LISTEN/NOTIFY</code>).
     </p>
 
     <h2 class="mt-8 text-xl font-semibold border-b border-base-300 pb-2">
       Prerequisites
     </h2>
     <ul class="mt-3 space-y-2 text-base-content/80 list-disc list-inside">
+      <li><strong>Rust 1.85+</strong> (only for running from source)</li>
+      <li><strong>PostgreSQL 15+</strong> — a direct connection, not a pooler</li>
       <li>
-        <strong>Elixir 1.17+</strong> and <strong>Erlang/OTP 26+</strong> (only for
-        running from source)
-      </li>
-      <li><strong>PostgreSQL 15+</strong></li>
-      <li>
-        <strong>Node.js 20+</strong> (only for the Studio dev server and the SDKs)
+        <strong>Docker</strong> (only for the container route) — no other system
+        package is required
       </li>
       <li>
-        <strong>ImageMagick 6 or 7</strong> — required for image thumbnails,
-        presets and on-demand scaling. It is a <em>host</em> dependency when you
-        run the binary or from source (the Docker image bundles it); see
-        <a class="text-primary underline" href="#images">Image processing</a>.
-        Uploads still work without it, but no resized variants are produced.
-      </li>
-      <li>
-        <code class="doc-inline px-1 py-0.5">zig</code> and
-        <code class="doc-inline px-1 py-0.5">xz</code> — only needed for Burrito
-        production release builds
+        <strong>Bun</strong> (only for the Studio dev server)
       </li>
     </ul>
     <p class="mt-3 text-sm text-base-content/70">
-      The Docker quick start below skips the Elixir/Node prerequisites entirely
-      — just Docker and the published image.
+      There is no ImageMagick, no external queue and no other sidecar: thumbnails
+      and scaled images are produced in-process, or by a service you point the
+      server at — see
+      <a class="text-primary underline" href="#images">Image processing</a>.
     </p>
   </section>
 
   <!-- QUICK START (DOCKER) -->
   <section id="quick-start" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
-      Quick start — Docker image
+      Quick start — Docker
     </h2>
     <p class="mt-3 text-base-content/80 leading-relaxed">
-      No Elixir, Erlang, or source checkout needed — just Docker and the
-      published image (<code class="doc-inline px-1 py-0.5">gnuzd/lazypock</code
-      >, built from the released Linux binary for both
-      <code class="doc-inline px-1 py-0.5">amd64</code> and
-      <code class="doc-inline px-1 py-0.5">arm64</code>). Save this as
-      <code class="doc-inline px-1 py-0.5">compose.yml</code> and run
-      <code class="doc-inline px-1 py-0.5">docker compose up -d</code>:
+      No Rust toolchain needed. The repository root has a
+      <code class="doc-inline px-1 py-0.5">Dockerfile</code> and a
+      <code class="doc-inline px-1 py-0.5">compose.yml</code> that runs the server
+      next to Postgres, so the shortest path is:
+    </p>
+    <CodeBlock
+      lang="bash"
+      code={`git clone https://github.com/gnuzd/lazypock.git
+cd lazypock
+
+# set LAZYPOCK_DATABASE_URL and LAZYPOCK_SECRET_KEY in compose.yml first
+docker compose up --build
+
+# Studio: http://localhost:4000/_/`}
+    />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      A tagged release also publishes a multi-arch image
+      (<code class="doc-inline px-1 py-0.5">ghcr.io/gnuzd/lazypock</code>), so a
+      deployment can pull a built artifact instead of building one:
     </p>
     <CodeBlock
       lang="yaml"
       code={`services:
   lazypock:
-    image: gnuzd/lazypock:latest
+    image: ghcr.io/gnuzd/lazypock:latest
     ports: ["4000:4000"]
     environment:
-      LAZYPOCK_DATABASE_URL: ecto://postgres:postgres@postgres:5432/lazypock
-      # generate one with: openssl rand -base64 48
-      SECRET_KEY_BASE: change-me
-      LAZYPOCK_SUPERUSER_EMAIL: admin@lazypock.app
-      LAZYPOCK_SUPERUSER_PASSWORD: admin123
-    volumes: ["uploads:/data/uploads"]
-  postgres:
+      LAZYPOCK_DATABASE_URL: postgres://lazypock:change-me@db:5432/lazypock
+      # openssl rand -hex 32
+      LAZYPOCK_SECRET_KEY: change-me
+      LAZYPOCK_ENV: production
+    volumes: ["lazypock-data:/data"]
+  db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_PASSWORD: postgres
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+      POSTGRES_USER: lazypock
+      POSTGRES_PASSWORD: change-me
+      POSTGRES_DB: lazypock
+    volumes: ["db-data:/var/lib/postgresql/data"]
 volumes:
-  uploads:
-  pgdata:`}
-    />
-    <p class="mt-3 text-base-content/80 leading-relaxed">
-      Already run a PostgreSQL 15+? One container is enough — just point
-      <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code> at it:
-    </p>
-    <CodeBlock
-      lang="bash"
-      code={`docker run -d -p 4000:4000 \\
-  -e LAZYPOCK_DATABASE_URL="ecto://user:pass@host:5432/db" \\
-  -e SECRET_KEY_BASE="$(openssl rand -base64 48)" \\
-  -v lazypock-uploads:/data/uploads \\
-  gnuzd/lazypock:latest`}
+  lazypock-data:
+  db-data:`}
     />
     <div
       class="rounded-box border border-base-300 bg-base-200/60 p-4 my-4 text-sm leading-relaxed"
@@ -117,10 +115,7 @@ volumes:
           Server + Studio admin UI: <code class="doc-inline px-1 py-0.5"
             >http://localhost:4000</code
           >
-          (login at <code class="doc-inline px-1 py-0.5">/_/</code> — the superuser is
-          created on first boot from <code class="doc-inline px-1 py-0.5"
-            >LAZYPOCK_SUPERUSER_EMAIL</code
-          >/<code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_PASSWORD</code>)
+          (login at <code class="doc-inline px-1 py-0.5">/_/</code>)
         </li>
         <li>
           REST API: <code class="doc-inline px-1 py-0.5"
@@ -128,14 +123,13 @@ volumes:
           >
         </li>
         <li>
-          The image bundles ImageMagick, so thumbnails and on-demand scaling work
-          out of the box.
+          The image runs as a non-root user and writes only to
+          <code class="doc-inline px-1 py-0.5">/data</code>, which the compose
+          file mounts as a volume. Migrations run automatically on boot.
         </li>
         <li>
-          Pin a version (<code class="doc-inline px-1 py-0.5"
-            >gnuzd/lazypock:0.20.0</code
-          >) rather than <code class="doc-inline px-1 py-0.5">latest</code> in
-          production.
+          Pin a version rather than <code class="doc-inline px-1 py-0.5">latest</code>
+          in production.
         </li>
       </ul>
     </div>
@@ -144,14 +138,8 @@ volumes:
     </p>
     <CodeBlock lang="bash" code={`docker compose down -v`} />
     <p class="mt-3 text-base-content/80 leading-relaxed">
-      Prefer a single binary over a container? See
-      <a class="text-primary underline" href="#binary">Prebuilt binary</a> below.
-    </p>
-    <p class="mt-3 text-base-content/80 leading-relaxed">
-      Prefer no Docker at all? Any PostgreSQL 15+ works — just point
-      <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code> at it. Or run
-      from source — see
-      <a class="text-primary underline" href="#manual">Manual setup</a> below.
+      Prefer to run the binary directly? See
+      <a class="text-primary underline" href="#source">Run from source</a> below.
     </p>
     <p class="mt-3 text-base-content/80 leading-relaxed">
       Ready to connect an app? Follow the
@@ -161,90 +149,58 @@ volumes:
     </p>
   </section>
 
-  <!-- PREBUILT BINARY -->
-  <section id="binary" class="scroll-mt-20 mb-10">
+  <!-- RUN FROM SOURCE -->
+  <section id="source" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
-      Prebuilt binary
+      Run from source
     </h2>
     <p class="mt-2 text-base-content/80 leading-relaxed">
-      No Docker, no Elixir toolchain — grab a prebuilt single-binary release
-      (built with Burrito — macOS arm64, Linux x86_64 and Linux arm64) straight
-      from GitHub Releases and run it directly:
+      Requires Rust 1.85+ and a reachable PostgreSQL 15+ instance (Docker is
+      fine). The CLI is the same binary you deploy.
     </p>
     <CodeBlock
       lang="bash"
-      code={`# Download the latest release for your platform from:
-# https://github.com/gnuzd/lazypock/releases/latest
+      code={`git clone https://github.com/gnuzd/lazypock.git
+cd lazypock
 
-chmod +x lazypock_macos_silicon   # or the binary matching your OS/arch
-
-export LAZYPOCK_DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock"
-export SECRET_KEY_BASE="$(openssl rand -base64 48)"
-LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \\
-  ./lazypock_macos_silicon`}
-    />
-    <p class="mt-3 text-sm text-base-content/70">
-      You still need a reachable PostgreSQL 15+ instance (e.g. via
-      <code class="doc-inline px-1 py-0.5"
-        >docker run -p 5432:5432 postgres:16-alpine</code
-      >). The binary handles migrations, seeding, and serving the Studio UI on
-      its own — see
-      <a
-        class="text-primary underline"
-        href="https://github.com/gnuzd/lazypock/releases"
-        target="_blank"
-        rel="noreferrer">Releases</a
-      >
-      for available platforms and checksums.
-    </p>
-    <p class="mt-3 text-sm text-base-content/70">
-      The binary bundles the app, <strong>not its system dependencies</strong>.
-      In particular <strong>ImageMagick is not included</strong>: install it on
-      the host (or in your container image) if you want thumbnails and image
-      scaling — see <a class="text-primary underline" href="#images"
-        >Image processing</a
-      >.
-    </p>
-  </section>
-
-  <!-- MANUAL -->
-  <section id="manual" class="scroll-mt-20 mb-10">
-    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
-      Manual setup (from source)
-    </h2>
-
-    <h3 class="mt-6 text-lg font-semibold">1. Run the backend (Phoenix)</h3>
-    <CodeBlock
-      lang="bash"
-      code={`git clone git@github.com:gnuzd/lazypock.git
-cd lazypock/core
-
-export LAZYPOCK_DATABASE_URL="ecto://postgres:postgres@localhost:5432/lazypock_dev"
-mix setup          # install deps, create DB, run migrations, seed
-mix phx.server      # starts Phoenix on http://localhost:4000`}
+cp .env.example .env       # then point LAZYPOCK_DATABASE_URL at your Postgres
+cargo run -- migrate        # create the system tables
+cargo run -- config         # show the resolved config (credentials redacted)
+cargo run -- serve          # start the API on http://localhost:4000
+curl http://localhost:4000/api/health`}
     />
     <p class="mt-2 text-sm text-base-content/70">
-      The REST API and realtime channels are served at <code
-        class="doc-inline px-1 py-0.5">http://localhost:4000</code
-      >.
+      <code class="doc-inline px-1 py-0.5">serve</code> also applies pending
+      migrations on boot and loads the schema before accepting requests, so a
+      first run against an empty database is the whole installation step. Run
+      <code class="doc-inline px-1 py-0.5">lazypock migrate --status</code> to see
+      what is applied.
     </p>
-
-    <h3 class="mt-6 text-lg font-semibold">2. Run Studio (Admin UI)</h3>
+    <h3 class="mt-6 text-lg font-semibold">Studio (admin UI)</h3>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      A plain <code class="doc-inline px-1 py-0.5">cargo build</code> embeds no
+      Studio. To run the SvelteKit dev server against a local API:
+    </p>
     <CodeBlock
       lang="bash"
-      code={`cd lazypock/studio
-
-npm install
-npm run dev          # starts Vite dev server on http://localhost:5173`}
+      code={`cd studio
+bun install
+bun run dev          # Vite dev server on http://localhost:5173`}
     />
     <p class="mt-2 text-base-content/80 leading-relaxed">
       The SvelteKit dev server proxies <code class="doc-inline px-1 py-0.5"
         >/api</code
       >
-      requests to the Phoenix backend on port 4000. Studio itself is served at
-      <code class="doc-inline px-1 py-0.5">http://localhost:5173/_/</code>.
+      requests to the Rust backend on port 4000, and serves the Studio at
+      <code class="doc-inline px-1 py-0.5">http://localhost:5173/_/</code>. To
+      build the bundle into the binary:
     </p>
-
+    <CodeBlock
+      lang="bash"
+      code={`cd studio && bun run build
+cd ..
+LAZYPOCK_STUDIO_DIR=studio/build/studio cargo run -- serve`}
+    />
     <p class="mt-4 text-base-content/80 leading-relaxed">
       Then connect an app with one of the
       <a class="text-primary underline" href="/sdk">SDKs</a> — see the
@@ -259,24 +215,31 @@ npm run dev          # starts Vite dev server on http://localhost:5173`}
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
       First-time setup
     </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      There are two ways to create the first superuser, and either is enough:
+    </p>
     <ol class="mt-3 list-decimal list-inside space-y-1 text-base-content/80">
       <li>
-        Open Studio at <code class="doc-inline px-1 py-0.5"
-          >http://localhost:5173/_/</code
+        <strong>From the Studio.</strong> Open
+        <code class="doc-inline px-1 py-0.5">/_/</code>; with no superuser yet you
+        are offered <strong>Setup</strong> instead of login. Setup only works
+        while no superuser exists, so it cannot be replayed later.
+      </li>
+      <li>
+        <strong>From the CLI.</strong>
+        <code class="doc-inline px-1 py-0.5"
+          >lazypock superuser create --email you@example.com</code
         >
-        (or <code class="doc-inline px-1 py-0.5">/_</code> if served directly from
-        Phoenix)
-      </li>
-      <li>You'll be redirected to the login page</li>
-      <li>
-        Click <strong>Setup</strong> to create the first superuser account
-      </li>
-      <li>
-        Log in and start creating collections — every collection you create in
-        Studio gets an instant REST API + realtime channel + rules, ready to
-        call from any SDK
+        (prompts for a password, or reads
+        <code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_PASSWORD</code>).
+        This applies migrations first, so it is safe on a brand-new database.
       </li>
     </ol>
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      Then log in and start creating collections — every collection you create in
+      Studio gets an instant REST API + realtime channel + rules, ready to
+      call from any SDK.
+    </p>
   </section>
 
   <!-- FILTERS -->
@@ -379,10 +342,8 @@ GET /api/posts?filter=deleted_at = null`}
     </p>
     <CodeBlock
       lang="bash"
-      code={`export LAZYPOCK_DATABASE_URL="ecto://user:password@db-host:5432/my_existing_db"
-export SECRET_KEY_BASE="$(openssl rand -base64 48)"
-LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme \
-  ./lazypock_macos_silicon`}
+      code={`export LAZYPOCK_DATABASE_URL="postgres://user:password@db-host:5432/my_existing_db"
+cargo run -- serve`}
     />
     <p class="mt-3 text-base-content/80 leading-relaxed">
       On boot LazyPock does three things to the database:
@@ -394,45 +355,41 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
         (<code class="doc-inline px-1 py-0.5">_collections</code>,
         <code class="doc-inline px-1 py-0.5">_fields</code>,
         <code class="doc-inline px-1 py-0.5">_superusers</code>,
-        <code class="doc-inline px-1 py-0.5">_request_logs</code>, …) plus
-        <code class="doc-inline px-1 py-0.5">schema_migrations</code>. These
-        are namespaced and never touch your tables.
+        <code class="doc-inline px-1 py-0.5">_settings</code>,
+        <code class="doc-inline px-1 py-0.5">_request_logs</code>, …) plus its
+        migration bookkeeping. These are namespaced and never touch your tables.
       </li>
       <li>
-        <strong>Auto-registration</strong>: every public table that isn't
-        already a LazyPock collection becomes a <code
-          class="doc-inline px-1 py-0.5">base</code> collection, with columns
-        inferred from the Postgres schema — so your existing tables appear in
-        the Studio sidebar and are served through the dynamic
+        <strong>Adoption (reflection)</strong>: every table it did not create
+        becomes a collection, and every column becomes a field — so your existing
+        tables appear in the Studio sidebar and are served through the dynamic
         <code class="doc-inline px-1 py-0.5">/api/:collection</code> routes
-        immediately.
+        immediately. This is reflection, not migration: <strong>nothing alters
+        the existing tables</strong>, and a column lazypock has no field type for
+        becomes text with the original type kept in its options.
       </li>
       <li>
-        <strong>Shape reconciliation</strong> so CRUD works out of the box:
-        Ecto <code class="doc-inline px-1 py-0.5">timestamps()</code>
-        columns are normalized (<code
-          class="doc-inline px-1 py-0.5">inserted_at</code> → <code
-          class="doc-inline px-1 py-0.5">created_at</code>, a missing
-        <code class="doc-inline px-1 py-0.5">updated_at</code> is added), and
-        foreign-key columns become <strong>relation fields</strong> pointing
-        at the referenced table — so the Studio shows a relation dropdown and
-        the API supports <code class="doc-inline px-1 py-0.5">expand</code>
-        on them.
+        <strong>Default-deny.</strong> An adopted collection starts with no rules,
+        which means <strong>superuser-only</strong>. Adopting a table must not
+        silently expose somebody else&rsquo;s data; open it up deliberately in
+        the Studio. Tables and schemas that are internal, or already a collection,
+        are left alone.
       </li>
     </ol>
     <p class="mt-3 text-sm text-base-content/70">
-      Internal <code class="doc-inline px-1 py-0.5">_</code>-prefixed tables
-      and <code class="doc-inline px-1 py-0.5">schema_migrations</code> are
-      never registered. Set
-      <code class="doc-inline px-1 py-0.5">LAZYPOCK_AUTOMIGRATE=0</code> if
-      you'd rather run migrations manually with
-      <code class="doc-inline px-1 py-0.5">lazypock migrate</code> — note
-      that auto-registration runs as part of every migrate, so tables added
-      later by other tools are picked up on the next
-      <code class="doc-inline px-1 py-0.5">lazypock migrate</code> (or
-      restart). Log in to the Studio with the superuser created on first boot
-      (or via the env vars above) and your data is ready to browse, query,
-      and edit.
+      Adoption is controlled by
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_REFLECT_EXISTING</code> (on by
+      default). Row-level security needs the restricted
+      <code class="doc-inline px-1 py-0.5">lazypock_anon</code> /
+      <code class="doc-inline px-1 py-0.5">lazypock_authenticated</code> roles to
+      exist and be reachable by the connecting role; if they are not, the server
+      logs a loud warning at boot rather than pretending RLS is in force. See
+      <code class="doc-inline px-1 py-0.5">README.md</code> for the CLI
+      (<code class="doc-inline px-1 py-0.5">serve</code>,
+      <code class="doc-inline px-1 py-0.5">migrate</code>,
+      <code class="doc-inline px-1 py-0.5">superuser</code>,
+      <code class="doc-inline px-1 py-0.5">config</code>,
+      <code class="doc-inline px-1 py-0.5">healthcheck</code>).
     </p>
   </section>
 
@@ -481,6 +438,12 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
       first run and kept there.
     </p>
     <p class="mt-3 text-sm text-base-content/70">
+      Behind a reverse proxy, set
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_TRUSTED_PROXIES</code> to the
+      proxy&rsquo;s addresses. Without it no forwarding header is read at all, so
+      rate limits and request logs would key on the proxy rather than the client.
+    </p>
+    <p class="mt-3 text-sm text-base-content/70">
       The image runs as a non-root user and writes only to
       <code class="doc-inline px-1 py-0.5">/data</code>, which compose mounts as
       a volume. It needs no
@@ -507,121 +470,53 @@ LAZYPOCK_SUPERUSER_EMAIL=admin@example.com LAZYPOCK_SUPERUSER_PASSWORD=changeme 
   <!-- IMAGE PROCESSING -->
   <section id="images" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
-      Image processing (ImageMagick)
+      Image processing
     </h2>
     <p class="mt-2 text-base-content/80 leading-relaxed">
-      Every resize goes through the <strong>ImageMagick CLI</strong>: upload
-      thumbnails, the named presets (<code class="doc-inline px-1 py-0.5">thumb</code>,
-      <code class="doc-inline px-1 py-0.5">small</code>,
-      <code class="doc-inline px-1 py-0.5">content</code>) and on-demand
+      Resizing runs <strong>in the API process</strong> by default, using image
+      codecs compiled into the binary. There is no ImageMagick and no sidecar:
+      that is what keeps the binary self-contained. The named presets, upload
+      thumbnails and on-demand
       <code class="doc-inline px-1 py-0.5">GET /api/files/:id/scale/:preset</code>
-      requests. It is a <strong>host dependency</strong> — a prebuilt binary
-      does not bundle it, and an OS upgrade does not remove the need for it.
+      requests all go through the same code path.
     </p>
 
-    <h3 class="mt-5 font-semibold">Install</h3>
-    <CodeBlock
-      lang="bash"
-      code={`# Debian / Ubuntu — ImageMagick 6 (identify + convert)
-sudo apt install imagemagick
-
-# RHEL / Fedora
-sudo dnf install ImageMagick
-
-# Alpine (containers)
-apk add imagemagick
-
-# macOS — ImageMagick 7 (magick)
-brew install imagemagick`}
-    />
-
-    <h3 class="mt-5 font-semibold">Verify</h3>
-    <CodeBlock
-      lang="bash"
-      code={`identify -version      # ImageMagick 6 and 7
-magick -version        # ImageMagick 7 only
-
-# the two binaries LazyPock shells out to:
-command -v identify    # reads dimensions
-command -v convert || command -v magick   # performs the resize`}
-    />
-    <p class="mt-3 text-sm text-base-content/70">
-      Both <strong>ImageMagick 6</strong> (what Debian/Ubuntu ship, providing
-      <code class="doc-inline px-1 py-0.5">identify</code> and
-      <code class="doc-inline px-1 py-0.5">convert</code>) and
-      <strong>ImageMagick 7</strong>
-      (<code class="doc-inline px-1 py-0.5">magick</code>) are supported.
+    <h3 class="mt-5 font-semibold">Moving resizing out of the process</h3>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      A large image decodes into peak memory in the request worker. Set
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_SERVICE_URL</code> to
+      move that work — and its memory — to a service you run:
     </p>
+    <CodeBlock
+      lang="bash"
+      code={`# a service that accepts the source bytes and the resize parameters
+export LAZYPOCK_IMAGE_SERVICE_URL="https://images.example.com/resize"
+# optional bearer token
+export LAZYPOCK_IMAGE_SERVICE_TOKEN="$(openssl rand -hex 32)"
 
-    <h3 class="mt-5 font-semibold">If it is missing</h3>
-    <ul class="mt-2 space-y-2 text-base-content/80 list-disc list-inside">
-      <li>Uploads still succeed, and originals are served unchanged.</li>
-      <li>
-        No thumbnails or presets are generated:
-        <code class="doc-inline px-1 py-0.5">GET /api/files/:id/thumbs/:size</code>
-        answers <code class="doc-inline px-1 py-0.5">404</code> and
-        <code class="doc-inline px-1 py-0.5">/scale/…</code> answers
-        <code class="doc-inline px-1 py-0.5">400</code>.
-      </li>
-      <li>A one-time warning is logged on the first upload.</li>
-      <li>
-        Set
-        <code class="doc-inline px-1 py-0.5">LAZYPOCK_THUMBNAILS=0</code> to
-        disable resizing deliberately (and silence the warning).
-      </li>
-    </ul>
-
-    <h3 class="mt-5 font-semibold">Resource limits</h3>
-    <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
-      <table class="w-full text-sm">
-        <thead class="bg-base-200">
-          <tr>
-            <th class="px-3 py-2 text-left">Variable</th>
-            <th class="px-3 py-2 text-left">Purpose</th>
-            <th class="px-3 py-2 text-left">Default</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-base-300">
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_CONCURRENCY</code></td
-            >
-            <td class="px-3 py-2"
-              >Resizes running at once per instance — requests wait briefly, then
-              get a <code class="doc-inline px-1 py-0.5">503</code></td
-            >
-            <td class="px-3 py-2 font-mono text-xs">1</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5"
-                >LAZYPOCK_MAGICK_MEMORY_LIMIT</code
-              ></td
-            >
-            <td class="px-3 py-2">Per-process ImageMagick memory cap</td>
-            <td class="px-3 py-2 font-mono text-xs">256MiB</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_VARIANT_CACHE_MAX</code></td
-            >
-            <td class="px-3 py-2">Local variant cache cap, oldest evicted first</td>
-            <td class="px-3 py-2 font-mono text-xs">5GB</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_ENGINE</code></td
-            >
-            <td class="px-3 py-2">Image engine (an unavailable engine fails loudly)</td>
-            <td class="px-3 py-2 font-mono text-xs">magick</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+# a thin binary with no codecs of its own: the service does all resizing
+cargo build --release --no-default-features`}
+    />
+    <p class="mt-2 text-sm text-base-content/70">
+      The request is
+      <code class="doc-inline px-1 py-0.5"
+        >POST &lt;url&gt;?width=…&amp;height=…&amp;fit=…&amp;format=…&amp;quality=…</code
+      >
+      with the source bytes as the body and the encoded image as the response.
+      <code class="doc-inline px-1 py-0.5">fit</code> is one of
+      <code class="doc-inline px-1 py-0.5">cover|contain|fill|inside|outside</code>,
+      <code class="doc-inline px-1 py-0.5">format</code> one of
+      <code class="doc-inline px-1 py-0.5">webp|png|jpeg|avif</code>. A failure is
+      <strong>never</strong> silently fallen back to the local codecs: a
+      deployment that pointed at a service did so to keep the CPU elsewhere. The
+      full contract is in
+      <code class="doc-inline px-1 py-0.5">crates/files/src/image_service.rs</code>.
+    </p>
     <p class="mt-3 text-sm text-base-content/70">
       Which variants exist, their sizes, and whether they are generated during
       upload (eager) or on first request (lazy) is configured with
-      <code class="doc-inline px-1 py-0.5">image.presets</code> — see
+      <code class="doc-inline px-1 py-0.5">_image_presets</code> in the Studio —
+      see
       <a class="text-primary underline" href="/files">File storage &amp; images</a>.
     </p>
   </section>
@@ -631,13 +526,21 @@ command -v convert || command -v magick   # performs the resize`}
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
       Environment variables
     </h2>
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      Only these <code class="doc-inline px-1 py-0.5">LAZYPOCK_</code>-prefixed
+      names are read. A value that cannot be parsed is refused at boot rather
+      than silently defaulted. The same list lives in
+      <code class="doc-inline px-1 py-0.5">.env.example</code>.
+    </p>
+
+    <h3 class="mt-6 text-lg font-semibold">Core</h3>
     <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
       <table class="w-full text-sm">
         <thead class="bg-base-200 text-left">
           <tr>
             <th class="px-3 py-2 font-semibold">Variable</th>
             <th class="px-3 py-2 font-semibold">Description</th>
-            <th class="px-3 py-2 font-semibold">Example</th>
+            <th class="px-3 py-2 font-semibold">Default / example</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-base-300">
@@ -645,254 +548,358 @@ command -v convert || command -v magick   # performs the resize`}
             <td class="px-3 py-2"
               ><code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code></td
             >
-            <td class="px-3 py-2">PostgreSQL connection string</td>
+            <td class="px-3 py-2"
+              >Direct Postgres connection string (<strong>required</strong>)</td
+            >
             <td class="px-3 py-2 font-mono text-xs"
-              >ecto://postgres:postgres@localhost:5432/lazypock_dev</td
+              >postgres://user:pass@host:5432/lazypock</td
             >
           </tr>
           <tr>
             <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">SECRET_KEY_BASE</code></td
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_ENV</code></td
             >
-            <td class="px-3 py-2">Secret for signing cookies</td>
-            <td class="px-3 py-2 font-mono text-xs">mix phx.gen.secret</td>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">development</code> /
+              <code class="doc-inline px-1 py-0.5">production</code> /
+              <code class="doc-inline px-1 py-0.5">test</code></td
+            >
+            <td class="px-3 py-2 font-mono text-xs">development</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">PHX_HOST</code></td
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_LISTEN_ADDR</code></td
             >
-            <td class="px-3 py-2"
-              >Public hostname (optional, defaults to <code
-                class="doc-inline px-1 py-0.5">example.com</code
-              >)</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">localhost</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">PORT</code></td
-            >
-            <td class="px-3 py-2"
-              >HTTP port (optional, defaults to <code
-                class="doc-inline px-1 py-0.5">4000</code
-              >)</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">4000</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">POOL_SIZE</code></td
-            >
-            <td class="px-3 py-2"
-              >DB connection pool size (optional, defaults to <code
-                class="doc-inline px-1 py-0.5">10</code
-              >)</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">10</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5"
-                >LAZYPOCK_SUPERUSER_EMAIL</code
-              ></td
-            >
-            <td class="px-3 py-2">Auto-create superuser on boot</td>
-            <td class="px-3 py-2 font-mono text-xs">admin@lazypock.app</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5"
-                >LAZYPOCK_SUPERUSER_PASSWORD</code
-              ></td
-            >
-            <td class="px-3 py-2">Auto-create superuser on boot</td>
-            <td class="px-3 py-2 font-mono text-xs">your-password</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_THUMBNAILS</code
-              ></td
-            >
-            <td class="px-3 py-2"
-              >Set to <code class="doc-inline px-1 py-0.5">0</code> to disable thumbnail/scaling
-              generation</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">0</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_IMAGE_CONCURRENCY</code></td
-            >
-            <td class="px-3 py-2"
-              >Concurrent image resizes per instance (requests wait, then get
-              <code class="doc-inline px-1 py-0.5">503</code>)</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">1</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_UPLOAD_MAX_MB</code></td
-            >
-            <td class="px-3 py-2"
-              >Request-body cap for
-              <code class="doc-inline px-1 py-0.5">POST /api/files</code> (other routes stay at
-              8 MB)</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">20</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_MAGICK_MEMORY_LIMIT</code></td
-            >
-            <td class="px-3 py-2">Per-process ImageMagick memory cap</td>
-            <td class="px-3 py-2 font-mono text-xs">256MiB</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_VARIANT_CACHE_MAX</code></td
-            >
-            <td class="px-3 py-2"
-              >Local variant cache cap — oldest files are evicted first</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">5GB</td>
-          </tr>
-          <tr>
-            <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_S3_*</code></td
-            >
-            <td class="px-3 py-2"
-              >S3/R2 backend: <code class="doc-inline px-1 py-0.5">ENDPOINT</code>,
-              <code class="doc-inline px-1 py-0.5">BUCKET</code>,
-              <code class="doc-inline px-1 py-0.5">REGION</code>,
-              <code class="doc-inline px-1 py-0.5">ACCESS_KEY</code>,
-              <code class="doc-inline px-1 py-0.5">SECRET</code>,
-              <code class="doc-inline px-1 py-0.5">PREFIX</code>,
-              <code class="doc-inline px-1 py-0.5">PUBLIC_URL</code> — override and lock the matching
-              Studio fields. See <a href="/files">File storage &amp; images</a></td
-            >
-            <td class="px-3 py-2 font-mono text-xs">—</td>
+            <td class="px-3 py-2">Address the HTTP server binds to</td>
+            <td class="px-3 py-2 font-mono text-xs">0.0.0.0:4000</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
               ><code class="doc-inline px-1 py-0.5">LAZYPOCK_DATA_DIR</code></td
             >
+            <td class="px-3 py-2">Local data directory (local files, outbox spool)</td>
+            <td class="px-3 py-2 font-mono text-xs">data</td>
+          </tr>
+          <tr>
             <td class="px-3 py-2"
-              >Base data dir for migrations/hooks/seeds (default: <code
-                class="doc-inline px-1 py-0.5">~/.lazypock</code
-              >)</td
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_HOOKS_DIR</code></td
             >
-            <td class="px-3 py-2 font-mono text-xs">/data/lazypock</td>
+            <td class="px-3 py-2">Directory for TypeScript hook files</td>
+            <td class="px-3 py-2 font-mono text-xs">hooks</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_LOG_LEVEL</code></td
+            >
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >trace|debug|info|warn|error</code
+              ></td
+            >
+            <td class="px-3 py-2 font-mono text-xs">info</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_LOG_FORMAT</code></td
+            >
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">text</code> /
+              <code class="doc-inline px-1 py-0.5">json</code></td
+            >
+            <td class="px-3 py-2 font-mono text-xs">text (json in production)</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_POOL_SIZE</code></td
+            >
+            <td class="px-3 py-2"
+              >Postgres pool per node (1-64); total connections = nodes ×
+              (pool + 1)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">5</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
               ><code class="doc-inline px-1 py-0.5"
-                >LAZYPOCK_MIGRATIONS_DIR</code
+                >LAZYPOCK_PG_PREPARED_STATEMENTS</code
               ></td
             >
-            <td class="px-3 py-2"
-              >Directory for migrations (default: <code
-                class="doc-inline px-1 py-0.5">~/.lazypock/migrations</code
-              >)</td
-            >
-            <td class="px-3 py-2 font-mono text-xs"
-              >/data/lazypock/migrations</td
-            >
+            <td class="px-3 py-2">Use named prepared statements</td>
+            <td class="px-3 py-2 font-mono text-xs">true</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_AUTOMIGRATE</code
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_UPLOAD_MAX_BYTES</code
               ></td
             >
-            <td class="px-3 py-2"
-              >Set to <code class="doc-inline px-1 py-0.5">0</code> to disable
-              auto-migrate on boot (then use
-              <code class="doc-inline px-1 py-0.5">lazypock migrate</code>)</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">0</td>
+            <td class="px-3 py-2">Maximum accepted upload size, in bytes</td>
+            <td class="px-3 py-2 font-mono text-xs">5242880 (5 MiB)</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_AUTOSEED</code></td
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_PUBLIC_URL</code></td
             >
-            <td class="px-3 py-2"
-              >Set to <code class="doc-inline px-1 py-0.5">0</code> to disable boot-time
-              seeding</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">0</td>
+            <td class="px-3 py-2">Public base URL when it differs from the host</td>
+            <td class="px-3 py-2 font-mono text-xs">—</td>
           </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="mt-6 text-lg font-semibold">Request handling</h3>
+    <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
+      <table class="w-full text-sm">
+        <thead class="bg-base-200 text-left">
+          <tr>
+            <th class="px-3 py-2 font-semibold">Variable</th>
+            <th class="px-3 py-2 font-semibold">Description</th>
+            <th class="px-3 py-2 font-semibold">Default / example</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-base-300">
           <tr>
             <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_HOOKS_DIR</code
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_TRUSTED_PROXIES</code
               ></td
             >
             <td class="px-3 py-2"
-              >Directory for user hooks (default: <code
-                class="doc-inline px-1 py-0.5">~/.lazypock/hooks</code
-              >)</td
+              >Peers whose forwarding headers are believed (address or CIDR, comma
+              separated). Empty reads no header at all.</td
             >
-            <td class="px-3 py-2 font-mono text-xs">/data/lazypock/hooks</td>
+            <td class="px-3 py-2 font-mono text-xs">—</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_SEEDS_FILE</code
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_RATE_LIMIT_AUTH</code
               ></td
             >
             <td class="px-3 py-2"
-              >Seed file path (default: <code class="doc-inline px-1 py-0.5"
-                >~/.lazypock/seeds.exs</code
-              >)</td
+              >Requests/min per address that spend credentials; 0 disables</td
             >
-            <td class="px-3 py-2 font-mono text-xs">/data/lazypock/seeds.exs</td
-            >
+            <td class="px-3 py-2 font-mono text-xs">20</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
-              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_AUTH_TOKEN_TTL</code
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_RATE_LIMIT_API</code
+              ></td
+            >
+            <td class="px-3 py-2">Requests/min per address for everything else</td>
+            <td class="px-3 py-2 font-mono text-xs">600</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="mt-6 text-lg font-semibold">Secrets</h3>
+    <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
+      <table class="w-full text-sm">
+        <thead class="bg-base-200 text-left">
+          <tr>
+            <th class="px-3 py-2 font-semibold">Variable</th>
+            <th class="px-3 py-2 font-semibold">Description</th>
+            <th class="px-3 py-2 font-semibold">Default / example</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-base-300">
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_SECRET_KEY</code></td
+            >
+            <td class="px-3 py-2"
+              >AES-256-GCM key for the secrets stored in
+              <code class="doc-inline px-1 py-0.5">_settings</code>; required
+              before a secret can be saved</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">openssl rand -hex 32</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_SIGNING_KEY</code></td
+            >
+            <td class="px-3 py-2"
+              >Access-token signing key (base64), kept out of the database</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">openssl rand -base64 32</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="mt-6 text-lg font-semibold">File storage and images</h3>
+    <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
+      <table class="w-full text-sm">
+        <thead class="bg-base-200 text-left">
+          <tr>
+            <th class="px-3 py-2 font-semibold">Variable</th>
+            <th class="px-3 py-2 font-semibold">Description</th>
+            <th class="px-3 py-2 font-semibold">Default / example</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-base-300">
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_FILES_ADAPTER</code
               ></td
             >
             <td class="px-3 py-2"
-              >Access-token lifetime in seconds (optional, defaults to <code
-                class="doc-inline px-1 py-0.5">604800</code
-              > = 7 days)</td
+              ><code class="doc-inline px-1 py-0.5">local</code> /
+              <code class="doc-inline px-1 py-0.5">s3</code>; a saved Studio
+              setting overrides it</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">local</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_FILES_DIR</code></td
+            >
+            <td class="px-3 py-2">Root directory for the local adapter</td>
+            <td class="px-3 py-2 font-mono text-xs">data/files</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_FILES_PUBLIC_URL</code
+              ></td
+            >
+            <td class="px-3 py-2">Public/CDN base URL for served objects</td>
+            <td class="px-3 py-2 font-mono text-xs">—</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_S3_ENDPOINT</code>,
+              <code class="doc-inline px-1 py-0.5">_BUCKET</code>,
+              <code class="doc-inline px-1 py-0.5">_REGION</code>,
+              <code class="doc-inline px-1 py-0.5">_ACCESS_KEY</code>,
+              <code class="doc-inline px-1 py-0.5">_SECRET_KEY</code></td
+            >
+            <td class="px-3 py-2"
+              >S3/R2 backend. All required when the adapter is
+              <code class="doc-inline px-1 py-0.5">s3</code>.</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">region: auto</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_PRESIGN_TTL</code></td
+            >
+            <td class="px-3 py-2"
+              >Presigned URL lifetime, in seconds (1 s-7 days)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">900</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_IMAGE_SERVICE_URL</code
+              ></td
+            >
+            <td class="px-3 py-2">Resize in this service instead of in-process</td>
+            <td class="px-3 py-2 font-mono text-xs">—</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_IMAGE_SERVICE_TOKEN</code
+              ></td
+            >
+            <td class="px-3 py-2">Bearer token sent to that service</td>
+            <td class="px-3 py-2 font-mono text-xs">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="mt-6 text-lg font-semibold">Background workers</h3>
+    <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
+      <table class="w-full text-sm">
+        <thead class="bg-base-200 text-left">
+          <tr>
+            <th class="px-3 py-2 font-semibold">Variable</th>
+            <th class="px-3 py-2 font-semibold">Description</th>
+            <th class="px-3 py-2 font-semibold">Default</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-base-300">
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_REFLECT_EXISTING</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >Adopt tables lazypock did not create as superuser-only collections
+              (<code class="doc-inline px-1 py-0.5">on</code>/<code
+                class="doc-inline px-1 py-0.5">off</code>)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">on</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_CRON_INTERVAL</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >Cron scheduler tick, in seconds; 0 disables it (loudly)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">30</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_JOB_INTERVAL</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >Job-queue worker tick, in seconds; 0 disables it (loudly)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">5</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_JOB_LEASE</code></td
+            >
+            <td class="px-3 py-2"
+              >How long a job claim is trusted before it is handed back, in
+              seconds</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">300</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_FILE_REAPER_INTERVAL</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >File-reaper tick, in seconds; 0 disables it (loudly)</td
             >
             <td class="px-3 py-2 font-mono text-xs">3600</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
               ><code class="doc-inline px-1 py-0.5"
-                >LAZYPOCK_AUTH_TOKEN_SECRET</code
+                >LAZYPOCK_IMPORT_CONFIRM_RECORDS</code
               ></td
             >
-            <td class="px-3 py-2"
-              >Dedicated signing secret for auth tokens (optional; defaults to
-              <code class="doc-inline px-1 py-0.5">SECRET_KEY_BASE</code>)</td
-            >
-            <td class="px-3 py-2 font-mono text-xs">openssl rand -base64 48</td>
+            <td class="px-3 py-2">Records above which an import must be confirmed</td>
+            <td class="px-3 py-2 font-mono text-xs">10000</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p class="mt-3 text-base-content/80 leading-relaxed">
-      Migrations and hooks live in <strong
-        >user-writable directories on disk</strong
-      >
-      (<code class="doc-inline px-1 py-0.5">~/.lazypock/migrations</code>,
-      <code class="doc-inline px-1 py-0.5">~/.lazypock/hooks</code>) rather than
-      inside the binary — bundled defaults are copied there on first boot and
-      applied automatically, and you can drop in new
-      <code class="doc-inline px-1 py-0.5">.exs</code> migration files or Elixir
-      hook modules after a release without rebuilding. See
-      <code class="doc-inline px-1 py-0.5">lazypock migrate</code>
-      /
-      <code class="doc-inline px-1 py-0.5">lazypock migrations</code> /
-      <code class="doc-inline px-1 py-0.5">lazypock seed</code> in the
-      <a
-        class="text-primary underline"
-        href="https://github.com/gnuzd/lazypock#migrations-pocketbase-style"
-        target="_blank"
-        rel="noreferrer">lazypock README</a
-      >
-      for the full CLI.
+
+    <p class="mt-4 text-sm text-base-content/70">
+      Two further variables are CLI/build-time and are not read by a running
+      server: <code class="doc-inline px-1 py-0.5">LAZYPOCK_STUDIO_DIR</code>
+      (a prebuilt Studio bundle to embed) and
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_PASSWORD</code>
+      (for <code class="doc-inline px-1 py-0.5">superuser create</code>).
     </p>
   </section>
 </div>
