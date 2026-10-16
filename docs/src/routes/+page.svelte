@@ -16,7 +16,7 @@
 	jsonLd={[websiteJsonLd(description), softwareApplicationJsonLd(description)]}
 />
 
-<div class="prose-doc max-w-3xl">
+<div class="prose-doc w-full">
 	<!-- HERO -->
 	<section class="scroll-mt-20 mb-14">
 		<div class="flex flex-wrap items-center gap-2">

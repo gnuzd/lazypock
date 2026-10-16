@@ -18,8 +18,7 @@
 
 	// Markdown pages can't set <title> from frontmatter, so the title/description
 	// come from `sdkNav` (generated) plus the prose map in $lib/seo — rendered
-	// server-side, so crawlers and link previews see them. Pages not in `sdkNav`
-	// (the "coming soon" SDKs) set their own metadata.
+	// server-side, so crawlers and link previews see them.
 	const title = $derived(sdk ? docTitle(`${sdk.name} SDK`) : '');
 	const description = $derived(sdk ? sdkDescription(sdk.slug, sdk.name) : '');
 </script>

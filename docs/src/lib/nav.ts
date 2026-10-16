@@ -42,8 +42,7 @@ export const nav: NavSection[] = [
 				label: "Server Guide",
 				children: [
 					{ href: "/server#quick-start", label: "Quick Start" },
-					{ href: "/server#binary", label: "Prebuilt binary" },
-					{ href: "/server#manual", label: "Manual setup" },
+					{ href: "/server#source", label: "Run from source" },
 					{ href: "/server#first-time", label: "First-time setup" },
 					{ href: "/server#filters", label: "Filters" },
 					{ href: "/server#production", label: "Production" },
@@ -64,9 +63,6 @@ export const nav: NavSection[] = [
 					label: p.label,
 				})),
 			})),
-			{ href: "/sdk/swift", label: "Swift", badge: "coming soon" },
-			{ href: "/sdk/android", label: "Android", badge: "coming soon" },
-			{ href: "/sdk/godot", label: "Godot", badge: "coming soon" },
 		],
 	},
 	{
