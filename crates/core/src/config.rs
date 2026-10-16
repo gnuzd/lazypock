@@ -26,6 +26,11 @@ pub const DEFAULT_RATE_LIMIT_AUTH: u32 = 20;
 /// Large enough that an ordinary client never notices, small enough that a script
 /// cannot walk the API.
 pub const DEFAULT_RATE_LIMIT_API: u32 = 600;
+/// Failed credential attempts per account before a soft lockout.
+///
+/// Failures only, so an attacker who knows a victim's address cannot spend the
+/// victim's budget and lock the real user out of their own login. Zero disables it.
+pub const DEFAULT_RATE_LIMIT_ACCOUNT: u32 = 10;
 /// Upper bound on the pool size. Postgres dislikes many connections and the
 /// deployment target is many small instances, so this is a hard cap.
 pub const MAX_POOL_SIZE: u32 = 64;
@@ -167,6 +172,11 @@ pub struct Config {
     pub rate_limit_credentials_per_minute: u32,
     /// Requests per minute per address for everything else. Zero disables.
     pub rate_limit_requests_per_minute: u32,
+    /// Failed credential attempts per account before a soft lockout. Zero disables.
+    ///
+    /// Counted per account rather than per address, so a distributed guessing
+    /// attack cannot stay under an address limit by spreading itself across many.
+    pub rate_limit_account_failures: u32,
 }
 
 impl Config {
@@ -284,6 +294,15 @@ impl Config {
                 ))
             })?,
         };
+        let rate_limit_account_failures = match optional(&get, "LAZYPOCK_RATE_LIMIT_ACCOUNT") {
+            None => DEFAULT_RATE_LIMIT_ACCOUNT,
+            Some(raw) => raw.trim().parse::<u32>().map_err(|_| {
+                Error::config(format!(
+                    "LAZYPOCK_RATE_LIMIT_ACCOUNT must be a whole number of failed attempts, \
+                     got {raw:?}"
+                ))
+            })?,
+        };
 
         let public_url = optional(&get, "LAZYPOCK_PUBLIC_URL");
         if let Some(url) = &public_url {
@@ -318,6 +337,7 @@ impl Config {
             trusted_proxies,
             rate_limit_credentials_per_minute,
             rate_limit_requests_per_minute,
+            rate_limit_account_failures,
         })
     }
 
@@ -363,6 +383,10 @@ impl Config {
             (
                 "rate_limit_requests_per_minute",
                 self.rate_limit_requests_per_minute.to_string(),
+            ),
+            (
+                "rate_limit_account_failures",
+                self.rate_limit_account_failures.to_string(),
             ),
             ("log_level", self.log_level.as_str().to_string()),
             ("log_format", self.log_format.as_str().to_string()),
@@ -487,6 +511,28 @@ mod tests {
         assert_eq!(config.upload_max_bytes, DEFAULT_UPLOAD_MAX_BYTES);
         assert!(config.pg_prepared_statements);
         assert_eq!(config.public_url, None);
+        assert_eq!(
+            config.rate_limit_account_failures,
+            DEFAULT_RATE_LIMIT_ACCOUNT
+        );
+    }
+
+    #[test]
+    fn a_zero_account_limit_disables_the_lockout() {
+        let mut pairs = minimal();
+        pairs.push(("LAZYPOCK_RATE_LIMIT_ACCOUNT", "0"));
+        assert_eq!(config(&pairs).unwrap().rate_limit_account_failures, 0);
+    }
+
+    #[test]
+    fn a_non_numeric_account_limit_is_refused() {
+        let mut pairs = minimal();
+        pairs.push(("LAZYPOCK_RATE_LIMIT_ACCOUNT", "lots"));
+        let err = config(&pairs).expect_err("refused");
+        assert!(
+            err.to_string().contains("LAZYPOCK_RATE_LIMIT_ACCOUNT"),
+            "{err}"
+        );
     }
 
     #[test]

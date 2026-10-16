@@ -690,6 +690,18 @@ cargo build --release --no-default-features`}
             <td class="px-3 py-2">Requests/min per address for everything else</td>
             <td class="px-3 py-2 font-mono text-xs">600</td>
           </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_RATE_LIMIT_ACCOUNT</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >Failed sign-ins per account before a 15-minute lockout. Only
+              failures count; 0 disables it.</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">10</td>
+          </tr>
         </tbody>
       </table>
     </div>

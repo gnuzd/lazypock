@@ -34,6 +34,13 @@ use crate::state::AppState;
 /// becomes a slow leak on a deployment that sees many addresses and never restarts.
 const SWEEP_AT: usize = 10_000;
 
+/// How long an account's soft lockout lasts, from its first failure in the window.
+///
+/// Long enough that guessing is not worth it, short enough that someone who
+/// fumbled a password can come back without an administrator. It expires on its
+/// own, which is what makes it *soft*: there is no state to clear.
+pub const ACCOUNT_LOCKOUT_WINDOW: Duration = Duration::from_secs(15 * 60);
+
 /// A fixed-window counter per key.
 pub struct Limiter {
     /// Requests allowed per window. Zero disables this limiter entirely.
@@ -128,20 +135,123 @@ impl Buckets {
     }
 }
 
-/// The two allowances a node enforces.
+/// A fixed-window count of **failed** credential attempts, keyed by account.
+///
+/// The per-address [`Limiter`] counts every credential request. This counts only
+/// failures, and is consulted before each attempt. Counting failures rather than
+/// requests is what stops an attacker who knows a victim's address from spending
+/// the victim's budget and locking the real user out of their own sign-in. A
+/// successful sign-in clears the count, so fumbles do not accumulate across
+/// sessions.
+///
+/// The account is the collection plus the submitted identity, so the same address
+/// in two auth collections is two accounts, and a non-existent account is counted
+/// the same as a real one (which is what stops it being an enumeration oracle).
+pub struct Lockout {
+    limit: u32,
+    window: Duration,
+    state: Mutex<Buckets>,
+}
+
+impl Lockout {
+    /// A lockout after `limit` failures in `window`. Zero disables it.
+    pub fn new(limit: u32, window: Duration) -> Self {
+        Self {
+            limit,
+            window,
+            state: Mutex::new(Buckets {
+                counts: HashMap::new(),
+                swept: Instant::now(),
+            }),
+        }
+    }
+
+    /// Whether this lockout does anything.
+    pub fn is_enabled(&self) -> bool {
+        self.limit > 0
+    }
+
+    /// Whether `key` has exhausted its failures, and how long until it recovers.
+    pub fn is_locked(&self, key: &str) -> Result<(), Refused> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.sweep(now, self.window);
+
+        match state.counts.get(key) {
+            Some(count) if count.used >= self.limit && count.started.elapsed() < self.window => {
+                Err(Refused {
+                    retry_after: self.window.saturating_sub(count.started.elapsed()),
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Count one failed attempt.
+    pub fn record_failure(&self, key: &str) {
+        if !self.is_enabled() {
+            return;
+        }
+
+        let now = Instant::now();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.sweep(now, self.window);
+
+        let count = state.counts.entry(key.to_string()).or_insert(Count {
+            used: 0,
+            started: now,
+        });
+        if count.started.elapsed() >= self.window {
+            count.used = 0;
+            count.started = now;
+        }
+        count.used += 1;
+    }
+
+    /// Forget a key's failures, after a successful sign-in.
+    pub fn clear(&self, key: &str) {
+        if !self.is_enabled() {
+            return;
+        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.counts.remove(key);
+    }
+}
+
+/// The allowances a node enforces.
 pub struct Limits {
     /// Requests that spend credentials: signing in, and refreshing.
     pub credentials: Limiter,
     /// Everything else.
     pub requests: Limiter,
+    /// Failed sign-ins per account, over [`ACCOUNT_LOCKOUT_WINDOW`].
+    pub account: Lockout,
 }
 
 impl Limits {
-    /// Build from the configured per-minute allowances.
-    pub fn new(credentials_per_minute: u32, requests_per_minute: u32) -> Self {
+    /// Build from the configured allowances.
+    pub fn new(
+        credentials_per_minute: u32,
+        requests_per_minute: u32,
+        account_failures: u32,
+    ) -> Self {
         Self {
             credentials: Limiter::new(credentials_per_minute, Duration::from_secs(60)),
             requests: Limiter::new(requests_per_minute, Duration::from_secs(60)),
+            account: Lockout::new(account_failures, ACCOUNT_LOCKOUT_WINDOW),
         }
     }
 }
@@ -183,23 +293,29 @@ pub async fn guard(State(state): State<AppState>, request: Request, next: Next) 
     if let Err(refused) = limiter.check(&key) {
         let seconds = refused.retry_after.as_secs().max(1);
         tracing::warn!(key = %key, path = %path, "rate limit reached");
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(
-                header::RETRY_AFTER,
-                HeaderValue::from_str(&seconds.to_string())
-                    .unwrap_or_else(|_| HeaderValue::from_static("60")),
-            )],
-            Json(json!({
-                "status": 429,
-                "message": format!("Too many requests. Try again in {seconds} seconds."),
-                "data": {},
-            })),
-        )
-            .into_response();
+        return too_many(
+            seconds,
+            format!("Too many requests. Try again in {seconds} seconds."),
+        );
     }
 
     next.run(request).await
+}
+
+/// The refusal response, with the wait in `Retry-After`.
+///
+/// Shared with the per-account lockout so both refusals have one shape.
+pub(crate) fn too_many(seconds: u64, message: String) -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(
+            header::RETRY_AFTER,
+            HeaderValue::from_str(&seconds.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("60")),
+        )],
+        Json(json!({ "status": 429, "message": message, "data": {} })),
+    )
+        .into_response()
 }
 
 /// Whether a path spends credentials, and therefore gets the smaller allowance.
@@ -268,5 +384,52 @@ mod tests {
         assert!(!spends_credentials("/api/collections/posts/records"));
         assert!(!spends_credentials("/api/collections/users/auth-methods"));
         assert!(!spends_credentials("/api/health"));
+    }
+
+    #[test]
+    fn an_account_locks_only_after_its_failures_and_recovers_with_the_window() {
+        let lockout = Lockout::new(2, Duration::from_millis(30));
+        assert!(lockout.is_locked("a@example.com").is_ok());
+
+        lockout.record_failure("a@example.com");
+        assert!(
+            lockout.is_locked("a@example.com").is_ok(),
+            "one failure is not a lockout"
+        );
+
+        lockout.record_failure("a@example.com");
+        assert!(lockout.is_locked("a@example.com").is_err(), "two lock it");
+        // A different account has its own count.
+        assert!(lockout.is_locked("b@example.com").is_ok());
+
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(
+            lockout.is_locked("a@example.com").is_ok(),
+            "the window should have passed"
+        );
+    }
+
+    #[test]
+    fn a_successful_sign_in_clears_the_failures() {
+        let lockout = Lockout::new(2, Duration::from_secs(60));
+        lockout.record_failure("a@example.com");
+        lockout.record_failure("a@example.com");
+        assert!(lockout.is_locked("a@example.com").is_err());
+
+        lockout.clear("a@example.com");
+        assert!(
+            lockout.is_locked("a@example.com").is_ok(),
+            "a success clears the record"
+        );
+    }
+
+    #[test]
+    fn a_zero_account_limit_disables_the_lockout() {
+        let lockout = Lockout::new(0, Duration::from_secs(60));
+        assert!(!lockout.is_enabled());
+        for _ in 0..1_000 {
+            lockout.record_failure("a@example.com");
+        }
+        assert!(lockout.is_locked("a@example.com").is_ok());
     }
 }

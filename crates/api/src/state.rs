@@ -60,6 +60,7 @@ impl AppState {
         let rate_limits = Arc::new(Limits::new(
             config.rate_limit_credentials_per_minute,
             config.rate_limit_requests_per_minute,
+            config.rate_limit_account_failures,
         ));
 
         Self {
