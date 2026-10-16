@@ -46,6 +46,18 @@ use cli::{Cli, Command, SuperuserCommand};
 /// Timeout for a single `healthcheck` probe.
 const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How many due cron jobs a single scheduling pass will fire.
+///
+/// A bound rather than "all of them", so a backlog cannot hold a pass open
+/// indefinitely. The next tick picks up whatever this one left.
+const CRON_BATCH: i64 = 16;
+
+/// How many due jobs a single queue pass will run.
+///
+/// Bounded for the same reason as [`CRON_BATCH`], and so one slow job cannot hold
+/// up every job behind it.
+const JOB_BATCH: i64 = 16;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // Best-effort .env loading; real deployments inject the environment.
@@ -349,7 +361,7 @@ async fn serve(config: Config) -> Result<()> {
             .map_err(|err| Error::config(format!("cannot load the CORS allowlist: {err}")))?;
     }
 
-    let app = router(AppState::new(
+    let state = AppState::new(
         config,
         db,
         schema,
@@ -360,7 +372,73 @@ async fn serve(config: Config) -> Result<()> {
             hooks,
             cors,
         },
-    ));
+    );
+
+    // The cron scheduler. `next_run_at` has been written since the admin API
+    // landed, but nothing ever fired on it: a job only ran if an operator pressed
+    // "run now", so a schedule looked live and did nothing. Before the state is
+    // handed to the router, so a tick cannot race the first request.
+    {
+        let interval = cron_interval()?;
+        if interval.is_zero() {
+            tracing::warn!("LAZYPOCK_CRON_INTERVAL=0: scheduled jobs never fire");
+        } else {
+            tracing::info!(every_seconds = interval.as_secs(), "cron scheduler started");
+            let state = state.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    ticker.tick().await;
+                    match lazypock_api::crons::run_due(&state, CRON_BATCH).await {
+                        Ok(0) => {}
+                        Ok(ran) => tracing::info!(ran, "cron schedule fired"),
+                        Err(err) => tracing::warn!(
+                            error = %err.error,
+                            "a cron scheduling pass failed"
+                        ),
+                    }
+                }
+            });
+        }
+    }
+
+    // The job queue. `_jobs` and its claim index have existed since migration 1
+    // and nothing wrote to them; this is the worker. Nothing enqueues yet — the
+    // mailer and the "after" hooks are the callers it was built for — so it is
+    // idle until one of them lands.
+    {
+        let interval = job_interval()?;
+        let lease = job_lease_seconds()?;
+        if interval.is_zero() {
+            tracing::warn!("LAZYPOCK_JOB_INTERVAL=0: queued jobs never run");
+        } else {
+            let worker = lazypock_core::id::new_id();
+            tracing::info!(
+                every_seconds = interval.as_secs(),
+                lease_seconds = lease,
+                "job queue worker started"
+            );
+            let state = state.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    ticker.tick().await;
+                    match lazypock_api::jobs::run_due(&state, &worker, JOB_BATCH, lease).await {
+                        Ok(0) => {}
+                        Ok(ran) => tracing::info!(ran, "job queue ran"),
+                        Err(err) => tracing::warn!(
+                            error = %err.error,
+                            "a job queue pass failed"
+                        ),
+                    }
+                }
+            });
+        }
+    }
+
+    let app = router(state);
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -445,7 +523,64 @@ fn file_reaper_interval() -> Result<std::time::Duration> {
     Ok(std::time::Duration::from_secs(seconds))
 }
 
-/// How long an unattached editor or library upload is kept.
+/// How often the cron scheduler looks for jobs that are due.
+///
+/// A pass with nothing due is one indexed query, so this can be frequent. The
+/// granularity of a cron expression is a minute, so the default is half of that:
+/// a job fires within thirty seconds of its time rather than up to a minute late.
+/// `0` disables the scheduler — loudly, because a disabled scheduler means
+/// `next_run_at` is written and never acted on, which is the bug this fixes.
+fn cron_interval() -> Result<std::time::Duration> {
+    let seconds = match std::env::var("LAZYPOCK_CRON_INTERVAL") {
+        Err(_) => 30,
+        Ok(raw) => raw.trim().parse::<u64>().map_err(|_| {
+            Error::config(format!(
+                "LAZYPOCK_CRON_INTERVAL must be a whole number of seconds, got {raw:?}"
+            ))
+        })?,
+    };
+    Ok(std::time::Duration::from_secs(seconds))
+}
+
+/// How often the job queue worker looks for work.
+///
+/// A pass with nothing to do is one indexed query, so this can be frequent.
+/// Five seconds keeps a busy queue feeling immediate without polling hard when it
+/// is empty. `0` disables the worker — loudly, because enqueued work would
+/// otherwise sit there forever with nothing to say so.
+fn job_interval() -> Result<std::time::Duration> {
+    let seconds = match std::env::var("LAZYPOCK_JOB_INTERVAL") {
+        Err(_) => 5,
+        Ok(raw) => raw.trim().parse::<u64>().map_err(|_| {
+            Error::config(format!(
+                "LAZYPOCK_JOB_INTERVAL must be a whole number of seconds, got {raw:?}"
+            ))
+        })?,
+    };
+    Ok(std::time::Duration::from_secs(seconds))
+}
+
+/// How long a claim on a job is trusted before the job is handed back.
+///
+/// A worker that dies mid-job leaves the row `running`, and this is how long the
+/// next pass waits before assuming that happened. Long enough that a slow job is
+/// not taken away from a worker still running it.
+fn job_lease_seconds() -> Result<f64> {
+    let seconds = match std::env::var("LAZYPOCK_JOB_LEASE") {
+        Err(_) => 300.0,
+        Ok(raw) => raw.trim().parse::<f64>().map_err(|_| {
+            Error::config(format!(
+                "LAZYPOCK_JOB_LEASE must be a number of seconds, got {raw:?}"
+            ))
+        })?,
+    };
+    if seconds <= 0.0 {
+        return Err(Error::config(
+            "LAZYPOCK_JOB_LEASE must be greater than zero".to_string(),
+        ));
+    }
+    Ok(seconds)
+}
 ///
 /// Read from the `files` setting the Studio's Media page writes
 /// (`files.rules.unattached_ttl_ms`), falling back to a day. An upload that arrived

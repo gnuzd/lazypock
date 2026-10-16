@@ -12,6 +12,7 @@ pub mod cors;
 pub mod crons;
 pub mod error;
 pub mod files;
+pub mod jobs;
 pub mod logs;
 pub mod presets;
 pub mod realtime;

@@ -346,3 +346,243 @@ async fn a_hook_job_refuses_to_run_rather_than_pretending() {
 
     app.cleanup().await;
 }
+
+/// Create a job through the API and put its schedule in the past.
+///
+/// The admin API always stores a *future* `next_run_at`, so this is the only way
+/// to reach the state the scheduler acts on.
+async fn due(app: &TestApp, token: &str, body: Value) -> String {
+    let reply = call_authed(
+        &router(app).await,
+        Method::POST,
+        "/api/crons",
+        Some(body),
+        token,
+    )
+    .await;
+    let id = reply.body.expect("a job")["id"]
+        .as_str()
+        .expect("an id")
+        .to_string();
+
+    app.client()
+        .await
+        .execute(
+            "update _crons set next_run_at = now() - interval '1 minute' where id = $1",
+            &[&id],
+        )
+        .await
+        .expect("the schedule moves into the past");
+    id
+}
+
+/// One job's recorded outcome, read straight from the table.
+async fn recorded(app: &TestApp, id: &str) -> (Option<String>, Option<String>) {
+    let row = app
+        .client()
+        .await
+        .query_one(
+            "select last_status, last_error, \
+                    (next_run_at > now()) as advanced from _crons where id = $1",
+            &[&id],
+        )
+        .await
+        .expect("the job is still there");
+    let advanced: bool = row.get("advanced");
+    assert!(advanced, "{id} did not have its schedule moved forward");
+    (row.get("last_status"), row.get("last_error"))
+}
+
+#[tokio::test]
+async fn the_scheduler_fires_a_due_job_and_moves_its_schedule() {
+    let Some(app) = test_app("crons_sched_fires").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // A statement with an observable effect, so the test proves the action ran
+    // rather than only that a row was updated.
+    let id = due(
+        &app,
+        &token,
+        json!({
+            "name": "touch",
+            "expression": "0 0 * * *",
+            "action": "sql",
+            "config": { "statement": "create table if not exists sched_probe (id int)" },
+        }),
+    )
+    .await;
+
+    let ran = lazypock_api::crons::run_due(&app.state, 10)
+        .await
+        .expect("a scheduling pass");
+    assert_eq!(ran, 1, "one job was due");
+
+    let (status, error) = recorded(&app, &id).await;
+    assert_eq!(status.as_deref(), Some("ok"), "{error:?}");
+
+    let there: bool = app
+        .client()
+        .await
+        .query_one(
+            "select to_regclass('sched_probe') is not null as there",
+            &[],
+        )
+        .await
+        .expect("a row")
+        .get("there");
+    assert!(there, "the job's statement did not run");
+
+    // The schedule moved forward, so a second pass has nothing to do. Without
+    // this the job would fire on every tick.
+    let again = lazypock_api::crons::run_due(&app.state, 10)
+        .await
+        .expect("a second pass");
+    assert_eq!(again, 0, "a job fired twice");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn the_scheduler_leaves_jobs_that_are_not_due_or_not_enabled() {
+    let Some(app) = test_app("crons_sched_idle").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // Created through the API, so `next_run_at` is in the future.
+    due(
+        &app,
+        &token,
+        json!({
+            "name": "later",
+            "expression": "0 0 * * *",
+            "action": "sql",
+            "config": { "statement": "select 1" },
+        }),
+    )
+    .await;
+    app.client()
+        .await
+        .execute(
+            "update _crons set next_run_at = now() + interval '1 day' where name = 'later'",
+            &[],
+        )
+        .await
+        .expect("the schedule moves into the future");
+
+    let disabled = due(
+        &app,
+        &token,
+        json!({
+            "name": "off",
+            "expression": "0 0 * * *",
+            "enabled": false,
+            "action": "sql",
+            "config": { "statement": "select 1" },
+        }),
+    )
+    .await;
+
+    let ran = lazypock_api::crons::run_due(&app.state, 10)
+        .await
+        .expect("a scheduling pass");
+    assert_eq!(ran, 0);
+
+    let (status, _) = recorded_unadvanced(&app, &disabled).await;
+    assert_eq!(status, None, "a disabled job ran");
+
+    app.cleanup().await;
+}
+
+/// Like [`recorded`], for a job the pass was expected to leave alone.
+async fn recorded_unadvanced(app: &TestApp, id: &str) -> (Option<String>, Option<String>) {
+    let row = app
+        .client()
+        .await
+        .query_one(
+            "select last_status, last_error from _crons where id = $1",
+            &[&id],
+        )
+        .await
+        .expect("the job is still there");
+    (row.get("last_status"), row.get("last_error"))
+}
+
+#[tokio::test]
+async fn a_failing_action_is_recorded_and_the_schedule_still_advances() {
+    let Some(app) = test_app("crons_sched_fails").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let id = due(
+        &app,
+        &token,
+        json!({
+            "name": "bad",
+            "expression": "0 0 * * *",
+            "action": "sql",
+            "config": { "statement": "select * from definitely_not_a_table" },
+        }),
+    )
+    .await;
+
+    let ran = lazypock_api::crons::run_due(&app.state, 10)
+        .await
+        .expect("a scheduling pass");
+    assert_eq!(ran, 1);
+
+    let (status, error) = recorded(&app, &id).await;
+    assert_eq!(status.as_deref(), Some("error"));
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|message| message.contains("definitely_not_a_table")),
+        "the recorded reason should name what went wrong, got {error:?}"
+    );
+
+    app.cleanup().await;
+}
+
+/// A job whose action cannot run must still leave a trace.
+///
+/// `POST /api/crons/{id}` returns the refusal to the caller, but a scheduled run
+/// has no caller — so without this the schedule would advance silently and the
+/// job would look like it had worked.
+#[tokio::test]
+async fn a_hook_job_is_recorded_as_an_error_rather_than_advancing_silently() {
+    let Some(app) = test_app("crons_sched_hook").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let id = due(
+        &app,
+        &token,
+        json!({
+            "name": "hooky",
+            "expression": "0 0 * * *",
+            "action": "hook",
+            "config": { "event": "nightly" },
+        }),
+    )
+    .await;
+
+    let ran = lazypock_api::crons::run_due(&app.state, 10)
+        .await
+        .expect("a scheduling pass");
+    assert_eq!(ran, 1);
+
+    let (status, error) = recorded(&app, &id).await;
+    assert_eq!(status.as_deref(), Some("error"));
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|message| message.contains("hook")),
+        "the refusal should say what is unsupported, got {error:?}"
+    );
+
+    app.cleanup().await;
+}
