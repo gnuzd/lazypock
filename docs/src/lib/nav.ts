@@ -64,9 +64,6 @@ export const nav: NavSection[] = [
 					label: p.label,
 				})),
 			})),
-			{ href: "/sdk/swift", label: "Swift", badge: "coming soon" },
-			{ href: "/sdk/android", label: "Android", badge: "coming soon" },
-			{ href: "/sdk/godot", label: "Godot", badge: "coming soon" },
 		],
 	},
 	{

@@ -9,7 +9,7 @@
 
 <Seo {title} {description} />
 
-<div class="prose-doc max-w-3xl">
+<div class="prose-doc w-full">
   <!-- INTRO -->
   <section class="scroll-mt-20 mb-14">
     <div class="flex flex-wrap items-center gap-2">
@@ -683,6 +683,14 @@ cargo build --release --no-default-features`}
       than silently defaulted. The same list lives in
       <code class="doc-inline px-1 py-0.5">.env.example</code>.
     </p>
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      <strong>Only <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code> is
+      required</strong> — everything else has a default, so a server starts with a
+      database URL and nothing more. The exceptions are per row: an S3 bucket needs
+      its credentials, and a stored secret needs
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_SECRET_KEY</code> before it can
+      be saved.
+    </p>
 
     <h3 class="mt-6 text-lg font-semibold">Core</h3>
     <div class="mt-3 overflow-x-auto rounded-box border border-base-300">
@@ -692,6 +700,7 @@ cargo build --release --no-default-features`}
             <th class="px-3 py-2 font-semibold">Variable</th>
             <th class="px-3 py-2 font-semibold">Description</th>
             <th class="px-3 py-2 font-semibold">Default / example</th>
+            <th class="px-3 py-2 font-semibold">Required?</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-base-300">
@@ -705,6 +714,7 @@ cargo build --release --no-default-features`}
             <td class="px-3 py-2 font-mono text-xs"
               >postgres://user:pass@host:5432/lazypock</td
             >
+          <td class="px-3 py-2"><strong>yes</strong></td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -716,6 +726,7 @@ cargo build --release --no-default-features`}
               <code class="doc-inline px-1 py-0.5">test</code></td
             >
             <td class="px-3 py-2 font-mono text-xs">development</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -723,6 +734,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Address the HTTP server binds to</td>
             <td class="px-3 py-2 font-mono text-xs">0.0.0.0:4000</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -730,6 +742,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Local data directory (local files, outbox spool)</td>
             <td class="px-3 py-2 font-mono text-xs">data</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -737,6 +750,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Directory for TypeScript hook files</td>
             <td class="px-3 py-2 font-mono text-xs">hooks</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -748,6 +762,7 @@ cargo build --release --no-default-features`}
               ></td
             >
             <td class="px-3 py-2 font-mono text-xs">info</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -758,6 +773,7 @@ cargo build --release --no-default-features`}
               <code class="doc-inline px-1 py-0.5">json</code></td
             >
             <td class="px-3 py-2 font-mono text-xs">text (json in production)</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -768,6 +784,7 @@ cargo build --release --no-default-features`}
               (pool + 1)</td
             >
             <td class="px-3 py-2 font-mono text-xs">5</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -777,6 +794,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Use named prepared statements</td>
             <td class="px-3 py-2 font-mono text-xs">true</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -786,6 +804,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Maximum accepted upload size, in bytes</td>
             <td class="px-3 py-2 font-mono text-xs">5242880 (5 MiB)</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -793,6 +812,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Public base URL when it differs from the host</td>
             <td class="px-3 py-2 font-mono text-xs">—</td>
+          <td class="px-3 py-2">no</td>
           </tr>
         </tbody>
       </table>
@@ -806,6 +826,7 @@ cargo build --release --no-default-features`}
             <th class="px-3 py-2 font-semibold">Variable</th>
             <th class="px-3 py-2 font-semibold">Description</th>
             <th class="px-3 py-2 font-semibold">Default / example</th>
+            <th class="px-3 py-2 font-semibold">Required?</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-base-300">
@@ -820,6 +841,7 @@ cargo build --release --no-default-features`}
               separated). Empty reads no header at all.</td
             >
             <td class="px-3 py-2 font-mono text-xs">—</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -831,6 +853,7 @@ cargo build --release --no-default-features`}
               >Requests/min per address that spend credentials; 0 disables</td
             >
             <td class="px-3 py-2 font-mono text-xs">20</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -840,6 +863,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Requests/min per address for everything else</td>
             <td class="px-3 py-2 font-mono text-xs">600</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -852,6 +876,7 @@ cargo build --release --no-default-features`}
               failures count; 0 disables it.</td
             >
             <td class="px-3 py-2 font-mono text-xs">10</td>
+          <td class="px-3 py-2">no</td>
           </tr>
         </tbody>
       </table>
@@ -865,6 +890,7 @@ cargo build --release --no-default-features`}
             <th class="px-3 py-2 font-semibold">Variable</th>
             <th class="px-3 py-2 font-semibold">Description</th>
             <th class="px-3 py-2 font-semibold">Default / example</th>
+            <th class="px-3 py-2 font-semibold">Required?</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-base-300">
@@ -878,6 +904,7 @@ cargo build --release --no-default-features`}
               before a secret can be saved</td
             >
             <td class="px-3 py-2 font-mono text-xs">openssl rand -hex 32</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -887,6 +914,7 @@ cargo build --release --no-default-features`}
               >Access-token signing key (base64), kept out of the database</td
             >
             <td class="px-3 py-2 font-mono text-xs">openssl rand -base64 32</td>
+          <td class="px-3 py-2">no</td>
           </tr>
         </tbody>
       </table>
@@ -900,6 +928,7 @@ cargo build --release --no-default-features`}
             <th class="px-3 py-2 font-semibold">Variable</th>
             <th class="px-3 py-2 font-semibold">Description</th>
             <th class="px-3 py-2 font-semibold">Default / example</th>
+            <th class="px-3 py-2 font-semibold">Required?</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-base-300">
@@ -915,6 +944,7 @@ cargo build --release --no-default-features`}
               setting overrides it</td
             >
             <td class="px-3 py-2 font-mono text-xs">local</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -922,6 +952,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Root directory for the local adapter</td>
             <td class="px-3 py-2 font-mono text-xs">data/files</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -931,6 +962,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Public/CDN base URL for served objects</td>
             <td class="px-3 py-2 font-mono text-xs">—</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -945,6 +977,7 @@ cargo build --release --no-default-features`}
               <code class="doc-inline px-1 py-0.5">s3</code>.</td
             >
             <td class="px-3 py-2 font-mono text-xs">region: auto</td>
+          <td class="px-3 py-2">no <span class="whitespace-nowrap">(S3 only)</span></td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -954,6 +987,7 @@ cargo build --release --no-default-features`}
               >Presigned URL lifetime, in seconds (1 s-7 days)</td
             >
             <td class="px-3 py-2 font-mono text-xs">900</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -963,6 +997,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Resize in this service instead of in-process</td>
             <td class="px-3 py-2 font-mono text-xs">—</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -972,6 +1007,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Bearer token sent to that service</td>
             <td class="px-3 py-2 font-mono text-xs">—</td>
+          <td class="px-3 py-2">no</td>
           </tr>
         </tbody>
       </table>
@@ -985,6 +1021,7 @@ cargo build --release --no-default-features`}
             <th class="px-3 py-2 font-semibold">Variable</th>
             <th class="px-3 py-2 font-semibold">Description</th>
             <th class="px-3 py-2 font-semibold">Default</th>
+            <th class="px-3 py-2 font-semibold">Required?</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-base-300">
@@ -1000,6 +1037,7 @@ cargo build --release --no-default-features`}
                 class="doc-inline px-1 py-0.5">off</code>)</td
             >
             <td class="px-3 py-2 font-mono text-xs">on</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -1011,6 +1049,7 @@ cargo build --release --no-default-features`}
               >Cron scheduler tick, in seconds; 0 disables it (loudly)</td
             >
             <td class="px-3 py-2 font-mono text-xs">30</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -1022,6 +1061,7 @@ cargo build --release --no-default-features`}
               >Job-queue worker tick, in seconds; 0 disables it (loudly)</td
             >
             <td class="px-3 py-2 font-mono text-xs">5</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -1032,6 +1072,7 @@ cargo build --release --no-default-features`}
               seconds</td
             >
             <td class="px-3 py-2 font-mono text-xs">300</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -1043,6 +1084,7 @@ cargo build --release --no-default-features`}
               >File-reaper tick, in seconds; 0 disables it (loudly)</td
             >
             <td class="px-3 py-2 font-mono text-xs">3600</td>
+          <td class="px-3 py-2">no</td>
           </tr>
           <tr>
             <td class="px-3 py-2"
@@ -1052,6 +1094,7 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2">Records above which an import must be confirmed</td>
             <td class="px-3 py-2 font-mono text-xs">10000</td>
+          <td class="px-3 py-2">no</td>
           </tr>
         </tbody>
       </table>

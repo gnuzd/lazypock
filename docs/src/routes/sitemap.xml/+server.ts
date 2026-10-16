@@ -16,8 +16,7 @@ const NAVBAR_ONLY = ["/sdk"];
  * Derived from `nav` — the sidebar *is* the site map, so a new page shows up
  * here without a second list to maintain.
  *
- * Anchors (`/server#images`) collapse to their page, and entries still marked
- * "coming soon" are left out until they have real content.
+ * Anchors (`/server#images`) collapse to their page.
  */
 const paths = [
 	...new Set([

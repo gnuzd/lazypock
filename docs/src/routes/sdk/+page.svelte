@@ -4,13 +4,7 @@
 
 	const title = 'SDKs — Lazypock Docs';
 	const description =
-		'Client SDKs for the Lazypock backend: the TypeScript SDK plus Swift, Android and Godot clients — install, codegen, queries, realtime, files and auth.';
-
-	const comingSoon = [
-		{ name: 'Swift', href: '/sdk/swift' },
-		{ name: 'Android', href: '/sdk/android' },
-		{ name: 'Godot', href: '/sdk/godot' }
-	];
+		'The TypeScript SDK for the Lazypock backend — install, codegen, queries, realtime, files and auth.';
 </script>
 
 <Seo {title} {description} />
@@ -29,15 +23,6 @@
 		<p class="text-sm text-base-content/70">
 			{sdk.pages.length} pages: {sdk.pages.map((p) => p.label).join(' · ')}
 		</p>
-	</a>
-{/each}
-
-<h2>Coming soon</h2>
-
-{#each comingSoon as sdk}
-	<a href={sdk.href} class="card-link" aria-disabled="true">
-		<p class="font-semibold">{sdk.name}</p>
-		<p class="text-sm text-base-content/70">Not released yet — this slot will follow the same structure.</p>
 	</a>
 {/each}
 

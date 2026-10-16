@@ -38,7 +38,7 @@ An archive contains `manifest.json`, `schema.json`, `data/<collection>.ndjson`, 
 - [Architecture](https://lazypock.gnuzd.dev/architecture): system layers, request lifecycle, realtime.
 - [Server guide](https://lazypock.gnuzd.dev/server): Docker, binary, first-time setup, filters, production, env vars.
 - [TypeScript SDK](https://lazypock.gnuzd.dev/sdk/typescript): install, codegen, queries, realtime, files, auth.
-- [All SDKs](https://lazypock.gnuzd.dev/sdk): TypeScript (Swift, Android, Godot marked coming soon).
+- [All SDKs](https://lazypock.gnuzd.dev/sdk): TypeScript.
 
 ## Source
 
