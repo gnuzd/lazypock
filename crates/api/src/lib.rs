@@ -19,6 +19,7 @@ pub mod realtime;
 pub mod records;
 pub mod router;
 pub mod settings;
+pub mod sql;
 pub mod state;
 pub mod studio;
 pub mod superusers;

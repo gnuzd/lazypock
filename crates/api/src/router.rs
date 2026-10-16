@@ -21,6 +21,7 @@ use crate::presets;
 use crate::realtime;
 use crate::records;
 use crate::settings;
+use crate::sql;
 use crate::state::AppState;
 use crate::studio;
 use crate::superusers;
@@ -125,6 +126,11 @@ pub fn router(state: AppState) -> Router {
                 .delete(crons::delete)
                 .post(crons::run_now),
         )
+        // The SQL console. Superuser-only, which the extractor enforces, and
+        // read-only: the handler refuses anything the database would have to
+        // write for, and a read-only transaction catches what the keyword check
+        // cannot.
+        .route("/api/sql/query", post(sql::query))
         // Reading the available sizes is public: a client needs them to build a
         // thumbnail URL. Changing them is a superuser action, enforced in the
         // handlers.
