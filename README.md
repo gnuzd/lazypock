@@ -2,6 +2,14 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-000000?logo=rust)](https://www.rust-lang.org)
+[![CI](https://img.shields.io/github/actions/workflow/status/gnuzd/lazypock/ci.yml?branch=main&label=CI&logo=github)](https://github.com/gnuzd/lazypock/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/gnuzd/lazypock?label=release&logo=github&sort=semver)](https://github.com/gnuzd/lazypock/releases)
+[![Tests](https://img.shields.io/badge/tests-755%20passing-brightgreen?logo=github)](https://github.com/gnuzd/lazypock/actions/workflows/ci.yml)
+[![Image](https://img.shields.io/badge/ghcr.io-lazypock-2496ED?logo=docker&logoColor=white)](https://github.com/gnuzd/lazypock/pkgs/container/lazypock)
+[![Docs](https://img.shields.io/badge/docs-lazypock.gnuzd.dev-4B275F?logo=readme&logoColor=white)](https://lazypock.gnuzd.dev/)
+
+📚 **Docs:** [What is Lazypock](https://lazypock.gnuzd.dev/) · [Architecture](https://lazypock.gnuzd.dev/architecture) · [Server Guide](https://lazypock.gnuzd.dev/server) · [TypeScript SDK](https://lazypock.gnuzd.dev/sdk/typescript) · [Backup format](https://lazypock.gnuzd.dev/backup)
+
 
 > **Your whole backend. In one lazy pocket.**
 
