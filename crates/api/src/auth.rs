@@ -471,8 +471,15 @@ pub(crate) fn auth_body(outcome: &AuthOutcome, record: Value) -> Value {
 /// runs first, and an anonymous caller with no multipart body gets the body error
 /// rather than the authorization error — which is exactly how `/api/import` answered
 /// 415 where it should have answered 403.
-#[derive(Debug, Clone, Copy)]
-pub struct Superuser;
+/// The superuser making the request, and who they are.
+///
+/// The id is carried so an admin action can name its actor in the audit trail;
+/// without it the log would say what changed and never who changed it.
+#[derive(Debug, Clone)]
+pub struct Superuser {
+    /// The acting superuser's record id in `_superusers`.
+    pub id: String,
+}
 
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Superuser {
     type Rejection = ApiError;
@@ -487,7 +494,9 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Superuser {
             .cloned()
             .unwrap_or_else(Principal::anonymous);
         require_superuser(&principal)?;
-        Ok(Superuser)
+        Ok(Superuser {
+            id: principal.user_id().unwrap_or_default().to_string(),
+        })
     }
 }
 

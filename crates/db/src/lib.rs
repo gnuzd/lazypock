@@ -20,6 +20,7 @@ pub mod runner;
 pub mod schema;
 pub mod types;
 pub mod validation;
+pub mod view_builder;
 pub mod watch;
 
 /// Re-exported so downstream crates and integration tests use the exact same

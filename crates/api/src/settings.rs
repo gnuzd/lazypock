@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::api_keys;
+use crate::audit;
 use crate::auth::Superuser;
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -59,7 +60,7 @@ pub async fn get(
 /// group without sending the rest back.
 pub async fn update(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
 ) -> Result<ResponseJson<Value>, ApiError> {
     let Json(body) = crate::auth::json_body(body)?;
@@ -103,6 +104,20 @@ pub async fn update(
             .await
             .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
     }
+
+    // Inside the transaction, so a settings write that cannot be attributed does
+    // not happen. Names only, never values: these settings hold credentials — an
+    // SMTP password, storage keys — and an audit log that copies them is one more
+    // place for them to leak from.
+    audit::record(
+        &transaction,
+        &superuser.id,
+        audit::action::SETTINGS_UPDATE,
+        None,
+        json!({ "keys": object.keys().cloned().collect::<Vec<_>>() }),
+    )
+    .await
+    .map_err(ApiError::new)?;
 
     transaction
         .commit()
@@ -162,7 +177,7 @@ pub async fn storage_get(
 /// so a bad save cannot take a working deployment down.
 pub async fn storage_update(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
 ) -> Result<ResponseJson<Value>, ApiError> {
     let Json(body) = crate::auth::json_body(body)?;
@@ -242,6 +257,18 @@ pub async fn storage_update(
     lazypock_files::save_storage_setting(&client, &setting)
         .await
         .map_err(ApiError::new)?;
+
+    // Field names only, for the same reason as the settings write above: the body
+    // carries the storage secret.
+    audit::record(
+        &client,
+        &superuser.id,
+        audit::action::SETTINGS_UPDATE,
+        Some("storage"),
+        json!({ "fields": body.keys().cloned().collect::<Vec<_>>() }),
+    )
+    .await
+    .map_err(ApiError::new)?;
 
     tracing::info!(
         backend = config.adapter_str(),
@@ -376,11 +403,21 @@ pub async fn list_api_keys(
 /// never be shown again.
 pub async fn generate_api_key(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     Json(body): Json<CreateApiKey>,
 ) -> Result<ResponseJson<Value>, ApiError> {
     let client = state.db.client().await.map_err(ApiError::new)?;
     let (raw, key) = api_keys::create(&client, body.expires_in_days).await?;
+
+    audit::record(
+        &client,
+        &superuser.id,
+        audit::action::API_KEY_CREATE,
+        Some(&key.id),
+        json!({ "expiresInDays": body.expires_in_days }),
+    )
+    .await
+    .map_err(ApiError::new)?;
 
     tracing::info!(id = %key.id, "API key created");
     Ok(ResponseJson(json!({
@@ -395,7 +432,7 @@ pub async fn generate_api_key(
 /// was revoked.
 pub async fn revoke_api_key(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     Path(id): Path<String>,
 ) -> Result<ResponseJson<Value>, ApiError> {
     let client = state.db.client().await.map_err(ApiError::new)?;
@@ -404,6 +441,16 @@ pub async fn revoke_api_key(
             "no API key with id {id:?}"
         ))));
     }
+
+    audit::record(
+        &client,
+        &superuser.id,
+        audit::action::API_KEY_REVOKE,
+        Some(&id),
+        json!({}),
+    )
+    .await
+    .map_err(ApiError::new)?;
     tracing::info!(id = %id, "API key revoked");
     Ok(ResponseJson(json!({ "ok": true })))
 }

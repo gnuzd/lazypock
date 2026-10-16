@@ -13,7 +13,9 @@ use lazypock_core::error::Error;
 use lazypock_files::presets::{self, ImagePreset};
 use lazypock_files::{OutputFormat, ResizeMode};
 use serde::Deserialize;
+use serde_json::json;
 
+use crate::audit;
 use crate::auth::{require_superuser, Principal};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -86,6 +88,15 @@ pub async fn create(
         .map_err(ApiError::new)?;
 
     tracing::info!(name = %preset.name, "image preset created");
+    audit::record(
+        &client,
+        &audit::actor(&principal),
+        audit::action::PRESET_CHANGE,
+        Some(&preset.name),
+        json!({ "change": "create" }),
+    )
+    .await
+    .map_err(ApiError::new)?;
     Ok((StatusCode::CREATED, Json(preset)).into_response())
 }
 
@@ -123,6 +134,15 @@ pub async fn update(
     }
 
     tracing::info!(name = %name, "image preset updated");
+    audit::record(
+        &client,
+        &audit::actor(&principal),
+        audit::action::PRESET_CHANGE,
+        Some(&name),
+        json!({ "change": "update" }),
+    )
+    .await
+    .map_err(ApiError::new)?;
     Ok((StatusCode::OK, Json(preset)).into_response())
 }
 
@@ -143,6 +163,16 @@ pub async fn delete(
             "no image preset named {name:?}"
         ))));
     }
+
+    audit::record(
+        &client,
+        &audit::actor(&principal),
+        audit::action::PRESET_CHANGE,
+        Some(&name),
+        json!({ "change": "delete" }),
+    )
+    .await
+    .map_err(ApiError::new)?;
 
     // Thumbnails already generated from this preset stay where they are until the
     // orphan sweeper runs; deleting them here would make this call unbounded.

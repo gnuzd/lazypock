@@ -47,6 +47,57 @@ pub fn body_limit() -> DefaultBodyLimit {
 /// looks to the client like an upload that vanished.
 ///
 /// An upload with **no record** is the editor's and the media library's case: it is
+/// Enforce a file field's own limits on a file about to be attached to it.
+///
+/// `maxFileSize` and `mimeTypes` live on the field, and until this existed they
+/// were stored and never read: a limit an operator had set that nothing checked,
+/// which reads as enforced and is not.
+///
+/// Called from both places a file becomes attached to a field — this endpoint and
+/// a record write — because either can be the one that does it.
+pub(crate) fn check_file_policy(
+    field: &lazypock_db::collections::Field,
+    size: i64,
+    mime_type: &str,
+) -> Result<(), Error> {
+    if let Some(max) = field.options.get("maxFileSize").and_then(Value::as_u64) {
+        if size > max as i64 {
+            return Err(Error::invalid(format!(
+                "`{}` accepts files up to {max} bytes; this one is {size} bytes",
+                field.name
+            )));
+        }
+    }
+
+    if let Some(types) = field.options.get("mimeTypes").and_then(Value::as_array) {
+        let allowed: Vec<&str> = types.iter().filter_map(Value::as_str).collect();
+        if !allowed.is_empty()
+            && !allowed
+                .iter()
+                .any(|pattern| mime_matches(pattern, mime_type))
+        {
+            return Err(Error::invalid(format!(
+                "`{}` accepts {}; this file is {mime_type}",
+                field.name,
+                allowed.join(", ")
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Whether a file's type matches one entry of `mimeTypes`: exactly, or by
+/// `type/*`, which is how the reference writes a whole family.
+fn mime_matches(pattern: &str, mime_type: &str) -> bool {
+    match pattern.strip_suffix("/*") {
+        Some(kind) => mime_type
+            .split_once('/')
+            .is_some_and(|(actual, _)| actual.eq_ignore_ascii_case(kind)),
+        None => pattern.eq_ignore_ascii_case(mime_type),
+    }
+}
+
 /// stored and left `pending`, a record write attaches it, and one nobody attaches is
 /// reclaimed after the configured TTL. The response is the row a client reads, and its
 /// `id` is what goes into a file field.
@@ -163,6 +214,22 @@ pub async fn upload(
         .map_err(ApiError::new)?;
     let dimensions = lazypock_files::validation::dimensions(&body, format);
     let declared_size = body.len() as i64;
+
+    // A field's own limits are enforced before anything is stored, so a refused
+    // upload leaves no object and no row behind for the reaper to find.
+    if !collection.is_empty() && !field_name.is_empty() {
+        let field = state.schema.snapshot().get(&collection).and_then(|found| {
+            found
+                .fields
+                .iter()
+                .find(|field| field.name == field_name)
+                .cloned()
+        });
+        if let Some(field) = field {
+            check_file_policy(&field, declared_size, format.content_type())
+                .map_err(ApiError::new)?;
+        }
+    }
     let checksum = hex(&Sha256::digest(&body));
     let stored_name = key.rsplit('/').next().unwrap_or_default().to_string();
 

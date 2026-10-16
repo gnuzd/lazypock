@@ -455,6 +455,70 @@ pub fn validate_options(field_type: FieldType, options: &Value) -> Result<()> {
         ));
     }
 
+    validate_file_options(field_type, options)?;
+
+    Ok(())
+}
+
+/// Check the options only a file field has.
+///
+/// These are enforced when a file is attached to a record, so they are checked
+/// here for shape as well: an option that is stored but not understood would be
+/// one more setting that reads as enforced and is not.
+fn validate_file_options(field_type: FieldType, options: &Value) -> Result<()> {
+    let is_file = field_type == FieldType::File;
+
+    // Each of these is a no-op anywhere else, so accepting one would mean
+    // accepting a setting that can never apply.
+    for key in ["maxFileSize", "mimeTypes", "thumbs"] {
+        if !is_file && options.get(key).is_some_and(|value| !value.is_null()) {
+            return Err(Error::invalid(format!(
+                "{key} is only meaningful for file fields, not {field_type}"
+            )));
+        }
+    }
+
+    if !is_file {
+        return Ok(());
+    }
+
+    if options
+        .get("maxFileSize")
+        .is_some_and(|value| !value.is_null())
+        && !option_u64(options, "maxFileSize").is_some_and(|size| size > 0)
+    {
+        return Err(Error::invalid(
+            "maxFileSize must be a positive number of bytes",
+        ));
+    }
+
+    if let Some(value) = options.get("mimeTypes").filter(|value| !value.is_null()) {
+        let Some(types) = value.as_array() else {
+            return Err(Error::invalid("mimeTypes must be a JSON array of strings"));
+        };
+        if types.is_empty() {
+            return Err(Error::invalid("mimeTypes must name at least one type"));
+        }
+        if !types
+            .iter()
+            .all(|entry| entry.as_str().is_some_and(|text| !text.trim().is_empty()))
+        {
+            return Err(Error::invalid(
+                "mimeTypes entries must be non-empty strings",
+            ));
+        }
+    }
+
+    // Per-field thumbnails are not implemented. Storing the option would promise
+    // thumbnails that never appear, so it is refused and points at the thing that
+    // does work: an image preset is generated for every view of the file, which
+    // is what per-field thumbnails were approximating anyway.
+    if options.get("thumbs").is_some_and(|value| !value.is_null()) {
+        return Err(Error::unsupported(
+            "per-field `thumbs` is not implemented; declare an image preset instead",
+        ));
+    }
+
     Ok(())
 }
 
@@ -680,5 +744,62 @@ mod tests {
             Some("'{}'::text[]")
         );
         assert_eq!(zero_default(FieldType::Relation, &json!({})), None);
+    }
+
+    /// A file field's limits are enforced when a file is attached, and they are
+    /// checked for shape here so a limit that could never be applied is not stored
+    /// in the first place.
+    #[test]
+    fn file_options_are_checked_where_they_are_set() {
+        let file = FieldType::File;
+
+        assert!(validate_options(file, &json!({})).is_ok());
+        assert!(validate_options(file, &json!({ "maxFileSize": 1024 })).is_ok());
+        assert!(validate_options(file, &json!({ "mimeTypes": ["image/png", "image/*"] })).is_ok());
+
+        for options in [
+            json!({ "maxFileSize": 0 }),
+            json!({ "maxFileSize": -1 }),
+            json!({ "maxFileSize": "1kb" }),
+            json!({ "mimeTypes": [] }),
+            json!({ "mimeTypes": "image/png" }),
+            json!({ "mimeTypes": [""] }),
+            json!({ "mimeTypes": [7] }),
+        ] {
+            assert!(
+                validate_options(file, &options).is_err(),
+                "a file field accepted {options}"
+            );
+        }
+    }
+
+    /// Per-field thumbnails are not implemented, so the option is refused rather
+    /// than stored and ignored. Storing it would promise thumbnails that never
+    /// appear.
+    #[test]
+    fn per_field_thumbs_are_refused_rather_than_stored() {
+        let error = validate_options(FieldType::File, &json!({ "thumbs": ["100x100"] }))
+            .expect_err("thumbs is not implemented, so it must be refused");
+        assert!(
+            error.message().contains("image preset"),
+            "the refusal should point at what does work, got {}",
+            error.message()
+        );
+    }
+
+    /// Each of these is meaningless off a file field, so accepting one would mean
+    /// accepting a setting that can never apply.
+    #[test]
+    fn file_options_are_refused_on_other_field_types() {
+        for options in [
+            json!({ "maxFileSize": 1024 }),
+            json!({ "mimeTypes": ["image/png"] }),
+            json!({ "thumbs": ["100x100"] }),
+        ] {
+            assert!(
+                validate_options(FieldType::Text, &options).is_err(),
+                "a text field accepted {options}"
+            );
+        }
     }
 }

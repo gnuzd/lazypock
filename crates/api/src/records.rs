@@ -455,9 +455,27 @@ async fn sync_files(
             // A file field's upload belongs to this record now, which is what takes it
             // out of the reaper's reach and what a delete of the file is guarded against.
             store::FileLink::Owner => {
-                store::attach(runner, &found.id, &collection.name, record_id, &found.field)
-                    .await
-                    .map_err(ApiError::new)?;
+                let attached =
+                    store::attach(runner, &found.id, &collection.name, record_id, &found.field)
+                        .await
+                        .map_err(ApiError::new)?;
+
+                // The field's own limits are checked here rather than at upload
+                // time: this is the first point at which a file and a field are
+                // known to belong together, and therefore the first point at
+                // which `maxFileSize` and `mimeTypes` mean anything.
+                if let (Some(file), Some(field)) = (
+                    attached,
+                    collection
+                        .fields
+                        .iter()
+                        .find(|field| field.name == found.field),
+                ) {
+                    // The policy lives with the file API, because the upload
+                    // endpoint attaches a file too and has to apply the same one.
+                    crate::files::check_file_policy(field, file.size, &file.mime_type)
+                        .map_err(ApiError::new)?;
+                }
             }
             store::FileLink::Reference => references.push((found.id, found.field)),
         }
@@ -470,7 +488,6 @@ async fn sync_files(
         .map_err(ApiError::new)?;
     Ok(())
 }
-
 /// Let go of what a deleted record owned and referenced.
 async fn release_files(
     runner: &dyn QueryRunner,

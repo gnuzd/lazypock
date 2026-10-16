@@ -530,13 +530,7 @@ test('an API key can be generated and revoked through the UI', async ({ page }) 
 	await page.getByRole('button', { name: 'Revoke' }).first().click();
 	await expect(page.getByText('revoked').first()).toBeVisible();
 });
-
-// `fixme`: the Studio's SQL console posts to `/sql/query`, but the Rust server
-// has no SQL endpoint at all — the page renders and any query 404s ("The
-// requested resource was not found"). Implementing it (superuser-only, and
-// read-only as the page promises) is a separate change; PLAN.md records the
-// gap. Drop the `fixme` with the endpoint.
-test.fixme('the SQL console runs a query', async ({ page }) => {
+test('the SQL console runs a query', async ({ page }) => {
 	await signIn(page);
 	await page.goto('/_/settings/sql');
 

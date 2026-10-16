@@ -1467,3 +1467,157 @@ async fn completing_an_upload_verifies_the_object_and_finishes_the_row() {
 
     app.cleanup().await;
 }
+
+/// A collection with one file field, configured by `options`.
+async fn seed_file_field(app: &TestApp, name: &str, options: serde_json::Value) {
+    let mut client = app.client().await;
+    collections::create(
+        &mut client,
+        CreateCollection {
+            name: name.into(),
+            collection_type: CollectionType::Base,
+            fields: vec![CreateField {
+                name: "photo".into(),
+                field_type: FieldType::File,
+                required: false,
+                unique: false,
+                options,
+            }],
+            rules: json!({
+                "listRule": "", "viewRule": "", "createRule": "",
+                "updateRule": "", "deleteRule": "",
+            }),
+            options: json!({}),
+            adopt_existing_table: false,
+        },
+    )
+    .await
+    .expect("create the collection");
+    app.reload_schema().await;
+    sql(app, &format!("insert into {name} (id) values ('r1')")).await;
+}
+
+/// How many files the field of that collection holds.
+async fn attached_count(app: &TestApp, collection: &str) -> i64 {
+    app.client()
+        .await
+        .query_one(
+            "select count(*) as n from _files where collection_name = $1",
+            &[&collection.to_string()],
+        )
+        .await
+        .expect("a row")
+        .get("n")
+}
+
+/// `maxFileSize` and `mimeTypes` are stored on the field. Until this existed they
+/// were stored and never read, so an operator's limit read as enforced and was not.
+#[tokio::test]
+async fn a_file_fields_own_limits_are_enforced_when_a_file_is_attached() {
+    let Some(app) = test_app("http_files_field_policy").await else {
+        return;
+    };
+    let token = token(&app).await;
+    let bytes = png(64, 48);
+
+    // A field that will not take anything larger than a byte, and one that will.
+    seed_file_field(&app, "limited", json!({ "maxFileSize": 1 })).await;
+    seed_file_field(&app, "roomy", json!({ "maxFileSize": 10_000_000 })).await;
+
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"limited"),
+            ("record", None, b"r1"),
+            ("field_name", None, b"photo"),
+            ("file", Some("photo.png"), &bytes),
+        ],
+        Some(&token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+
+    let message = reply.body.expect("an error")["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        message.contains("photo") && message.contains("1 bytes"),
+        "the refusal should name the field and the limit, got {message:?}"
+    );
+    // The check runs before anything is written, so a refused upload leaves
+    // nothing behind for the reaper to find.
+    assert_eq!(
+        attached_count(&app, "limited").await,
+        0,
+        "a refused upload left a file row behind"
+    );
+
+    // The same bytes are fine where the field allows them, so the refusal is the
+    // field's limit rather than the upload in general.
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"roomy"),
+            ("record", None, b"r1"),
+            ("field_name", None, b"photo"),
+            ("file", Some("photo.png"), &bytes),
+        ],
+        Some(&token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    assert_eq!(attached_count(&app, "roomy").await, 1);
+
+    app.cleanup().await;
+}
+
+/// `mimeTypes` accepts an exact type or a `type/*` family.
+#[tokio::test]
+async fn a_file_fields_mime_types_limit_is_enforced() {
+    let Some(app) = test_app("http_files_field_mime").await else {
+        return;
+    };
+    let token = token(&app).await;
+
+    seed_file_field(&app, "only_jpeg", json!({ "mimeTypes": ["image/jpeg"] })).await;
+
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"only_jpeg"),
+            ("record", None, b"r1"),
+            ("field_name", None, b"photo"),
+            ("file", Some("photo.png"), &png(16, 16)),
+        ],
+        Some(&token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+    let message = reply.body.expect("an error")["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        message.contains("image/jpeg") && message.contains("image/png"),
+        "the refusal should name what is accepted and what arrived, got {message:?}"
+    );
+    assert_eq!(attached_count(&app, "only_jpeg").await, 0);
+
+    // `image/*` is the same field written as a family, and a PNG is in it.
+    seed_file_field(&app, "any_image", json!({ "mimeTypes": ["image/*"] })).await;
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"any_image"),
+            ("record", None, b"r1"),
+            ("field_name", None, b"photo"),
+            ("file", Some("photo.png"), &png(16, 16)),
+        ],
+        Some(&token),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    app.cleanup().await;
+}

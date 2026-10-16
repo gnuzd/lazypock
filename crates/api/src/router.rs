@@ -8,6 +8,7 @@ use axum::{
 use lazypock_core::error::Error;
 use serde_json::{json, Value};
 
+use crate::audit;
 use crate::auth;
 use crate::backup;
 use crate::batch;
@@ -21,9 +22,11 @@ use crate::presets;
 use crate::realtime;
 use crate::records;
 use crate::settings;
+use crate::sql;
 use crate::state::AppState;
 use crate::studio;
 use crate::superusers;
+use crate::views;
 
 /// The full application router.
 pub fn router(state: AppState) -> Router {
@@ -115,6 +118,9 @@ pub fn router(state: AppState) -> Router {
             get(logs::get_retention).patch(logs::set_retention),
         )
         .route("/api/logs/{id}", get(logs::show))
+        // The admin audit trail. Superuser-only, like the request log and for the
+        // same reason: it names who did what, and when.
+        .route("/api/audit", get(audit::list))
         // Cron jobs. Superuser-only: running one executes SQL or an HTTP request.
         .route("/api/crons", get(crons::list).post(crons::create))
         .route("/api/crons/validate", post(crons::validate))
@@ -124,6 +130,23 @@ pub fn router(state: AppState) -> Router {
                 .patch(crons::update)
                 .delete(crons::delete)
                 .post(crons::run_now),
+        )
+        // The SQL console. Superuser-only, which the extractor enforces, and
+        // read-only: the handler refuses anything the database would have to
+        // write for, and a read-only transaction catches what the keyword check
+        // cannot.
+        .route("/api/sql/query", post(sql::query))
+        // The view previews. Superuser-only: each one runs a statement, and the
+        // generated SQL is what a view would then be created from. Registered
+        // before the `/api/collections/{name}` routes; the static segment wins,
+        // so `meta` is never read as a collection name.
+        .route(
+            "/api/collections/meta/dry-run-view",
+            post(views::dry_run_view),
+        )
+        .route(
+            "/api/collections/meta/preview-view-builder",
+            post(views::preview_view_builder),
         )
         // Reading the available sizes is public: a client needs them to build a
         // thumbnail URL. Changing them is a superuser action, enforced in the

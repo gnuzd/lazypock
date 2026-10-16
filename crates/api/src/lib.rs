@@ -4,6 +4,7 @@
 //! PocketBase clients and tooling work unmodified.
 
 pub mod api_keys;
+pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod batch;
@@ -19,8 +20,10 @@ pub mod realtime;
 pub mod records;
 pub mod router;
 pub mod settings;
+pub mod sql;
 pub mod state;
 pub mod studio;
 pub mod superusers;
+pub mod views;
 
 pub use state::{AppState, Services};
