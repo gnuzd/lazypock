@@ -18,6 +18,7 @@ local-image-codecs = ["lazypock-files/local-image-codecs"]
 [dependencies]
 arc-swap = "1.9.2"
 axum = { version = "0.8.9", features = ["multipart"] }
+base64 = "0.23.1"
 bytes = "1.12.1"
 chrono = "0.4.42"
 chrono-tz = "0.10.4"
@@ -34,14 +35,13 @@ lazypock-studio-embed = { version = "0.1.0", path = "../studio-embed" }
 reqwest = { version = "0.13.5" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+serde_urlencoded = "0.7.1"
 sha2 = "0.10"
 subtle = "2"
 tokio = { version = "1.53.2", features = ["rt"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
-base64 = "0.23.1"
 image = { version = "0.25.9", default-features = false, features = ["png"] }
-serde_urlencoded = "0.7.1"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }

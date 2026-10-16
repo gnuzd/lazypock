@@ -339,9 +339,10 @@ fn not_found(name: &str) -> ApiError {
 /// keeps a system collection visible in the Studio's System section while leaving
 /// it outside the schema cache — so it can be neither read as records nor altered.
 ///
-/// The list is the PocketBase set. Four of these tables are not created yet —
-/// OAuth2, MFA and OTP are Track E backlog (PLAN.md 7.1) — so today they are
-/// presented for parity and have no records to serve.
+/// The list is the PocketBase set. `_auth_origins` and `_external_auths` are real
+/// tables (migration 0012, backing OAuth2). `_mfas` and `_otps` are not created
+/// yet — MFA and OTP are still backlog (PLAN.md 7.1) — so those two are presented
+/// for parity and have no records to serve.
 fn system_collections() -> Vec<Collection> {
     vec![
         superusers_collection(),

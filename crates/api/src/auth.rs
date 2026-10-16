@@ -6,11 +6,12 @@
 //! instead of quietly losing access.
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Extension, Path, Request, State};
+use axum::extract::{Extension, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
+use base64::Engine as _;
 use lazypock_auth::token::Claims;
 use lazypock_auth::AuthOutcome;
 use lazypock_core::error::Error;
@@ -21,6 +22,7 @@ use lazypock_db::records;
 use lazypock_db::rls::context::{Action, RequestContext};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 use crate::error::ApiError;
 use crate::records::resolve;
@@ -469,8 +471,10 @@ pub async fn auth_refresh(
 pub async fn auth_methods(
     State(state): State<AppState>,
     Path(collection): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if collection != SUPERUSERS {
+    let is_superusers = collection == SUPERUSERS;
+    if !is_superusers {
         let (_schema, resolved) = resolve(&state, &collection)?;
         if !resolved.collection.collection_type.is_auth() {
             return Err(ApiError::new(Error::not_found(format!(
@@ -479,18 +483,391 @@ pub async fn auth_methods(
         }
     }
 
-    // Only password auth exists so far; the others are reported as disabled
-    // rather than omitted, so a client can tell "off" from "unknown".
+    // OAuth2 is for auth records. The superuser login stays password-only, as the
+    // reference's routes are, so `_superusers` lists no providers.
+    let providers = if is_superusers {
+        Vec::new()
+    } else {
+        let client = state.db.client().await.map_err(ApiError::new)?;
+        let configured = crate::oauth2::configured(&client)
+            .await
+            .map_err(ApiError::new)?;
+        let app_origin = app_origin(&state, &headers);
+        let mut listed = Vec::with_capacity(configured.len());
+        for provider in &configured {
+            let pkce = crate::oauth2::Pkce::new().map_err(ApiError::new)?;
+            let auth_url = crate::oauth2::authorize_url(provider, &pkce);
+            // Remember where this flow started, so the provider's callback knows
+            // which origin may receive the result. Keyed by the state, single-use.
+            crate::oauth2::remember_flow(
+                &client,
+                &collection,
+                &pkce.state,
+                json!({ "provider": provider.name, "app_origin": app_origin }),
+            )
+            .await
+            .map_err(ApiError::new)?;
+            listed.push(json!({
+                "name": provider.name,
+                "authURL": auth_url,
+                "state": pkce.state,
+                "codeVerifier": pkce.verifier,
+            }));
+        }
+        listed
+    };
+
+    // The other methods are reported as disabled rather than omitted, so a client
+    // can tell "off" from "unknown".
+    let oauth2_enabled = !providers.is_empty();
     Ok((
         StatusCode::OK,
         Json(json!({
             "password": { "enabled": true },
-            "oauth2": { "enabled": false, "providers": [] },
+            "oauth2": { "enabled": oauth2_enabled, "providers": providers },
             "otp": { "enabled": false },
             "mfa": { "enabled": false },
         })),
     )
         .into_response())
+}
+
+/// The app origin a popup result may be posted to.
+///
+/// The browser sends `Origin` on the cross-origin request that starts the flow.
+/// It is believed only when the CORS allowlist accepts it; otherwise the
+/// deployment's own origin is used, so a same-origin Studio keeps working. A
+/// caller cannot redirect the result somewhere else by naming it in the request.
+fn app_origin(state: &AppState, headers: &HeaderMap) -> String {
+    if let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        let origin = origin.trim();
+        if state.cors.allows(origin) {
+            return origin.to_string();
+        }
+    }
+
+    if let Some(public) = &state.config.public_url {
+        return public.trim_end_matches('/').to_string();
+    }
+
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| format!("http://{host}"))
+        .unwrap_or_default()
+}
+
+/// What `POST /api/collections/{collection}/auth-with-oauth2` accepts.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OAuth2Auth {
+    /// The provider name, as `auth-methods` listed it.
+    pub provider: String,
+    /// The authorization code the provider returned to the popup.
+    pub code: String,
+    /// The PKCE verifier the client kept from `auth-methods`.
+    pub code_verifier: String,
+    /// The redirect URI used at authorize time; the provider needs the same one.
+    pub redirect_url: String,
+    /// Extra record fields to set on a first sign-in.
+    #[serde(default)]
+    pub create_data: Option<Value>,
+}
+
+/// `POST /api/collections/{collection}/auth-with-oauth2`
+///
+pub async fn auth_with_oauth2(
+    State(state): State<AppState>,
+    Path(collection): Path<String>,
+    body: Result<Json<OAuth2Auth>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = json_body(body)?;
+
+    if collection == SUPERUSERS {
+        return Err(ApiError::new(Error::not_found(
+            "OAuth2 sign-in is for auth collections; the superuser login is password-only",
+        )));
+    }
+    let (_schema, resolved) = resolve(&state, &collection)?;
+    if !resolved.collection.collection_type.is_auth() {
+        return Err(ApiError::new(Error::not_found(format!(
+            "no auth collection named {collection:?}"
+        ))));
+    }
+
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let providers = crate::oauth2::configured(&client)
+        .await
+        .map_err(ApiError::new)?;
+    let provider = providers
+        .iter()
+        .find(|provider| provider.name == request.provider)
+        .ok_or_else(|| {
+            ApiError::new(Error::not_found(format!(
+                "no oauth2 provider named {:?}",
+                request.provider
+            )))
+        })?;
+
+    let token = crate::oauth2::exchange(
+        provider,
+        &request.code,
+        &request.code_verifier,
+        &request.redirect_url,
+    )
+    .await
+    .map_err(ApiError::new)?;
+    let user = crate::oauth2::user(provider, &token)
+        .await
+        .map_err(ApiError::new)?;
+
+    let record_id =
+        match crate::oauth2::find_link(&client, &collection, &provider.name, &user.provider_id)
+            .await
+            .map_err(ApiError::new)?
+        {
+            Some(linked) => linked,
+            None => {
+                let input =
+                    oauth2_create_input(&resolved.collection, &user, request.create_data.as_ref());
+                validate_first(&resolved.collection, &input, false)?;
+                let extra = auth_columns(&resolved.collection, &input)?;
+                let record = records::create_with(
+                    &client,
+                    &resolved.collection,
+                    &resolved.context,
+                    input,
+                    &extra,
+                    state.hooks.as_ref(),
+                )
+                .await
+                .map_err(ApiError::from)?;
+                let created = record
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ApiError::new(Error::internal("the created record has no id")))?
+                    .to_string();
+                // A concurrent callback for the same identity may have linked first. The
+                // link is the identity, so the id it resolves to wins either way.
+                crate::oauth2::link(
+                    &client,
+                    &collection,
+                    &provider.name,
+                    &user.provider_id,
+                    &created,
+                )
+                .await
+                .map_err(ApiError::new)?
+            }
+        };
+
+    let record = records::get_one(
+        &client,
+        &resolved.collection,
+        &resolved.context,
+        &record_id,
+        &FieldSelection::all(),
+        &ExpandSpec::none(),
+    )
+    .await
+    .map_err(ApiError::new)?
+    .ok_or_else(|| ApiError::new(Error::internal("the linked record vanished")))?;
+
+    let outcome = state
+        .auth
+        .issue_for_record(&resolved.collection, &record_id)
+        .await
+        .map_err(ApiError::new)?;
+
+    Ok((StatusCode::OK, Json(auth_body(&outcome, record))).into_response())
+}
+
+/// Build the record input for a first OAuth2 sign-in.
+///
+/// The email and password come from the server — a random password, because the
+/// account signs in through the provider — and `createData` may fill the rest,
+/// except the fields that decide identity or credentials.
+fn oauth2_create_input(
+    collection: &Collection,
+    user: &crate::oauth2::OAuthUser,
+    create_data: Option<&Value>,
+) -> Value {
+    use lazypock_db::types::FieldType;
+
+    let email_field = collection
+        .fields
+        .iter()
+        .find(|field| field.field_type == FieldType::Email)
+        .map(|field| field.name.clone())
+        .unwrap_or_else(|| "email".to_string());
+    let password_field = collection
+        .fields
+        .iter()
+        .find(|field| field.field_type == FieldType::Password)
+        .map(|field| field.name.clone())
+        .unwrap_or_else(|| "password_hash".to_string());
+
+    let mut object = serde_json::Map::new();
+    if let Some(email) = &user.email {
+        object.insert(email_field.clone(), json!(email));
+    }
+    object.insert(password_field.clone(), json!(random_password()));
+
+    // The provider verified the address, so the account starts verified.
+    if collection
+        .fields
+        .iter()
+        .any(|field| field.name == "verified")
+    {
+        object.insert("verified".to_string(), json!(true));
+    }
+    if let Some(name) = &user.name {
+        if collection.fields.iter().any(|field| field.name == "name") {
+            object.insert("name".to_string(), json!(name));
+        }
+    }
+    if let Some(picture) = &user.picture {
+        if collection.fields.iter().any(|field| field.name == "avatar") {
+            object.insert("avatar".to_string(), json!(picture));
+        }
+    }
+
+    if let Some(Value::Object(extra)) = create_data {
+        for (key, value) in extra {
+            let allowed = !is_protected_create_field(key)
+                && key != &email_field
+                && key != &password_field
+                && collection.fields.iter().any(|field| field.name == *key);
+            if allowed {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    Value::Object(object)
+}
+
+/// Fields a client may never set through `createData`.
+fn is_protected_create_field(key: &str) -> bool {
+    matches!(
+        key,
+        "id" | "created"
+            | "updated"
+            | "collectionId"
+            | "collectionName"
+            | "expand"
+            | "password"
+            | "passwordConfirm"
+            | "tokenKey"
+            | "verified"
+            | "emailVisibility"
+    )
+}
+
+fn random_password() -> String {
+    let mut bytes = [0u8; 24];
+    let _ = getrandom::fill(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// `GET /api/oauth2-redirect` — the popup bridge.
+///
+/// The provider sends the popup here. This page does not touch a record: it posts
+/// the code back to the origin that started the flow (looked up from the state,
+/// which is single-use) and closes itself. The `postMessage` target is never
+/// taken from the request.
+pub async fn oauth2_redirect(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let state_param = params.get("state").cloned().unwrap_or_default();
+
+    let flow = match state.db.client().await {
+        Ok(client) => crate::oauth2::take_flow(&client, &state_param)
+            .await
+            .unwrap_or(None),
+        Err(_) => None,
+    };
+    let origin = flow
+        .as_ref()
+        .and_then(|flow| flow.get("app_origin"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    if flow.is_none() {
+        return oauth2_bridge(
+            &origin,
+            json!({
+                "type": "lazypock:oauth2:error",
+                "message": "This sign-in link has expired or was already used.",
+            }),
+        );
+    }
+
+    if let Some(error) = params.get("error").filter(|error| !error.is_empty()) {
+        return oauth2_bridge(
+            &origin,
+            json!({
+                "type": "lazypock:oauth2:error",
+                "message": format!("The provider rejected the sign-in ({error})."),
+            }),
+        );
+    }
+
+    match params.get("code").filter(|code| !code.is_empty()) {
+        Some(code) => oauth2_bridge(
+            &origin,
+            json!({ "type": "lazypock:oauth2", "code": code, "state": state_param }),
+        ),
+        None => oauth2_bridge(
+            &origin,
+            json!({
+                "type": "lazypock:oauth2:error",
+                "message": "The provider returned no authorization code.",
+            }),
+        ),
+    }
+}
+
+/// Render the popup bridge page.
+///
+/// The payload is embedded as JSON in a `type="application/json"` element rather
+/// than interpolated into the script, so nothing a provider or a code contains
+/// can become script. A missing origin is refused rather than broadcast to `*`:
+/// the code is a credential, and `*` would hand it to whatever opened the popup.
+fn oauth2_bridge(origin: &str, payload: Value) -> Response {
+    if origin.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(
+                "<p>This sign-in could not be completed: the app origin is unknown.</p>"
+                    .to_string(),
+            ),
+        )
+            .into_response();
+    }
+
+    let payload = serde_json::to_string(&payload)
+        .unwrap_or_default()
+        .replace("</", "<\\/");
+    let target = serde_json::to_string(origin).unwrap_or_default();
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>Signing in…</title>\
+         <script id=\"payload\" type=\"application/json\">{payload}</script>\
+         <script>\
+         (function(){{\
+           var p = JSON.parse(document.getElementById('payload').textContent);\
+           if (window.opener) {{ window.opener.postMessage(p, {target}); }}\
+           window.close();\
+         }})();\
+         </script>"
+    );
+
+    (StatusCode::OK, Html(html)).into_response()
 }
 
 /// `GET /api/jwks` and `GET /.well-known/jwks.json`
