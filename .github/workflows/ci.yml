@@ -117,6 +117,15 @@ jobs:
       # *pass*, so a service container that never came up would read as a
       # green suite that tested nothing. This makes that case a failure.
       LAZYPOCK_REQUIRE_DB_TESTS: "1"
+      # `lld` links the ~57 test binaries far faster than the default GNU ld,
+      # and this job is roughly half build rather than test. Measured on this
+      # repository: the build phase of this job went from 134s to 68s, which is
+      # where the whole gain in this change comes from.
+      #
+      # CI only, on purpose: this is a `RUSTFLAGS` value in one job, so it cannot
+      # affect the release image, which keeps the default linker. Deleting this
+      # line and the `Install lld` step below reverts it completely.
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
     steps:
       # actions/checkout v4.4.0
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -124,8 +133,21 @@ jobs:
           persist-credentials: false
       - name: Install the toolchain pinned by rust-toolchain.toml
         run: rustup show
+      - name: Install lld
+        # Deliberately no `apt-get update`: the runner image's package lists are
+        # current enough for `lld`, and the update on its own costs ~15s.
+        run: sudo apt-get install -y lld
       # Swatinem/rust-cache v2.9.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      # `cargo test`, NOT `cargo nextest`.
+      #
+      # nextest was tried here and reverted. It runs each of the 755 tests in its
+      # own process, which on a 4-vCPU runner against a cold Postgres costs more
+      # than the parallelism saves: over two runs the test phase measured 162-167s
+      # under nextest against 106s under `cargo test`. It *looked* like a win
+      # locally (755 tests in 51s, against 65-115s), because that machine has more
+      # cores and a database whose test schemas already existed from earlier runs.
+      # Do not reintroduce it without measuring it in CI.
       - run: cargo test --workspace
 
   studio:
