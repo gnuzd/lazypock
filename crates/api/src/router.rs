@@ -295,11 +295,24 @@ async fn batch_requires_state() -> ApiError {
 ///
 /// Deliberately does not touch the database: liveness should not flap when
 /// Postgres is briefly unavailable. Readiness is a separate concern.
+///
+/// What it *does* report is a subsystem that has failed locally and cannot fix
+/// itself — the schema watcher and the realtime listener. Those are the failures
+/// that used to hide: the API kept answering, so the node looked healthy while it
+/// served a stale schema and delivered no realtime events. The extra field is
+/// present only when something is wrong, so the healthy payload is unchanged.
 async fn health() -> Json<Value> {
+    let unavailable = lazypock_core::health::unavailable();
+    let data = if unavailable.is_empty() {
+        json!({})
+    } else {
+        json!({ "unavailable": unavailable })
+    };
+
     Json(json!({
         "code": 200,
         "message": "OK",
-        "data": {},
+        "data": data,
     }))
 }
 

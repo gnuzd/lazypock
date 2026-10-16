@@ -185,7 +185,7 @@ impl Db {
 /// `channel_binding` is dropped: the driver does not support it, and once the
 /// server certificate is verified there is no channel to bind. Both changes only
 /// affect what the driver is asked to do — [`tls_mode`] reads the original URL.
-fn normalize_url(url: &str) -> String {
+pub(crate) fn normalize_url(url: &str) -> String {
     let Some((base, query)) = url.split_once('?') else {
         return url.to_string();
     };
@@ -257,7 +257,7 @@ pub fn tls_mode(url: &str) -> TlsMode {
 }
 
 /// A rustls connector that verifies the server against the system trust store.
-fn rustls_connector() -> Result<MakeRustlsConnect> {
+pub(crate) fn rustls_connector() -> Result<MakeRustlsConnect> {
     let loaded = rustls_native_certs::load_native_certs();
     for error in &loaded.errors {
         tracing::warn!(%error, "could not load a native certificate");
