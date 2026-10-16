@@ -22,6 +22,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::SystemTime;
 
+use crate::audit;
 use crate::auth::{require_superuser, require_superuser_or_api_key};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -171,6 +172,16 @@ pub async fn create(
         .await
         .map_err(ApiError::new)?;
 
+    audit::record(
+        &client,
+        &audit::actor(&principal),
+        audit::action::COLLECTION_CREATE,
+        Some(&collection.name),
+        json!({ "type": collection.collection_type.as_str() }),
+    )
+    .await
+    .map_err(ApiError::new)?;
+
     tracing::info!(collection = %collection.name, "collection created");
     let body = collection_json(&collection, is_system(&collection.name))?;
     Ok((StatusCode::CREATED, Json(body)).into_response())
@@ -202,6 +213,15 @@ pub async fn update(
     let collection = collections::update(&mut client, &name, body)
         .await
         .map_err(ApiError::new)?;
+    audit::record(
+        &client,
+        &audit::actor(&principal),
+        audit::action::COLLECTION_UPDATE,
+        Some(&name),
+        json!({ "type": collection.collection_type.as_str() }),
+    )
+    .await
+    .map_err(ApiError::new)?;
     tracing::info!(collection = %collection.name, "collection updated");
     Ok(Json(collection_json(
         &collection,
@@ -251,6 +271,16 @@ pub async fn delete(
     let collection = collections::delete(&mut client, &name, drop_data)
         .await
         .map_err(ApiError::new)?;
+
+    audit::record(
+        &client,
+        &audit::actor(&principal),
+        audit::action::COLLECTION_DELETE,
+        Some(&name),
+        json!({ "dropData": drop_data }),
+    )
+    .await
+    .map_err(ApiError::new)?;
 
     tracing::warn!(collection = %name, drop_data, "collection deleted");
     Ok(Json(collection_json(

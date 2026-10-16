@@ -8,6 +8,7 @@ use axum::{
 use lazypock_core::error::Error;
 use serde_json::{json, Value};
 
+use crate::audit;
 use crate::auth;
 use crate::backup;
 use crate::batch;
@@ -117,6 +118,9 @@ pub fn router(state: AppState) -> Router {
             get(logs::get_retention).patch(logs::set_retention),
         )
         .route("/api/logs/{id}", get(logs::show))
+        // The admin audit trail. Superuser-only, like the request log and for the
+        // same reason: it names who did what, and when.
+        .route("/api/audit", get(audit::list))
         // Cron jobs. Superuser-only: running one executes SQL or an HTTP request.
         .route("/api/crons", get(crons::list).post(crons::create))
         .route("/api/crons/validate", post(crons::validate))

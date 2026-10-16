@@ -18,6 +18,7 @@ use lazypock_db::backup::{self, ImportOptions, ImportOutcome};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::audit;
 use crate::auth::{Principal, Superuser};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -158,7 +159,7 @@ pub struct JsonImport {
 /// rather than silently dropped.
 pub async fn import(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     request: Request,
 ) -> Result<Response, ApiError> {
     let content_type = request
@@ -235,6 +236,26 @@ pub async fn import(
         .map_err(ApiError::new)?
     {
         ImportOutcome::Applied(report) => {
+            // Recorded only when something was applied: `NeedsConfirmation` above
+            // did not change anything, so there is nothing to have done. An import
+            // can drop collections, so their names are kept rather than only
+            // counted.
+            audit::record(
+                &client,
+                &superuser.id,
+                audit::action::IMPORT,
+                None,
+                json!({
+                    "collections": report.imported.len(),
+                    "skipped": report.skipped.len(),
+                    "errors": report.errors.len(),
+                    "removed": report.removed,
+                    "atomic": options.atomic.as_str(),
+                }),
+            )
+            .await
+            .map_err(ApiError::new)?;
+
             let mut body = serde_json::to_value(&report).map_err(|err| {
                 ApiError::new(Error::internal(format!(
                     "cannot serialize the import report: {err}"
@@ -429,6 +450,19 @@ pub async fn import_rollback(
         collections = report.imported.len(),
         "rolled back the last import"
     );
+
+    audit::record(
+        &client,
+        id,
+        audit::action::IMPORT_ROLLBACK,
+        None,
+        json!({
+            "collections": report.imported.len(),
+            "errors": report.errors.len(),
+        }),
+    )
+    .await
+    .map_err(ApiError::new)?;
     Ok(Json(json!({
         "rolled_back": true,
         "imported": report.imported,

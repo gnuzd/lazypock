@@ -25,6 +25,7 @@ use lazypock_db::pool::db_error;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::audit;
 use crate::auth::Superuser;
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -140,7 +141,7 @@ pub async fn get(
 /// `POST /api/crons`
 pub async fn create(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     Json(input): Json<CronInput>,
 ) -> Result<Response, ApiError> {
     let prepared = prepare_create(input)?;
@@ -175,6 +176,17 @@ pub async fn create(
         .map_err(|err| ApiError::new(db_error(err)))?;
 
     tracing::info!(cron = %prepared.name, "cron job created");
+    // A cron runs an operator-supplied statement on a timer, so creating one is a
+    // way to arrange for work to happen later. It belongs in the trail.
+    audit::record(
+        &client,
+        &superuser.id,
+        audit::action::CRON_CHANGE,
+        Some(&prepared.name),
+        json!({ "change": "create", "action": prepared.action }),
+    )
+    .await
+    .map_err(ApiError::new)?;
     let row = fetch_row(&client, &id)
         .await?
         .ok_or_else(|| ApiError::new(Error::internal("the created cron job vanished")))?;
@@ -184,7 +196,7 @@ pub async fn create(
 /// `PATCH /api/crons/{id}`
 pub async fn update(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     Path(id): Path<String>,
     Json(input): Json<CronInput>,
 ) -> Result<Json<Value>, ApiError> {
@@ -222,6 +234,15 @@ pub async fn update(
         .map_err(|err| ApiError::new(db_error(err)))?;
 
     tracing::info!(cron = %prepared.name, "cron job updated");
+    audit::record(
+        &client,
+        &superuser.id,
+        audit::action::CRON_CHANGE,
+        Some(&prepared.name),
+        json!({ "change": "update", "action": prepared.action }),
+    )
+    .await
+    .map_err(ApiError::new)?;
     let row = fetch_row(&client, &id)
         .await?
         .ok_or_else(|| not_found(&id))?;
@@ -231,7 +252,7 @@ pub async fn update(
 /// `DELETE /api/crons/{id}`
 pub async fn delete(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let client = state.db.client().await.map_err(ApiError::new)?;
@@ -244,6 +265,15 @@ pub async fn delete(
         return Err(not_found(&id));
     }
     tracing::info!(cron = %id, "cron job deleted");
+    audit::record(
+        &client,
+        &superuser.id,
+        audit::action::CRON_CHANGE,
+        Some(&id),
+        json!({ "change": "delete" }),
+    )
+    .await
+    .map_err(ApiError::new)?;
     Ok(Json(json!({})))
 }
 
@@ -268,7 +298,7 @@ pub async fn validate(
 /// `POST /api/crons/{id}` — run now, and record the outcome.
 pub async fn run_now(
     State(state): State<AppState>,
-    _: Superuser,
+    superuser: Superuser,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let client = state.db.client().await.map_err(ApiError::new)?;
@@ -293,6 +323,15 @@ pub async fn run_now(
         .map_err(|err| ApiError::new(db_error(err)))?;
 
     tracing::info!(cron = %job.name, status = %status, "cron job run");
+    audit::record(
+        &client,
+        &superuser.id,
+        audit::action::CRON_RUN,
+        Some(&job.name),
+        json!({ "status": status }),
+    )
+    .await
+    .map_err(ApiError::new)?;
     let row = fetch_row(&client, &id)
         .await?
         .ok_or_else(|| not_found(&id))?;

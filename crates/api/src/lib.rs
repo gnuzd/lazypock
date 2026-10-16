@@ -4,6 +4,7 @@
 //! PocketBase clients and tooling work unmodified.
 
 pub mod api_keys;
+pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod batch;
