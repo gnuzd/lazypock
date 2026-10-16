@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+authors = ["lazypock contributors"]
+repository = "https://github.com/gnuzd/lazypock"
+homepage = "https://lazypock.gnuzd.dev"
+description = "lazypock — a PocketBase-style backend-as-a-service in Rust + Postgres"
+
+[workspace.dependencies]
+lazypock-core = { path = "crates/core" }
+lazypock-db = { path = "crates/db" }
+lazypock-api = { path = "crates/api" }
+
+# Release profile: small binary, no debug noise.
+# `panic` is intentionally left at the default `unwind` for now: graceful SSE
+# drain and in-process recovery matter more than the few hundred KB that
+# `panic = "abort"` would save (see PLAN.md 18.6).
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+incremental = false

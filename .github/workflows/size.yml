@@ -1,0 +1,101 @@
+name: Size
+
+# The release binary is the product, and its size is a thing to watch rather than
+# discover at release time (PLAN.md risk 9; README priority 1, "small binary, low
+# RAM — many instances on a 2 vCPU / 2 GB VPS").
+#
+# This is its own workflow rather than a job in `ci.yml` because of *when* it can
+# afford to run. The release profile is `lto = "fat"` with `codegen-units = 1`, so
+# this is the slowest build in the repository, and running it on every PR would
+# dominate PR feedback. It runs on:
+#
+#   * a push to a long-lived branch, which is enough to notice drift; and
+#   * a PR that changes a manifest or the lockfile — the realistic way a binary
+#     grows — where it is a real gate rather than a note.
+#
+# An unrelated PR never sees a "skipped" entry, because the workflow does not run
+# for it at all.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/*/Cargo.toml"
+      - ".github/workflows/size.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: size-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Off on purpose: the cache should make a rebuild fast, not incremental state
+  # that can hide what the build actually did.
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  size:
+    name: binary size
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      # The SPA has to be built **before** the server, or the measurement is of an
+      # API-only binary that nobody deploys: `studio/build` is gitignored, so a
+      # fresh checkout has no bundle and `studio-embed` embeds nothing. This is the
+      # same handoff the `studio` job and the Dockerfile make.
+      # oven-sh/setup-bun v2.2.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: latest
+      - name: Install the Studio
+        working-directory: studio
+        run: bun install --frozen-lockfile
+      - name: Build the Studio
+        working-directory: studio
+        run: bun run build
+
+      - name: Install the toolchain pinned by rust-toolchain.toml
+        run: rustup show
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Build the server with the Studio embedded
+        run: LAZYPOCK_STUDIO_DIR=studio/build/studio cargo build --release --bin lazypock
+
+      - name: Measure
+        # The ceiling is deliberately loose — a tripwire for a real regression,
+        # not a budget ordinary growth trips. Raise it in the commit that explains
+        # the increase.
+        run: |
+          set -euo pipefail
+          binary=target/release/lazypock
+          bytes=$(stat -c%s "$binary")
+          mib=$((bytes / 1024 / 1024))
+          limit=$((40 * 1024 * 1024))
+          limit_mib=$((limit / 1024 / 1024))
+          echo "release binary: ${bytes} bytes (${mib} MiB)"
+          echo "ceiling: ${limit_mib} MiB"
+          {
+            echo "### release binary size"
+            echo ""
+            echo "| measurement | bytes | MiB |"
+            echo "| --- | --- | --- |"
+            echo "| lazypock (Studio embedded) | ${bytes} | ${mib} |"
+            echo "| ceiling | ${limit} | ${limit_mib} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -gt "$limit" ]; then
+            msg="binary is ${mib} MiB, over the ${limit_mib} MiB ceiling"
+            echo "::error::${msg}"
+            exit 1
+          fi

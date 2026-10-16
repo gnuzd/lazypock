@@ -1,0 +1,17 @@
+# yamllint configuration.
+#
+# Only one deviation from the default ruleset: the line-length limit is 100
+# rather than 80.
+#
+# The reason is specific to workflow files. Every action reference is pinned to a
+# commit SHA (40 characters) for supply-chain safety, and several of the actions
+# this project uses have long names — `docker/setup-buildx-action` alone is 27
+# characters before the SHA. `      - uses: docker/setup-buildx-action@<40 hex>`
+# is 82 characters and cannot be shortened without either unpinning the action or
+# laying the YAML out in a way no reader expects. 100 leaves room for the longest
+# reference plus a short version comment.
+extends: default
+
+rules:
+  line-length:
+    max: 100

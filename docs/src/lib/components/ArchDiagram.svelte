@@ -140,7 +140,7 @@
     },
     {
       label: "PostgreSQL",
-      chip: "external — connect via DATABASE_URL",
+      chip: "external — connect via LAZYPOCK_DATABASE_URL",
       cols: [
         {
           title: "PostgreSQL",

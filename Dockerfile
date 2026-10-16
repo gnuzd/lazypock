@@ -1,60 +1,87 @@
 # syntax=docker/dockerfile:1
+#
+# LazyPock — one image, one binary. It serves the API and the Studio together.
+#
+# Three stages: build the SPA, build the server with the SPA embedded, then keep
+# only the server. Nothing from the build stages reaches the runtime image.
+#
+# There is deliberately no ImageMagick here. Thumbnails and scaled images are
+# produced in-process (PLAN.md section 10), so the sidecar the Elixir image
+# needed is gone. A deployment that sets LAZYPOCK_IMAGE_SERVICE_URL moves that
+# work to a service instead, which is a network dependency rather than a host
+# package.
+#
+# Likewise no `git` and no `pg_dump`: scheduled backups are left to the platform
+# (Coolify backs up databases and application volumes on a schedule), so the
+# image does not need the client tools those would require.
 
-# LazyPock ships the prebuilt Linux binary from the GitHub Release unchanged, so
-# each variant of the image is byte-identical to the `lazypock-<version>-linux-*`
-# asset users download. The `docker` job in .github/workflows/release.yml
-# downloads them, verifies them against the release checksums and only
-# then builds (and smoke-tests) this image.
-FROM debian:bookworm-slim
+# ───────────────────────────────────────────────────────────────── studio ──
+# The SPA. Its SDK is a published npm package (`lazypock`), so this stage needs
+# nothing from outside the build context — no sibling checkout of the SDK repo.
+FROM oven/bun:1.3.14 AS studio
+WORKDIR /studio
+COPY studio/package.json studio/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY studio/ ./
+RUN bun run build
 
-# Buildx sets TARGETARCH (amd64 / arm64) for the platform being built, so each
-# variant of the image gets the matching release binary. Declared here because
-# `COPY` below expands it.
-ARG TARGETARCH
-
-# No Elixir/Erlang runtime is needed here — the binary bundles its own ERTS.
-#  * imagemagick      -> image resizing/thumbnails (Lazypock.Images shells
-#                        out to `magick`/`convert`; bookworm ships
-#                        ImageMagick 6 = `convert`)
-#  * ca-certificates  -> outbound TLS (S3/R2, SMTP)
-#  * curl             -> the HEALTHCHECK below
-#  * procps           -> `pkill`, used by the entrypoint to forward signals
-# Packages are deliberately unpinned (DL3008): the image is rebuilt per release
-# and should pick up the current Debian security fixes for them.
+# ───────────────────────────────────────────────────────────────── server ──
+FROM rust:1.99-bookworm AS server
+WORKDIR /src
+# `aws-lc-rs` is rustls' default crypto provider (PLAN.md risk 12). It is C, and
+# it is built here with cmake, so the toolchain has to be present.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        imagemagick \
-        procps \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 1000 lazypock
+ && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/*
+COPY . .
+COPY --from=studio /studio/build/studio /src/studio/build/studio
+# `LAZYPOCK_STUDIO_DIR` is what makes the built SPA the one that gets embedded,
+# rather than whatever happened to be in `crates/studio-embed/dist`.
+RUN LAZYPOCK_STUDIO_DIR=/src/studio/build/studio cargo build --release --bin lazypock
 
-# Burrito extracts the release into $HOME/.local/share/lazypock on first run, so
-# HOME has to be writable by the runtime user. Uploads are redirected to a
-# volume: the release default (`<app_dir>/priv/uploads`) lives *inside* that
-# extraction directory and is wiped whenever the container is recreated.
-ENV HOME=/home/lazypock \
-    LAZYPOCK_STORAGE_PATH=/data/uploads \
-    PORT=4000
+# ──────────────────────────────────────────────────────────────── runtime ──
+FROM debian:bookworm-slim AS runtime
 
-WORKDIR /home/lazypock
+# `ca-certificates` is for outbound TLS: S3, the image service, `$http` in hooks
+# and (later) OAuth endpoints. `tini` is PID 1 so signals are forwarded and
+# zombies reaped; the server drains live SSE connections on SIGTERM, and that
+# only happens if the signal reaches it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates tini \
+ && rm -rf /var/lib/apt/lists/*
 
-COPY --chown=lazypock:lazypock \
-    lazypock-linux-${TARGETARCH} /usr/local/bin/lazypock
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --from=server /src/target/release/lazypock /usr/local/bin/lazypock
 
-RUN install -d -o lazypock -g lazypock /data/uploads \
-    && chmod 0755 /usr/local/bin/lazypock /usr/local/bin/docker-entrypoint.sh
+# Everything the server writes lives under one path, and it runs as a user that
+# can write only that path. `VOLUME` is declared so a deployment that forgets to
+# mount anything still keeps its data across a container replacement rather than
+# losing it without a word.
+# `--system` is deliberately not used: it expects a uid below 1000, and a fixed
+# high uid is what makes the volume's ownership predictable on the host.
+RUN useradd --uid 10001 --home-dir /data --shell /usr/sbin/nologin --no-create-home lazypock \
+ && mkdir -p /data/hooks /data/files \
+ && chown -R lazypock:lazypock /data
+WORKDIR /data
+VOLUME ["/data"]
+
+# Set explicitly rather than relying on the defaults, which are relative and
+# would otherwise nest as `/data/data/files`.
+ENV LAZYPOCK_DATA_DIR=/data \
+    LAZYPOCK_HOOKS_DIR=/data/hooks \
+    LAZYPOCK_FILES_DIR=/data/files \
+    LAZYPOCK_LISTEN_ADDR=0.0.0.0:4000 \
+    LAZYPOCK_ENV=production
+EXPOSE 4000
 
 USER lazypock
 
-VOLUME ["/data/uploads"]
-EXPOSE 4000
+# Probes the server's own `/api/health` over loopback, so it needs no extra
+# package in the image.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["lazypock", "healthcheck"]
 
-# /api/health is unauthenticated and reports the version plus file-queue depths.
-# --start-period covers the first-boot extraction + migrations.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null || exit 1
-
-ENTRYPOINT ["docker-entrypoint.sh"]
+# `serve` is the default subcommand but stays overridable, so one-off commands
+# work without a second entrypoint:
+#   docker run --rm -e LAZYPOCK_DATABASE_URL=... <image> superuser create --email a@b.c
+ENTRYPOINT ["/usr/bin/tini", "--", "lazypock"]
+CMD ["serve"]

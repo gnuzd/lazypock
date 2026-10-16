@@ -19,8 +19,18 @@ export type Preflight = {
 };
 
 export type ImportOutcome = {
-	imported: { name: string; type?: string; records_imported?: number }[];
+	imported: {
+		name: string;
+		type?: string;
+		records_imported?: number;
+		/** Fields dropped, because `deleteMissing` was set and the payload did not
+		 * declare them. */
+		fields_removed?: string[];
+	}[];
 	errors: { name: string | null; error: string }[];
+	/** Collections dropped, because `deleteMissing` was set and the payload did not
+	 * declare them. */
+	removed?: string[];
 	rolled_back?: boolean;
 };
 
@@ -325,5 +335,26 @@ export function summarize(
 		return { ok: false, message: `${verb} ${imported} collections with ${errors} errors` };
 	}
 
-	return { ok: true, message: `${verb} ${imported} collections` };
+	// Say what was destroyed. A successful import that dropped a collection or a
+	// column and only reported what it wrote is the kind of silence that gets a
+	// table noticed missing hours later.
+	const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+	const removed = outcome.removed ?? [];
+	const fields = (outcome.imported ?? []).reduce(
+		(total, collection) => total + (collection.fields_removed?.length ?? 0),
+		0
+	);
+	const dropped = [
+		removed.length ? plural(removed.length, 'collection') : '',
+		fields ? plural(fields, 'field') : ''
+	]
+		.filter(Boolean)
+		.join(' and ');
+
+	return {
+		ok: true,
+		message: dropped
+			? `${verb} ${imported} collections, removed ${dropped}`
+			: `${verb} ${imported} collections`
+	};
 }

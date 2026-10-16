@@ -95,6 +95,20 @@ accepts either a `.zip` archive or the JSON file.
 Field-name semantics are identical to the JSON format: names are kept **verbatim** (`tagColor` stays
 `tagColor`), and records are upserted by `id`.
 
+An import is a **declaration**, not a patch. A collection the payload names is created, or updated to
+match it — its fields, rules and options — and the records it carries are upserted by `id`. A record
+or collection the payload leaves out is left exactly as it is, unless you ask for the difference to
+be applied: **`deleteMissing`** drops the user collections *and* fields the payload does not declare,
+which is what the Studio's **Delete missing collections and schema fields** switch sends. It is off by
+default, in the Studio and on the API, because it is the one import option that destroys data: a
+column it drops takes its contents with it.
+
+Two things are never dropped, whatever the payload or the option says: a system collection (any
+`_`-prefixed table) and a built-in column — `id`, `created`, `updated`, and on an auth collection
+`email`, `password_hash`, `verified`, `emailVisibility` and `token_key`. A payload may name them (a
+PocketBase export names its own); naming them keeps them, and a field marked `"system": true` is
+stripped from the fields an import creates or alters rather than declared.
+
 ### Undo, and what happens on large databases
 
 Before an import, Lazypock writes an automatic undo checkpoint (itself an NDJSON archive) so the last
@@ -105,6 +119,11 @@ size.
 Above the threshold the checkpoint is skipped, and instead of silently losing rollback the import
 stops and asks for explicit confirmation (a dialog in the Studio, a `--no-undo-checkpoint` flag or
 interactive prompt on the CLI, a `409` with `requires_confirmation: true` from HTTP).
+
+The checkpoint holds collection definitions as well as rows, which is what lets the rollback undo the
+destructive half of an import too: a collection `deleteMissing` dropped is recreated, and a field it
+pruned comes back with its column *and* its values, because the rows are restored from the snapshot
+after the column is.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -160,16 +179,16 @@ list is fine. View collections omit it (their columns come from the view query).
 
 ## Collection object
 
-| Key         | Type    | Required | Notes                                                                                     |
-| ----------- | ------- | -------- | ----------------------------------------------------------------------------------------- |
-| `name`      | string  | yes      | `^[a-z][a-z0-9_]*$` — lowercase table name.                                               |
-| `type`      | string  | yes      | `"base"`, `"auth"` or `"view"`.                                                            |
-| `schema`    | array   | no       | Field definitions (see below). PocketBase calls this `"fields"` — **use one or the other**. |
-| `id`        | string  | no       | Existing collection id. Omit it and the collection is matched/created by `name`.           |
-| `rules`     | object  | no       | Access rules (see below).                                                                  |
-| `options`   | object  | no       | `{ "indexes": [...] }`, and for views the query (see below).                               |
-| `hooks`     | object  | no       | Usually `{}`.                                                                              |
-| `records`   | array   | no       | Records to upsert (see below). Omit for `view` collections.                                |
+| Key       | Type   | Required | Notes                                                                                                                      |
+| --------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `name`    | string | yes      | `^[a-z][a-z0-9_]*$` — lowercase table name.                                                                                |
+| `type`    | string | yes      | `"base"`, `"auth"` or `"view"`.                                                                                            |
+| `schema`  | array  | no       | Field definitions (see below). PocketBase calls this `"fields"` — send either; if a collection has both, `fields` is used. |
+| `id`      | string | no       | Existing collection id. Omit it and the collection is matched/created by `name`.                                           |
+| `rules`   | object | no       | Access rules (see below).                                                                                                  |
+| `options` | object | no       | `{ "indexes": [...] }`, and for views the query (see below).                                                               |
+| `hooks`   | object | no       | Usually `{}`.                                                                                                              |
+| `records` | array  | no       | Records to upsert (see below). Omit for `view` collections.                                                                |
 
 > Auth collections always get a **unique `email`** field — if you declare one, its `unique` flag is
 > forced on for you.
@@ -286,19 +305,23 @@ and `updated_at` itself:
 
 A PocketBase export imports as-is. Differences the importer normalizes for you:
 
-- `"fields"` instead of `"schema"` (do not send both — that's an error).
+- `"fields"` instead of `"schema"`. A collection carrying **both** is fine too: `fields` is used.
+  The Studio's own "Export Collections" file looks like that, because it posts back the collection
+  objects the API serves.
 - camelCase field names and PocketBase collection ids in `relation` options.
 - Type options at the **top level** of a field (`"maxSelect": 3`) rather than nested under `"options"`.
 - PocketBase's `"system": true` fields (its own `id`, `tokenKey`, …) are stripped.
 
 ## Common mistakes
 
-- Sending both `fields` **and** `schema` on the same collection → rejected as ambiguous.
+- Sending both `fields` **and** `schema` on the same collection → `fields` wins, `schema` is ignored
+  (they mean the same thing; the derived `schema` beside `fields` is the poorer of the two).
 - Including a system `id` field in `schema` → stripped (harmless), but do not rely on it.
 - Using `geoPoint`/`multiSelect` style names from the Studio UI — use the canonical `geo` /
   `multi_select` types.
-- `deleteMissing` (**destructive**) drops any user collection missing from the file. Leave it `false`
-  when importing a partial file.
+- `deleteMissing` (**destructive**) drops every user collection **and field** the file does not
+  declare. Leave it `false` when importing a partial file. System collections and built-in columns are
+  never dropped.
 
 ## For AI assistants
 

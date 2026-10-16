@@ -1,0 +1,39 @@
+[package]
+name = "lazypock-files"
+description = "lazypock file storage: upload validation and the storage backends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["local-image-codecs"]
+# In-process image decoding, resizing and encoding. Without it a build carries no
+# codecs at all: thumbnails then need `LAZYPOCK_IMAGE_SERVICE_URL`, and asking for a
+# local one fails loudly rather than silently producing nothing.
+local-image-codecs = ["dep:image"]
+
+[dependencies]
+arc-swap = "1.9.2"
+bytes = "1.12.1"
+hmac = "0.13.0"
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp", "avif"], optional = true }
+lazypock-core.workspace = true
+lazypock-db.workspace = true
+reqwest = { version = "0.13.5" }
+# The AEAD for a credential stored in the database. Already in the build: the
+# token layer uses the same crate, so this adds no artifact.
+ring = "0.17.14"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.0"
+tokio = { version = "1.53.3", features = ["fs"] }
+tokio-postgres = "0.7.18"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread"] }
+tokio-postgres = "0.7.18"

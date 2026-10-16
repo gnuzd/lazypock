@@ -1,377 +1,274 @@
----
-title: File storage & images
----
-
 # File storage & images
 
-Lazypock stores uploads either on the server's disk (**local**, the default) or in an
-**S3-compatible bucket** (AWS S3, Cloudflare R2, MinIO). Images are validated on the way in, resized
-into named **presets**, cached, and served either from the app or from your CDN.
+Uploads live in a configured backend — the local disk by default, or an S3-compatible
+bucket — and are served back through the API. Images are resized into named **presets**
+on first request and the result is cached next to the original.
 
-Everything below is available **today** in the Studio, the REST API, the CLI and the TypeScript SDK.
+A file is a row in `_files`, and its **id is what a record's file field holds**. A client
+uploads, puts the returned `id` in the field, and reads an image back from
+`/api/files/<id>` — it never has to build a storage path itself.
 
 ## Where to configure what
 
-| I want to… | Go to |
+| What | Where |
 | --- | --- |
-| Turn on S3/R2 and test the connection | Studio → **Settings → Files Storage** |
-| Change the global upload size / allowed types / image caps | `PATCH /api/settings` with an `upload` key (or the same page) |
-| Limit one field differently | the field's options in the collection editor (`maxFileSize`, `mimeTypes`, `thumbs`) |
-| Add or change an image preset | `PATCH /api/settings` with an `image.presets` list |
-| Browse or delete uploaded files | Studio → **Settings → Media** |
-| Control who can list or delete files via the API | Studio → **Settings → Media** (File rules), or `PATCH /api/settings` with a `files.rules` key |
-| Insert an image into a richtext field | the 🖼 button in the editor toolbar |
-
----
+| Storage backend, bucket, public base URL | **Settings → Files** (saved in `_settings`, applied immediately) or the environment (`LAZYPOCK_FILES_*`, `LAZYPOCK_S3_*`) as the default |
+| Image presets | `PATCH /api/settings` with an `image.presets` list, or **Settings → Media** |
+| Who may list and delete files | `PATCH /api/settings` with a `files.rules` map, or **Settings → Media** |
+| Per-field type and size limits | the field's options in the collection editor |
+| Upload ceiling and reaper interval | environment (`LAZYPOCK_UPLOAD_MAX_BYTES`, `LAZYPOCK_FILE_REAPER_INTERVAL`) |
 
 ## Uploading
 
-`POST /api/files` (`multipart/form-data`, field name `file`) is what the SDK, the Studio and the
-richtext editor all use. The server validates in this order and stops at the first failure:
-
-1. **Body size** — the request-body cap for this route is `LAZYPOCK_UPLOAD_MAX_MB` (default 20 MB).
-2. **File size** — the effective policy limit (default 10 MB, see below) → `413`.
-3. **Extension + magic bytes** — the file's real contents must match an allowlisted extension
-   (a PHP script renamed `.png` is rejected) → `400`.
-4. **MIME allowlist** — if the field/settings restrict types → `400`.
-5. **Image dimensions** — megapixel and per-side caps → `422`.
-6. **Store + generate variants** → `201` with the file record.
-
-| Response | Meaning |
-| --- | --- |
-| `201` | Stored; the body is the file record (see *API reference*) |
-| `400` | Wrong type / contents do not match the extension / disallowed MIME |
-| `413` | Too large (request body or file) |
-| `415` | Not an accepted type (direct-upload verification) |
-| `422` | Image over the megapixel or dimension cap; direct-upload size mismatch |
-| `503` | The image queue is saturated — retry after the `Retry-After` header |
-
-### Upload policy
-
-Limits resolve **field option → global settings → built-in default**:
-
-| Limit | Field option | Global setting | Default |
-| --- | --- | --- | --- |
-| Max size | `maxFileSize` | `upload.max_size` | 10 MB |
-| Allowed types | `mimeTypes` | `upload.mime_types` (optional; `image/*` wildcards allowed) | the built-in allowlist |
-| Megapixels | — | `upload.max_megapixels` | 40 |
-| Max side | — | `upload.max_dimension` | 10000 px |
-
-```json
-// PATCH /api/settings
-{ "upload": { "max_size": "5MB", "mime_types": ["image/*"], "max_megapixels": 40 } }
-```
-
-`LAZYPOCK_UPLOAD_MAX_MB` overrides the size setting. Leave a field's option blank to inherit the
-global value — the collection editor shows where each default comes from.
-
----
-
-## Images: presets & variants
-
-A **preset** is a named resize. Defaults ship `thumb` (100×100 cover) and `content` (1280 px wide,
-contain) — both generated **eagerly on upload**, so the URLs in the response work immediately.
-
-```json
-// PATCH /api/settings
-{ "image": { "presets": [
-  { "name": "thumb",   "width": 100,  "height": 100, "fit": "cover",   "quality": 80, "eager": true },
-  { "name": "content", "width": 1280, "height": null, "fit": "contain", "quality": 80, "eager": true },
-  { "name": "card",    "width": 640,  "height": null, "fit": "contain", "quality": 75, "eager": false }
-] } }
-```
-
-| Key | Meaning |
-| --- | --- |
-| `name` | Used in the URL: `GET /api/files/:id/scale/:preset` |
-| `width` / `height` | Target box in pixels (`height: null` = keep aspect) |
-| `fit` | `cover` (fill and centre-crop), `contain` (fit inside, never upscale), `exact` (stretch) |
-| `quality` | WebP quality, 1–100 |
-| `eager` | Generate during upload instead of on first request |
-
-Preset variants are always **WebP**, metadata is stripped and orientation applied. Requests for the
-same missing variant are coalesced, so a burst of traffic generates it once.
-
-Also available:
-
-- `GET /api/files/:id/scale/300x200` — arbitrary size, capped at **2000 px per side** (rejected with `400` otherwise).
-- `GET /api/files/:id/thumbs/:size` — legacy thumbnail route (kept for compatibility).
-- Upload accepts `?variants=content,thumb` to force specific presets before the response.
-
-### Image engine & requirements
-
-Every resize shells out to the **ImageMagick CLI**. That is a **host dependency**: a prebuilt
-single-binary release does **not** bundle it, so install it on the machine (or in the container
-image) that runs the app — see the [Server Guide](/server#images) for the install/verify steps.
-
-| Command | Used for |
-| --- | --- |
-| `identify` | Reading image dimensions (the megapixel/dimension caps, and direct uploads) |
-| `magick` / `convert` | The actual resize (thumbnails, presets, `/scale/:size`) |
-
-**ImageMagick 6** (what Debian/Ubuntu install: `identify` + `convert`) and **ImageMagick 7**
-(`magick`) are both supported:
+`POST /api/files` takes a multipart body and requires an authenticated request:
 
 ```bash
-sudo apt install imagemagick      # Debian / Ubuntu (IM6)
-brew install imagemagick          # macOS (IM7)
-identify -version                 # verify
+curl -X POST -H "Authorization: Bearer <token>" \
+  -F "file=@cover.png" \
+  -F "collection_name=posts" -F "field_name=cover" -F "record_id=<record id>" \
+  https://your-host/api/files
 ```
 
-If ImageMagick is not installed, uploads still work and originals are served unchanged, but no
-variants are produced:
+Parts:
 
-- `GET /api/files/:id/thumbs/:size` → `404`
-- `GET /api/files/:id/scale/:preset` → `400`
-- a one-time warning is logged on the first upload; set `LAZYPOCK_THUMBNAILS=0` to disable resizing
-deliberately
-
-Image work always runs through a per-instance **limiter**, so a burst of uploads cannot exhaust the
-server:
-
-| Variable | Default | Purpose |
+| Part | Required | Meaning |
 | --- | --- | --- |
-| `LAZYPOCK_IMAGE_CONCURRENCY` | `1` | Concurrent image jobs per instance (overload → `503`) |
-| `LAZYPOCK_MAGICK_MEMORY_LIMIT` | `256MiB` | Per-process ImageMagick memory cap |
-| `LAZYPOCK_THUMBNAILS` | — | Set to `0` to disable all resizing |
-| `LAZYPOCK_IMAGE_ENGINE` | `magick` | Image engine (selecting an unavailable engine fails loudly) |
-| `LAZYPOCK_VARIANT_CACHE_MAX` | `5GB` | Local variant cache cap (oldest evicted first) |
+| `file` | yes | The bytes. The filename on the part is what gets stored. |
+| `collection_name` (or `collection`) | no | The collection the file belongs to. It has to exist. |
+| `record_id` (or `record`) | no | The record it belongs to. It has to exist, unless it does not exist *yet* — a form uploads before the record is saved. |
+| `field_name` | no | The field it is for. |
+| `origin` | no | `field` (default), `editor` or `library`. See **Abandoned uploads**. |
+| `variants` | no | Presets to generate before responding, e.g. `content,thumb`. |
 
----
+**An upload with no record is normal.** A record form uploads the file first and posts the
+id with the rest of the form, and the media library and the rich-text editor upload
+without a record at all. Such a file is stored `pending`, under a `library/<id>/<name>`
+key, and appears in the media library immediately. A record write that names it attaches
+it (`status: ready`, `attached_at` set).
 
-## Storage backends
+**Images only.** The four formats this server can read: **png, jpeg, gif, webp**. The
+type is decided by the bytes, never by the filename or the declared `Content-Type` — an
+SVG renamed to `.png` is refused, because an SVG served as an image can execute script.
+The default ceiling is **5 MiB** per file (`LAZYPOCK_UPLOAD_MAX_BYTES`), and the upload
+route's own body limit is 16 MiB.
 
-### Local (default)
-
-Files live under the app's `priv/uploads/YYYY/MM/DD/`, variants under `priv/uploads/_variants/:file_id/`,
-and the ad-hoc `/scale/:size` cache under `priv/uploads/_cache/scale/`. Zero configuration.
-
-> **Persist this directory in containers.** The default root is *inside the release*, e.g.
-> `/root/.local/share/.burrito/lazypock_erts-*/lib/lazypock-*/priv/uploads`, so it is recreated when
-> the container is replaced and moves when lazypock/ERTS is upgraded. The database rows survive (a
-> hosted Postgres like Neon is persistent) while the bytes disappear, and every old file URL then
-> answers `404`. Point the storage at a mounted volume instead:
->
-> ```bash
-> LAZYPOCK_STORAGE_PATH=/data/uploads   # e.g. a docker named volume mounted at /data/uploads
-> ```
->
-> `:file_storage` config wins over `LAZYPOCK_STORAGE_PATH`, which wins over the release default.
-> For anything long-lived, prefer S3/R2 below — it has no such coupling.
-
-### S3 / R2
-
-Open **Settings → Files Storage**, fill in the endpoint, bucket and keys, then press **Test
-connection** — it performs a real `PUT` → `HEAD` → `GET` → `DELETE` round-trip and reports each step
-(credentials, endpoint, permissions, CORS), so you see exactly what failed.
-
-| Field | Cloudflare R2 |
-| --- | --- |
-| Endpoint | `https://{account_id}.r2.cloudflarestorage.com` |
-| Region | `auto` |
-| Bucket | your bucket name |
-| Key prefix | e.g. `lazypock/my-app/` (objects live under `{prefix}{file_id}/`) |
-| Public base URL | your CDN domain (optional) |
-| Force path style | **on** (safest for R2/MinIO) |
-| Presign TTL | `900` seconds |
-
-Prefer environment variables in production — they **win** over the Studio and the matching fields
-are locked in the UI:
-
-```bash
-LAZYPOCK_S3_ENDPOINT=https://{account_id}.r2.cloudflarestorage.com
-LAZYPOCK_S3_BUCKET=my-bucket
-LAZYPOCK_S3_ACCESS_KEY=...
-LAZYPOCK_S3_SECRET=...
-LAZYPOCK_S3_REGION=auto
-LAZYPOCK_S3_PREFIX=lazypock/my-app/
-LAZYPOCK_S3_PUBLIC_URL=https://cdn.example.com
-```
-
-**The secret is encrypted at rest** (AES-256-GCM, key derived from `SECRET_KEY_BASE`) and is never
-returned by the API — reads show a mask. Rotating `SECRET_KEY_BASE` makes the stored secret
-undecryptable; re-enter it in the Studio.
-
-Switching backends is safe: `_files.storage_backend` is stored **per row**, so files uploaded while
-the local backend was active stay readable after you switch to S3.
-
----
-
-## Direct upload (skip the server)
-
-When S3/R2 is configured, the browser can `PUT` straight to the bucket so image bytes never touch
-the app:
-
-1. `POST /api/files/presign` `{ filename, size, mime }` → a pending row and a presigned `PUT`
-   (`content-type` and `content-length` are signed to fixed values).
-2. Upload the file to the returned URL with the returned headers.
-3. `POST /api/files/:id/complete` → the server checks the object's size, magic bytes and dimensions,
-   generates the eager variants and marks it ready. A failure deletes the object and the row.
-
-With the TypeScript SDK this is one call:
-
-```ts
-const file = await client.files.uploadDirect(input.files[0], {
-  collectionName: 'posts',
-  fieldName: 'cover'
-});
-```
-
-Abandoned pending uploads are cleaned up automatically (`LAZYPOCK_PENDING_UPLOAD_TTL_MS`, default 1 h).
-
----
-
-## The Studio media library
-
-**Media** (top navigation) lists every upload with thumbnails, filename search and paging. Select a
-file to see its URL and metadata, or delete it — deleting a file that a record still uses asks for
-confirmation first.
-
-The same picker powers **every** file input:
-
-- **Richtext fields** — the 🖼 toolbar button opens **Insert image** with two tabs: **Library** (pick
-  an existing image) and **Upload** (drop or choose files; the upload is used immediately). Images
-  are embedded as the `content` preset, never the original. Pasting or dropping an image into the
-  editor uploads it the same way.
-- **`file` / `multi_file` fields** — the same modal, multi-select when the field allows it.
-
----
-
-## File access rules
-
-`GET /api/files` and `DELETE /api/files/:id` are governed by **file rules** stored at
-`_settings.data["files"]["rules"]`. Configure them in **Studio → Settings → Media** or with
-`PATCH /api/settings`:
-
-```json
-{ "files": { "rules": {
-  "listRule":   "uploaded_by = @request.auth.id || @request.auth.role = 'admin'",
-  "deleteRule": "uploaded_by = @request.auth.id || @request.auth.role = 'admin'"
-} } }
-```
-
-Rules use the same three states as collection rules:
-
-| Value | Meaning |
-| --- | --- |
-| `null` / absent | **Superusers only** — the default |
-| `""` | **Anyone** (public) |
-| filter string | **Conditional**, evaluated against each file row |
-
-Every upload records the uploading identity in `_files.uploaded_by`, so a single global rule such
-as `uploaded_by = @request.auth.id` gives per-file behaviour: users can list and delete the files
-**they** uploaded. This is what lets an app's own dashboard (for example a `users` collection with
-`admin` and `staff` roles) manage uploads with an end-user token, rather than requiring the Studio's
-superuser account.
-
-Available per-file fields:
-
-| Field | Type |
-| --- | --- |
-| `id` | UUID |
-| `filename`, `extension`, `mime_type` | text |
-| `size` | number |
-| `origin` | `field` / `editor` / `library` |
-| `status`, `collection_name`, `field_name`, `record_id` | text |
-| `uploaded_by` | the uploader's id |
-| `created_at` | date |
-
-`@request.auth.id`, `@request.auth.email` and `@request.auth.role` resolve to the authenticated
-user, exactly as in collection rules. Write the field on the **left** of the comparison
-(`uploaded_by = @request.auth.id`), matching the collection-rule convention.
-
-**Superusers always bypass file rules**, so the Studio media library keeps working unchanged. The
-`?force=true` flag that skips the "still referenced by records" guard is **superuser-only**: an
-authorised user can delete their own file, but cannot break a record that still embeds it.
-
-These rules cover the **library list and delete API only**. A file's direct URL
-(`GET /api/files/:id`, `/scale/…`, `/thumbs/…`) is still public — listing and deleting are what the
-rules protect. Enabling S3/R2's `public_base_url` makes `url`/`variants` point straight at the
-bucket, so those requests never reach the app at all.
-
----
-
-## References, deletion & cleanup
-
-Richtext content is plain Markdown, so Lazypock scans it for file ids and records them in
-`_file_refs` whenever a record is created or updated. That drives three behaviours:
-
-- **Delete guard** — `DELETE /api/files/:id` returns `409` with the list of records/fields that use
-  the file. A superuser can force it with `DELETE /api/files/:id?force=true`.
-- **Editor cleanup** — images uploaded from the editor that never end up in a saved record are
-  deleted after `files.unattached_ttl_ms` (default 24 h). Library uploads are never auto-deleted.
-- **URL rewriting** — after moving to a CDN domain:
-
-```bash
-lazypock content rewrite-urls --from /api/files --to https://cdn.example.com --dry-run
-```
-
-Deletions are **database-first**: the `_files` row is removed immediately (and the record no longer
-points at it), an `_file_deletions` outbox entry is written in the same transaction, and the reaper
-removes the objects afterwards — retrying with backoff if the bucket is unreachable.
-
----
-
-## Operations
-
-```bash
-lazypock files reap                 # process the deletion outbox + stale pending uploads
-lazypock files regen --preset thumb # regenerate variants (e.g. after changing a preset)
-lazypock files reconcile --dry-run  # report orphaned local objects
-lazypock files migrate --to s3 --delete-local   # move local files to S3 (resumable)
-lazypock files trim                 # enforce LAZYPOCK_VARIANT_CACHE_MAX
-```
-
-`GET /api/health` reports the deletion-queue depth and the image-queue state, which is the quickest
-way to see whether cleanup is stuck or images are backing up.
-
----
-
-## API reference
-
-| Endpoint | Access | Description |
-| --- | --- | --- |
-| `POST /api/files` | authenticated | Multipart upload (through the app) |
-| `POST /api/files/presign` · `POST /api/files/:id/complete` | authenticated | Direct upload (S3/R2) |
-| `GET /api/files` | rules (superuser bypass) | Library list (`mime`, `q`, `page`, `perPage`) |
-| `GET /api/files/:id` | public | Original file |
-| `GET /api/files/:id/scale/:preset_or_size` | public | Preset variant or arbitrary size |
-| `GET /api/files/:id/thumbs/:size` | public | Legacy thumbnail |
-| `DELETE /api/files/:id` | rules (superuser bypass) | Delete (`409` if referenced; `?force=true` for superusers) |
-| `GET/PATCH /api/settings/storage` | superuser | S3/R2 configuration (secret is masked) |
-| `POST /api/settings/storage/test` | superuser | Real upload round-trip against the bucket |
-
-A file record looks like this:
+The response is the file row:
 
 ```json
 {
-  "id": "1f0c…",
-  "filename": "sunset.png",
-  "mimeType": "image/png",
-  "size": 482913,
-  "url": "/api/files/1f0c…",
-  "uploadedBy": "b7d2…",
-  "thumbs": { "100x100": "/api/files/1f0c…/thumbs/100x100" },
+  "id": "Abc123xyz789abc",
+  "filename": "Abc123xyz789abc_cover.png",
+  "size": 20480,
+  "mime_type": "image/png",
+  "width": 800,
+  "height": 600,
+  "checksum": "…",
+  "url": "/api/files/Abc123xyz789abc",
+  "key": "posts/<record id>/Abc123xyz789abc_cover.png",
+  "status": "ready",
+  "origin": "field",
   "variants": {
-    "thumb": "/api/files/1f0c…/scale/thumb",
-    "content": "https://cdn.example.com/lazypock/sunset/content.webp"
+    "content": "/api/files/Abc123xyz789abc",
+    "thumb": "/api/files/Abc123xyz789abc?preset=thumb"
   }
 }
 ```
 
----
+Put **`id`** in the file field. `url` is what to render; `key` is where the object actually
+lives, which a client only needs if it addresses storage directly.
+
+## Serving
+
+A file is fetched by its id:
+
+```text
+GET /api/files/<id>                        the original
+GET /api/files/<id>?preset=<name>          a preset
+GET /api/files/<id>?thumb=400x300          an ad-hoc box
+GET /api/files/<id>/thumbs/<size>          the same, as a path
+GET /api/files/<id>/scale/<size>           the same, as a path
+```
+
+The older key-addressed form works too:
+`GET /api/files/<collection>/<record>/<filename>`.
+
+Serving is public and cached (`Cache-Control: immutable`): the key contains a random
+component, so a URL behaves as a capability. That is the same model PocketBase uses, and
+it is why the access rules below cover listing and deleting rather than reading.
+
+Sizes are generated on the first request and stored next to the original, so a preset
+costs a resize once. AVIF output is refused loudly: the presets table allows it, the
+encoder cannot write it.
+
+## Image presets
+
+A preset is a name, a box, a fit mode (`cover`, `contain`, `fill`, `inside`, `outside`), an
+output format and a quality. `sm`, `md` and `lg` fit *inside* the box and never enlarge, so
+a small source keeps its own resolution; `thumb` is a square cover crop for grid tiles.
+
+Four are seeded (`thumb` 200×200, `sm` 320, `md` 768, `lg` 1600). They are rows in
+`_image_presets`, editable with `PATCH /api/settings` or in **Settings → Media**, and
+`GET /api/settings` returns them so a client can discover the names it may ask for.
+
+Resizing happens **in this process** — there is no ImageMagick and no sidecar to install.
+The trade-off is that the API's own memory and CPU do the decoding, so the size of an
+image a client may upload is bounded by `LAZYPOCK_UPLOAD_MAX_BYTES` and the presets' own
+box limit (8192 px).
+
+## Direct upload (skipping the multipart body)
+
+A client that would rather send the bytes straight to the bucket does it in three calls:
+
+1. `POST /api/files/presign` with `{ "filename", "size", "mime", "collection_name", "field_name", "record_id" }`.
+   The row is reserved and the response is `{ "id", "key", "method": "PUT", "url", "headers" }`.
+2. `PUT` the file to `url` with `headers` (the bucket's own URL, not this server's).
+3. `POST /api/files/<id>/complete` — the server verifies what arrived and answers with the
+   file row, exactly as a multipart upload would.
+
+What the client *claims* is checked at step 1 (the size, the declared type, the collection
+and the record) and what actually arrived is checked at step 3: a presigned URL authorises
+a PUT to one key, never a content type or a size, so the bytes are sniffed and measured
+again before the row is finalised. The URL is valid for **15 minutes**. An id that never
+received an object is dropped rather than left as a file that cannot be served.
+
+**A local backend cannot presign** — a directory has no HTTP endpoint — so step 1 answers
+`501` with the reason and the reservation is dropped. The SDK reads that as "no direct
+upload here" and posts the bytes to `POST /api/files` instead, so a client can always call
+`uploadDirect` and let the server decide.
+
+## The media library
+
+`GET /api/files` lists what is stored, newest first, **including files that belong to no
+record yet**. Filters: `q` (filename contains), `mime` (`image/` for images only),
+`collectionName`, `fieldName`, `page`, `perPage`. The envelope carries `items`, `total`,
+`totalItems`, `page`, `perPage` and `totalPages`.
+
+Each item is the same shape an upload returns, so a picker renders a fresh upload and an
+old file with one code path.
+
+`DELETE /api/files/<id>` removes the row, which queues the object and its variants for
+removal (see below). Two guards:
+
+- **A file a record still references is refused** with `409` and the list of references —
+  deleting it would leave that record pointing at nothing. A superuser can insist with
+  `?force=true`.
+- The file rules below decide who may delete at all.
+
+## File rules
+
+`files.rules` in settings holds the two rules, exactly as a collection's rules work:
+
+| Value | Meaning |
+| --- | --- |
+| absent / `null` | Superusers only |
+| `""` | Public |
+| a filter | Conditional, evaluated per file |
+
+```json
+{ "files": { "rules": {
+  "listRule": "uploaded_by = @request.auth.id || @request.auth.role = 'admin'",
+  "deleteRule": "uploaded_by = @request.auth.id || @request.auth.role = 'admin'"
+} } }
+```
+
+Put the **field on the left** of a comparison. `@request.auth.id`, `@request.auth.email`
+and `@request.auth.role` refer to the authenticated user, and the columns available are
+`_files`' own: `filename`, `mime_type`, `extension`, `size`, `origin`, `status`,
+`collection_name`, `field_name`, `record_id`, `uploaded_by`, `width`, `height`,
+`created_at`, and the rest of the row.
+
+A superuser bypasses both rules, which is what keeps the media library usable when the API
+has been locked down. A rule that cannot be read — whitespace only, a number, a broken
+filter — **denies** rather than quietly meaning "public", and says so in the log.
+
+Nothing configured means superusers only: a fresh installation behaves as an admin tool
+until an operator opens it up.
+
+## Storage backends
+
+Local (the default) writes under `LAZYPOCK_FILES_DIR` (`data/files`):
+
+```bash
+LAZYPOCK_FILES_ADAPTER=local
+LAZYPOCK_FILES_DIR=/var/lib/lazypock/files
+```
+
+S3-compatible, Cloudflare R2 included:
+
+```bash
+LAZYPOCK_FILES_ADAPTER=s3
+LAZYPOCK_S3_ENDPOINT=https://{account_id}.r2.cloudflarestorage.com
+LAZYPOCK_S3_BUCKET=my-bucket
+LAZYPOCK_S3_ACCESS_KEY=…
+LAZYPOCK_S3_SECRET_KEY=…
+LAZYPOCK_S3_REGION=auto
+LAZYPOCK_FILES_PUBLIC_URL=https://cdn.example.com   # optional: serve objects from your CDN
+```
+
+An incomplete S3 configuration is refused at boot rather than on the first upload, and the
+backend is health-checked. With a public base URL the URLs a client is handed point at the
+CDN; without one they point at this server.
+
+**Settings → Files** shows this configuration (`GET /api/settings/storage`, with the secret
+reported only as "set"), **saves it** (`PATCH`, superuser-only) and probes the backend
+(`POST /api/settings/storage/test`).
+
+A save takes effect **immediately** — the running file service is rebuilt and swapped in, so
+there is no restart in the middle — and it is kept in `_settings`, so it survives one. The
+environment supplies the defaults and a saved field wins over it; a field the environment
+set and nothing has overridden is shown locked, with the variable that owns it.
+
+Two things to know before you save a secret:
+
+- It is stored **encrypted**, with a key only the environment holds:
+  `LAZYPOCK_SECRET_KEY=$(openssl rand -hex 32)`. Without that variable a save that includes a
+  secret is refused rather than stored in the clear — `_settings` travels in every backup,
+  replica and `pg_dump`. Losing the key means the saved secret cannot be read again and has
+  to be entered once more.
+- Two form fields are refused rather than stored and ignored: **Force path style** has to stay
+  on (an object is addressed as `<endpoint>/<bucket>/<key>`) and **Key prefix** must be empty
+  (an object's key is `{collection}/{record}/{filename}`).
+
+`LAZYPOCK_PRESIGN_TTL` (or the page's **Presign TTL**) sets how long a presigned URL stays
+valid; the default is fifteen minutes.
+
+### Deletion and the reaper
+
+Deleting a file — through the API, by deleting the record that owns it, or by dropping the
+whole collection — removes the row and writes the object into a deletion queue **in the
+same transaction**, through a database trigger. The object is removed afterwards by a
+worker, so a crash in between cannot leave a row pointing at an object that is gone, and a
+storage outage only delays the cleanup.
+
+The worker runs every hour by default (`LAZYPOCK_FILE_REAPER_INTERVAL` in seconds, `0`
+disables it and says so loudly). It also reclaims **abandoned uploads**: an editor or
+library upload nobody ever attached is deleted once it is older than
+`files.rules.unattached_ttl_ms` (default one day). An upload that arrived through a
+record's field is never reclaimed, even while it is pending — the user meant that file to
+be in a record, and a failure to attach it is not a reason to delete their upload.
+
+## API reference
+
+| Method | Path | Who | What |
+| --- | --- | --- | --- |
+| `POST` | `/api/files` | authenticated | Multipart upload |
+| `POST` | `/api/files/presign` | authenticated | Reserve an object and get a presigned `PUT` (S3) |
+| `POST` | `/api/files/{id}/complete` | authenticated | Verify a direct upload and finish the row |
+| `GET` | `/api/files` | per `listRule` | List the library, with filters and paging |
+| `GET` | `/api/files/{id}` | public | The file, or one of its variants |
+| `DELETE` | `/api/files/{id}` | per `deleteRule` | Delete a file (409 while referenced) |
+| `GET` | `/api/files/{collection}/{record}/{filename}` | public | The file by its storage key |
 
 ## Troubleshooting
 
-| Symptom | Likely cause |
+| Symptom | Cause |
 | --- | --- |
-| `413` on a 6 MB upload | the effective `max_size` (default 10 MB) or `LAZYPOCK_UPLOAD_MAX_MB` |
-| `400` "contents do not match the filename extension" | the bytes are not really that format (check the source file) |
-| `422` "exceeds the maximum allowed megapixels" | a very large image — raise `upload.max_megapixels` or downscale before upload |
-| No `thumbs`/`variants` in the response | ImageMagick is not installed, the file is not an image, or `LAZYPOCK_THUMBNAILS=0` |
-| `503` with `Retry-After` | the image queue is busy — retry, or raise `LAZYPOCK_IMAGE_CONCURRENCY` |
-| Images 404 after switching to S3 | the bucket keys/prefix or public URL are wrong — run **Test connection** |
-| An image does not appear in the editor | it is still generating (lazy preset) — the URL works on the next request |
-| `409` when deleting from the library | the file is referenced by a record; the response lists where |
-| File URL `404` (or `500` `:enoent`) while the row still exists | the stored object is gone: a non-persistent local volume (container recreated/upgraded), or a delete outside the app. Mount `LAZYPOCK_STORAGE_PATH` or move to S3/R2, then re-upload. |
-| File URL works locally but `404`s in production | dev writes to `priv/uploads`, production runs a release whose default root is wiped on redeploy — the same local-storage coupling. |
+| `400` "the file is not a supported image" | Not a png/jpeg/gif/webp, or an SVG renamed — the bytes decide |
+| `400` "a `collection` part is required" | The multipart body has no `collection_name`/`collection` part |
+| `403` on `GET /api/files` | No `file listRule` is set, or it does not match. A superuser token always works |
+| `409` on delete | A record still references the file; `?force=true` as a superuser breaks the reference |
+| `501` on `/api/files/presign` | The backend is local; post the bytes to `/api/files` instead |
+| `404` on a file that was just uploaded | The row is gone (the upload was cancelled or the file was deleted) — or the id is not the file's |
+| No `variants` in the response | The file is not an image, or no presets are configured |
+| An upload disappeared after a day | It was an unattached `editor`/`library` upload; see `files.rules.unattached_ttl_ms` |
+| Thumbnails are slow the first time | They are generated on first request and cached afterwards |

@@ -1,0 +1,48 @@
+[package]
+name = "lazypock-api"
+description = "lazypock HTTP API: axum router, middleware and error mapping"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["local-image-codecs"]
+# Forwards to `lazypock-files`: without it, thumbnails come from
+# `LAZYPOCK_IMAGE_SERVICE_URL` and this build carries no image codecs.
+local-image-codecs = ["lazypock-files/local-image-codecs"]
+
+[dependencies]
+arc-swap = "1.9.2"
+axum = { version = "0.8.9", features = ["multipart"] }
+base64 = "0.23.1"
+bytes = "1.12.1"
+chrono = "0.4.42"
+chrono-tz = "0.10.4"
+croner = "4.0.1"
+futures-util = "0.3.34"
+getrandom = "0.3"
+lazypock-auth = { version = "0.1.0", path = "../auth" }
+lazypock-core.workspace = true
+lazypock-db = { version = "0.1.0", path = "../db" }
+lazypock-files = { version = "0.1.0", path = "../files", default-features = false }
+lazypock-hooks = { version = "0.1.0", path = "../hooks" }
+lazypock-mail = { version = "0.1.0", path = "../mail" }
+lazypock-realtime = { version = "0.1.0", path = "../realtime" }
+lazypock-studio-embed = { version = "0.1.0", path = "../studio-embed" }
+reqwest = { version = "0.13.5" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+serde_urlencoded = "0.7.1"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1.53.2", features = ["rt"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+image = { version = "0.25.9", default-features = false, features = ["png"] }
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5.3", features = ["util"] }

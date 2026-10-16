@@ -161,7 +161,7 @@
 			<figcaption class="mt-2 px-2 pb-1 text-xs text-base-content/60 leading-relaxed">
 				Each arrow is a request/event boundary. Studio and SDK apps are external clients; the BEAM
 				app + Studio assets ship as one binary (dashed box); PostgreSQL is a separate service
-				connected with <code class="doc-inline px-1 py-0.5">DATABASE_URL</code>.
+				connected with <code class="doc-inline px-1 py-0.5">LAZYPOCK_DATABASE_URL</code>.
 			</figcaption>
 		</figure>
 
