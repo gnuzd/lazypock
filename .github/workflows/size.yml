@@ -18,7 +18,7 @@ name: Size
 
 on:
   push:
-    branches: [feat/rust-rewrite, main]
+    branches: [main]
   pull_request:
     paths:
       - "Cargo.toml"
