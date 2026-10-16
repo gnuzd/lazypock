@@ -44,6 +44,10 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
+  # Docker Hub is where releases went before the Rust rewrite, and that
+  # repository is still public — with `latest` frozen on the retired Elixir
+  # build until this publishes again.
+  DOCKERHUB_IMAGE: docker.io/${{ github.repository }}
 
 jobs:
   release-please:
@@ -147,6 +151,12 @@ jobs:
       contents: read
       packages: write
     runs-on: ubuntu-latest
+    env:
+      # At job level rather than on the steps, because a step cannot read
+      # `secrets` in its own `if`: a missing or rotated secret has to *skip* the
+      # Docker Hub push, not fail the release.
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       # actions/download-artifact v4.3.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -162,6 +172,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # docker/login-action v3.7.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
       - id: meta
         # docker/metadata-action v5.10.0
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
@@ -210,11 +227,43 @@ jobs:
             digest_args+=("${IMAGE}@sha256:${digest}")
           done
           docker buildx imagetools create "${tag_args[@]}" "${digest_args[@]}"
+
+          # Docker Hub gets the version tags only. `edge` and the per-commit
+          # `sha-` tags stay on GHCR: a registry nobody browses does not need a
+          # tag per merge, and the Docker Hub repository has only ever carried
+          # semver tags and `latest`.
+          if [[ "${DOCKERHUB_USERNAME:-}" == "" ]]; then
+            echo "DOCKERHUB_USERNAME is unset; skipped the Docker Hub push."
+            exit 0
+          fi
+          hub_args=()
+          while IFS= read -r ref; do
+            name="${ref##*:}"
+            case "$name" in
+              edge|sha-*) continue ;;
+            esac
+            hub_args+=("-t" "${DOCKERHUB_IMAGE}:${name}")
+          done < <(jq -r '(.tags // [])[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          if [[ "$RELEASE_CREATED" == "true" && -n "$RELEASE_TAG" ]]; then
+            bare="${RELEASE_TAG#v}"
+            hub_args+=("-t" "${DOCKERHUB_IMAGE}:${bare}")
+            hub_args+=("-t" "${DOCKERHUB_IMAGE}:${bare%.*}")
+            hub_args+=("-t" "${DOCKERHUB_IMAGE}:latest")
+          fi
+          if [[ ${#hub_args[@]} -eq 0 ]]; then
+            echo "no version tag in this run; nothing to publish to Docker Hub."
+            exit 0
+          fi
+          # Same digests, second registry: this copies the manifests rather than
+          # rebuilding, so the two registries cannot drift apart.
+          docker buildx imagetools create "${hub_args[@]}" "${digest_args[@]}"
       - name: Inspect what was published
         env:
           IMAGE: ${{ env.IMAGE }}
+          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_IMAGE }}
           VERSION: ${{ steps.meta.outputs.version }}
           RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
           # A release run tags the version rather than `edge`, so inspect that.
@@ -222,4 +271,10 @@ jobs:
           # `${RELEASE_TAG#v:-$VERSION}` is not valid bash and silently leaves
           # the `v` prefix in place.
           tag="${RELEASE_TAG#v}"
-          docker buildx imagetools inspect "${IMAGE}:${tag:-$VERSION}"
+          tag="${tag:-$VERSION}"
+          docker buildx imagetools inspect "${IMAGE}:${tag}"
+          # Docker Hub only carries release tags, so on a plain `main` push it
+          # has nothing to inspect and asking would fail the job.
+          if [[ -n "${DOCKERHUB_USERNAME:-}" && "$tag" != "edge" && "$tag" != sha-* ]]; then
+            docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${tag}"
+          fi
