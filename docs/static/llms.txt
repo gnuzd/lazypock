@@ -1,19 +1,32 @@
 # Lazypock
 
-> Self-hosted, PocketBase-compatible backend on PostgreSQL. Single binary + an admin Studio (collections, records, rules, indexes, auth, realtime, files). Write real Postgres, query it from any PocketBase SDK.
+> Self-hosted backend-as-a-service in Rust + Postgres. One binary — API, auth, realtime, jobs, hooks and the Studio — over real Postgres tables with RLS permissions, and a PocketBase-canonical REST API so existing PocketBase clients and SDKs work unchanged.
 
 This file is for AI assistants and crawlers. The most useful page for generating a file that can be
 imported into a Lazypock server (Studio → Settings → Import / Backups, or `POST /api/import`) is the
 backup format reference below.
+
+## API shape
+
+Records live at `/api/collections/{collection}/records(/{id})` and use the PocketBase list envelope
+(`page`, `perPage`, `totalItems`, `totalPages`, `items`). Auth is at
+`/api/collections/{collection}/auth-with-password`, `auth-refresh`, `auth-with-oauth2`,
+`auth-methods`, `request-verification`, `request-password-reset` and their `confirm-*` pairs. Files
+are served from `/api/files/{collection}/{record}/{filename}` (also `?preset=`, `?thumb=`,
+`/thumbs/{size}`, `/scale/{size}`, and by file id at `/api/files/{id}`). Realtime is **SSE** at
+`/api/realtime`, resumable with `Last-Event-ID`. `POST /api/batch` is all-or-nothing in one
+transaction, and `/api/jwks` publishes the access-token keys.
 
 ## Import / backup JSON format
 
 - [Backup & import JSON format](https://lazypock.gnuzd.dev/backup): envelope, collections, fields, types, rules, indexes, records, examples, PocketBase 23+ compatibility, and the NDJSON zip archive used for large databases.
 - [JSON Schema (backup.schema.json)](https://lazypock.gnuzd.dev/backup.schema.json): machine-readable contract for the canonical `{ "collections": [...] }` payload.
 
-Endpoints: `GET /api/export` (download JSON, unchanged), `GET /api/export/archive` (download a streamed NDJSON zip for large databases), `POST /api/import` (restore JSON or a multipart archive, superuser only), `GET /api/import/preflight` (whether automatic undo is available). CLI:
-`lazypock backup [file]` / `lazypock restore <file>` / `lazypock inspect <file>` — archives by default,
-add a `.json` path for the legacy single-document format.
+Endpoints: `GET /api/export` (download JSON), `GET /api/export/archive` (download a streamed NDJSON
+zip for large databases), `POST /api/import` (restore JSON or a multipart archive, superuser only),
+`GET /api/import/preflight` (whether automatic undo is available), `GET /api/import/status`, and
+`POST /api/import/rollback`. An import never deletes a collection unless `deleteMissing` asks, and
+never writes a `_`-prefixed system collection.
 
 An archive contains `manifest.json`, `schema.json`, `data/<collection>.ndjson`, `files.ndjson` and
 `files/<storage_path>` (the uploaded blobs). The Studio previews an archive by reading only

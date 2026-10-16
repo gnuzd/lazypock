@@ -1,50 +1,75 @@
 # lazypock-docs
 
-Trang tài liệu (docs) kiểu PocketBase cho SDK **lazypock-ts**, build bằng SvelteKit + Tailwind CSS v4.
-Theme màu dùng đúng bộ CSS variables `wabisabi-light` (kiểu daisyUI 5) mà bạn cung cấp — định nghĩa trong
-`src/app.css`, dùng chung cho cả Tailwind `@theme` (để sinh utilities `bg-base-100`, `text-primary-content`, `rounded-box`, ...)
-và block `:root` / `[data-theme='wabisabi-light']` để runtime-switchable sau này (chỉ cần thêm theme khác, vd `wabisabi-dark`).
+The documentation site for [lazypock](https://github.com/gnuzd/lazypock) — a
+self-hosted backend-as-a-service in Rust + Postgres. Built with SvelteKit and
+Tailwind CSS v4, and deployed as a static site.
 
-## Chạy thử
+## Running it
 
 ```bash
 npm install
-npm run dev
+npm run dev        # http://localhost:5173
 ```
 
-Mở http://localhost:5173
-
-## Build
-
 ```bash
-npm run build
+npm run build      # static output
 npm run preview
 ```
 
-## Cấu trúc
+## Structure
 
 ```
 src/
-  app.css                    # Tailwind v4 import + theme tokens wabisabi-light
-  app.html                   # HTML shell, đặt sẵn data-theme="wabisabi-light"
-  routes/
-    +layout.svelte           # Navbar + sidebar (giống bố cục docs PocketBase)
-    +page.svelte             # Toàn bộ nội dung docs (single-page, section theo id)
+  app.css                    # Tailwind v4 import + the wabisabi-light theme tokens
+  app.html                   # HTML shell, sets data-theme="wabisabi-light"
   lib/
-    nav.ts                   # Danh sách mục lục sidebar
-    components/
-      CodeBlock.svelte       # Component hiển thị code block
+    nav.ts                   # sidebar table of contents
+    seo.ts                   # site identity, per-page descriptions
+    json-ld.ts               # schema.org structured data
+    sdk-nav.generated.ts     # GENERATED — do not edit by hand
+    components/              # CodeBlock, Seo, ArchDiagram, FlowSteps, ComingSoon
+  routes/
+    +page.svelte             # landing page ("What is Lazypock")
+    architecture/            # how it works: layers, request lifecycle, realtime
+    server/                  # Docker, binary, setup, filters, production, env vars
+    files/                   # file storage and images
+    backup/                  # backup & import JSON format
+    sdk/                     # per-SDK pages (generated, see below)
+static/
+  llms.txt                   # the summary served to AI assistants and crawlers
+  backup.schema.json         # machine-readable backup contract
 ```
 
-## Thêm theme khác
+## The SDK pages are generated
 
-Copy nguyên khối `:root, [data-theme='wabisabi-light'] { ... }` trong `app.css`,
-đổi selector thành `[data-theme='wabisabi-dark']` và đổi giá trị oklch, rồi set
-`data-theme="wabisabi-dark"` trên `<html>` hoặc qua `input.theme-controller` (kiểu daisyUI)
-để chuyển theme lúc runtime — không cần đổi lại các class Tailwind đã dùng.
+`src/routes/sdk/<slug>/+page.md` and `src/lib/sdk-nav.generated.ts` are **build
+artifacts**. Do not edit them: the next sync overwrites them.
 
-## Nội dung tham khảo
+The source of truth for SDK documentation is each SDK's own repository
+(`gnuzd/lazypock-ts` → `docs/*.md`). `scripts/sync-sdks.mjs` merges those files
+into one scrollable page per SDK — each source file becomes an `<h2>` section —
+and regenerates the nav from the rendered sections.
 
-Nội dung API/Quick Start lấy theo README của
-[lazypock-ts](https://github.com/gnuzd/lazypock-ts) — TypeScript SDK cho
-[lazypock](https://github.com/gnuzd/lazypock) (backend tương thích PocketBase).
+```bash
+node scripts/sync-sdks.mjs
+```
+
+It resolves an SDK's source in this order:
+
+1. `$LAZYPOCK_TS_DIR` — a local clone, for editing SDK docs and seeing the
+   result without pushing the SDK repo first;
+2. a cached clone in `.sdk-cache/<slug>`;
+3. the already-committed `+page.md`, re-deriving the nav from its sections so the
+   site still builds offline.
+
+So to change the TypeScript SDK page: edit `docs/*.md` **in lazypock-ts**, then
+run the sync here.
+
+## Theme
+
+The colour tokens are the `wabisabi-light` set, defined once in `src/app.css` as
+both the Tailwind v4 `@theme` (which generates utilities like `bg-base-100`,
+`text-primary-content`, `rounded-box`) and a `:root` / `[data-theme='wabisabi-light']`
+block for runtime switching. To add another theme, copy that block under a new
+`[data-theme='…']` selector, change the oklch values, and set `data-theme` on
+`<html>` — no Tailwind classes need to change.

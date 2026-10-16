@@ -31,14 +31,14 @@
           lines: [
             "collections · records · fields",
             "rules · indexes · API keys · logs",
-            "served by Phoenix at /_/ (SvelteKit SPA)",
+            "served by the server at / (SvelteKit SPA)",
           ],
           span: 7,
         },
         {
           title: "Your app (via SDK)",
           lines: [
-            "REST /api/* · realtime WebSocket /socket",
+            "REST /api/* · realtime SSE /api/realtime",
             "official SDKs — TS · Swift · Android · Godot",
             "auth tokens, queries, realtime, files",
           ],
@@ -47,25 +47,25 @@
       ],
     },
     {
-      label: "HTTP & API (Phoenix)",
+      label: "HTTP & API (axum + tokio)",
       chip: "part of the Lazypock binary ↓",
       cols: [
         {
-          title: "Router — LazypockWeb",
+          title: "Router — lazypock_api",
           lines: [
-            "dynamic CRUD on /api/:collection",
-            "/api/:collection/auth-* login & refresh",
-            "static: files · settings · logs · crons",
+            "records CRUD on /api/collections/:c/records",
+            "/api/collections/:c/auth-* login & refresh",
+            "static: files · settings · logs · crons · sql",
           ],
           span: 7,
         },
         {
-          title: "Plugs — every request passes through",
+          title: "Middleware — every request passes through",
           lines: [
-            "Auth.Plug verifies JWT (superuser + user)",
-            "RequestLogger → _request_logs",
-            "ConnectionId (realtime origin-exclusion)",
-            "CustomRoutes from on_before_serve hooks",
+            "auth verifies the EdDSA token by signature",
+            "request log → _logs, credentials redacted",
+            "connection id (realtime origin exclusion)",
+            "rate limits · trusted proxy headers",
           ],
           span: 8,
         },
@@ -78,29 +78,30 @@
           title: "Schema / DDL engine",
           lines: [
             "creates real Postgres tables & columns",
-            "TypeMapper: field ↔ column types",
+            "field types ↔ column types, indexes, FKs",
             "metadata in _collections / _fields",
-            "auto-registers existing tables on boot",
+            "reflects existing tables on boot",
+            "ArcSwap cache + NOTIFY reload",
           ],
           span: 5,
         },
         {
-          title: "Hooks engine (~80 events)",
+          title: "Hooks engine (6 record events)",
           lines: [
-            "file-based Elixir hook modules",
-            "before/after chain, abort w/ error",
-            "app: bootstrap · before_serve · cron",
-            "custom API routes (routerAdd-style)",
+            "TypeScript modules in a QuickJS sandbox",
+            "before/after chain, abort by throwing",
+            "hot reload · thread-owned worker",
+            "$db / $http / $app — not shipped yet",
           ],
           span: 5,
         },
         {
-          title: "Rule enforcer",
+          title: "Permissions — Postgres RLS",
           lines: [
             "PocketBase-style rules per action",
-            "nil → superuser only · empty → public",
-            "filter string → SQL WHERE + params",
-            "superuser & manageRule bypass",
+            "absent → superuser · empty → public",
+            "filter string → CREATE POLICY",
+            "runs as lazypock_anon / _authenticated",
           ],
           span: 5,
         },
@@ -110,29 +111,29 @@
       label: "Generic data layer",
       cols: [
         {
-          title: "Dynamic queries",
+          title: "Query plane",
           lines: [
-            "GenericRecord over real tables",
-            "filter · sort · expand · paginate",
-            "relation fields → joins / expand",
+            "one builder over real tables",
+            "filter · sort · expand · fields · paging",
+            "schema-whitelisted, fully parameterized",
           ],
           span: 5,
         },
         {
           title: "Files",
           lines: [
-            "multipart uploads → /api/files",
+            "validated uploads · presigned PUT",
             "adapter: local disk or S3 / R2",
-            "thumbs + on-demand scaling",
+            "presets + thumbs, resized in-process",
           ],
           span: 5,
         },
         {
-          title: "Realtime broadcaster",
+          title: "Realtime",
           lines: [
-            "CRUD event after every successful op",
-            "Phoenix Channels PubSub fan-out",
-            "origin excluded by connectionId",
+            "change row in _rt_log + NOTIFY",
+            "LISTEN → EventBus → SSE fan-out",
+            "RLS-filtered · origin excluded",
           ],
           span: 5,
         },
@@ -146,7 +147,8 @@
           title: "PostgreSQL",
           lines: [
             "your data lives in real tables with real columns — no lock-in",
-            "meta: _collections · _fields · _files · _superusers · _request_logs",
+            "RLS policies enforce the rules — the database is the boundary",
+            "meta: _collections · _fields · _files · _logs · _sessions · _jobs · _crons",
             "types, indexes, relations, JSONB — full Postgres power",
           ],
           span: 15,
@@ -195,7 +197,7 @@
   const arrowX = (X0 + X1) / 2;
 
   // The "single binary" boundary wraps everything except Postgres (bands 1..3
-  // in the placed array) — the BEAM app + bundled Studio assets.
+  // in the placed array) — the Rust server + bundled Studio assets.
   const binY = placed[1].bandY - 8;
   const binBottom = placed[3].bandY + placed[3].bandH + 8;
   const binX = 10;
@@ -207,10 +209,10 @@
     viewBox="0 0 880 {svgH}"
     class="arch-svg"
     role="img"
-    aria-label="Layered architecture diagram of Lazypock: clients and admin UI at the top, the Phoenix HTTP/API layer, the dynamic engines, the generic data layer, all inside a single-binary boundary, above PostgreSQL."
+    aria-label="Layered architecture diagram of Lazypock: clients and admin UI at the top, the axum HTTP/API layer, the dynamic engines, the generic data layer, all inside a single-binary boundary, above PostgreSQL."
     style="min-width: 660px"
   >
-    <!-- Single-binary boundary (Phoenix + engines + data layer) -->
+    <!-- Single-binary boundary (server + engines + data layer) -->
     <rect class="arch-boundary" x={binX} y={binY} width={binW} height={binBottom - binY} rx="18" />
 
     {#each placed as L}
