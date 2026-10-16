@@ -9,6 +9,23 @@ name: Release
 # pipeline this replaced chose native runners for the same reason.
 #
 # `workflow_dispatch` re-runs a publish without needing a new commit.
+#
+# The `release-please` job owns versions, tags and CHANGELOG.md. It was lost
+# with the Elixir tree (`b409aa88`), which is why nothing was released after the
+# Rust rewrite merged: no run bumps a version or creates a tag.
+#
+# Two things about it are not obvious, and are why it lives here rather than in
+# a workflow of its own:
+#
+#   1. A tag pushed with `GITHUB_TOKEN` does **not** trigger a workflow run, so
+#      the `push: tags` trigger below never fires for a release-please release.
+#      The version tags therefore have to be attached to the image in this same
+#      run, keyed off release-please's `release_created` output.
+#   2. `release-type` is `simple` with `extra-files`, not `rust`. The `rust`
+#      strategy always updates the root `Cargo.toml` with a `CargoToml` updater,
+#      which throws `is not a package manifest (might be a cargo workspace)`
+#      when the root has no `[package]` — and this root is a virtual workspace
+#      whose version lives in `[workspace.package]`. Do not "fix" it back.
 
 on:
   push:
@@ -29,6 +46,29 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
+  release-please:
+    name: release-please
+    # Only on `main`: a tag push is already a release, and dispatching this from
+    # another branch would open a release PR nobody asked for.
+    if: github.ref == 'refs/heads/main'
+    # Granted per job rather than workflow-wide, so the jobs that only build an
+    # image cannot write to the repository or open a pull request.
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      # googleapis/release-please-action v4.4.1
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   image:
     name: build (${{ matrix.platform }})
     # Granted per job rather than workflow-wide, so a job that only reads the
@@ -96,7 +136,13 @@ jobs:
 
   publish:
     name: publish
-    needs: image
+    needs: [image, release-please]
+    # `always()` so that a skipped `release-please` (a tag push, where the job's
+    # `if` does not hold) does not skip the publish as well. `needs.image`
+    # succeeding is what actually gates this job, so a failed build still stops
+    # here. A skipped job's outputs read as empty strings, which the tag step
+    # below treats as "no release in this run".
+    if: ${{ always() && needs.image.result == 'success' }}
     permissions:
       contents: read
       packages: write
@@ -132,17 +178,48 @@ jobs:
         working-directory: /tmp/digests
         env:
           IMAGE: ${{ env.IMAGE }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_CREATED: ${{ needs.release-please.outputs.release_created }}
         run: |
           set -euo pipefail
-          # The image name belongs in the format string rather than the argument
-          # list, or each digest would be prefixed with the previous one.
-          format="${IMAGE}@sha256:%s "
-          docker buildx imagetools create \
-            $(jq -r '.tags | map("-t " + .) | join(" ")' \
-              <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf "$format" *)
+          # Two argument lists, both built as arrays: the digests are discovered
+          # from the working directory, so there is nothing to quote a literal
+          # against and word-splitting a string would be the bug, not the fix.
+          shopt -s nullglob
+          tag_args=()
+          digest_args=()
+          # Tags that come from the pushed ref: `edge` on main, semver from the
+          # ref on a `v*` tag push. metadata-action emits these already fully
+          # qualified (`ghcr.io/owner/repo:tag`), so they are used as given.
+          while IFS= read -r ref; do
+            tag_args+=("-t" "$ref")
+          done < <(jq -r '(.tags // [])[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          # A release-please release cannot rely on the `push: tags` trigger: the
+          # tag is created with `GITHUB_TOKEN`, and GitHub does not run workflows
+          # for events that token creates. So the versioned tags are attached
+          # here, in the same run, from release-please's own outputs.
+          if [[ "$RELEASE_CREATED" == "true" && -n "$RELEASE_TAG" ]]; then
+            bare="${RELEASE_TAG#v}"
+            tag_args+=("-t" "${IMAGE}:${bare}")
+            tag_args+=("-t" "${IMAGE}:${bare%.*}")
+            tag_args+=("-t" "${IMAGE}:latest")
+          fi
+          # Each uploaded artifact is a bare sha256, so the reference is the
+          # image name plus that digest.
+          for digest in *; do
+            digest_args+=("${IMAGE}@sha256:${digest}")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "${digest_args[@]}"
       - name: Inspect what was published
         env:
           IMAGE: ${{ env.IMAGE }}
           VERSION: ${{ steps.meta.outputs.version }}
-        run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          # A release run tags the version rather than `edge`, so inspect that.
+          # The strip and the default are two separate steps on purpose:
+          # `${RELEASE_TAG#v:-$VERSION}` is not valid bash and silently leaves
+          # the `v` prefix in place.
+          tag="${RELEASE_TAG#v}"
+          docker buildx imagetools inspect "${IMAGE}:${tag:-$VERSION}"
