@@ -536,7 +536,12 @@ async fn a_failing_action_is_recorded_and_the_schedule_still_advances() {
 
     let (status, error) = recorded(&app, &id).await;
     assert_eq!(status.as_deref(), Some("error"));
-    assert!(error.is_some(), "the failure was recorded without a reason");
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|message| message.contains("definitely_not_a_table")),
+        "the recorded reason should name what went wrong, got {error:?}"
+    );
 
     app.cleanup().await;
 }

@@ -385,7 +385,9 @@ async fn execute(state: &AppState, job: &Job) -> Result<(String, Option<String>)
             let client = state.db.client().await.map_err(ApiError::new)?;
             match client.batch_execute(statement).await {
                 Ok(()) => Ok(("ok".to_string(), None)),
-                Err(err) => Ok(("error".to_string(), Some(err.to_string()))),
+                // `db_error` rather than the driver's own message: that is only
+                // "db error", which leaves `last_error` with nothing to act on.
+                Err(err) => Ok(("error".to_string(), Some(db_error(err).to_string()))),
             }
         }
         "http" => {
