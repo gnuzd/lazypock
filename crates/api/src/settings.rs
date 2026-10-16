@@ -145,6 +145,242 @@ fn is_internal(key: &str) -> bool {
     key.starts_with(INTERNAL_PREFIX)
 }
 
+/// The version of the settings export document.
+///
+/// A settings file is read by a *different* build from the one that wrote it, so
+/// the document carries its own version and an unknown one is refused rather than
+/// partly applied.
+pub const EXPORT_VERSION: u32 = 1;
+
+/// Whether a key name, at any depth, marks its value as a credential.
+///
+/// The encrypted-envelope check below catches everything lazypock stores through
+/// [`Secrets`]. This catches the plaintext kind — a `mail.password` saved before
+/// the value was encrypted — so the export redacts those too.
+fn is_secret_name(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.contains("password")
+        || key.contains("secret")
+        || key.ends_with("token")
+        || key.ends_with("api_key")
+        || key.ends_with("signing_key")
+        || key == "private_key"
+}
+
+/// Whether a string is a stored-secret envelope (`v1:<nonce>:<ciphertext>`).
+fn is_encrypted_envelope(value: &str) -> bool {
+    value.starts_with("v1:")
+}
+
+/// Replace credential values with `null`, recording the path of each.
+///
+/// Recurses, because a setting is one JSON value: `storage` carries its secret as
+/// a field of an object, and a redaction that only looked at the top level would
+/// export it verbatim.
+fn redact(value: &Value, path: &str, redacted: &mut Vec<String>) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let child = format!("{path}.{key}");
+                    (key.clone(), redact(value, &child, redacted))
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| redact(item, path, redacted))
+                .collect(),
+        ),
+        Value::String(text) if is_encrypted_envelope(text) => {
+            redacted.push(path.to_string());
+            Value::Null
+        }
+        _ => {
+            let leaf = path.rsplit('.').next().unwrap_or(path);
+            if is_secret_name(leaf) {
+                redacted.push(path.to_string());
+                Value::Null
+            } else {
+                value.clone()
+            }
+        }
+    }
+}
+
+/// Merge an imported setting over the stored one, treating `null` as "keep".
+///
+/// The exporter replaces every credential with `null`, so an import that read
+/// `null` as "clear" would delete every secret on a round trip. It does the
+/// opposite: a value the file does not carry, or carries as `null`, is left as it
+/// was. An operator who genuinely wants a setting gone deletes it in the Studio.
+fn merge_keep(stored: &Value, imported: &Value) -> Value {
+    match (stored, imported) {
+        (Value::Object(stored), Value::Object(imported)) => {
+            let mut merged = stored.clone();
+            for (key, value) in imported {
+                let next = match merged.get(key) {
+                    Some(existing) => merge_keep(existing, value),
+                    None => value.clone(),
+                };
+                merged.insert(key.clone(), next);
+            }
+            Value::Object(merged)
+        }
+        (_, Value::Null) => stored.clone(),
+        _ => imported.clone(),
+    }
+}
+
+/// `GET /api/settings/export`
+///
+/// The application settings as a portable document, with every credential
+/// **redacted** rather than removed silently: the value becomes `null` and its
+/// path is listed under `secrets`, so an import (and a reader) knows a value is
+/// missing rather than unset.
+///
+/// Redaction rather than encryption: an encrypted export could only be imported
+/// by a deployment holding the same `LAZYPOCK_SECRET_KEY`, which is a different
+/// feature. Lazypock's own settings (`auth.*`), including the token signing key,
+/// are omitted entirely.
+pub async fn export(
+    State(state): State<AppState>,
+    _: Superuser,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let client = state.db.client().await.map_err(ApiError::new)?;
+    let rows = client
+        .query("select key, value from _settings order by key", &[])
+        .await
+        .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+
+    let mut settings = Map::new();
+    let mut redacted = Vec::new();
+    for row in &rows {
+        let key: String = row.get("key");
+        if is_internal(&key) {
+            continue;
+        }
+        let value: Value = row.get("value");
+        settings.insert(key.clone(), redact(&value, &key, &mut redacted));
+    }
+
+    Ok(ResponseJson(json!({
+        "version": EXPORT_VERSION,
+        "settings": Value::Object(settings),
+        // Dotted paths whose values were removed, so the operator knows what to
+        // re-enter after importing.
+        "secrets": redacted,
+    })))
+}
+
+/// What `POST /api/settings/import` accepts.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportSettings {
+    /// The document version the client read.
+    pub version: u32,
+    /// The settings to apply.
+    #[serde(default)]
+    pub settings: Map<String, Value>,
+    /// Paths the exporter redacted. Informational: the merge already keeps the
+    /// stored value for a `null`, and this is what the response reports.
+    #[serde(default)]
+    pub secrets: Vec<String>,
+}
+
+/// `POST /api/settings/import`
+///
+/// Applies a settings document over the stored settings. It is a merge, never a
+/// replace: keys the file does not carry are left alone, and a `null` — which is
+/// what the exporter writes for a credential — keeps the stored value. The
+/// version is checked first, so a document from a future format is refused with a
+/// named version rather than partly applied.
+pub async fn import(
+    State(state): State<AppState>,
+    superuser: Superuser,
+    body: Result<Json<ImportSettings>, axum::extract::rejection::JsonRejection>,
+) -> Result<ResponseJson<Value>, ApiError> {
+    let Json(body) = crate::auth::json_body(body)?;
+    if body.version != EXPORT_VERSION {
+        return Err(ApiError::new(Error::invalid(format!(
+            "this settings file is version {}, but this server reads version {EXPORT_VERSION}",
+            body.version
+        ))));
+    }
+
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+
+    let mut imported = Vec::new();
+    let mut skipped = Vec::new();
+    for (key, value) in &body.settings {
+        if is_internal(key) {
+            return Err(ApiError::new(Error::invalid(format!(
+                "{key:?} is lazypock's own setting and cannot be written through the \
+                 settings API"
+            ))));
+        }
+
+        let stored = transaction
+            .query_opt("select value from _settings where key = $1", &[key])
+            .await
+            .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+        let stored: Value = stored.map(|row| row.get("value")).unwrap_or(Value::Null);
+
+        let merged = merge_keep(&stored, value);
+        // Nothing to write: the file carried only a redacted credential, or a
+        // `null`, and there was no stored value to keep.
+        if merged.is_null() {
+            skipped.push(key.clone());
+            continue;
+        }
+
+        transaction
+            .execute(
+                "insert into _settings (key, value, updated) values ($1, $2, now()) \
+                 on conflict (key) do update set value = excluded.value, updated = now()",
+                &[key, &merged],
+            )
+            .await
+            .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+        imported.push(key.clone());
+    }
+
+    // Names only, never values: an imported file can carry credentials.
+    audit::record(
+        &transaction,
+        &superuser.id,
+        audit::action::SETTINGS_UPDATE,
+        Some("import"),
+        json!({
+            "keys": imported,
+            "redacted_in_file": body.secrets,
+        }),
+    )
+    .await
+    .map_err(ApiError::new)?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
+
+    tracing::info!(
+        imported = imported.len(),
+        skipped = skipped.len(),
+        "settings imported"
+    );
+    Ok(ResponseJson(json!({
+        "imported": imported,
+        "skipped": skipped,
+    })))
+}
+
 /// `GET /api/settings/storage`
 ///
 /// The storage configuration the server is **running with**: the environment's, with
@@ -482,5 +718,61 @@ mod tests {
         assert!(!is_internal("cors_origins"));
         assert!(!is_internal("mail"));
         assert!(!is_internal("authentication"));
+    }
+
+    #[test]
+    fn an_encrypted_secret_is_redacted_wherever_it_sits() {
+        let mut redacted = Vec::new();
+        let value = json!({
+            "backend": "s3",
+            "secret_access_key": "v1:abcd:ef01",
+            "bucket": "lazypock",
+        });
+        let out = redact(&value, "storage", &mut redacted);
+        assert_eq!(out["secret_access_key"], json!(null));
+        assert_eq!(out["bucket"], json!("lazypock"));
+        assert_eq!(redacted, vec!["storage.secret_access_key"]);
+    }
+
+    #[test]
+    fn a_plaintext_credential_is_redacted_by_name() {
+        let mut redacted = Vec::new();
+        let value = json!({ "host": "smtp.example", "password": "hunter2", "port": 587 });
+        let out = redact(&value, "mail", &mut redacted);
+        assert_eq!(out["password"], json!(null));
+        assert_eq!(out["host"], json!("smtp.example"));
+        assert_eq!(redacted, vec!["mail.password"]);
+
+        // A name that only looks auth-ish is not a credential.
+        assert!(!is_secret_name("access_key_id"));
+        assert!(!is_secret_name("host"));
+        assert!(is_secret_name("refresh_token"));
+        assert!(is_secret_name("signing_key"));
+        assert!(is_secret_name("client_secret"));
+    }
+
+    #[test]
+    fn an_import_keeps_a_redacted_secret_instead_of_clearing_it() {
+        let stored = json!({
+            "backend": "s3",
+            "secret_access_key": "v1:aa:bb",
+            "bucket": "old",
+        });
+        let imported = json!({
+            "backend": "s3",
+            "secret_access_key": null,
+            "bucket": "new",
+        });
+        let merged = merge_keep(&stored, &imported);
+        assert_eq!(merged["secret_access_key"], json!("v1:aa:bb"));
+        assert_eq!(merged["bucket"], json!("new"));
+
+        // A key the file does not carry at all is left alone too.
+        let merged = merge_keep(&stored, &json!({ "bucket": "new" }));
+        assert_eq!(merged["secret_access_key"], json!("v1:aa:bb"));
+        assert_eq!(merged["backend"], json!("s3"));
+
+        // A plain value replaces, and an array replaces rather than merges.
+        assert_eq!(merge_keep(&json!([1, 2]), &json!([3])), json!([3]));
     }
 }
