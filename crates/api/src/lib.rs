@@ -23,5 +23,6 @@ pub mod sql;
 pub mod state;
 pub mod studio;
 pub mod superusers;
+pub mod views;
 
 pub use state::{AppState, Services};

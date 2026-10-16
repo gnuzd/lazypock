@@ -25,6 +25,7 @@ use crate::sql;
 use crate::state::AppState;
 use crate::studio;
 use crate::superusers;
+use crate::views;
 
 /// The full application router.
 pub fn router(state: AppState) -> Router {
@@ -131,6 +132,18 @@ pub fn router(state: AppState) -> Router {
         // write for, and a read-only transaction catches what the keyword check
         // cannot.
         .route("/api/sql/query", post(sql::query))
+        // The view previews. Superuser-only: each one runs a statement, and the
+        // generated SQL is what a view would then be created from. Registered
+        // before the `/api/collections/{name}` routes; the static segment wins,
+        // so `meta` is never read as a collection name.
+        .route(
+            "/api/collections/meta/dry-run-view",
+            post(views::dry_run_view),
+        )
+        .route(
+            "/api/collections/meta/preview-view-builder",
+            post(views::preview_view_builder),
+        )
         // Reading the available sizes is public: a client needs them to build a
         // thumbnail URL. Changing them is a superuser action, enforced in the
         // handlers.
