@@ -135,3 +135,88 @@ async fn a_zero_limit_disables_limiting() {
 
     app.cleanup().await;
 }
+
+/// Sign in as the harness superuser with `password`.
+async fn sign_in_as_admin(router: &Router, password: &str) -> support::Reply {
+    call(
+        router,
+        Method::POST,
+        "/api/collections/_superusers/auth-with-password",
+        Some(json!({ "identity": "admin@example.com", "password": password })),
+    )
+    .await
+}
+
+/// Failures are counted **per account**, so a distributed guessing attack cannot
+/// stay under the per-address limit by spreading itself across addresses. Because
+/// only failures count, an attacker who knows an address cannot spend its owner's
+/// budget and lock the real user out; a success clears the count.
+#[tokio::test]
+async fn an_account_is_locked_after_repeated_failures_and_a_success_clears_it() {
+    let Some(app) = test_app_with(
+        "rate_limit_account",
+        &[
+            // Isolate the account lockout from the per-address allowance.
+            ("LAZYPOCK_RATE_LIMIT_AUTH", "0"),
+            ("LAZYPOCK_RATE_LIMIT_ACCOUNT", "2"),
+        ],
+    )
+    .await
+    else {
+        return;
+    };
+    let router = router(&app).await;
+    let client = app.client().await;
+    lazypock_auth::superuser::create(&client, "admin@example.com", "correct-horse")
+        .await
+        .expect("create");
+
+    // One failure is not a lockout, and a success clears it.
+    let reply = sign_in_as_admin(&router, "wrong").await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
+    let reply = sign_in_as_admin(&router, "correct-horse").await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    // Two failures reach the configured limit.
+    for attempt in 1..=2 {
+        let reply = sign_in_as_admin(&router, "wrong").await;
+        assert_eq!(
+            reply.status,
+            StatusCode::UNAUTHORIZED,
+            "failure {attempt}: {:?}",
+            reply.body
+        );
+    }
+
+    // The right password is refused too: this is a lockout, not a wrong guess.
+    let reply = sign_in_as_admin(&router, "correct-horse").await;
+    assert_eq!(
+        reply.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{:?}",
+        reply.body
+    );
+    assert!(
+        reply.headers.contains_key(axum::http::header::RETRY_AFTER),
+        "a lockout must say how long to wait"
+    );
+    assert!(
+        reply.body.expect("a body")["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("failed sign-ins"),
+        "the refusal should say what happened"
+    );
+
+    // Another account is unaffected.
+    let reply = call(
+        &router,
+        Method::POST,
+        "/api/collections/_superusers/auth-with-password",
+        Some(json!({ "identity": "someone-else@example.com", "password": "wrong" })),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
+
+    app.cleanup().await;
+}

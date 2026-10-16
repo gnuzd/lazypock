@@ -295,11 +295,29 @@ pub async fn auth_with_password(
 ) -> Result<Response, ApiError> {
     let Json(request) = json_body(body)?;
 
+    // The per-account lockout, checked before the password is looked at. It counts
+    // *failures*, so a legitimate sign-in never spends the budget and a success
+    // clears it — which is what keeps an attacker who knows an address from
+    // locking its owner out. See `rate_limit::Lockout`.
+    let account = account_key(&collection, &request.identity);
+    if let Err(refused) = state.rate_limits.account.is_locked(&account) {
+        let seconds = refused.retry_after.as_secs().max(1);
+        tracing::warn!(account = %account, "account locked after failed sign-ins");
+        return Ok(crate::rate_limit::too_many(
+            seconds,
+            format!("Too many failed sign-ins. Try again in {seconds} seconds."),
+        ));
+    }
+
     if collection == SUPERUSERS {
-        let outcome = state
-            .auth
-            .authenticate_superuser(&request.identity, &request.password)
-            .await?;
+        let outcome = record_credential_outcome(
+            &state.rate_limits.account,
+            &account,
+            state
+                .auth
+                .authenticate_superuser(&request.identity, &request.password)
+                .await,
+        )?;
         let client = state.db.client().await.map_err(ApiError::new)?;
         let account = lazypock_auth::superuser::find_by_id(&client, &outcome.user_id)
             .await
@@ -323,10 +341,14 @@ pub async fn auth_with_password(
         ))));
     }
 
-    let outcome = state
-        .auth
-        .authenticate_record(&resolved.collection, &request.identity, &request.password)
-        .await?;
+    let outcome = record_credential_outcome(
+        &state.rate_limits.account,
+        &account,
+        state
+            .auth
+            .authenticate_record(&resolved.collection, &request.identity, &request.password)
+            .await,
+    )?;
 
     // Return the record the client just authenticated as.
     let client = state.db.client().await.map_err(ApiError::new)?;
@@ -345,6 +367,39 @@ pub async fn auth_with_password(
     // Touch the schema snapshot so a reload during login is not lost.
     drop(schema);
     Ok((StatusCode::OK, Json(auth_body(&outcome, record))).into_response())
+}
+
+/// The key a lockout counts an account against: the collection and the submitted
+/// identity.
+///
+/// The identity is normalized, so `Ada@Example.com` and `ada@example.com` share a
+/// count. A non-existent account is counted the same as a real one, which is what
+/// stops the lockout from becoming a user-enumeration oracle.
+fn account_key(collection: &str, identity: &str) -> String {
+    format!("{collection}:{}", identity.trim().to_ascii_lowercase())
+}
+
+/// Count a failed sign-in, or clear the count on success.
+///
+/// Only a `401` counts. An internal error is not a wrong password, and counting it
+/// would let a database blip lock accounts out.
+fn record_credential_outcome<T>(
+    lockout: &crate::rate_limit::Lockout,
+    key: &str,
+    result: Result<T, Error>,
+) -> Result<T, ApiError> {
+    match result {
+        Ok(value) => {
+            lockout.clear(key);
+            Ok(value)
+        }
+        Err(err) => {
+            if err.status() == StatusCode::UNAUTHORIZED.as_u16() {
+                lockout.record_failure(key);
+            }
+            Err(ApiError::new(err))
+        }
+    }
 }
 
 /// `POST /api/collections/{collection}/auth-refresh`
