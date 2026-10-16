@@ -1,0 +1,126 @@
+# An example deployment using the published image.
+#
+# This is the counterpart to the `compose.yml` at the repository root: that one
+# **builds from source** (for a checkout, and for Coolify), while this one pulls
+# the image GHCR already has, so a VPS needs nothing but Docker and this file.
+#
+#   docker compose -f deploy/compose.example.yml up -d
+#
+# The image is referenced by a **floating tag**, deliberately — never a pinned
+# version in an example, or a copy of this file would silently rot into an old
+# release. `latest` is the most recent release; `edge` tracks `main` and is
+# rebuilt on every merge:
+#
+#   ghcr.io/gnuzd/lazypock:latest   ← default here: the last release
+#   ghcr.io/gnuzd/lazypock:edge     ← tip of main, unreleased
+#   ghcr.io/gnuzd/lazypock:0.23.0   ← a specific release, for a real deployment
+#   ghcr.io/gnuzd/lazypock:0.23     ← the release line
+#
+# Pin to a version (or a digest) for anything you care about; the floating tags
+# are for trying it out, which is what an example is for.
+#
+# Every value marked `change-me` must be set before this is reachable from
+# anywhere.
+#
+# Not included, on purpose: no reverse proxy or TLS (put Caddy or your platform
+# in front of port 4000), and no backup sidecar — dump the database and the
+# `/data` volume with whatever your host already uses.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lazypock
+      POSTGRES_PASSWORD: change-me
+      POSTGRES_DB: lazypock
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lazypock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  lazypock:
+    image: ghcr.io/gnuzd/lazypock:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        # This matters: the server migrates itself at boot, so starting before
+        # Postgres accepts connections only produces a restart loop.
+        condition: service_healthy
+    environment:
+      # ── required ───────────────────────────────────────────────────────────
+      #
+      # A DIRECT connection. PgBouncer in transaction mode, and the pooled
+      # endpoint managed providers offer, are unsupported: realtime needs
+      # LISTEN/NOTIFY on the direct endpoint, and a named prepared statement has
+      # to survive a pool checkout. See PLAN.md risk 1.
+      LAZYPOCK_DATABASE_URL: postgres://lazypock:change-me@db:5432/lazypock
+
+      # 32 bytes as hex: `openssl rand -hex 32`. It encrypts the secrets stored
+      # in `_settings` (the storage secret today). Losing it means those values
+      # can no longer be decrypted, so keep it with your other deployment
+      # secrets.
+      LAZYPOCK_SECRET_KEY: change-me
+
+      LAZYPOCK_ENV: production
+
+      # ── recommended ───────────────────────────────────────────────────────
+      #
+      # Left unset, the server generates an access-token signing key on first
+      # run and keeps it in `_settings`, so the key travels in every dump and
+      # replica. Setting it keeps it out of all of them:
+      #   openssl rand -base64 32
+      # LAZYPOCK_SIGNING_KEY: change-me
+
+      # One connection per node is held for LISTEN. Keep it small: total
+      # connections = nodes x (pool + 1), and the database has a limit.
+      LAZYPOCK_POOL_SIZE: "5"
+
+      # Peers whose X-Forwarded-For / X-Real-IP headers are believed. Unset
+      # means no forwarding header is ever read, so rate limits and request logs
+      # key on the proxy's address instead of the client's. Set it to whatever
+      # terminates TLS in front of this.
+      # LAZYPOCK_TRUSTED_PROXIES: 10.0.0.0/8
+
+      # ── storage: set it here, or in the Studio — see the note below ────────
+      #
+      # These are DEFAULTS. A configuration saved in Studio → Settings → Storage
+      # wins over every one of them, and takes effect without a restart, which
+      # is why the fields below can be left out entirely and set in the UI once.
+      # Setting them here is what makes a deployment reproducible from this file.
+      #
+      # LAZYPOCK_FILES_ADAPTER: local            # local | s3
+      # LAZYPOCK_FILES_DIR: /data/files          # the container path when local
+      # LAZYPOCK_FILES_PUBLIC_URL: https://files.example.com
+      # LAZYPOCK_S3_ENDPOINT: https://<account>.r2.cloudflarestorage.com
+      # LAZYPOCK_S3_BUCKET: lazypock
+      # LAZYPOCK_S3_REGION: auto
+      # LAZYPOCK_S3_ACCESS_KEY: change-me
+      # LAZYPOCK_S3_SECRET_KEY: change-me
+      #
+      # Offload resizing to an external service instead of doing it in-process:
+      # LAZYPOCK_IMAGE_SERVICE_URL: http://imgproxy:8080
+      # LAZYPOCK_IMAGE_SERVICE_TOKEN: change-me
+    ports:
+      # Nothing but the reverse proxy in front should reach this port.
+      - "4000:4000"
+    volumes:
+      # Local uploads, hooks, and anything else the server writes. Point the
+      # storage adapter at S3 instead and only hooks remain here.
+      - lazypock-data:/data
+    # The image carries its own healthcheck; this is here so the intent is
+    # visible, and so `docker compose ps` reports it either way.
+    healthcheck:
+      test: ["CMD", "lazypock", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # The first boot runs migrations, so give it room before failing.
+      start_period: 30s
+
+volumes:
+  db-data:
+  lazypock-data:
