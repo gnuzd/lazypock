@@ -6,6 +6,8 @@ use lazypock_auth::AuthService;
 use lazypock_core::config::Config;
 use lazypock_db::pool::Db;
 use lazypock_db::schema::SchemaCache;
+
+use crate::rate_limit::Limits;
 use lazypock_files::Files;
 use lazypock_hooks::HookService;
 
@@ -34,6 +36,12 @@ pub struct AppState {
     pub hooks: Arc<HookService>,
     /// The CORS allowlist, reloadable while the node runs.
     pub cors: Arc<CorsPolicy>,
+    /// Per-node rate allowances.
+    ///
+    /// Behind an `Arc` because cloning the state must share the counters: a clone
+    /// that carried its own would give every clone a fresh allowance, which is the
+    /// same as having none.
+    pub rate_limits: Arc<Limits>,
 }
 
 impl AppState {
@@ -47,6 +55,13 @@ impl AppState {
             cors,
         } = services;
 
+        // Built from the configuration rather than handed in as a service, so a
+        // caller that only wants a router does not have to know limits exist.
+        let rate_limits = Arc::new(Limits::new(
+            config.rate_limit_credentials_per_minute,
+            config.rate_limit_requests_per_minute,
+        ));
+
         Self {
             config: Arc::new(config),
             db,
@@ -56,6 +71,7 @@ impl AppState {
             files,
             hooks,
             cors,
+            rate_limits,
         }
     }
 }

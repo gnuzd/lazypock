@@ -97,7 +97,16 @@ fn init_logging() {
     });
 }
 
+/// An application bound to one disposable schema.
 pub async fn test_app(label: &str) -> Option<TestApp> {
+    test_app_with(label, &[]).await
+}
+
+/// Like [`test_app`], with extra configuration the test needs.
+///
+/// The knobs are the ones the server reads from the environment, so a test
+/// configures a limit or a proxy list the way a deployment does.
+pub async fn test_app_with(label: &str, extra: &[(&str, &str)]) -> Option<TestApp> {
     init_logging();
     // `LAZYPOCK_TEST_DATABASE_URL` first, then the app's own variable, so exporting
     // a single `LAZYPOCK_DATABASE_URL` is enough to point the tests somewhere.
@@ -164,7 +173,12 @@ pub async fn test_app(label: &str) -> Option<TestApp> {
 
     let config = Config::from_source(|key| match key {
         "LAZYPOCK_DATABASE_URL" => Some(url.clone()),
-        _ => None,
+        // Whatever the test asked for, and nothing else: the ambient environment
+        // must not change what a test measures.
+        other => extra
+            .iter()
+            .find(|(name, _)| *name == other)
+            .map(|(_, value)| value.to_string()),
     })
     .expect("test configuration");
 

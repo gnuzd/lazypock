@@ -17,6 +17,7 @@ pub mod files;
 pub mod jobs;
 pub mod logs;
 pub mod presets;
+pub mod rate_limit;
 pub mod realtime;
 pub mod records;
 pub mod router;
