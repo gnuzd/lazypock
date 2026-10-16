@@ -15,10 +15,8 @@
 //! has passed — and that counts as an attempt, so a job that repeatedly kills its
 //! worker cannot loop forever.
 //!
-//! No producer uses this yet: the mailer and the "after" hooks that are meant to
-//! run off the request path are the callers it was built for, and they are not
-//! written. The `sql` kind exists so the machinery is exercised end to end in the
-//! meantime.
+//! Two kinds today: `sql`, which exercises the machinery end to end, and `mail`,
+//! which sends a templated email. The "after" hooks are the next caller.
 
 use std::time::Instant;
 
@@ -33,6 +31,9 @@ use crate::state::AppState;
 
 /// A job that runs a SQL statement.
 pub const KIND_SQL: &str = "sql";
+
+/// A job that sends one templated email.
+pub const KIND_MAIL: &str = "mail";
 
 /// How many attempts a job gets unless it asks for something else.
 pub const DEFAULT_MAX_ATTEMPTS: i32 = 5;
@@ -275,6 +276,58 @@ async fn run_one(state: &AppState, job: &Claimed) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The payload a `mail` job carries.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MailJob {
+    /// The template name (`otp`, `verification`, `password_reset`, `email_change`).
+    template: String,
+    /// The recipient's address.
+    to: String,
+    /// The recipient's display name.
+    to_name: String,
+    /// The template context.
+    #[serde(default)]
+    assigns: Value,
+}
+
+/// A job that sends one templated email.
+///
+/// Callers enqueue this rather than sending in the request: an SMTP server that is
+/// slow or down must not hold a request open, and the queue already retries with
+/// backoff.
+pub fn mail_job(template: &str, to_name: &str, to: &str, assigns: Value) -> NewJob {
+    NewJob::new(
+        KIND_MAIL,
+        serde_json::json!({
+            "template": template,
+            "to": to,
+            "toName": to_name,
+            "assigns": assigns,
+        }),
+    )
+}
+
+/// The application settings, for a job that needs them (the mail config).
+async fn read_settings(client: &Client) -> Result<Value, String> {
+    let rows = client
+        .query("select key, value from _settings", &[])
+        .await
+        .map_err(|err| db_error(err).to_string())?;
+
+    let mut settings = serde_json::Map::new();
+    for row in &rows {
+        let key: String = row.get("key");
+        // Lazypock's own settings, including the signing key, are not application
+        // settings and one of them is a credential.
+        if key.starts_with("auth.") {
+            continue;
+        }
+        settings.insert(key, row.get("value"));
+    }
+    Ok(Value::Object(settings))
+}
+
 /// What the job does, or why it could not.
 async fn perform(state: &AppState, job: &Claimed) -> Result<(), String> {
     match job.kind.as_str() {
@@ -295,6 +348,28 @@ async fn perform(state: &AppState, job: &Claimed) -> Result<(), String> {
                 // which leaves `last_error` with nothing to act on. `db_error`
                 // pulls the code and message out of the server's response.
                 .map_err(|err| db_error(err).to_string())
+        }
+        KIND_MAIL => {
+            let mail: MailJob = serde_json::from_value(job.payload.clone())
+                .map_err(|err| format!("invalid mail payload: {err}"))?;
+
+            let client = state.db.client().await.map_err(|err| err.to_string())?;
+            let settings = read_settings(&client).await?;
+            // Read at send time, so a superuser changing SMTP settings in the Studio
+            // takes effect on the next send without a restart.
+            let config = lazypock_mail::MailConfig::from_settings(&settings)
+                .map_err(|err| err.to_string())?
+                .ok_or_else(|| {
+                    "mail is not configured: set the `mail` settings before queueing mail"
+                        .to_string()
+                })?;
+
+            let mailer = lazypock_mail::Mailer::new(state.mail_templates.clone(), config)
+                .map_err(|err| err.to_string())?;
+            mailer
+                .deliver(&mail.template, &mail.to_name, &mail.to, &mail.assigns)
+                .await
+                .map_err(|err| err.to_string())
         }
         // An unknown kind is a bug in whatever enqueued it. Retrying and then
         // retiring it as `dead` with the reason is better than a job that quietly

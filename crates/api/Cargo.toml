@@ -30,6 +30,7 @@ lazypock-core.workspace = true
 lazypock-db = { version = "0.1.0", path = "../db" }
 lazypock-files = { version = "0.1.0", path = "../files", default-features = false }
 lazypock-hooks = { version = "0.1.0", path = "../hooks" }
+lazypock-mail = { version = "0.1.0", path = "../mail" }
 lazypock-realtime = { version = "0.1.0", path = "../realtime" }
 lazypock-studio-embed = { version = "0.1.0", path = "../studio-embed" }
 reqwest = { version = "0.13.5" }

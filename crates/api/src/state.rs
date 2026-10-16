@@ -34,6 +34,8 @@ pub struct AppState {
     pub files: Arc<Files>,
     /// The hook worker, or a handle to one that has nothing loaded.
     pub hooks: Arc<HookService>,
+    /// Mail templates: the built-in defaults with any file overrides applied.
+    pub mail_templates: Arc<lazypock_mail::Templates>,
     /// The CORS allowlist, reloadable while the node runs.
     pub cors: Arc<CorsPolicy>,
     /// Per-node rate allowances.
@@ -52,6 +54,7 @@ impl AppState {
             hub,
             files,
             hooks,
+            mail_templates,
             cors,
         } = services;
 
@@ -71,6 +74,7 @@ impl AppState {
             hub,
             files,
             hooks,
+            mail_templates,
             cors,
             rate_limits,
         }
@@ -92,6 +96,8 @@ pub struct Services {
     pub files: Arc<Files>,
     /// The hook worker.
     pub hooks: Arc<HookService>,
+    /// Mail templates (built-in, with file overrides).
+    pub mail_templates: Arc<lazypock_mail::Templates>,
     /// The CORS allowlist.
     pub cors: Arc<CorsPolicy>,
 }
