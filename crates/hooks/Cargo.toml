@@ -11,7 +11,7 @@ homepage.workspace = true
 
 [dependencies]
 lazypock-core.workspace = true
-lazypock-db = { version = "0.1.0", path = "../db" }
+lazypock-db = { path = "../db" }
 oxc_allocator = "0.154"
 oxc_codegen = "0.154"
 oxc_parser = "0.154"
