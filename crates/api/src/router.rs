@@ -19,6 +19,7 @@ use crate::error::ApiError;
 use crate::files;
 use crate::logs;
 use crate::presets;
+use crate::rate_limit;
 use crate::realtime;
 use crate::records;
 use crate::settings;
@@ -213,6 +214,12 @@ pub fn router(state: AppState) -> Router {
         // Outside authentication, so a refused request is still logged. Inside
         // CORS, so preflights are answered without a log write.
         .layer(middleware::from_fn_with_state(state.clone(), logs::record))
+        // Inside the logger, so a refusal is recorded, and inside CORS, so a
+        // preflight is answered without spending an allowance.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit::guard,
+        ))
         // Outermost, and it has to be: a preflight carries no credentials, so it must
         // be answered before authentication runs, and a 401 still needs its CORS
         // headers or the browser reports an opaque network error instead of the

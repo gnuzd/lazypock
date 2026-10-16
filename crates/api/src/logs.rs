@@ -26,6 +26,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::Superuser;
+use crate::client;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -104,11 +105,15 @@ pub async fn record(State(state): State<AppState>, request: Request, next: Next)
         return next.run(request).await;
     }
 
-    let ip = request
+    // The socket address is the truth. A forwarding header is believed only when
+    // the connection itself came from a configured proxy, so a caller cannot name
+    // themselves in the log — which, reading the header unconditionally, they
+    // could.
+    let peer = request
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|ConnectInfo(address)| address.ip().to_string())
-        .or_else(|| forwarded_for(request.headers()));
+        .map(|ConnectInfo(address)| address.ip());
+    let ip = client::address(&state.config, peer, request.headers()).map(|ip| ip.to_string());
     let user_agent = header_string(request.headers(), header::USER_AGENT);
     let referer = header_string(request.headers(), header::REFERER);
     let collection = collection_from_path(&path);
@@ -610,19 +615,6 @@ fn header_string(headers: &HeaderMap, name: HeaderName) -> Option<String> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
-}
-
-/// The client address from a proxy header, when the connection is not enough. The
-/// socket address wins when there is one; this is only a fallback.
-fn forwarded_for(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("x-forwarded-for")
-        .or_else(|| headers.get("x-real-ip"))
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
 

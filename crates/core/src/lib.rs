@@ -7,4 +7,5 @@
 pub mod config;
 pub mod error;
 pub mod id;
+pub mod net;
 pub mod telemetry;

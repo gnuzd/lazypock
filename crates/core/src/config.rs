@@ -5,6 +5,7 @@
 //! must fail at boot, not at request time.
 
 use crate::error::{Error, Result};
+use crate::net::TrustedProxies;
 use std::{env, fmt, net::SocketAddr, path::PathBuf};
 
 /// Default bind address for the API server.
@@ -15,6 +16,16 @@ pub const DEFAULT_DATA_DIR: &str = "data";
 pub const DEFAULT_HOOKS_DIR: &str = "hooks";
 /// Default Postgres pool size per node.
 pub const DEFAULT_POOL_SIZE: u32 = 5;
+/// Requests per minute per address that spend credentials.
+///
+/// Small on purpose: a person signing in does it a handful of times, and a
+/// password being guessed does it thousands.
+pub const DEFAULT_RATE_LIMIT_AUTH: u32 = 20;
+/// Requests per minute per address for everything else.
+///
+/// Large enough that an ordinary client never notices, small enough that a script
+/// cannot walk the API.
+pub const DEFAULT_RATE_LIMIT_API: u32 = 600;
 /// Upper bound on the pool size. Postgres dislikes many connections and the
 /// deployment target is many small instances, so this is a hard cap.
 pub const MAX_POOL_SIZE: u32 = 64;
@@ -145,6 +156,17 @@ pub struct Config {
     pub pg_prepared_statements: bool,
     /// Public base URL of this deployment, when it differs from the request.
     pub public_url: Option<String>,
+    /// Peers whose forwarding headers are believed.
+    ///
+    /// Empty by default, and empty means no header is ever read: a forwarding
+    /// header is set by the client when nothing is in front of the server, so
+    /// believing one without saying which proxy set it is believing the caller's
+    /// own claim about who they are.
+    pub trusted_proxies: TrustedProxies,
+    /// Requests per minute per address that spend credentials. Zero disables.
+    pub rate_limit_credentials_per_minute: u32,
+    /// Requests per minute per address for everything else. Zero disables.
+    pub rate_limit_requests_per_minute: u32,
 }
 
 impl Config {
@@ -236,6 +258,33 @@ impl Config {
             None => DEFAULT_UPLOAD_MAX_BYTES,
         };
 
+        // A forwarding header is client-controlled unless a proxy set it, so the
+        // list of proxies has to be explicit rather than guessed at. A malformed
+        // entry is refused at boot: silently trusting nothing, or something, is not
+        // a state an operator can notice from the outside.
+        let trusted_proxies = match optional(&get, "LAZYPOCK_TRUSTED_PROXIES") {
+            Some(raw) => TrustedProxies::parse(&raw)
+                .map_err(|err| Error::config(format!("LAZYPOCK_TRUSTED_PROXIES: {err}")))?,
+            None => TrustedProxies::default(),
+        };
+
+        let rate_limit_credentials_per_minute = match optional(&get, "LAZYPOCK_RATE_LIMIT_AUTH") {
+            None => DEFAULT_RATE_LIMIT_AUTH,
+            Some(raw) => raw.trim().parse::<u32>().map_err(|_| {
+                Error::config(format!(
+                    "LAZYPOCK_RATE_LIMIT_AUTH must be a whole number per minute, got {raw:?}"
+                ))
+            })?,
+        };
+        let rate_limit_requests_per_minute = match optional(&get, "LAZYPOCK_RATE_LIMIT_API") {
+            None => DEFAULT_RATE_LIMIT_API,
+            Some(raw) => raw.trim().parse::<u32>().map_err(|_| {
+                Error::config(format!(
+                    "LAZYPOCK_RATE_LIMIT_API must be a whole number per minute, got {raw:?}"
+                ))
+            })?,
+        };
+
         let public_url = optional(&get, "LAZYPOCK_PUBLIC_URL");
         if let Some(url) = &public_url {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -266,6 +315,9 @@ impl Config {
             upload_max_bytes,
             pg_prepared_statements,
             public_url,
+            trusted_proxies,
+            rate_limit_credentials_per_minute,
+            rate_limit_requests_per_minute,
         })
     }
 
@@ -290,6 +342,11 @@ impl Config {
         }
     }
 
+    /// Whether a peer's forwarding header may be believed.
+    pub fn trusts(&self, peer: std::net::IpAddr) -> bool {
+        self.trusted_proxies.contains(peer)
+    }
+
     /// Key/value summary for `lazypock config`, with credentials redacted.
     pub fn summary(&self) -> Vec<(&'static str, String)> {
         vec![
@@ -298,6 +355,15 @@ impl Config {
             ("database_url", self.redacted_database_url()),
             ("data_dir", self.data_dir.display().to_string()),
             ("hooks_dir", self.hooks_dir.display().to_string()),
+            ("trusted_proxies", self.trusted_proxies.len().to_string()),
+            (
+                "rate_limit_credentials_per_minute",
+                self.rate_limit_credentials_per_minute.to_string(),
+            ),
+            (
+                "rate_limit_requests_per_minute",
+                self.rate_limit_requests_per_minute.to_string(),
+            ),
             ("log_level", self.log_level.as_str().to_string()),
             ("log_format", self.log_format.as_str().to_string()),
             ("pool_size", self.pool_size.to_string()),
