@@ -507,3 +507,173 @@ async fn the_storage_test_round_trips_against_the_configured_backend() {
 
     app.cleanup().await;
 }
+
+#[tokio::test]
+async fn settings_export_redacts_credentials_and_never_the_signing_key() {
+    let Some(app) = test_app("settings_export").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/settings",
+        Some(json!({
+            "app_name": "My App",
+            "mail": { "host": "smtp.example", "password": "hunter2" },
+        })),
+        &token,
+    )
+    .await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/settings/export",
+        None,
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let body = reply.body.expect("an export");
+    assert_eq!(body["version"], json!(1), "{body}");
+
+    // Ordinary settings survive verbatim, the credential does not.
+    assert_eq!(body["settings"]["app_name"], json!("My App"));
+    assert_eq!(body["settings"]["mail"]["host"], json!("smtp.example"));
+    assert_eq!(body["settings"]["mail"]["password"], json!(null), "{body}");
+    assert!(
+        body["secrets"]
+            .as_array()
+            .expect("secrets")
+            .iter()
+            .any(|path| path.as_str() == Some("mail.password")),
+        "the path must be named so an operator knows what to re-enter: {body}"
+    );
+
+    // Lazypock's own settings, including the token signing key, are omitted entirely.
+    assert!(body["settings"].get("auth.signing_key").is_none(), "{body}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn settings_import_merges_and_keeps_a_redacted_secret() {
+    let Some(app) = test_app("settings_import").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/settings",
+        Some(json!({
+            "app_name": "My App",
+            "mail": { "host": "smtp.example", "password": "hunter2" },
+        })),
+        &token,
+    )
+    .await;
+
+    // Export, change one field as an operator would, and import the result.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/settings/export",
+        None,
+        &token,
+    )
+    .await;
+    let mut doc = reply.body.expect("an export");
+    doc["settings"]["mail"]["host"] = json!("smtp2.example");
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/settings/import",
+        Some(doc),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let imported = reply.body.expect("a report")["imported"].clone();
+    assert!(
+        imported
+            .as_array()
+            .expect("imported")
+            .iter()
+            .any(|key| key.as_str() == Some("mail")),
+        "{imported}"
+    );
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/settings",
+        None,
+        &token,
+    )
+    .await;
+    let settings = reply.body.expect("settings");
+    assert_eq!(
+        settings["mail"]["host"],
+        json!("smtp2.example"),
+        "{settings}"
+    );
+    assert_eq!(
+        settings["mail"]["password"],
+        json!("hunter2"),
+        "a round trip must keep the stored secret, not delete it: {settings}"
+    );
+    assert_eq!(settings["app_name"], json!("My App"), "{settings}");
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn settings_import_refuses_an_unknown_version_and_lazypocks_own_keys() {
+    let Some(app) = test_app("settings_import_refuse").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    // A document from a future format is named, not partly applied.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/settings/import",
+        Some(json!({ "version": 999, "settings": {} })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+    assert!(
+        reply.body.expect("a reason")["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("999"),
+        "the version must be in the message"
+    );
+
+    // The signing key is not an application setting, on the way in either.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/settings/import",
+        Some(json!({ "version": 1, "settings": { "auth.signing_key": "x" } })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{:?}", reply.body);
+    assert!(
+        reply.body.expect("a reason")["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("auth.signing_key"),
+        "the refused key must be named"
+    );
+
+    app.cleanup().await;
+}
