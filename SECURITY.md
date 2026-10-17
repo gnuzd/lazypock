@@ -60,8 +60,8 @@ verified against.
   `_files` (`crates/files/src/policy.rs`), and — unlike records — a serving path that is
   public: a file id is an unguessable, non-expiring capability URL. `_file_refs` is
   owner-only bookkeeping. A caller may only attach a file they uploaded, and only to a
-  record they may write (the attach rule is application-level until F7b). See
-  [the security roadmap](SECURITY_ROADMAP.md) for the open decision on file-read
+  record they may write (the attach is now an `UPDATE` policy, `uploaded_by = auth.uid()`).
+  See [the security roadmap](SECURITY_ROADMAP.md) for the open decision on file-read
   authorization.
 - **No default credentials.** There is no built-in superuser and no default
   password. The first superuser is created either by the Studio's first-run

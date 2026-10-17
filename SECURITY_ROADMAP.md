@@ -32,7 +32,7 @@ Findings keep stable `F` numbers; the P0 list refers to them.
 | F4 | If the connection cannot switch to `lazypock_anon`/`lazypock_authenticated`, boot logs a warning and serves on. That is not a degraded mode: superusers use `RequestContext::owner()` (no `SET ROLE`) so the Studio keeps working while **every** anonymous and authenticated request fails in `apply()`. | **High** — RLS silently absent, end users 100% broken | `crates/app/src/main.rs:253-265`, `crates/api/src/auth.rs:97-108`, `crates/db/src/rls/context.rs:236-242` |
 | F5 | The token signing key is stored as plaintext base64 DER in `_settings.auth.signing_key`. Read-only DB access (a dump, a replica, a backup) plus that value mints a token for any user — including superusers. | **High** — DB read escalates to app takeover | `crates/auth/src/service.rs:433-478` |
 | F6 | `delete_by_id`'s doc comment claims "a caller who is neither a superuser nor the uploader may not delete somebody else's file". No `uploaded_by` check exists; only `deleteRule`. | Low — doc/code mismatch | `crates/api/src/files.rs:858-864` vs `:888-921` |
-| F7 | **Fixed for read/list and delete (F7a).** File rules *were* enforced by hand in `crates/api/src/files.rs`, and `_files`/`_file_refs` had no row-level security. They now do (`migrations/0015_file_rls.sql`), and the list/delete policies are generated from `files.rules` by `lazypock_files::policy` at boot and on every settings write. Serving remains a capability URL (F10). What is still application-level is the **write/attach** side: an attach policy would have to reach into the target record, and `rls::policy` refuses subqueries (F7b). | Medium → structural | `migrations/0015_file_rls.sql`, `crates/files/src/policy.rs` |
+| F7 | **Fixed (F7a + F7b).** File rules *were* enforced by hand in `crates/api/src/files.rs`, and `_files`/`_file_refs` had no row-level security. They now do (`migrations/0015_file_rls.sql`), and the list/delete policies are generated from `files.rules` by `lazypock_files::policy` at boot and on every settings write. Serving remains a capability URL (F10). The write side is a policy too: an attach is an `UPDATE` gated by `uploaded_by = auth.uid()`, which also closes the anonymous case (no `auth.uid()`). It did **not** need a subquery into the target record: the attach runs inside that record's write transaction, which its own rules already authorised. The "not already another record's" guard stays in the statement's `WHERE`, where old and new rows can be compared. | Medium → structural | `migrations/0015_file_rls.sql`, `crates/files/src/policy.rs`, `crates/api/src/records.rs` |
 | F8 | ~~`POST /api/settings/storage/test` is documented as a full upload round-trip.~~ **Retracted** — the docs source says "probes the backend", which is what it does. What survives is part of F9: the probe is a `GET ?list-type=2&max-keys=1`, so it proves the credentials and the bucket and nothing about writing, reading back or deleting. The claim I recorded came from stale generated output under `docs/.svelte-kit/` (untracked and gitignored), not from the page source. | — retracted (see F9) | `docs/src/routes/files/+page.md:213-215` (accurate), `crates/api/src/settings.rs:518-524` |
 | F9 | S3/R2 has only offline SigV4 assertions (timestamp, canonical query, signature shape); no PUT/GET/DELETE/LIST/presigned-PUT has ever run against a bucket, in CI or out. | Medium — unverified | `crates/files/src/s3.rs:833-1027` |
 | F10 | Serving a file (`GET /api/files/{id}`, `?preset=`, `?thumb=`, and the key-addressed path) takes no `Principal` and consults no rule: a file id is a never-expiring capability URL. **This is documented in all three places** — `files/src/rules.rs`, the Studio's File rules modal, and the docs page ("a URL behaves as a capability… which is why the access rules cover listing and deleting rather than reading"). What is open is the *decision*: PocketBase moved to short-lived file tokens, and this repo should either keep the capability model deliberately or gate reads on the record's `viewRule`. | Medium — an open design decision, not an undocumented one | `crates/api/src/files.rs:978-1040`, `crates/files/src/rules.rs:24-27`, `docs/src/routes/files/+page.md:93-96` |
@@ -202,11 +202,11 @@ that silently did nothing would fail. Verified: `cargo test --workspace`, 11/11 
   migration (F12; its rows are credential-adjacent, and the Studio already lists a
   `_mfas` collection that cannot hold a row). Start with superusers, include recovery
   codes.
-- **12. File rules as RLS policies.** Read/list and delete are done (F7a): `_files` and
-  `_file_refs` have RLS, and the list/delete policies are generated from `files.rules`
-  (the same parser and compiler a collection rule uses). Remaining: the attach policy,
-  which needs subquery support in `rls::policy`; until then `store::attach`'s ownership
-  filter is the write-side invariant (F7b).
+- **12. File rules as RLS policies — done (F7a + F7b).** `_files` and `_file_refs` have
+  RLS; list/delete policies are generated from `files.rules`, and an attach is an
+  `UPDATE` policy (`uploaded_by = auth.uid()`) run inside the target record's write
+  transaction. The `WHERE` in `store::attach` keeps the "not already another record's"
+  guard, which a policy cannot express (it cannot compare the old and new row).
 - **13. PocketBase data importer**, only if someone needs to migrate.
 
 ## P3 — when there is demand
@@ -256,6 +256,11 @@ Corrections to the earlier review pass (the pre-verification draft of this roadm
 | "Hooks are partial: no `$db`, `$http`, `$app`" | Understated: only the six record hooks are registered, and a promise-returning handler throws. |
 | "755 tests" | 758 `#[test]`/`#[tokio::test]` attributes at `0ecd3eb`; the README badge says 755. |
 
+One claim in this roadmap itself was corrected while fixing it: **F7 said an attach
+policy would need subquery support.** It does not. The attach runs inside the target
+record's write transaction, which the record's own rules already authorised, so
+`uploaded_by = auth.uid()` is the whole invariant. No subquery support was required.
+
 ## Status
 
 | Item | State |
@@ -270,5 +275,5 @@ Corrections to the earlier review pass (the pre-verification draft of this roadm
 | F8 + F9 bucket round-trip + MinIO CI | **F8 retracted** (the docs are accurate; see Corrections). F9 open: no write/read/delete has run against a bucket — the owner is testing R2 by hand, so this stays a note rather than a planned item |
 | F10 file-read decision | documented everywhere it needs to be; the **decision** (capability URLs vs PocketBase-style file tokens, or `viewRule` gating) is open |
 | F7a RLS on `_files` | done — `_files`/`_file_refs` have RLS, and list/delete policies are generated from `files.rules` at boot and on every settings write. Serving stays capability-based (F10). Tests: `crates/files/src/policy.rs`, `crates/api/tests/files.rs` |
-| F7b attach policy | open — needs subquery support in `rls::policy`; `store::attach`'s ownership filter is the write-side invariant until then |
+| F7b attach policy | done — `_files` update policy `uploaded_by = auth.uid()` + the update-action `SELECT` mirror; record writes run the attach under the request role. Regression tests: `another_account_cannot_claim_a_file_id`, `an_anonymous_write_cannot_claim_a_file_id` |
 | P1 #9 one round trip per request | done — `rls::context::apply` sets role + claims in one statement, with a same-transaction owner-reset regression test |

@@ -443,9 +443,9 @@ pub async fn delete_record(
 ///
 /// The caller's identity is part of the operation, not a detail: attaching a file is
 /// what makes it this record's, so it is the point at which "may this caller make this
-/// file theirs" has to be answered. The record write itself is already authorised by
-/// row-level security; the file tables are internal bookkeeping, so this switches back
-/// to the owner for them (the ownership check below is what authorises the attach).
+/// file theirs" has to be answered. The attach runs under the request role, so the
+/// answer is the `_files` update policy (`uploaded_by = auth.uid()`), not a Rust
+/// comparison; `_file_refs` stays owner-only bookkeeping.
 pub(crate) async fn sync_files(
     runner: &dyn QueryRunner,
     collection: &Collection,
@@ -456,10 +456,11 @@ pub(crate) async fn sync_files(
         return Ok(());
     };
 
-    // `_files`/`_file_refs` have row-level security and no write policies: the attach is
-    // authorised by the ownership filter in `store::attach`, not by a policy. F7b moves
-    // that predicate into the database.
-    rls::context::assume_owner(runner)
+    // The attach is an UPDATE on `_files`, and its policy is `uploaded_by = auth.uid()`
+    // for a restricted caller: run it under the request role so Postgres decides, not
+    // just the query's `owner` filter. A superuser's context is the owner, so it
+    // bypasses the policy as it does everywhere else.
+    rls::context::apply(runner, &principal.request_context(Action::Update))
         .await
         .map_err(ApiError::new)?;
 
@@ -490,10 +491,46 @@ pub(crate) async fn sync_files(
 
                 let file = match attached {
                     store::Attach::Attached(file) => file,
-                    // An id this server never stored is left alone, exactly as before: a
-                    // record may name one, and refusing the write would change what a
-                    // client sees for a mistake that was already being tolerated.
-                    store::Attach::Missing => continue,
+                    store::Attach::Missing => {
+                        // Under RLS a file uploaded by somebody else is invisible, so
+                        // `attach`'s own probe reports `Missing` for it. Ask as the owner
+                        // why the write matched nothing: an id the server never stored is
+                        // still left alone, while a real file that is not the caller's is
+                        // a refusal. The probe is not authorization — the policy already
+                        // refused the write.
+                        rls::context::assume_owner(runner)
+                            .await
+                            .map_err(ApiError::new)?;
+                        let visible = store::get(runner, &found.id).await.map_err(ApiError::new)?;
+                        // Back to the request role for the next file in the loop.
+                        rls::context::apply(runner, &principal.request_context(Action::Update))
+                            .await
+                            .map_err(ApiError::new)?;
+                        match visible {
+                            None => continue,
+                            Some(file) => {
+                                // A superuser is allowed to rearrange files; everybody
+                                // else must be the uploader. An anonymous caller has no
+                                // `auth.uid()` at all, so it is never the uploader — the
+                                // policy denied the write, and this says why.
+                                let mine = principal.is_superuser()
+                                    || owner.is_some_and(|owner| file.uploaded_by == owner);
+                                if !mine {
+                                    return Err(ApiError::new(Error::forbidden(format!(
+                                        "the file {} was uploaded by a different account, so it \
+                                         cannot be attached to this record",
+                                        found.id
+                                    ))));
+                                }
+                                // It is the caller's file, so the only reason the write
+                                // matched nothing is that it already belongs elsewhere.
+                                return Err(ApiError::new(Error::conflict(format!(
+                                    "the file {} already belongs to {}/{}/{}",
+                                    found.id, file.collection_name, file.record_id, file.field_name
+                                ))));
+                            }
+                        }
+                    }
                     store::Attach::NotOwned => {
                         return Err(ApiError::new(Error::forbidden(format!(
                             "the file {} was uploaded by a different account, so it cannot be \
@@ -531,6 +568,11 @@ pub(crate) async fn sync_files(
             store::FileLink::Reference => references.push((found.id, found.field)),
         }
     }
+
+    // `_file_refs` is owner-only bookkeeping: RLS is enabled with no policies.
+    rls::context::assume_owner(runner)
+        .await
+        .map_err(ApiError::new)?;
 
     // Replaced rather than merged: a file removed from the text must stop counting as a
     // reference, or the delete guard would refuse a delete that is in fact safe.

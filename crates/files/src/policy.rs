@@ -16,6 +16,15 @@
 //!   URL is the capability (roadmap F10). That is expressed as a `view` policy
 //!   that allows the row, so a serve path can run under a role without needing an
 //!   exemption.
+//! * Attaching is an `UPDATE`, and its policy is `uploaded_by = auth.uid()` for a
+//!   restricted caller. It does not need a subquery into the target record: the
+//!   attach happens inside that record's write transaction, which its own rules
+//!   already authorised. What the policy adds is the invariant the Rust filter
+//!   used to be alone in enforcing — and, because `auth.uid()` is null for an
+//!   anonymous request, it also closes the case where a caller with no account
+//!   could claim a file. The "not already another record's" guard stays in
+//!   `store::attach`'s `WHERE`: a policy cannot compare the old row with the new
+//!   one.
 //!
 //! `_file_refs` gets RLS with no policies: internal bookkeeping is owner-only.
 //! `_file_deletions` is left alone — the `_files_deleted` trigger inserts into it
@@ -42,6 +51,8 @@ const POLICIES: &[&str] = &[
     "lazypock_files_view",
     "lazypock_files_delete",
     "lazypock_files_delete_select",
+    "lazypock_files_attach",
+    "lazypock_files_attach_select",
 ];
 
 /// Enable RLS on the file tables and rebuild the policies from `rules`.
@@ -100,6 +111,20 @@ pub fn statements(rules: &FileRules) -> Result<Vec<String>> {
              using (current_setting('request.action', true) = 'delete' and ({predicate}))"
         ));
     }
+
+    // Attaching is an update of an upload the caller owns. `auth.uid()` is null for an
+    // anonymous request, so both halves deny it, which is the point: a file cannot be
+    // claimed by an account that never uploaded it.
+    statements.push(format!(
+        "create policy lazypock_files_attach on _files for update to {ROLES} \
+         using (uploaded_by = auth.uid()) with check (uploaded_by = auth.uid())"
+    ));
+    // The `SELECT` a write needs to find its row, keyed to the update action so it
+    // cannot widen a list or a view.
+    statements.push(format!(
+        "create policy lazypock_files_attach_select on _files for select to {ROLES} \
+         using (current_setting('request.action', true) = 'update' and uploaded_by = auth.uid())"
+    ));
 
     Ok(statements)
 }
@@ -180,6 +205,27 @@ mod tests {
             .find(|sql| sql.contains("create policy lazypock_files_delete "))
             .expect("delete policy");
         assert!(delete.contains("auth.uid()"));
+    }
+
+    #[test]
+    fn attaching_is_owner_only_and_closes_the_anonymous_case() {
+        let statements =
+            statements(&rules(FileRule::Public, FileRule::Public)).expect("statements");
+
+        let attach = statements
+            .iter()
+            .find(|sql| sql.contains("create policy lazypock_files_attach "))
+            .expect("attach policy");
+        assert!(attach.contains("for update"));
+        assert!(attach.contains("using (uploaded_by = auth.uid())"));
+        assert!(attach.contains("with check (uploaded_by = auth.uid())"));
+
+        let mirror = statements
+            .iter()
+            .find(|sql| sql.contains("create policy lazypock_files_attach_select"))
+            .expect("attach select mirror");
+        assert!(mirror.contains("current_setting('request.action', true) = 'update'"));
+        assert!(mirror.contains("uploaded_by = auth.uid()"));
     }
 
     #[test]
