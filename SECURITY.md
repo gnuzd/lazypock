@@ -7,8 +7,8 @@ minor version on the default branch.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.12.x  | :white_check_mark: |
-| < 0.12  | :x:                |
+| 0.23.x  | :white_check_mark: |
+| < 0.23  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -28,21 +28,40 @@ Please include:
 You can expect an acknowledgement within a few days. Once a fix is released we
 will credit you in the changelog unless you prefer to stay anonymous.
 
+Known gaps and the order they are being worked through are in
+[`SECURITY_ROADMAP.md`](SECURITY_ROADMAP.md), with the code each finding was
+verified against.
+
 ## Scope notes
 
 - **Access-control rules are the security boundary.** `listRule`, `viewRule`,
   `createRule`, `updateRule`, `deleteRule` and `manageRule` decide who can read
-  and write every record. Their behaviour — including the fail-closed
-  guarantees for rules that cannot be evaluated — is covered by a dedicated test
-  suite and CI workflow; see
-  [README → What the rule-engine tests cover](README.md#what-the-rule-engine-tests-cover)
-  and [`TEST_COVERAGE_AUDIT.md`](TEST_COVERAGE_AUDIT.md).
+  and write every record. They are compiled to Postgres policies
+  (`crates/db/src/rls/`), so the database — not the request handler — refuses a
+  write. The fail-closed behaviour for rules that cannot be evaluated is
+  covered by [`crates/db/tests/rls.rs`](crates/db/tests/rls.rs) and the rule
+  cases in [`crates/api/tests/records.rs`](crates/api/tests/records.rs).
+- **Row-level security is required, not optional.** At boot the server probes
+  that it can switch to `lazypock_anon` and `lazypock_authenticated` and
+  refuses to start if it cannot (`LAZYPOCK_REQUIRE_RLS`, on by default): a
+  server that cannot switch role would answer 500 to every end-user request
+  while the Studio kept working, which is the worst possible failure mode.
 - **Realtime subscriptions are authorized once, at join time.** A subscriber
   that passes `listRule` receives every record change for the collection; there
   is no per-record rule evaluation on delivery. This matches PocketBase.
 - **CORS / WebSocket origin checking** is configured separately via the server
   settings; see the CORS notes in the documentation.
-- **File storage** has its own URL-based surface and is tracked separately in
-  `TEST_COVERAGE_AUDIT.md`.
-- **Hook code runs with full server privileges.** Only load hooks you trust; see
-  [`HOOKS_SECURITY.md`](HOOKS_SECURITY.md).
+- **File storage** has its own surface, with its own rules
+  (`files.rules.listRule` / `deleteRule`) and — unlike records — a serving path
+  that is public: a file id is an unguessable, non-expiring capability URL.
+  A caller may only attach a file they uploaded, and only to a record they may
+  write. See [the security roadmap](SECURITY_ROADMAP.md) for the open decision
+  on file-read authorization.
+- **No default credentials.** There is no built-in superuser and no default
+  password. The first superuser is created either by the Studio's first-run
+  Setup (which works only while no superuser exists) or by
+  `lazypock superuser create --email … --password …`
+  (`LAZYPOCK_SUPERUSER_EMAIL` / `LAZYPOCK_SUPERUSER_PASSWORD`).
+- **Hook code runs with full server privileges.** Only load hooks you trust:
+  a hook file is executed as the server itself, with the storage, database and
+  environment it has.
