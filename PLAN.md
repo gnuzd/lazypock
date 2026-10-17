@@ -14,13 +14,16 @@ removed on this branch so the Rust rewrite starts from a clean tree.
 
 - **No users.** There is no production data and no published contract to preserve. No data
   migration, no back-compat shims, no dual-running.
-- The Elixir implementation is **kept in git history** as a design reference while building:
-  - `git grep <pattern> main -- core`
-  - `git show main:core/lib/lazypock/rules/enforcer.ex`
-- **Kept on disk as reference** (to be rewritten/reused later, not part of the new build yet):
-  - `studio/` — SvelteKit admin SPA (19 routes, ~40 components, TipTap, ERD, media library).
-  - `lazypock-ts/` — the TypeScript SDK (separate repo, published to npm as `lazypock`).
-  - `docs/` — the docs site.
+- The Elixir implementation is **kept in git history** as a design reference while building. It is
+  the first parent of the rewrite merge — `main` is Rust now, so these read the old tree:
+  - `git grep <pattern> 33736b25^ -- core`
+  - `git show 33736b25^:core/lib/lazypock/rules/enforcer.ex`
+- **Ported from the reference copies, and now part of this tree:**
+  - `studio/` — SvelteKit admin SPA, built by `crates/studio-embed` and embedded in the binary
+    (served at `/_/`).
+  - `lazypock-ts/` — the TypeScript SDK, tracked in its own repository and published to npm as
+    `lazypock`; ported to this server's routes and its SSE realtime.
+  - `docs/` — the docs site (its own static deployment).
 - **Legacy design notes are deleted.** `docs/legacy/` held five Elixir-era documents
   (`BACKUP_SCALING_PLAN.md`, `HOOKS_SECURITY.md`, `STUDIO_AUDIT.md`, `TEST_COVERAGE_AUDIT.md`,
   `PRODUCTION_PLAN.md`). They described an implementation that no longer exists, and nothing
@@ -803,7 +806,8 @@ Not built now, but the design must not block it:
 ## 16. Security overall
 
 - All SQL parameterized; identifiers whitelisted from the schema cache.
-- Least-privilege DB roles; RLS on by default (ENABLE + FORCE); secrets encrypted at rest.
+- Least-privilege DB roles; RLS on by default (`ENABLE`, deliberately not `FORCE` — see 6.1);
+  secrets encrypted at rest.
 - Limits on body size, field count, expand depth, filter complexity.
 - Security headers, audit log for admin actions, no native/loose `confirm`-style flows in Studio
   (in-app dialogs only).
@@ -867,8 +871,8 @@ somebody else's database.
 | G. Files & images | **done.** Upload validation (images only: png/jpeg/gif/webp, by magic bytes), the key layout, local and S3 backends, image presets with cached thumbnails and a superuser-gated CRUD API, and an orphan sweeper — resized in-process by default, so no sidecar and no extra artifact to ship, with `LAZYPOCK_IMAGE_SERVICE_URL` to move resizing to a service and a `local-image-codecs` feature to leave the codecs out of a thin build (a deliberate change from section 10). The media library is real (`_files`, migration 0011): one row per stored object with its owner, size, dimensions and generated `variants`; an upload with no record is `pending` and still listed; a file's **id** is what a client stores in a field, and `/api/files/{id}` (`?preset=`, `?thumb=`, `/thumbs/{size}`, `/scale/{size}`) serves it while the key-addressed routes keep working; a record write attaches its file fields and records its editor references; a record or collection delete removes the rows and queues their objects **in the same transaction**; a delete is refused with a 409 + `usage` while a record still references the file (superuser `?force=true`); **`files.rules.{listRule,deleteRule}` are enforced** (absent → superusers, `""` → public, a filter → per row; a superuser bypasses them; an unreadable rule denies); **storage is configurable from the Studio** (`_settings.storage`, migration-free: the environment supplies defaults, a saved field wins, the running service is rebuilt and swapped in without a restart, and a stored secret is encrypted with `LAZYPOCK_SECRET_KEY` — `ring`'s AES-256-GCM, the crate the token layer already uses, so no new artifact); **direct upload exists** (`POST /api/files/presign` → the client PUTs to a presigned S3 URL → `POST /api/files/{id}/complete`, which re-validates the bytes; a local backend answers 501 and drops the reservation); and a reaper worker drains both deletion queues and reclaims abandoned editor/library uploads after `files.rules.unattached_ttl_ms`. **Remaining:** uploads are images only (deliberate; the Elixir server accepted any file a field allowed), and the S3 path has **not** been exercised against a live bucket (signing — including the new presigned PUT — and listing are unit-tested; a live round-trip needs credentials and a bucket). AVIF output is refused loudly because the schema allows it and the encoder cannot write it. |
 | H. Hooks | **partly** — the thread-owned worker, the six events, TypeScript stripping, the loader with hot reload and the `RecordHooks` seam are in, and **create, update and delete all run their before-hooks and after-hooks** (before runs before validation so a hook can supply a field; after runs post-commit; a before-delete hook can refuse by throwing). Remaining: the `$db`/`$http`/`$app` bindings — see the note below on why `$db` is not a small change. |
 | I. Jobs & ops | **done** — request logs end to end (`_logs` via migration 0007, a recorder middleware that redacts credential keys, and `GET /api/logs`, `/logs/stats`, `/logs/collections`, `/logs/retention`, `PATCH /logs/retention`, `DELETE /logs?all=true` and `DELETE /logs?days=n`); the cron **admin API** (`GET/POST/PATCH/DELETE /api/crons`, `POST /crons/validate`, and `POST /crons/{id}` run-now for `sql`/`http`; a `hook` job refuses loudly) **and the scheduler that fires on `next_run_at`**; the job queue (`for update skip locked`, with a lease and stale-claim reclaim, and a `mail` job kind); the mailer; per-route and per-account rate limits; and trusted proxy headers. Outbound webhooks are the one thing still missing (section 13). |
-| J–K. Studio, SDK | **done except the JSON import body.** The SDK is ported and its live integration test passes; the collection admin API exists and serves the shape the Studio reads (`schema` alongside `fields`, per-field `hidden`/`system`/`indexed`, RFC 3339 `created`/`updated`, top-level `indexes`/`view*`); the PocketBase system collections (`_superusers`, `_auth_origins`, `_external_auths`, `_mfas`, `_otps`) are listed as locked entries — synthesised, so they stay out of the schema cache; an auth record's password is accepted under PocketBase's `password` **or** the password field's own name, which is what the Studio's generated form sends, and is hashed either way; `GET /api/export` serves the single-document JSON; logs, crons, API keys (`GET/POST/DELETE /api/settings/api-keys`, hashed, scoped, shown once) and `GET /api/import/status` / `POST /api/import/rollback` exist; and backup/restore is complete end to end — `GET /api/export/archive`, `POST /api/import`, `GET /api/import/preflight` — with the documented archive format and both safety invariants enforced server-side (an import never deletes; never writes a `_`-prefixed system collection). `POST /api/import` accepts both the archive and the single-document JSON, applies the definitions a payload declares (fields, rules, options), and deletes only what a caller asked for with `deleteMissing` — which drops the user collections and fields the payload leaves out, never a system collection or a built-in column. This is the one track with no open item. |
-| L. Deploy | **partly** — boot-time auto-migration works on an empty database and on one that already holds tables, and an existing ordinary database is **reflected**: every table becomes a collection and every column a field, verified against a real database. Remaining: the GitHub Action that builds and publishes the image, and the compose/release docs. |
+| J–K. Studio, SDK | **done** (the PocketBase *data* importer remains in section 13). The SDK is ported and its live integration test passes; the collection admin API exists and serves the shape the Studio reads (`schema` alongside `fields`, per-field `hidden`/`system`/`indexed`, RFC 3339 `created`/`updated`, top-level `indexes`/`view*`); the PocketBase system collections (`_superusers`, `_auth_origins`, `_external_auths`, `_mfas`, `_otps`) are listed as locked entries — synthesised, so they stay out of the schema cache; an auth record's password is accepted under PocketBase's `password` **or** the password field's own name, which is what the Studio's generated form sends, and is hashed either way; `GET /api/export` serves the single-document JSON; logs, crons, API keys (`GET/POST/DELETE /api/settings/api-keys`, hashed, scoped, shown once) and `GET /api/import/status` / `POST /api/import/rollback` exist; and backup/restore is complete end to end — `GET /api/export/archive`, `POST /api/import`, `GET /api/import/preflight` — with the documented archive format and both safety invariants enforced server-side (an import never deletes; never writes a `_`-prefixed system collection). `POST /api/import` accepts both the archive and the single-document JSON, applies the definitions a payload declares (fields, rules, options), and deletes only what a caller asked for with `deleteMissing` — which drops the user collections and fields the payload leaves out, never a system collection or a built-in column. No open item in this track beyond section 13's importer. |
+| L. Deploy | **done** — boot-time auto-migration works on an empty database and on one that already holds tables, and an existing ordinary database is **reflected**: every table becomes a collection and every column a field, verified against a real database. The release workflow (`.github/workflows/release.yml`) builds `linux/amd64` and `linux/arm64` on native runners and publishes both to GHCR and Docker Hub, with release-please owning versions and tags (`release.yml` runs green on `main`); `Dockerfile` and `deploy/compose.example.yml` are in the tree, and the server guide documents the compose path and the published image. |
 | M. Cloud | not started |
 
 Deleting a collection can keep its data (`drop_data = false`); re-declaring it with
@@ -887,25 +891,27 @@ notification, so a direct DDL change still needs an explicit reload or a restart
 
 Two security notes for the auth layer:
 
-* The access-token signing key is generated once and stored in `_settings` **in plaintext**.
-  Encrypting it at rest, or supplying it through `LAZYPOCK_SIGNING_KEY`, is a tracked
-  follow-up — and it is now a small one: `crates/files/src/secrets.rs` holds an AES-256-GCM
-  envelope with the key in `LAZYPOCK_SECRET_KEY`, which is exactly the shape this needs (the
-  module wants a home outside the file layer, and rotating the key needs a re-encrypt pass).
+* The access-token signing key is generated once and stored in `_settings`, **encrypted with
+  `LAZYPOCK_SECRET_KEY` when that variable is set** (the AES-256-GCM cipher now lives in
+  `crates/core/src/secret.rs`, shared with the file-secret envelope). A plaintext key from an
+  earlier version is read and rewritten encrypted on load, and a key that cannot be decrypted
+  fails boot rather than regenerating. Without `LAZYPOCK_SECRET_KEY` it is still stored as
+  plaintext and boot warns; `LAZYPOCK_SIGNING_KEY` skips the database copy entirely.
 * Access tokens are verified from the signature alone, with no database round trip. Revocation
   therefore takes effect at the next refresh; the 15-minute token lifetime is the backstop. Pinned by
   a test so the behaviour cannot drift silently.
 
 Notes from the admin-endpoint pass, recorded so the tradeoffs are not rediscovered:
 
-* **API keys** are stored only as SHA-256 digests under `_settings["auth.api_keys"]` (the `auth.`
-  prefix keeps the store out of `GET /api/settings`), returned raw exactly once, verified in
-  constant time with revocation and expiry honoured, and **scoped**: an API key reaches the
-  collection reads (what codegen needs) and nothing superuser-only. It is accepted as a bearer or
-  as `?api_key=`, which the middleware strips before a strict query parser sees it.
+* **API keys** live in `_api_keys` (migration 0014) as SHA-256 digests with a unique index, so
+  create and revoke are single statements and lookup does not grow with the number of keys;
+  expiry is compared in SQL against `timestamptz`. A key is returned raw exactly once, verified
+  in constant time with revocation and expiry honoured, and **scoped**: it reaches the collection
+  reads (what codegen needs) and nothing superuser-only. It is accepted as a bearer or as
+  `?api_key=`, which the middleware strips before a strict query parser sees it.
 * **Cron validation** uses `croner` + `chrono-tz`, which brings the IANA timezone database into
-  the binary — a Track L size item, not a free dependency. The cron **scheduler** is still Track I,
-  so `next_run_at` is written but nothing fires on it yet.
+  the binary — a Track L size item, not a free dependency. The scheduler ticks in the binary and
+  claims each due job, so only one node fires a given job (`crates/app/src/main.rs`).
 * **Import rollback** is destructive by design (undoing an import means removing what it added) and
   requires the acting superuser's password. It drops a collection the snapshot lacks with a
   non-CASCADE drop, so one still referenced by a kept collection would refuse, and its
@@ -951,8 +957,8 @@ integration test passes. `studio/` is being adapted the same way, and the endpoi
 collection admin API, `GET /api/export`, logs, crons, API keys and the import-status/rollback pair —
 now exist. The old Elixir shape (`/api/{collection}`) is gone; records are addressed as
 `/api/collections/{collection}/records`, which the SDK and Studio now use. The Studio's
-`adapter-static` output path writes to `build/studio` and moves to `crates/studio-embed/dist` when
-that crate lands.
+`adapter-static` output path writes to `build/studio`, which `crates/studio-embed/build.rs` copies
+into `dist/` at compile time (CI and the Dockerfile set `LAZYPOCK_STUDIO_DIR` to a prebuilt bundle).
 
 ### Roadmap
 
