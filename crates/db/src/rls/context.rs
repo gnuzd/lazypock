@@ -223,32 +223,30 @@ pub async fn assume_owner(runner: &dyn QueryRunner) -> Result<()> {
 
 /// Apply the context to the current transaction.
 ///
-/// Must be called inside a transaction: everything here is `SET LOCAL` or
+/// One statement, not two: `set_config('role', …)` is the parameterised
+/// equivalent of `SET LOCAL ROLE`, so switching role and publishing the request
+/// claims cost one round trip instead of two. The role name comes from a closed
+/// set, never from a request; `NULL` resets `role` to the session user, which is
+/// how the owner path is expressed (`SET ROLE NONE` is special syntax and cannot
+/// be passed as a role name).
+///
+/// Must be called inside a transaction: everything here is
 /// `set_config(..., true)`, so it is undone at commit or rollback and cannot leak
 /// onto a pooled connection that the next request will reuse.
 pub async fn apply(runner: &dyn QueryRunner, context: &RequestContext) -> Result<()> {
-    if let Some(role) = context.role.name() {
-        // The role name comes from a closed set, never from a request.
-        runner
-            .run_batch_execute(&format!("set local role {role}"))
-            .await
-            .map_err(|err| {
-                Error::internal(format!(
-                    "cannot switch to the {role} role: is it missing, or is the connecting role \
-                     not a member of it? {err}"
-                ))
-            })?;
-    }
-
+    // `None` is the owner: a NULL value resets `role` to the session user.
+    let role = context.role.name();
     runner
         .run_query_one(
-            "select set_config('request.auth.id', $1::text, true), \
-                    set_config('request.auth.email', $2::text, true), \
-                    set_config('request.auth.collection_id', $3::text, true), \
-                    set_config('request.auth.collection_name', $4::text, true), \
-                    set_config('request.connection_id', $5::text, true), \
-                    set_config('request.action', $6::text, true)",
+            "select set_config('role', $1::text, true), \
+                    set_config('request.auth.id', $2::text, true), \
+                    set_config('request.auth.email', $3::text, true), \
+                    set_config('request.auth.collection_id', $4::text, true), \
+                    set_config('request.auth.collection_name', $5::text, true), \
+                    set_config('request.connection_id', $6::text, true), \
+                    set_config('request.action', $7::text, true)",
             &[
+                &role,
                 &context.auth_id,
                 &context.auth_email,
                 &context.auth_collection_id,
@@ -258,7 +256,13 @@ pub async fn apply(runner: &dyn QueryRunner, context: &RequestContext) -> Result
             ],
         )
         .await
-        .map_err(db_error)?;
+        .map_err(|err| match role {
+            Some(role) => Error::internal(format!(
+                "cannot switch to the {role} role: is it missing, or is the connecting role \
+                 not a member of it? {err}"
+            )),
+            None => db_error(err),
+        })?;
 
     Ok(())
 }

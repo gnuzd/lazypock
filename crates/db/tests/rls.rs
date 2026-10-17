@@ -1,8 +1,8 @@
 //! Row-level security: does it actually enforce?
 //!
 //! Every assertion here runs through the real path a request takes — a
-//! transaction with `SET LOCAL ROLE` and the `set_config` context — so a
-//! "policy that exists but does nothing" fails the test.
+//! transaction with the role switch and the `set_config` context in one
+//! statement — so a "policy that exists but does nothing" fails the test.
 //!
 //! Requires a Postgres; see `tests/support/mod.rs`.
 
@@ -131,6 +131,53 @@ async fn an_owner_rule_hides_everyone_elses_rows() {
     );
 
     test.cleanup().await;
+}
+
+/// The owner path is a *reset*, not a role name: `SET ROLE NONE` is special
+/// syntax, so `apply` passes NULL to `set_config('role', …)`. If that silently
+/// did nothing, a transaction that had switched to a restricted role would keep
+/// it — and an owner context would be quietly narrowed.
+#[tokio::test]
+async fn an_owner_context_resets_a_restricted_role_in_the_same_transaction() {
+    let Some(test) = migrated_test_db("rls_owner_reset").await else {
+        return;
+    };
+    seed(&test, json!({ "listRule": "author = @request.auth.id" })).await;
+
+    let mut client = test.client().await;
+    let transaction = client.transaction().await.expect("transaction");
+
+    apply(&transaction, &user("u1").with_action(Action::List))
+        .await
+        .expect("restricted context");
+    assert_eq!(ids(&transaction).await, vec!["p1", "p2"]);
+
+    // Same transaction, now the owner: the switch must actually be undone.
+    apply(
+        &transaction,
+        &RequestContext::owner().with_action(Action::List),
+    )
+    .await
+    .expect("owner context");
+    assert_eq!(
+        ids(&transaction).await,
+        vec!["p1", "p2", "p3"],
+        "an owner context must not inherit the restricted role"
+    );
+
+    transaction.commit().await.expect("commit");
+    test.cleanup().await;
+}
+
+/// Every id in `posts`, read on an existing connection.
+async fn ids(transaction: &lazypock_db::tokio_postgres::Transaction<'_>) -> Vec<String> {
+    transaction
+        .query(r#"select "id" from "posts" order by "id""#, &[])
+        .await
+        .expect("select")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
 }
 
 #[tokio::test]
