@@ -176,14 +176,13 @@ who owns it or may write the owning record).
   `viewRule`. PocketBase's answer is a short-lived file token; the migration cost is real
   for every stored URL, so this is a decision rather than a bug fix. The model is already
   documented in all three places, so nothing here is a documentation debt.
-- **9. Fewer round trips per request (cheap, measured need).** `apply()` spends two
-  statements where one would do: `set local role` then a `select set_config(...)`.
-  `set_config('role', …)` is the parameterised equivalent of `SET LOCAL ROLE`, so the two
-  can probably collapse into the existing `set_config` call — one fewer round trip on
-  *every* user-facing query. Verify the owner path first: `SET ROLE NONE` is special
-  syntax, so a superuser request must not try to set `role` to a name that is not a role.
-  Remote-database benchmarks (one create in ~0.55 s against Neon) make this the highest
-  value-per-line item on the list.
+- **9. ~~Fewer round trips per request~~ Done.** `apply()` now publishes the role switch and
+the request claims in **one** statement: `set_config('role', $n, true)` is the parameterised
+equivalent of `SET LOCAL ROLE`. `NULL` resets `role` to the session user, which is how the owner
+path is expressed — `SET ROLE NONE` is special syntax and cannot be a parameter. A regression
+test applies a restricted context and then an owner one in the same transaction, so a reset
+that silently did nothing would fail. Verified: `cargo test --workspace`, 11/11 in
+`crates/db/tests/rls.rs`.
 
 - **6a. S1–S4, S5 and S8 — the audit's security findings.** Done: rotation is a
   compare-and-swap, the collection check happens before the rotation, API keys live in
@@ -270,3 +269,4 @@ Corrections to the earlier review pass (the pre-verification draft of this roadm
 | F8 + F9 bucket round-trip + MinIO CI | **F8 retracted** (the docs are accurate; see Corrections). F9 open: no write/read/delete has run against a bucket — the owner is testing R2 by hand, so this stays a note rather than a planned item |
 | F10 file-read decision | documented everywhere it needs to be; the **decision** (capability URLs vs PocketBase-style file tokens, or `viewRule` gating) is open |
 | F7 RLS on `_files` | open. Read/list + delete policies are a day's work on the existing `rls::policies` machinery; the **attach** policy needs subquery support in `rls::policy` first, and every file query has to move under a request role (today they run as the owner, which bypasses RLS) |
+| P1 #9 one round trip per request | done — `rls::context::apply` sets role + claims in one statement, with a same-transaction owner-reset regression test |
