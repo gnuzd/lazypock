@@ -1704,6 +1704,38 @@ async fn another_account_cannot_claim_a_file_id() {
     app.cleanup().await;
 }
 
+/// An anonymous request has no `auth.uid()`, so it can never be the uploader of a file.
+///
+/// Before the attach policy, `owner` was `None` for an anonymous caller and the attach
+/// filter read that as "bypass" — so a collection with a public `createRule` let a
+/// caller with no account claim a file it did not upload. The policy now denies it, and
+/// this pins that.
+#[tokio::test]
+async fn an_anonymous_write_cannot_claim_a_file_id() {
+    let Some(app) = test_app("http_files_claim_anonymous").await else {
+        return;
+    };
+    seed_file_field(&app, "photos", json!({})).await;
+    let alice = user_token(&app, "alice@example.com").await;
+    let file = upload_as(&app, &alice, "alice.png").await;
+
+    let reply = call(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections/photos/records",
+        Some(json!({ "photo": file })),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+    assert_eq!(
+        attached_count(&app, "photos").await,
+        0,
+        "the anonymous claim must not have attached anything"
+    );
+
+    app.cleanup().await;
+}
+
 /// A file that is already attached belongs to that record: re-pointing it at another
 /// record is refused rather than silently moving ownership.
 #[tokio::test]

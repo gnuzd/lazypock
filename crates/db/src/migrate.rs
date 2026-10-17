@@ -116,6 +116,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "api_keys",
         sql: include_str!("../../../migrations/0014_api_keys.sql"),
     },
+    Migration {
+        version: 15,
+        name: "file_rls",
+        sql: include_str!("../../../migrations/0015_file_rls.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

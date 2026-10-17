@@ -336,19 +336,28 @@ for big tables. `GET .../records` accepts `filter`, `sort`, `fields`, `expand`.
 
 ```sql
 BEGIN;
-SET LOCAL ROLE app_authenticated;                      -- or app_anon, app_service
-SELECT set_config('request.auth.id',     $1, true);
-SELECT set_config('request.auth.claims', $2, true);    -- JSON claims
-SELECT set_config('request.connection_id', $3, true);  -- for realtime (8.7)
-SELECT set_config('request.action',      $4, true);  -- list | view | update | delete | write
+-- One statement: `set_config('role', …)` is the parameterised SET LOCAL ROLE,
+-- and NULL resets to the session user (the owner / superuser path).
+SELECT set_config('role',                     $1, true),  -- lazypock_anon | lazypock_authenticated | NULL
+       set_config('request.auth.id',          $2, true),
+       set_config('request.auth.email',       $3, true),
+       set_config('request.auth.collection_id',   $4, true),
+       set_config('request.auth.collection_name', $5, true),
+       set_config('request.connection_id',    $6, true),  -- for realtime (8.7)
+       set_config('request.action',           $7, true);  -- list | view | update | delete | write
 -- the user's query runs here (RLS applies automatically)
 COMMIT;
 ```
 
-- `set_config(..., true)` is transaction-local, so it is **safe with connection pooling**.
-  `SET LOCAL ROLE` also resets at commit, so it is safe with PgBouncer transaction pooling.
-- The server connects with a dedicated **non-superuser** role that is a member of
-  `app_anon`, `app_authenticated`, `app_service`. `app_service` bypasses RLS and is internal.
+- Everything is transaction-local (`set_config(..., true)`), so it is **safe with connection
+  pooling**: the role switch and the claims are undone at commit, which is also what makes it
+  safe with PgBouncer transaction pooling.
+- The role and the claims are published in **one statement** — one round trip instead of two on
+  every user-facing query. The role name comes from a closed set; `NULL` resets it to the
+  session user (the owner path), because `SET ROLE NONE` is special syntax that cannot be a
+  parameter.
+- The server connects with a dedicated role that **owns the tables** and is a member of
+  `lazypock_anon` and `lazypock_authenticated`. The owner bypasses RLS and is internal.
 - Tables are created with `ENABLE ROW LEVEL SECURITY` but **not** `FORCE ROW LEVEL SECURITY`:
   forcing it would subject the schema owner to the policies too and break the server's own
   internal reads (the login lookup is the obvious one). The owner *is* the service identity —
@@ -356,9 +365,10 @@ COMMIT;
   runs as a restricted role. Migration `0003_rls.sql` carries the same note.
 - SQL helpers: `auth.uid()`, `auth.claim('role')` reading `current_setting`.
 
-**Implementation note.** The names in this section are the design's; the code uses
-`lazypock_anon` / `lazypock_authenticated` (`migrations/0003_rls.sql`) and models the service
-bypass as the connecting **owner** role rather than a separate `app_service`.
+**Implementation note.** The design named a separate `app_service` role; the code models the
+service bypass as the connecting **owner** role instead, so there is one fewer role to grant.
+The restricted roles are `lazypock_anon` / `lazypock_authenticated`
+(`migrations/0003_rls.sql`).
 
 **`request.action` and the list/view divergence (resolved).** `listRule` and `viewRule` both
 compile to a `SELECT` policy, and Postgres OR-combines permissive policies — so a public
@@ -868,7 +878,7 @@ somebody else's database.
 | D. Records API | done — `GET/POST/PATCH/DELETE /api/collections/{c}/records(/{id})` with the PocketBase list envelope, per-field validation details, ETag/`If-None-Match`, filter/sort/fields/expand/paging wired to the query plane, and `POST /api/batch` (all-or-nothing, one transaction). |
 | E. Access control | done — argon2id, EdDSA tokens with a published JWKS, sessions with rotation and replay detection, superusers, the CLI, the auth HTTP endpoints behind a bearer middleware, accounts in auth collections (a password is optional, matching `main`, so OAuth/OTP/invite-only accounts exist), and **Postgres RLS** for collection rules (roles, per-request `set_config` context, rule → `CREATE POLICY`, default deny). A password change revokes the account's `_sessions` and rotates its `token_key`; the revocation is what ends the refresh tokens issued before it. |
 | F. Realtime | done — the change-event trigger plus `_rt_log`, the `EventBus` seam with a Postgres `LISTEN` implementation, RLS-filtered fan-out with connection-id echo suppression, and SSE at `/api/realtime` with `lastEventId` resume. The Redis backend, event batching and logical replication are deliberately deferred (section 8.8). |
-| G. Files & images | **done.** Upload validation (images only: png/jpeg/gif/webp, by magic bytes), the key layout, local and S3 backends, image presets with cached thumbnails and a superuser-gated CRUD API, and an orphan sweeper — resized in-process by default, so no sidecar and no extra artifact to ship, with `LAZYPOCK_IMAGE_SERVICE_URL` to move resizing to a service and a `local-image-codecs` feature to leave the codecs out of a thin build (a deliberate change from section 10). The media library is real (`_files`, migration 0011): one row per stored object with its owner, size, dimensions and generated `variants`; an upload with no record is `pending` and still listed; a file's **id** is what a client stores in a field, and `/api/files/{id}` (`?preset=`, `?thumb=`, `/thumbs/{size}`, `/scale/{size}`) serves it while the key-addressed routes keep working; a record write attaches its file fields and records its editor references; a record or collection delete removes the rows and queues their objects **in the same transaction**; a delete is refused with a 409 + `usage` while a record still references the file (superuser `?force=true`); **`files.rules.{listRule,deleteRule}` are enforced** (absent → superusers, `""` → public, a filter → per row; a superuser bypasses them; an unreadable rule denies); **storage is configurable from the Studio** (`_settings.storage`, migration-free: the environment supplies defaults, a saved field wins, the running service is rebuilt and swapped in without a restart, and a stored secret is encrypted with `LAZYPOCK_SECRET_KEY` — `ring`'s AES-256-GCM, the crate the token layer already uses, so no new artifact); **direct upload exists** (`POST /api/files/presign` → the client PUTs to a presigned S3 URL → `POST /api/files/{id}/complete`, which re-validates the bytes; a local backend answers 501 and drops the reservation); and a reaper worker drains both deletion queues and reclaims abandoned editor/library uploads after `files.rules.unattached_ttl_ms`. **Remaining:** uploads are images only (deliberate; the Elixir server accepted any file a field allowed), and the S3 path has **not** been exercised against a live bucket (signing — including the new presigned PUT — and listing are unit-tested; a live round-trip needs credentials and a bucket). AVIF output is refused loudly because the schema allows it and the encoder cannot write it. |
+| G. Files & images | **done.** Upload validation (images only: png/jpeg/gif/webp, by magic bytes), the key layout, local and S3 backends, image presets with cached thumbnails and a superuser-gated CRUD API, and an orphan sweeper — resized in-process by default, so no sidecar and no extra artifact to ship, with `LAZYPOCK_IMAGE_SERVICE_URL` to move resizing to a service and a `local-image-codecs` feature to leave the codecs out of a thin build (a deliberate change from section 10). The media library is real (`_files`, migration 0011): one row per stored object with its owner, size, dimensions and generated `variants`; an upload with no record is `pending` and still listed; a file's **id** is what a client stores in a field, and `/api/files/{id}` (`?preset=`, `?thumb=`, `/thumbs/{size}`, `/scale/{size}`) serves it while the key-addressed routes keep working; a record write attaches its file fields and records its editor references; a record or collection delete removes the rows and queues their objects **in the same transaction**; a delete is refused with a 409 + `usage` while a record still references the file (superuser `?force=true`); **`files.rules.{listRule,deleteRule}` are enforced by generated Postgres policies** (absent → superusers, `""` → public, a filter → per row; a superuser bypasses them; an unreadable rule denies; `_files` and `_file_refs` have RLS, rebuilt from the setting at boot and on every settings write, while serving stays a capability URL; an attach is an `UPDATE` policy `uploaded_by = auth.uid()` run inside the record write's transaction, so the ownership invariant is the database's too); **storage is configurable from the Studio** (`_settings.storage`, migration-free: the environment supplies defaults, a saved field wins, the running service is rebuilt and swapped in without a restart, and a stored secret is encrypted with `LAZYPOCK_SECRET_KEY` — `ring`'s AES-256-GCM, the crate the token layer already uses, so no new artifact); **direct upload exists** (`POST /api/files/presign` → the client PUTs to a presigned S3 URL → `POST /api/files/{id}/complete`, which re-validates the bytes; a local backend answers 501 and drops the reservation); and a reaper worker drains both deletion queues and reclaims abandoned editor/library uploads after `files.rules.unattached_ttl_ms`. **Remaining:** uploads are images only (deliberate; the Elixir server accepted any file a field allowed), and the S3 path has **not** been exercised against a live bucket (signing — including the new presigned PUT — and listing are unit-tested; a live round-trip needs credentials and a bucket). AVIF output is refused loudly because the schema allows it and the encoder cannot write it. |
 | H. Hooks | **partly** — the thread-owned worker, the six events, TypeScript stripping, the loader with hot reload and the `RecordHooks` seam are in, and **create, update and delete all run their before-hooks and after-hooks** (before runs before validation so a hook can supply a field; after runs post-commit; a before-delete hook can refuse by throwing). Remaining: the `$db`/`$http`/`$app` bindings — see the note below on why `$db` is not a small change. |
 | I. Jobs & ops | **done** — request logs end to end (`_logs` via migration 0007, a recorder middleware that redacts credential keys, and `GET /api/logs`, `/logs/stats`, `/logs/collections`, `/logs/retention`, `PATCH /logs/retention`, `DELETE /logs?all=true` and `DELETE /logs?days=n`); the cron **admin API** (`GET/POST/PATCH/DELETE /api/crons`, `POST /crons/validate`, and `POST /crons/{id}` run-now for `sql`/`http`; a `hook` job refuses loudly) **and the scheduler that fires on `next_run_at`**; the job queue (`for update skip locked`, with a lease and stale-claim reclaim, and a `mail` job kind); the mailer; per-route and per-account rate limits; and trusted proxy headers. Outbound webhooks are the one thing still missing (section 13). |
 | J–K. Studio, SDK | **done** (the PocketBase *data* importer remains in section 13). The SDK is ported and its live integration test passes; the collection admin API exists and serves the shape the Studio reads (`schema` alongside `fields`, per-field `hidden`/`system`/`indexed`, RFC 3339 `created`/`updated`, top-level `indexes`/`view*`); the PocketBase system collections (`_superusers`, `_auth_origins`, `_external_auths`, `_mfas`, `_otps`) are listed as locked entries — synthesised, so they stay out of the schema cache; an auth record's password is accepted under PocketBase's `password` **or** the password field's own name, which is what the Studio's generated form sends, and is hashed either way; `GET /api/export` serves the single-document JSON; logs, crons, API keys (`GET/POST/DELETE /api/settings/api-keys`, hashed, scoped, shown once) and `GET /api/import/status` / `POST /api/import/rollback` exist; and backup/restore is complete end to end — `GET /api/export/archive`, `POST /api/import`, `GET /api/import/preflight` — with the documented archive format and both safety invariants enforced server-side (an import never deletes; never writes a `_`-prefixed system collection). `POST /api/import` accepts both the archive and the single-document JSON, applies the definitions a payload declares (fields, rules, options), and deletes only what a caller asked for with `deleteMissing` — which drops the user collections and fields the payload leaves out, never a system collection or a built-in column. No open item in this track beyond section 13's importer. |
@@ -921,7 +931,7 @@ Notes from the admin-endpoint pass, recorded so the tradeoffs are not rediscover
 
 ### Row-level security: what was decided, and why
 
-The policies, the role switch and the default-deny all work as designed, but three
+The policies, the role switch and the default-deny all work as designed, but several
 things about the implementation are worth recording because they are not obvious:
 
 * **No `FORCE ROW LEVEL SECURITY`.** Forcing it makes the schema *owner* subject to policies too,
@@ -929,7 +939,8 @@ things about the implementation are worth recording because they are not obvious
   whenever the node connects as a non-superuser owner. Verified against Postgres: `FORCE` has no
   effect on a superuser, so it would add that risk without adding the guarantee. The owner is the
   service identity — internal work and superusers run as it and bypass policies — while every
-  user-facing request runs as `lazypock_anon` or `lazypock_authenticated` through `SET LOCAL ROLE`.
+  user-facing request runs as `lazypock_anon` or `lazypock_authenticated` through the
+  transaction-local role switch.
 * **Writes do not use `RETURNING`.** Postgres applies the *select* policies to an
   `INSERT ... RETURNING` row, so a caller allowed to create a record but not to see it was refused
   outright — which broke anonymous registration. A write now runs under the request's role, so the
@@ -949,6 +960,14 @@ change so a removed rule stops applying.
   that map is both filterable and returned by `fields=*`, so having them there returned the password
   hash to the client on every auth-collection read — a real leak that is now pinned by a test, along
   with a check that naming either column in `fields` or `filter` is refused.
+* **The file layer is under RLS too, with one deliberate exception.** `_files` and `_file_refs` have
+  policies generated from `files.rules` (rebuilt at boot and on every settings write);
+  `_file_deletions` does not, because the `_files_deleted` trigger inserts into it while a restricted
+  `DELETE` runs, so a policy there would make every file delete fail. An attach runs under the
+  request role and is gated by `uploaded_by = auth.uid()`, which is also what stops an anonymous
+  caller (no `auth.uid()`) claiming an upload; the "not already another record's" guard stays in the
+  statement's `WHERE`, because a policy cannot compare the old and new row. Serving is still a
+  capability URL, not a rule check (F10).
 
 ### Kept-out-of-tree code and the Rust server
 

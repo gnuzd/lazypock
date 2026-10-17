@@ -165,6 +165,18 @@ pub async fn test_app_with(label: &str, extra: &[(&str, &str)]) -> Option<TestAp
             .expect("apply system migrations");
     }
 
+    // The real node applies the file policies at boot; a test must too, or every
+    // attach/delete runs against RLS with no policies and default-deny.
+    {
+        let client = db.client().await.expect("file policy client");
+        let rules = lazypock_files::FileRules::load(&client)
+            .await
+            .expect("load the file rules");
+        lazypock_files::policy::apply(&client, &rules)
+            .await
+            .expect("apply the file policies");
+    }
+
     let cache = Arc::new(SchemaCache::new());
     {
         let client = db.client().await.expect("schema client");

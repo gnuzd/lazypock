@@ -236,6 +236,16 @@ pub async fn import(
         .map_err(ApiError::new)?
     {
         ImportOutcome::Applied(report) => {
+            // The payload may have replaced the `files` setting, so the file policies are
+            // rebuilt from what is now stored. A failure here is loud rather than leaving
+            // a rule that reads as applied; the next boot rebuilds them too.
+            let rules = lazypock_files::FileRules::load(&client)
+                .await
+                .map_err(ApiError::new)?;
+            lazypock_files::policy::apply(&client, &rules)
+                .await
+                .map_err(ApiError::new)?;
+
             // Recorded only when something was applied: `NeedsConfirmation` above
             // did not change anything, so there is nothing to have done. An import
             // can drop collections, so their names are kept rather than only
@@ -436,6 +446,15 @@ pub async fn import_rollback(
     let payload: Value = row.get("payload");
 
     let report = backup::restore_snapshot(&mut client, &payload)
+        .await
+        .map_err(ApiError::new)?;
+
+    // A rollback restores settings too, so the file policies are rebuilt from what
+    // the snapshot left behind.
+    let rules = lazypock_files::FileRules::load(&client)
+        .await
+        .map_err(ApiError::new)?;
+    lazypock_files::policy::apply(&client, &rules)
         .await
         .map_err(ApiError::new)?;
 
