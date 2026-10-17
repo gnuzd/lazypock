@@ -40,6 +40,63 @@ Findings keep stable `F` numbers; the P0 list refers to them.
 | F12 | `_mfas` is synthesised as a Studio system collection with no table behind it, so it cannot hold a row. | Low — advertised capability that cannot function | `crates/api/src/collections.rs:344-380` |
 | F13 | `SECURITY.md` links `TEST_COVERAGE_AUDIT.md` and `HOOKS_SECURITY.md` (neither exists) and `README.md#what-the-rule-engine-tests-cover` (no such anchor); its supported-versions table says 0.12.x. | Low — stale docs | `SECURITY.md:5-40` |
 
+## Audit — the other hand-enforced surfaces
+
+Read-only pass over the surfaces that are not backed by row-level security, done after the
+file layer turned out to hide two cross-tenant holes: sessions and refresh rotation, API
+keys, rate limiting, OAuth2/OTP flows, backup and settings import/export, the SQL console,
+realtime delivery, hook execution, and Studio asset serving. Nothing here was exploited;
+every finding cites the line it was read at.
+
+Findings are `S`-numbered so they do not collide with the file-layer `F` numbers.
+
+| # | Finding | Severity | Evidence |
+| --- | --- | --- | --- |
+| S1 | Refresh rotation is a read-then-write, not a conditional update: two simultaneous uses of one token both see `revoked = false`, both mint a token, and the replay that reuse detection exists to catch goes unnoticed. `consume` in the OTP flow does the same job correctly (`delete … returning`), which is the shape this should take. | Medium — the theft-detection guarantee can be raced away by a thief who is willing to race the victim | `crates/auth/src/sessions.rs:118-172` vs `crates/api/src/emails.rs:159-172` |
+| S2 | `auth-refresh` rotates **before** it checks that the token belongs to the collection in the path, so a refresh token presented to the wrong collection's endpoint is consumed and the caller gets a 401 — the old token is dead, the new one is discarded, and the user is silently logged out. Related: a superuser refresh token carries an empty collection id, so that check is skipped entirely and it is accepted on any collection's path. | Medium — a client bug or a stale SDK logs people out; the superuser case is a routing oddity rather than a privilege change | `crates/api/src/auth.rs:411-436`, `:159-166` |
+| S3 | API keys are one JSON array in `_settings` written read-modify-write with no lock or version: two concurrent creates, or a create and a revoke, silently lose one of the two. `verify` also re-reads and re-parses the whole array on every request that carries a key. | Medium — a revocation can be lost, which is the wrong direction for a credential | `crates/api/src/api_keys.rs:88-160`, `:131-152` |
+| S4 | API-key expiry is compared as **text**: `expires_at > now` on two RFC 3339 strings. That only holds while both sides were written by the same formatter; a value with different precision (`.000` vs none) or a numeric offset compares backwards and keeps an expired key alive. | Low-Medium — needs a non-server-written value, and the admin settings path is the way one appears | `crates/api/src/api_keys.rs:143-150` |
+| S5 | `SECURITY.md` says realtime is "authorized once, at join time … no per-record rule evaluation on delivery", and the code does the opposite: every event runs the collection's select policy for that subscriber's context, and deletes are gated on the record having been delivered before. **The code is stronger than the doc**, so this is a documentation defect that would mislead an auditor in the safe direction — still worth fixing, because a scope note that is wrong is a scope note nobody can rely on. | Medium — the security policy misstates a boundary | `SECURITY.md` (Scope notes) vs `crates/realtime/src/hub.rs:220-260`, `:336-370` |
+| S6 | Nothing bounds realtime subscriptions per connection or connections per address: `subscribe=*` expands to every collection, and each subscription holds a queue and a `seen` buffer. Anonymous callers can do this. | Low — memory/CPU amplification, no data exposure | `crates/api/src/realtime.rs:41-95`, `crates/realtime/src/hub.rs:141-171` |
+| S7 | `GET …/auth-methods` is public and writes: one upsert per configured provider, plus a sweep `DELETE`, on every call. Bounded by the flow TTL and the per-address rate limit, so it cannot grow without bound — but a read endpoint that writes is worth knowing about. | Low | `crates/api/src/auth.rs:471-520`, `crates/api/src/oauth2.rs:483-515` |
+| S8 | A presented API key that is invalid, revoked or expired becomes an **anonymous** principal rather than a 401, so a client with a typo'd or revoked key silently gets public access instead of a clear refusal. | Low — fail-open to the least privilege, but it hides a real misconfiguration | `crates/api/src/auth.rs:196-201` |
+| S9 | `Hub::subscribe`/`unsubscribe` use `if let Ok(guard) = self.subscribers.lock()`: a poisoned lock silently drops the subscription and the client keeps an open SSE stream that will never deliver anything. | Low — availability, and a silent one | `crates/realtime/src/hub.rs:152-183` |
+| S10 | The SQL console can read any table, including `_settings` (ciphertext for the storage secret and the signing key) and `_sessions` (token hashes). Superuser-only, and the same trust as the settings export, but it is worth stating rather than leaving to be discovered. | Info | `crates/api/src/sql.rs:1-40` |
+| S11 | Import caps the **compressed** upload at 512 MiB and has no uncompressed-size cap, so a small archive can expand into a large in-memory import. Superuser-only. | Low — self-inflicted DoS with an already-trusted token | `crates/api/src/backup.rs:30-34`, `crates/db/src/backup.rs` (zip read) |
+
+### Verified sound in the same pass
+
+Worth recording so the next audit does not repeat it:
+
+- **Refresh tokens**: 256-bit CSPRNG value, only a SHA-256 digest stored, rotation, family
+  revocation on replay, expiry, and a purge job (`auth/src/sessions.rs`). The race in S1 is
+  the one gap.
+- **Credential columns cannot leak through a record**: `password_hash` and `token_key` are
+  absent from the map that both filters and `fields=*` are built from, so they can be
+  neither filtered on nor returned (`db/src/query/compile.rs:76-95`, `db/src/records.rs:364`).
+- **API keys at rest**: SHA-256 digest, constant-time comparison, `auth.`-prefixed so the
+  settings read and export both redact them (`api/src/api_keys.rs:131-152`,
+  `api/src/settings.rs:141-205`).
+- **OTP flows**: 256-bit token, hashed at rest, single use through `delete … returning`,
+  TTL-checked on read *and* delete, swept on mint, and an email change deliberately does not
+  consume the token before the password is checked (`api/src/emails.rs:55-172`).
+- **Admin surface**: one `require_superuser`, one `Superuser` extractor; API keys are
+  refused everywhere a superuser is required, and the single exception
+  (`require_superuser_or_api_key`) is limited to the collection reads codegen needs
+  (`api/src/auth.rs:918-996`).
+- **Settings export** redacts `auth.*` and every secret-named leaf, and reports what it
+  redacted instead of dropping it silently (`api/src/settings.rs:141-275`).
+- **SQL console**: leading-keyword check *and* a read-only transaction *and* a 10 s statement
+  timeout *and* a row cap — the belt-and-braces answer to "one check is not enough"
+  (`api/src/sql.rs:1-40`).
+- **Hooks**: QuickJS with a dispatch deadline (2 s) and explicit limits, and no filesystem or
+  network bindings at all (`hooks/src/runtime.rs:13-40`).
+- **Studio**: assets are looked up in a map, not joined onto a path, so there is no traversal
+  surface (`api/src/studio.rs`).
+- **Realtime delivery**: per-event select-policy evaluation under the subscriber's own RLS
+  context, with deletes gated on prior delivery (`realtime/src/hub.rs:220-260`). See S5 for
+  the documentation that contradicts this.
+
 ## P0 — fix now
 
 Order chosen so the two data-loss defects land together: F1 and F2 are the same
