@@ -1961,6 +1961,7 @@ name = "lazypock-core"
 version = "0.23.1"
 dependencies = [
  "getrandom 0.3.4",
+ "ring",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1996,7 +1997,6 @@ dependencies = [
  "lazypock-core",
  "lazypock-db",
  "reqwest",
- "ring",
  "serde",
  "serde_json",
  "sha2 0.11.1",

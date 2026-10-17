@@ -266,7 +266,7 @@ pub async fn create_record(
     // The record's file fields are attached and its editor references recorded in the
     // same transaction, so a record cannot exist without its files being claimed and a
     // failed write cannot leave a reference behind.
-    sync_files(&transaction, &resolved.collection, &record).await?;
+    sync_files(&transaction, &resolved.collection, &record, &principal).await?;
 
     transaction
         .commit()
@@ -333,7 +333,7 @@ pub async fn update_record(
     // counting as a reference — otherwise a delete of the latter would be refused for
     // a reference that no longer exists.
     if let Some(record) = &record {
-        sync_files(&transaction, &resolved.collection, record).await?;
+        sync_files(&transaction, &resolved.collection, record, &principal).await?;
     }
 
     transaction
@@ -440,13 +440,27 @@ pub async fn delete_record(
 ///
 /// Runs inside the write's transaction, so the attachments and the row they describe
 /// commit together.
-async fn sync_files(
+///
+/// The caller's identity is part of the operation, not a detail: attaching a file is
+/// what makes it this record's, so it is the point at which "may this caller make this
+/// file theirs" has to be answered. The record write itself is already authorised by
+/// row-level security; the file is not covered by it.
+pub(crate) async fn sync_files(
     runner: &dyn QueryRunner,
     collection: &Collection,
     record: &Value,
+    principal: &Principal,
 ) -> Result<(), ApiError> {
     let Some(record_id) = record.get("id").and_then(Value::as_str) else {
         return Ok(());
+    };
+
+    // `None` bypasses the ownership check: a superuser is the one identity that may
+    // rearrange anybody's files.
+    let owner = if principal.is_superuser() {
+        None
+    } else {
+        principal.user_id()
     };
 
     let mut references: Vec<(String, String)> = Vec::new();
@@ -455,22 +469,51 @@ async fn sync_files(
             // A file field's upload belongs to this record now, which is what takes it
             // out of the reaper's reach and what a delete of the file is guarded against.
             store::FileLink::Owner => {
-                let attached =
-                    store::attach(runner, &found.id, &collection.name, record_id, &found.field)
-                        .await
-                        .map_err(ApiError::new)?;
+                let attached = store::attach(
+                    runner,
+                    &found.id,
+                    &collection.name,
+                    record_id,
+                    &found.field,
+                    owner,
+                )
+                .await
+                .map_err(ApiError::new)?;
+
+                let file = match attached {
+                    store::Attach::Attached(file) => file,
+                    // An id this server never stored is left alone, exactly as before: a
+                    // record may name one, and refusing the write would change what a
+                    // client sees for a mistake that was already being tolerated.
+                    store::Attach::Missing => continue,
+                    store::Attach::NotOwned => {
+                        return Err(ApiError::new(Error::forbidden(format!(
+                            "the file {} was uploaded by a different account, so it cannot be \
+                             attached to this record",
+                            found.id
+                        ))))
+                    }
+                    store::Attach::Elsewhere {
+                        collection,
+                        record,
+                        field,
+                    } => {
+                        return Err(ApiError::new(Error::conflict(format!(
+                            "the file {} already belongs to {collection}/{record}/{field}",
+                            found.id
+                        ))))
+                    }
+                };
 
                 // The field's own limits are checked here rather than at upload
                 // time: this is the first point at which a file and a field are
                 // known to belong together, and therefore the first point at
                 // which `maxFileSize` and `mimeTypes` mean anything.
-                if let (Some(file), Some(field)) = (
-                    attached,
-                    collection
-                        .fields
-                        .iter()
-                        .find(|field| field.name == found.field),
-                ) {
+                if let Some(field) = collection
+                    .fields
+                    .iter()
+                    .find(|field| field.name == found.field)
+                {
                     // The policy lives with the file API, because the upload
                     // endpoint attaches a file too and has to apply the same one.
                     crate::files::check_file_policy(field, file.size, &file.mime_type)

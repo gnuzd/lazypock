@@ -24,9 +24,6 @@ image = { version = "0.25.9", default-features = false, features = ["png", "jpeg
 lazypock-core.workspace = true
 lazypock-db.workspace = true
 reqwest = { version = "0.13.5" }
-# The AEAD for a credential stored in the database. Already in the build: the
-# token layer uses the same crate, so this adds no artifact.
-ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.0"

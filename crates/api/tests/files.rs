@@ -1621,3 +1621,226 @@ async fn a_file_fields_mime_types_limit_is_enforced() {
 
     app.cleanup().await;
 }
+
+/// How many rows the library holds.
+async fn library_rows(app: &TestApp) -> i64 {
+    app.client()
+        .await
+        .query_one("select count(*) as n from _files", &[])
+        .await
+        .expect("a row")
+        .get("n")
+}
+
+/// Attaching a file is what makes it a record's, so it is the point at which "may this
+/// caller make this file theirs" has to be answered.
+///
+/// It was not: a record write re-pointed any `_files` row at the caller's record, so an
+/// id read off any public record could be claimed by any other account — and a record
+/// delete releases its files, which made the claim a delete of somebody else's upload.
+#[tokio::test]
+async fn another_account_cannot_claim_a_file_id() {
+    let Some(app) = test_app("http_files_claim_by_id").await else {
+        return;
+    };
+    // Public rules: the point is *not* that the second account cannot write the record.
+    // It is that a write it is allowed to make cannot take a file it does not own.
+    seed_file_field(&app, "photos", json!({})).await;
+    let alice = user_token(&app, "alice@example.com").await;
+    let mallory = user_token(&app, "mallory@example.com").await;
+
+    let file = upload_as(&app, &alice, "alice.png").await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/photos/records/r1",
+        Some(json!({ "photo": file })),
+        &mallory,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+    assert_eq!(
+        attached_count(&app, "photos").await,
+        0,
+        "the claim must not have attached anything"
+    );
+
+    // The positive control: the owner attaching the same file to the same record works.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/photos/records/r1",
+        Some(json!({ "photo": file })),
+        &alice,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert_eq!(attached_count(&app, "photos").await, 1);
+
+    // Once it belongs to a record, another account still cannot take it — not even by
+    // writing that same record, which its rules do allow.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/photos/records/r1",
+        Some(json!({ "photo": file })),
+        &mallory,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+
+    // And the file the owner saved is still served: nothing above removed it.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/collections/photos/records/r1",
+        None,
+        &alice,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+/// A file that is already attached belongs to that record: re-pointing it at another
+/// record is refused rather than silently moving ownership.
+#[tokio::test]
+async fn a_file_cannot_move_between_records() {
+    let Some(app) = test_app("http_files_move_between_records").await else {
+        return;
+    };
+    seed_file_field(&app, "photos", json!({})).await;
+    sql(&app, "insert into photos (id) values ('r2')").await;
+    let alice = user_token(&app, "alice@example.com").await;
+
+    let file = upload_as(&app, &alice, "alice.png").await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/photos/records/r1",
+        Some(json!({ "photo": file })),
+        &alice,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    // The same owner, a different record: still refused. Two records sharing one id is
+    // exactly the state that makes a delete of one silently break the other.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/photos/records/r2",
+        Some(json!({ "photo": file })),
+        &alice,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+/// `/api/batch` writes records exactly like the single-record routes, so it has to
+/// attach their files too. It did not: the upload stayed `pending`, and the reaper
+/// reclaimed it — a file field written through a batch quietly lost its file.
+#[tokio::test]
+async fn a_batch_write_attaches_its_files() {
+    let Some(app) = test_app("http_files_batch_attach").await else {
+        return;
+    };
+    seed_file_field(&app, "photos", json!({})).await;
+    let superuser = token(&app).await;
+    let file = upload_as(&app, &superuser, "batch.png").await;
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/batch",
+        Some(json!({
+            "requests": [
+                {
+                    "method": "PATCH",
+                    "url": "/api/collections/photos/records/r1",
+                    "body": { "photo": file },
+                }
+            ]
+        })),
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert_eq!(
+        attached_count(&app, "photos").await,
+        1,
+        "the batch's file field must own its upload"
+    );
+
+    app.cleanup().await;
+}
+
+/// The key-addressed delete used to enqueue the object and nothing else: any
+/// authenticated caller could delete any object whose key they knew, and the `_files`
+/// row was left behind claiming a file that no longer existed. It now resolves the key
+/// to its row and goes through the same rule and the same reference guard as
+/// `DELETE /api/files/{id}`.
+#[tokio::test]
+async fn the_key_addressed_delete_obeys_the_delete_rule() {
+    let Some(app) = test_app("http_files_key_delete").await else {
+        return;
+    };
+    seed(&app).await;
+    let superuser = token(&app).await;
+    let user = user_token(&app, "user@example.com").await;
+
+    let reply = upload(
+        &app,
+        &[
+            ("collection", None, b"posts"),
+            ("record", None, b"p1"),
+            ("file", Some("note.png"), &png(16, 16)),
+        ],
+        Some(&superuser),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+    let key = reply.body.expect("body")["key"]
+        .as_str()
+        .expect("key")
+        .to_string();
+    let url = format!("/api/files/{key}");
+
+    // No file rule is set, which leaves deletion to superusers.
+    let reply = call_authed(&router(&app).await, Method::DELETE, &url, None, &user).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+    assert_eq!(
+        fetch(&app, &url).await.0,
+        StatusCode::OK,
+        "a refused delete must leave the object alone"
+    );
+    assert_eq!(library_rows(&app).await, 1);
+
+    // A key that names no row is a 404, not a blind object delete.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::DELETE,
+        "/api/files/posts/p1/nothing_here.png",
+        None,
+        &superuser,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{:?}", reply.body);
+
+    // The superuser's delete removes the row and the object together.
+    let reply = call_authed(&router(&app).await, Method::DELETE, &url, None, &superuser).await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{:?}", reply.body);
+    assert_eq!(fetch(&app, &url).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        library_rows(&app).await,
+        0,
+        "the row must go with the object"
+    );
+
+    app.cleanup().await;
+}

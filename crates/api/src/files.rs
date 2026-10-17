@@ -860,13 +860,29 @@ pub struct DeleteQuery {
 /// Two guards, both of which the Elixir server had and this one did not:
 /// **a file a record still references is refused** with the list of references unless
 /// a superuser passes `?force=true` — deleting it would leave that record pointing at
-/// nothing — and a caller who is neither a superuser nor the uploader may not delete
-/// somebody else's file.
+/// nothing — and `files.rules.deleteRule` decides who may delete a file at all
+/// (an absent rule leaves it to superusers). There is deliberately no implicit
+/// "the uploader may always delete": the rule is the policy, so a `Public` delete rule
+/// is a decision an operator made rather than one this code overrides.
 pub async fn delete_by_id(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
     Query(query): Query<DeleteQuery>,
+) -> Result<Response, ApiError> {
+    remove_file(&state, &principal, &id, &query).await
+}
+
+/// Delete one file by id, applying the delete rule and the reference guard.
+///
+/// Shared by both delete routes on purpose: two spellings of one operation that differ
+/// in their authorization are how the key-addressed route ended up accepting a bare
+/// "is authenticated" while this one asked a rule.
+async fn remove_file(
+    state: &AppState,
+    principal: &Principal,
+    id: &str,
+    query: &DeleteQuery,
 ) -> Result<Response, ApiError> {
     let Some(user_id) = principal.user_id() else {
         return Err(ApiError::new(Error::forbidden(
@@ -875,7 +891,7 @@ pub async fn delete_by_id(
     };
 
     let client = state.db.client().await.map_err(ApiError::new)?;
-    let file = store::get(&client, &id)
+    let file = store::get(&client, id)
         .await
         .map_err(ApiError::new)?
         .ok_or_else(|| ApiError::new(Error::not_found(format!("no file {id:?}"))))?;
@@ -916,7 +932,7 @@ pub async fn delete_by_id(
         }
     }
 
-    let usage = store::refs_for_file(&client, &id)
+    let usage = store::refs_for_file(&client, id)
         .await
         .map_err(ApiError::new)?;
     if !usage.is_empty() && !(query.force && principal.is_superuser()) {
@@ -933,7 +949,7 @@ pub async fn delete_by_id(
             .into_response());
     }
 
-    store::delete(&client, &id).await.map_err(ApiError::new)?;
+    store::delete(&client, id).await.map_err(ApiError::new)?;
     tracing::info!(
         id = %id,
         key = %file.storage_path,
@@ -1020,6 +1036,21 @@ async fn serve_path(
 
     let storage = state.files.storage();
 
+    // The row is asked first, not the backend. An object whose row is gone is an orphan
+    // the sweeper has not reclaimed yet, and serving it would mean a deleted file stayed
+    // downloadable until the next reaper tick — the row is the library's answer to
+    // "does this file exist", for reads as much as for deletes.
+    {
+        let client = state.db.client().await.map_err(ApiError::new)?;
+        if store::get_by_key(&client, &key)
+            .await
+            .map_err(ApiError::new)?
+            .is_none()
+        {
+            return Err(ApiError::new(Error::not_found("no such file")));
+        }
+    }
+
     let Some(preset) = preset else {
         let object = storage
             .get(&key)
@@ -1053,12 +1084,17 @@ fn image_response(body: Bytes, content_type: &str) -> Response {
 
 /// `DELETE /api/files/{collection}/{record}/{filename}`
 ///
-/// The object is removed through the outbox, so a crash between the queue entry
-/// and the deletion cannot lose it.
+/// The key-addressed spelling of the delete, kept because the key-addressed `GET` is
+/// what an object-addressing client holds. It resolves the key to its `_files` row and
+/// then does exactly what `DELETE /api/files/{id}` does — the same delete rule, the same
+/// reference guard, the same `?force`. It used to enqueue the object directly, which
+/// meant any authenticated caller could delete any object by guessing its key *and* left
+/// the row behind claiming a file that no longer existed.
 pub async fn delete(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path((collection, record_id, filename)): Path<(String, String, String)>,
+    Query(query): Query<DeleteQuery>,
 ) -> Result<Response, ApiError> {
     if principal.user_id().is_none() {
         return Err(ApiError::new(Error::forbidden(
@@ -1066,6 +1102,8 @@ pub async fn delete(
         )));
     }
 
+    // The path segments become a key, so they are checked exactly as a upload's would be.
+    validate_identifier("collection name", &collection).map_err(ApiError::new)?;
     let key = format!(
         "{collection}/{}/{}",
         safe_segment(&record_id)?,
@@ -1073,20 +1111,12 @@ pub async fn delete(
     );
 
     let client = state.db.client().await.map_err(ApiError::new)?;
-    outbox::enqueue(&client, &key)
+    let file = store::get_by_key(&client, &key)
         .await
-        .map_err(ApiError::new)?;
-    let report = outbox::drain(&client, state.files.storage().as_ref())
-        .await
-        .map_err(ApiError::new)?;
+        .map_err(ApiError::new)?
+        .ok_or_else(|| ApiError::new(Error::not_found(format!("no file at {key:?}"))))?;
 
-    if report.deleted == 0 && report.failed == 0 {
-        // Nothing was queued for deletion, so the object was not there.
-        return Err(ApiError::new(Error::not_found("no such file")));
-    }
-
-    tracing::info!(key = %key, "file deleted");
-    Ok(StatusCode::NO_CONTENT.into_response())
+    remove_file(&state, &principal, &file.id, &query).await
 }
 
 /// The file rules, read from the `files` setting the Studio's Media page writes.
