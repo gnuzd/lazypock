@@ -111,6 +111,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "otps",
         sql: include_str!("../../../migrations/0013_otps.sql"),
     },
+    Migration {
+        version: 14,
+        name: "api_keys",
+        sql: include_str!("../../../migrations/0014_api_keys.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

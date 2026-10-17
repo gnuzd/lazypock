@@ -46,9 +46,13 @@ verified against.
   refuses to start if it cannot (`LAZYPOCK_REQUIRE_RLS`, on by default): a
   server that cannot switch role would answer 500 to every end-user request
   while the Studio kept working, which is the worst possible failure mode.
-- **Realtime subscriptions are authorized once, at join time.** A subscriber
-  that passes `listRule` receives every record change for the collection; there
-  is no per-record rule evaluation on delivery. This matches PocketBase.
+- **Realtime delivery is authorized per event.** A subscriber is checked when it joins
+  *and* every event is filtered through the collection's `SELECT` policy under that
+  subscriber's own context before it is sent, so a record the caller could not read is not
+  delivered even to a subscription it holds. A `DELETE` cannot be re-checked — the row is
+  gone — so it is delivered only to a subscriber that was sent that record before. This is
+  stronger than PocketBase, which evaluates rules once at join time; an earlier version of
+  this note said the opposite, and the code was right.
 - **CORS / WebSocket origin checking** is configured separately via the server
   settings; see the CORS notes in the documentation.
 - **File storage** has its own surface, with its own rules

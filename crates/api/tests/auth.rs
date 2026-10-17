@@ -819,3 +819,104 @@ fn token_subject(token: &str) -> String {
     let claims: Value = serde_json::from_slice(&bytes).expect("claims");
     claims["sub"].as_str().expect("sub").to_string()
 }
+
+/// Which collection a refresh token belongs to is checked **before** the rotation, so a
+/// token sent to the wrong endpoint is refused without being consumed.
+///
+/// It used to be checked afterwards: rotation retired the token, the request 401'd, and
+/// the replacement was discarded — so a stale SDK or a hand-built URL logged the user out
+/// with no way back.
+#[tokio::test]
+async fn a_refresh_sent_to_the_wrong_collection_is_refused_without_burning_the_token() {
+    let Some(app) = test_app("http_auth_refresh_wrong_collection").await else {
+        return;
+    };
+    let mut client = app.client().await;
+    lazypock_db::defaults::ensure_users(&mut client)
+        .await
+        .expect("the users collection");
+    app.reload_schema().await;
+
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/users/records",
+        json!({ "email": "user@example.com", "password": "user-password-123" }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/users/auth-with-password",
+        json!({ "identity": "user@example.com", "password": "user-password-123" }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let refresh = reply.body.expect("body")["refreshToken"]
+        .as_str()
+        .expect("refresh")
+        .to_string();
+
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/_superusers/auth-refresh",
+        json!({ "refreshToken": refresh }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
+
+    // The token still works where it belongs: the refusal above consumed nothing.
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/users/auth-refresh",
+        json!({ "refreshToken": refresh }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    app.cleanup().await;
+}
+
+/// A superuser refresh token belongs to `_superusers` and to no other path. It used to be
+/// accepted anywhere, because the collection check skipped a session with no collection id.
+#[tokio::test]
+async fn a_superuser_refresh_token_is_not_accepted_on_a_record_collection_path() {
+    let Some(app) = test_app("http_auth_refresh_superuser_path").await else {
+        return;
+    };
+    let mut client = app.client().await;
+    lazypock_db::defaults::ensure_users(&mut client)
+        .await
+        .expect("the users collection");
+    superuser::create(&client, "admin@example.com", "correct-horse")
+        .await
+        .expect("create");
+    app.reload_schema().await;
+
+    let refresh = login(&app, "admin@example.com", "correct-horse")
+        .await
+        .body
+        .expect("body")["refreshToken"]
+        .as_str()
+        .expect("refresh")
+        .to_string();
+
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/users/auth-refresh",
+        json!({ "refreshToken": refresh }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
+
+    // Its own path still works.
+    let reply = post(
+        &router(&app).await,
+        "/api/collections/_superusers/auth-refresh",
+        json!({ "refreshToken": refresh }),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    app.cleanup().await;
+}

@@ -102,6 +102,27 @@ async fn issue_in_family(
     Ok((token, from_row(&row)?))
 }
 
+/// The columns a session query selects.
+const SESSION_COLUMNS: &str = "id, collection_id, user_id, family_id, expires_at, revoked_at";
+
+/// Look a session up by its refresh token without touching it.
+///
+/// Rotation is destructive, so any check that has to come *before* it — does this token
+/// belong to the collection in the URL? — has to be able to read the session without
+/// consuming it. Otherwise a token sent to the wrong endpoint is consumed, the response
+/// carrying its replacement is thrown away, and the user is logged out by a client bug.
+pub async fn peek(runner: &dyn QueryRunner, token: &str) -> Result<Option<Session>> {
+    let row = runner
+        .run_query_opt(
+            &format!("select {SESSION_COLUMNS} from _sessions where token_hash = $1::text"),
+            &[&hash_token(token)],
+        )
+        .await
+        .map_err(db_error)?;
+
+    row.map(|row| from_row(&row)).transpose()
+}
+
 /// Exchange a refresh token for a new one, retiring the previous token.
 pub async fn rotate(
     runner: &dyn QueryRunner,
@@ -110,17 +131,47 @@ pub async fn rotate(
     ip: Option<&str>,
 ) -> Result<(String, Session)> {
     let hash = hash_token(token);
-    let row = runner
-        .run_query_one(
-            "select id, collection_id, user_id, family_id, expires_at, revoked_at \
-             from _sessions where token_hash = $1::text",
+
+    // The claim is **one conditional statement**: only the request that flips `revoked_at`
+    // from null mints the next token. Reading the session first and updating it afterwards
+    // let two simultaneous uses both pass the check and both mint a token — which quietly
+    // defeated the replay detection below, because the second use of a stolen token then
+    // looked like an ordinary rotation.
+    let claimed = runner
+        .run_query_opt(
+            &format!(
+                "update _sessions set revoked_at = now() \
+                 where token_hash = $1::text and revoked_at is null and expires_at > now() \
+                 returning {SESSION_COLUMNS}"
+            ),
             &[&hash],
         )
         .await
-        .map_err(db_error)
-        .ok();
+        .map_err(db_error)?;
 
-    let Some(row) = row else {
+    if let Some(row) = claimed {
+        let session = from_row(&row)?;
+        return issue_in_family(
+            runner,
+            &session.collection_id,
+            &session.user_id,
+            &session.family_id,
+            user_agent,
+            ip,
+        )
+        .await;
+    }
+
+    // Nothing was claimed, so say why. A token that exists but could not be claimed was
+    // either revoked already — a replay — or has expired.
+    let Some(row) = runner
+        .run_query_opt(
+            &format!("select {SESSION_COLUMNS} from _sessions where token_hash = $1::text"),
+            &[&hash],
+        )
+        .await
+        .map_err(db_error)?
+    else {
         return Err(Error::unauthorized("the refresh token is not recognised"));
     };
     let session = from_row(&row)?;
@@ -139,27 +190,7 @@ pub async fn rotate(
         ));
     }
 
-    if session.expires_at <= SystemTime::now() {
-        return Err(Error::unauthorized("the refresh token has expired"));
-    }
-
-    runner
-        .run_execute(
-            "update _sessions set revoked_at = now() where id = $1::text",
-            &[&session.id],
-        )
-        .await
-        .map_err(db_error)?;
-
-    issue_in_family(
-        runner,
-        &session.collection_id,
-        &session.user_id,
-        &session.family_id,
-        user_agent,
-        ip,
-    )
-    .await
+    Err(Error::unauthorized("the refresh token has expired"))
 }
 
 /// Revoke every session in a family, returning how many were revoked.

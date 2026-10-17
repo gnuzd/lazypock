@@ -195,7 +195,16 @@ pub async fn authenticate(
             };
             match crate::api_keys::verify(&client, &token).await {
                 Ok(true) => Principal::from_api_key(),
-                Ok(false) => Principal::anonymous(),
+                // A value carrying the key prefix *is* a key attempt, so "not found" means
+                // wrong, revoked or expired — and that is a 401, not a quiet demotion to
+                // anonymous. Demoting kept a revoked key working against everything public
+                // and made a typo'd key look like a permissions problem.
+                Ok(false) => {
+                    return ApiError::new(Error::unauthorized(
+                        "the API key is not valid, or it has been revoked or has expired",
+                    ))
+                    .into_response()
+                }
                 Err(err) => return err.into_response(),
             }
         }
@@ -425,14 +434,14 @@ pub async fn auth_refresh(
         })?;
 
     let schema = state.schema.snapshot();
-    let outcome = state.auth.refresh(&token, schema.collections()).await?;
-
-    // A token issued for one collection must not be usable against another.
-    if !outcome.collection_id.is_empty() && outcome.collection_name != collection {
-        return Err(ApiError::new(Error::unauthorized(
-            "the refresh token belongs to a different collection",
-        )));
-    }
+    // A token issued for one collection must not be usable against another, and that check
+    // belongs *before* the rotation rather than after it: rotation is destructive, so
+    // checking afterwards consumed the token and discarded its replacement, logging the
+    // user out because of a client bug. `AuthService::refresh` peeks, compares, then rotates.
+    let outcome = state
+        .auth
+        .refresh(&token, schema.collections(), Some(collection.as_str()))
+        .await?;
 
     let client = state.db.client().await.map_err(ApiError::new)?;
     let record = if outcome.collection_id.is_empty() {

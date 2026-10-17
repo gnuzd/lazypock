@@ -64,6 +64,33 @@ Findings are `S`-numbered so they do not collide with the file-layer `F` numbers
 | S10 | The SQL console can read any table, including `_settings` (ciphertext for the storage secret and the signing key) and `_sessions` (token hashes). Superuser-only, and the same trust as the settings export, but it is worth stating rather than leaving to be discovered. | Info | `crates/api/src/sql.rs:1-40` |
 | S11 | Import caps the **compressed** upload at 512 MiB and has no uncompressed-size cap, so a small archive can expand into a large in-memory import. Superuser-only. | Low — self-inflicted DoS with an already-trusted token | `crates/api/src/backup.rs:30-34`, `crates/db/src/backup.rs` (zip read) |
 
+### Fixed
+
+S1, S2, S3, S4, S5 and S8 — one change, because they are all "a credential handled slightly
+wrong":
+
+- **S1** — rotation now claims the row with a conditional `UPDATE … where revoked_at is null
+  and expires_at > now() returning …`, so only the request that flips the flag mints the next
+  token. Consequence, stated rather than discovered: two *simultaneous* refreshes of one token
+  revoke the family, exactly as a sequential replay always did, so a client must not refresh
+  concurrently — which is also how the TypeScript SDK behaves.
+- **S2** — the collection check runs before the rotation (`sessions::peek`), so a mis-targeted
+  refresh is refused **without** being consumed, and a superuser session is bound to the
+  `_superusers` path like any other session is bound to its collection.
+- **S3 + S4** — API keys live in `_api_keys` (migration 0014) with a unique index on the
+  digest: create and revoke are single statements, lookup no longer grows with the number of
+  keys, and expiry is compared in SQL against `timestamptz`. Existing keys are migrated and the
+  `_settings` blob deleted, so there is one store rather than two.
+- **S5** — `SECURITY.md` now describes what the dispatcher does: rule evaluation per event,
+  deletes gated on prior delivery. It says that is stronger than PocketBase, instead of
+  claiming to match it.
+- **S8** — a value carrying the key prefix *is* a key attempt, so wrong/revoked/expired is a
+  **401** naming the credential, not a silent demotion to anonymous. Client-visible: it used to
+  be a 403 from the endpoint's own check, and a revoked key no longer keeps working against
+  public endpoints.
+
+S6, S7, S9, S10 and S11 stay open: none of them exposes data.
+
 ### Verified sound in the same pass
 
 Worth recording so the next audit does not repeat it:
@@ -133,7 +160,7 @@ who owns it or may write the owning record).
 
 ## P1 — blockers for real use
 
-- **6. Audit the other hand-enforced surfaces.** The file layer was hand-rolled and had
+- **6. ~~Audit the other hand-enforced surfaces.~~ Done — see [the audit](#audit--the-other-hand-enforced-surfaces).** The file layer was hand-rolled and had
   two cross-tenant holes; everything else that is not RLS-backed has not been read with
   the same method: sessions and refresh rotation, API keys, rate limiting, OAuth2, backup
   and restore import, Studio endpoint gating, **realtime delivery** (authorised once at
@@ -157,6 +184,12 @@ who owns it or may write the owning record).
   syntax, so a superuser request must not try to set `role` to a name that is not a role.
   Remote-database benchmarks (one create in ~0.55 s against Neon) make this the highest
   value-per-line item on the list.
+
+- **6a. S1–S4, S5 and S8 — the audit's security findings.** Done: rotation is a
+  compare-and-swap, the collection check happens before the rotation, API keys live in
+  `_api_keys` with the expiry compared in SQL, and a wrong or revoked key is a 401 rather
+  than a silent demotion to anonymous. The remaining `S` numbers stay open because none of
+  them exposes data.
 
 ## P2 — capability expansion
 
