@@ -22,6 +22,13 @@ use crate::sessions;
 /// It must not collide with the migration runner's key.
 pub const SETUP_LOCK: i64 = 0x6C61_7A79_7365_7475;
 
+/// The collection name a superuser authenticates through.
+///
+/// Superusers are not records and have no collection row, but they are addressed like
+/// one (`/api/collections/_superusers/auth-refresh`), and a refresh token has to be able
+/// to say which endpoint it belongs to.
+pub const COLLECTION: &str = "_superusers";
+
 /// A superuser account, without the password hash when one is not needed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Superuser {

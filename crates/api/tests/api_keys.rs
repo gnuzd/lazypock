@@ -143,7 +143,7 @@ async fn a_key_reaches_collection_listing_but_not_superuser_endpoints() {
         );
     }
 
-    // A wrong key is nobody.
+    // A wrong key is a bad credential, not an anonymous caller with no credential.
     let reply = call_authed(
         &router(&app).await,
         Method::GET,
@@ -152,7 +152,7 @@ async fn a_key_reaches_collection_listing_but_not_superuser_endpoints() {
         "lazypock_0000",
     )
     .await;
-    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{:?}", reply.body);
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
 
     app.cleanup().await;
 }
@@ -197,8 +197,8 @@ async fn revoking_a_key_stops_it_working() {
     .await;
     assert_eq!(
         reply.status,
-        StatusCode::FORBIDDEN,
-        "a revoked key must not authenticate"
+        StatusCode::UNAUTHORIZED,
+        "a revoked key must not authenticate, and must say so"
     );
 
     // And it is still listed, marked revoked.
@@ -238,10 +238,7 @@ async fn an_expired_key_does_not_authenticate() {
     // Move the stored expiry into the past, which is what waiting a month does.
     sql(
         &app,
-        "update _settings set value = ( \
-             select jsonb_agg(jsonb_set(entry, '{expires_at}', '\"2000-01-01T00:00:00.000Z\"')) \
-               from jsonb_array_elements(value) as entry \
-         ) where key = 'auth.api_keys'",
+        "update _api_keys set expires_at = now() - interval '1 day'",
     )
     .await;
 
@@ -255,9 +252,86 @@ async fn an_expired_key_does_not_authenticate() {
     .await;
     assert_eq!(
         reply.status,
-        StatusCode::FORBIDDEN,
+        StatusCode::UNAUTHORIZED,
         "an expired key must not authenticate"
     );
+
+    app.cleanup().await;
+}
+
+/// A value carrying the key prefix is a key attempt, so a wrong or revoked one is a 401
+/// rather than a quiet demotion to anonymous — which kept a revoked key working against
+/// everything public and made a typo look like a permissions problem.
+#[tokio::test]
+async fn a_key_that_is_not_stored_is_refused_rather_than_ignored() {
+    let Some(app) = test_app("api_keys_unknown").await else {
+        return;
+    };
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/collections",
+        None,
+        "lazypock_00000000000000000000000000000000",
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{:?}", reply.body);
+    assert!(
+        reply
+            .body
+            .as_ref()
+            .and_then(|body| body["message"].as_str())
+            .is_some_and(|message| message.contains("API key")),
+        "the refusal must name the credential: {:?}",
+        reply.body
+    );
+
+    app.cleanup().await;
+}
+
+/// Two keys created at the same moment both survive. The store used to be one JSON array
+/// written read-modify-write, so a concurrent create silently dropped one of them.
+#[tokio::test]
+async fn two_keys_created_at_once_both_survive() {
+    let Some(app) = test_app("api_keys_concurrent").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let (first, second) = tokio::join!(
+        create_key(&app, &token, json!({})),
+        create_key(&app, &token, json!({})),
+    );
+    assert_ne!(first.0, second.0, "two distinct keys");
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::GET,
+        "/api/settings/api-keys",
+        None,
+        &token,
+    )
+    .await;
+    let body = reply.body.expect("a list");
+    assert_eq!(
+        body["items"].as_array().expect("items").len(),
+        2,
+        "neither create may be lost: {body}"
+    );
+
+    // Both work, which is the property that matters.
+    for raw in [&first.0, &second.0] {
+        let reply = call_authed(
+            &router(&app).await,
+            Method::GET,
+            "/api/collections",
+            None,
+            raw,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{raw} should authenticate");
+    }
 
     app.cleanup().await;
 }

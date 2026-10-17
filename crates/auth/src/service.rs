@@ -305,8 +305,34 @@ impl AuthService {
         &self,
         refresh_token: &str,
         collections: &[Collection],
+        expected_collection: Option<&str>,
     ) -> Result<AuthOutcome> {
         let client = self.db.client().await?;
+
+        // The collection check runs **before** the rotation, not after it. Rotation is
+        // destructive, so checking afterwards consumed the token and then threw away its
+        // replacement: a refresh sent to the wrong collection's endpoint — a stale SDK, a
+        // hand-built URL — logged the user out with no way back. `peek` reads the session
+        // without retiring it.
+        if let Some(expected) = expected_collection {
+            let session = sessions::peek(&client, refresh_token)
+                .await?
+                .ok_or_else(|| Error::unauthorized("the refresh token is not recognised"))?;
+            let matches = if session.collection_id.is_empty() {
+                // A superuser session has no collection, so it belongs to the
+                // `_superusers` path and to no other.
+                expected == superuser::COLLECTION
+            } else {
+                collections.iter().any(|collection| {
+                    collection.id == session.collection_id && collection.name == expected
+                })
+            };
+            if !matches {
+                return Err(Error::unauthorized(
+                    "the refresh token belongs to a different collection",
+                ));
+            }
+        }
 
         // Rotation already produced the next refresh token, in the same family,
         // and it must be the one handed back. Issuing a fresh session here would
