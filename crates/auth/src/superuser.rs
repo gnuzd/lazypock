@@ -13,6 +13,15 @@ use lazypock_db::tokio_postgres::Row;
 use crate::password;
 use crate::sessions;
 
+/// The advisory lock key for "create the first superuser".
+///
+/// Any constant works; it only has to be the same value in every process that could
+/// create the first account — the Studio's first-run Setup, and a boot with
+/// `LAZYPOCK_SUPERUSER_EMAIL`/`LAZYPOCK_SUPERUSER_PASSWORD` set. Two of those arriving
+/// together on a fresh installation must not both see zero accounts and both create one.
+/// It must not collide with the migration runner's key.
+pub const SETUP_LOCK: i64 = 0x6C61_7A79_7365_7475;
+
 /// A superuser account, without the password hash when one is not needed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Superuser {

@@ -41,9 +41,7 @@ pub use rules::{FileRule, FileRules};
 pub use secrets::Secrets;
 pub use settings::{save_storage_setting, storage_setting, STORAGE_SETTING};
 pub use storage::{Files, LocalStorage, Storage, StoredObject};
-pub use store::{
-    Attach, FileLink, FileRef, FileRow, FoundFile, Measured, NewFile, Origin, Status,
-};
+pub use store::{Attach, FileLink, FileRef, FileRow, FoundFile, Measured, NewFile, Origin, Status};
 pub use sweep::{SweepOptions, SweepReport};
 pub use thumbnail::{OutputFormat, ResizeMode};
 pub use validation::{sniff, ImageFormat, UploadLimits};

@@ -9,4 +9,5 @@ pub mod error;
 pub mod health;
 pub mod id;
 pub mod net;
+pub mod secret;
 pub mod telemetry;

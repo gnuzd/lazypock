@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 use arc_swap::ArcSwapOption;
 use base64::Engine;
 use lazypock_core::error::{Error, Result};
+use lazypock_core::secret::SecretCipher;
 use lazypock_db::collections::Collection;
 use lazypock_db::ddl::quote_ident;
 use lazypock_db::pool::{db_error, Db};
@@ -87,6 +88,14 @@ impl AuthService {
     /// first run — convenient for a single node, and the reason it is still the
     /// fallback rather than being removed: a restart must not silently invalidate
     /// every session when no key was configured.
+    ///
+    /// The database copy is **encrypted with `LAZYPOCK_SECRET_KEY`** when that is set,
+    /// because it has the same problem as a stored S3 secret and a worse consequence: a
+    /// read-only copy of the database plus a signing key mints a token for any account,
+    /// superusers included. A plaintext key from an earlier version is read and rewritten
+    /// encrypted on the spot; a key that cannot be decrypted is a boot failure that names
+    /// the variable, never a quiet regeneration — that would sign everybody out and look
+    /// like a bug in the tokens.
     pub async fn load(&self) -> Result<()> {
         if let Some(keys) = signing_key_from_env()? {
             tracing::info!(
@@ -97,13 +106,45 @@ impl AuthService {
             return Ok(());
         }
 
+        // Read here rather than in `new`: a malformed key is a boot error, and this is
+        // the only path that needs it.
+        let cipher = SecretCipher::from_env()?;
         let client = self.db.client().await?;
-        let keys = match read_key(&client).await? {
-            Some(der) => SigningKeys::from_der(&der)?,
+        let keys = match read_key(&client, cipher.as_ref()).await? {
+            Some(stored) => {
+                let keys = SigningKeys::from_der(&stored.der)?;
+                if !stored.encrypted {
+                    if let Some(cipher) = cipher.as_ref() {
+                        // Back-compat is read-and-upgrade, not read-and-leave: the next
+                        // dump should not carry the key in the clear.
+                        write_key(&client, &keys, Some(cipher)).await?;
+                        tracing::info!(
+                            kid = keys.kid(),
+                            "the stored signing key was plaintext; it is now encrypted with \
+                             LAZYPOCK_SECRET_KEY"
+                        );
+                    } else {
+                        tracing::warn!(
+                            kid = keys.kid(),
+                            "the signing key is stored as plaintext in _settings, so every dump \
+                             and replica of this database mints tokens for any account. Set \
+                             LAZYPOCK_SECRET_KEY and restart to encrypt it at rest."
+                        );
+                    }
+                }
+                keys
+            }
             None => {
                 let keys = SigningKeys::generate()?;
-                write_key(&client, &keys).await?;
+                write_key(&client, &keys, cipher.as_ref()).await?;
                 tracing::info!(kid = keys.kid(), "generated an access-token signing key");
+                if cipher.is_none() {
+                    tracing::warn!(
+                        kid = keys.kid(),
+                        "the generated signing key is stored as plaintext in _settings. Set \
+                         LAZYPOCK_SECRET_KEY to encrypt it at rest."
+                    );
+                }
                 keys
             }
         };
@@ -431,7 +472,18 @@ fn signing_key_from_env() -> Result<Option<SigningKeys>> {
     Ok(Some(SigningKeys::from_der(&der)?))
 }
 
-async fn read_key(runner: &dyn QueryRunner) -> Result<Option<Vec<u8>>> {
+/// A signing key as `_settings` holds it.
+struct StoredKey {
+    /// The DER bytes the tokens are signed with.
+    der: Vec<u8>,
+    /// Whether the stored form was ciphertext rather than base64.
+    encrypted: bool,
+}
+
+async fn read_key(
+    runner: &dyn QueryRunner,
+    cipher: Option<&SecretCipher>,
+) -> Result<Option<StoredKey>> {
     let row = runner
         .run_query_opt(
             "select value from _settings where key = $1::text",
@@ -449,16 +501,44 @@ async fn read_key(runner: &dyn QueryRunner) -> Result<Option<Vec<u8>>> {
             "the stored signing key has no `der`; remove the auth.signing_key setting to regenerate",
         ));
     };
+
+    // An encrypted value without the key is a hard stop, not a reason to generate a new
+    // one: regenerating would sign everybody out, and the operator would be looking at a
+    // mass logout instead of at the variable that is missing.
+    let encrypted = SecretCipher::is_encrypted(encoded);
+    let encoded = if encrypted {
+        let cipher = cipher.ok_or_else(|| {
+            Error::config(format!(
+                "the stored signing key is encrypted but {} is not set, so it cannot be read; \
+                 set it to the key it was saved with (`openssl rand -hex 32` for a new one, \
+                 which signs everybody out)",
+                lazypock_core::secret::KEY_VARIABLE
+            ))
+        })?;
+        cipher.decrypt(SIGNING_KEY_SETTING, encoded)?
+    } else {
+        encoded.to_string()
+    };
+
     let der = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
+        .decode(&encoded)
         .map_err(|_| Error::config("the stored signing key is not valid base64"))?;
-    Ok(Some(der))
+    Ok(Some(StoredKey { der, encrypted }))
 }
 
-async fn write_key(runner: &dyn QueryRunner, keys: &SigningKeys) -> Result<()> {
+async fn write_key(
+    runner: &dyn QueryRunner,
+    keys: &SigningKeys,
+    cipher: Option<&SecretCipher>,
+) -> Result<()> {
+    let der = base64::engine::general_purpose::STANDARD.encode(keys.to_der());
+    let der = match cipher {
+        Some(cipher) => cipher.encrypt(SIGNING_KEY_SETTING, &der)?,
+        None => der,
+    };
     let value = json!({
         "kid": keys.kid(),
-        "der": base64::engine::general_purpose::STANDARD.encode(keys.to_der()),
+        "der": der,
     });
     runner
         .run_execute(
