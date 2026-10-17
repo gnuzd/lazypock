@@ -270,7 +270,8 @@ async fn execute(
             .map_err(ApiError::from)?
             {
                 Some(record) => {
-                    crate::records::sync_files(runner, &step.collection, &record, principal).await?;
+                    crate::records::sync_files(runner, &step.collection, &record, principal)
+                        .await?;
                     Ok((200, record))
                 }
                 None => Err(missing(&step.collection.name, &id)),

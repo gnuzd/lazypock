@@ -216,7 +216,8 @@ LAZYPOCK_STUDIO_DIR=studio/build/studio cargo run -- serve`}
       First-time setup
     </h2>
     <p class="mt-2 text-base-content/80 leading-relaxed">
-      There are two ways to create the first superuser, and either is enough:
+      There is <strong>no default superuser and no default password</strong>. Any
+      one of these three creates the first account:
     </p>
     <ol class="mt-3 list-decimal list-inside space-y-1 text-base-content/80">
       <li>
@@ -228,11 +229,25 @@ LAZYPOCK_STUDIO_DIR=studio/build/studio cargo run -- serve`}
       <li>
         <strong>From the CLI.</strong>
         <code class="doc-inline px-1 py-0.5"
-          >lazypock superuser create --email you@example.com</code
+          >lazypock superuser create --email you@example.com --password …</code
         >
-        (prompts for a password, or reads
-        <code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_PASSWORD</code>).
-        This applies migrations first, so it is safe on a brand-new database.
+        (or set
+        <code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_EMAIL</code> /
+        <code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_PASSWORD</code> to
+        keep both out of shell history — there is no interactive prompt, and a
+        missing value is an error). This applies migrations first, so it is safe
+        on a brand-new database.
+      </li>
+      <li>
+        <strong>From the environment at boot,</strong> for a deployment with no
+        browser and nothing to <code class="doc-inline px-1 py-0.5">exec</code>
+        into yet: set both
+        <code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_EMAIL</code> and
+        <code class="doc-inline px-1 py-0.5">LAZYPOCK_SUPERUSER_PASSWORD</code>
+        and start the server. The account is created only while none exists, so a
+        redeploy never resets a password or makes a second one; setting only one
+        of the two is a boot error rather than a guess. The same advisory lock as
+        the Setup page is taken, so the two cannot race on a fresh installation.
       </li>
     </ol>
     <p class="mt-3 text-base-content/80 leading-relaxed">
@@ -534,7 +549,12 @@ cargo run -- serve`}
       <code class="doc-inline px-1 py-0.5">lazypock_anon</code> /
       <code class="doc-inline px-1 py-0.5">lazypock_authenticated</code> roles to
       exist and be reachable by the connecting role; if they are not, the server
-      logs a loud warning at boot rather than pretending RLS is in force. See
+      <strong>refuses to start</strong> rather than serving without them, because a
+      request that cannot switch role fails anyway (every anonymous and
+      authenticated call would answer 500 while the Studio kept working). A
+      deployment that runs on superuser tokens alone can set
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_REQUIRE_RLS=off</code> to keep
+      the warning instead. See
       <code class="doc-inline px-1 py-0.5">README.md</code> for the CLI
       (<code class="doc-inline px-1 py-0.5">serve</code>,
       <code class="doc-inline px-1 py-0.5">migrate</code>,
@@ -936,8 +956,9 @@ cargo build --release --no-default-features`}
             >
             <td class="px-3 py-2"
               >AES-256-GCM key for the secrets stored in
-              <code class="doc-inline px-1 py-0.5">_settings</code>; required
-              before a secret can be saved</td
+              <code class="doc-inline px-1 py-0.5">_settings</code>: the storage
+              secret, and the access-token signing key when that is not supplied
+              below. Required before a storage secret can be saved</td
             >
             <td class="px-3 py-2 font-mono text-xs">openssl rand -hex 32</td>
           <td class="px-3 py-2">no</td>
@@ -947,9 +968,42 @@ cargo build --release --no-default-features`}
               ><code class="doc-inline px-1 py-0.5">LAZYPOCK_SIGNING_KEY</code></td
             >
             <td class="px-3 py-2"
-              >Access-token signing key (base64), kept out of the database</td
+              >Access-token signing key (base64), kept out of the database
+              entirely. Without it the key is generated into
+              <code class="doc-inline px-1 py-0.5">_settings</code>, encrypted
+              with <code class="doc-inline px-1 py-0.5">LAZYPOCK_SECRET_KEY</code>
+              when that is set</td
             >
             <td class="px-3 py-2 font-mono text-xs">openssl rand -base64 32</td>
+          <td class="px-3 py-2">no</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_SUPERUSER_EMAIL</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >With the password below, creates the first superuser at boot —
+              only while none exists. Also read by
+              <code class="doc-inline px-1 py-0.5"
+                >lazypock superuser create</code
+              >. There is no default account and no default password</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">you@example.com</td>
+          <td class="px-3 py-2">no</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_SUPERUSER_PASSWORD</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >The first superuser's password. Set both of this pair or neither:
+              half of one is a boot error</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">—</td>
           <td class="px-3 py-2">no</td>
           </tr>
         </tbody>
@@ -1071,6 +1125,21 @@ cargo build --release --no-default-features`}
               >Adopt tables lazypock did not create as superuser-only collections
               (<code class="doc-inline px-1 py-0.5">on</code>/<code
                 class="doc-inline px-1 py-0.5">off</code>)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">on</td>
+          <td class="px-3 py-2">no</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_REQUIRE_RLS</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >Fail boot when the restricted roles cannot be switched to. Set
+              <code class="doc-inline px-1 py-0.5">off</code> only for a
+              superuser-only deployment, where every end-user request would fail
+              anyway</td
             >
             <td class="px-3 py-2 font-mono text-xs">on</td>
           <td class="px-3 py-2">no</td>

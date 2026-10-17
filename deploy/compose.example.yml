@@ -65,6 +65,15 @@ services:
       # secrets.
       LAZYPOCK_SECRET_KEY: change-me
 
+      # The first superuser, created at boot **only while no superuser exists**,
+      # which is what `docker compose up` needs: there is no browser to open and
+      # nothing to exec into yet. Both or neither — half a pair is a boot error,
+      # not a guess. A redeploy with a different password does not reset the
+      # account, so these can be left in place; remove them afterwards if you
+      # would rather they were not in the environment.
+      LAZYPOCK_SUPERUSER_EMAIL: you@example.com
+      LAZYPOCK_SUPERUSER_PASSWORD: change-me
+
       LAZYPOCK_ENV: production
 
       # ── recommended ───────────────────────────────────────────────────────
@@ -74,10 +83,19 @@ services:
       # replica. Setting it keeps it out of all of them:
       #   openssl rand -base64 32
       # LAZYPOCK_SIGNING_KEY: change-me
+      #
+      # The database copy is encrypted with LAZYPOCK_SECRET_KEY above, so a dump
+      # on its own no longer mints tokens. Setting this variable instead keeps the
+      # key out of the database entirely, which is stronger still.
 
       # One connection per node is held for LISTEN. Keep it small: total
       # connections = nodes x (pool + 1), and the database has a limit.
       LAZYPOCK_POOL_SIZE: "5"
+
+      # Fails boot when the restricted roles row-level security needs cannot be
+      # switched to (on by default). A server that cannot switch role answers
+      # 500 to every end-user request, so starting anyway only hides the cause.
+      # LAZYPOCK_REQUIRE_RLS: on
 
       # Peers whose X-Forwarded-For / X-Real-IP headers are believed. Unset
       # means no forwarding header is ever read, so rate limits and request logs

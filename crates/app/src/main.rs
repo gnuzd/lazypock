@@ -30,6 +30,108 @@ fn hooks_directory() -> String {
     std::env::var("LAZYPOCK_HOOKS_DIR").unwrap_or_else(|_| "hooks".to_string())
 }
 
+/// The first superuser, from `LAZYPOCK_SUPERUSER_EMAIL` + `LAZYPOCK_SUPERUSER_PASSWORD`.
+///
+/// A deployment that cannot open a browser or `exec` into a container — Kubernetes, a
+/// PaaS, a compose file a user is told to `up` — otherwise has no way to get its first
+/// account, and the Studio's Setup page is only reachable if the server is exposed before
+/// it has one. Both halves are supplied by the operator; **there is no default password**,
+/// because a baked-in one is the most exploited thing in this class of product.
+///
+/// Three properties this deliberately has:
+///
+/// - **It never touches an existing installation.** If any superuser exists the variables
+///   are ignored with a log line: a redeploy must not reset a password or create a second
+///   account.
+/// - **Both or neither.** Half a pair is a templating mistake, and guessing which half was
+///   meant is how an account nobody can log into gets created.
+/// - **It serialises with the Studio's Setup**, on the same advisory lock (`SETUP_LOCK`),
+///   so a boot and a Setup request arriving together cannot both create one.
+async fn bootstrap_superuser(db: &Db) -> Result<()> {
+    let email = variable("LAZYPOCK_SUPERUSER_EMAIL");
+    let password = variable("LAZYPOCK_SUPERUSER_PASSWORD");
+
+    let (email, password) = match (email, password) {
+        (None, None) => return Ok(()),
+        (Some(_), None) => {
+            return Err(Error::config(
+                "LAZYPOCK_SUPERUSER_EMAIL is set but LAZYPOCK_SUPERUSER_PASSWORD is not; \
+                 set both to create the first superuser, or neither",
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(Error::config(
+                "LAZYPOCK_SUPERUSER_PASSWORD is set but LAZYPOCK_SUPERUSER_EMAIL is not; \
+                 set both to create the first superuser, or neither",
+            ))
+        }
+        (Some(email), Some(password)) => (email, password),
+    };
+
+    let mut client = db.client().await?;
+    let transaction = client.transaction().await.map_err(db_error)?;
+
+    // The same lock the Setup endpoint takes, so the two cannot race.
+    transaction
+        .execute(
+            "select pg_advisory_xact_lock($1::bigint)",
+            &[&lazypock_auth::superuser::SETUP_LOCK],
+        )
+        .await
+        .map_err(db_error)?;
+
+    let existing = lazypock_auth::superuser::count(&transaction).await?;
+    if existing > 0 {
+        tracing::debug!(
+            "LAZYPOCK_SUPERUSER_EMAIL is ignored: this installation already has a superuser"
+        );
+        return Ok(());
+    }
+
+    // `create` validates the address and refuses a password that is too short, so the
+    // checks are the same ones the Setup page enforces.
+    let account = lazypock_auth::superuser::create(&transaction, &email, &password).await?;
+    transaction.commit().await.map_err(db_error)?;
+
+    // The email, never the password.
+    tracing::info!(
+        email = %account.email,
+        "created the first superuser from LAZYPOCK_SUPERUSER_EMAIL"
+    );
+    Ok(())
+}
+
+/// A non-empty environment variable, or `None`.
+fn variable(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Whether a missing row-level-security role is fatal, from `LAZYPOCK_REQUIRE_RLS`.
+///
+/// On by default, because the alternative is not a degraded server: a request that cannot
+/// switch role fails in `apply()`, so every anonymous and authenticated request answers
+/// 500 while the Studio keeps working. A deployment that genuinely runs on superuser
+/// tokens alone can say `LAZYPOCK_REQUIRE_RLS=off` and keep the warning.
+///
+/// An unrecognised value is an error rather than a silent default, for the same reason
+/// `LAZYPOCK_REFLECT_EXISTING` treats one as an error: the wrong reading of "off" is a
+/// server with no row-level security.
+fn require_rls() -> Result<bool> {
+    match std::env::var("LAZYPOCK_REQUIRE_RLS") {
+        Err(_) => Ok(true),
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "on" | "true" | "yes" => Ok(true),
+            "0" | "off" | "false" | "no" => Ok(false),
+            other => Err(Error::config(format!(
+                "LAZYPOCK_REQUIRE_RLS must be on or off, got {other:?}"
+            ))),
+        },
+    }
+}
+
 /// Where mail template overrides live, from `LAZYPOCK_MAIL_TEMPLATES_DIR`.
 ///
 /// Unset means the built-in templates only, which is what a deployment that has
@@ -50,7 +152,7 @@ use lazypock_core::{
     error::{Error, Result},
     telemetry,
 };
-use lazypock_db::{migrate, pool::Db, schema::SchemaCache, watch::watch_schema};
+use lazypock_db::{migrate, pool::db_error, pool::Db, schema::SchemaCache, watch::watch_schema};
 
 use cli::{Cli, Command, SuperuserCommand};
 
@@ -220,6 +322,11 @@ async fn serve(config: Config) -> Result<()> {
     }
     tracing::info!(collections = schema.snapshot().len(), "schema loaded");
 
+    // After the schema is up and before anything serves: a deployment with no browser and
+    // no shell still needs a way to get its first account. A no-op unless both variables
+    // are set, and a no-op on an installation that already has one.
+    bootstrap_superuser(&db).await?;
+
     // Realtime: every node listens on its own connection and fans out to its own
     // clients. A node that cannot listen still serves the API, but says so loudly.
     // Created before the schema watcher so the watcher can announce a registry
@@ -249,18 +356,30 @@ async fn serve(config: Config) -> Result<()> {
         .await
         .map_err(|err| Error::config(format!("cannot load the token signing key: {err}")))?;
 
-    // Row-level security needs the restricted roles. Without them a request cannot
-    // switch role, and the only safe reading is that it is not in force — so this
-    // is loud rather than a debug line.
+    // Row-level security needs the restricted roles, and without them "running anyway" is
+    // not a degraded mode: a request that cannot switch role fails in `apply()`, so every
+    // anonymous and authenticated request answers 500 while superuser tokens keep working.
+    // Failing here is the honest end of that: a node nobody can use is a worse outcome
+    // than a node that says why it will not start. `LAZYPOCK_REQUIRE_RLS=off` is the
+    // escape hatch for a deployment that really does run on superuser tokens alone.
     {
         let mut client = db.client().await?;
         let unreachable = lazypock_db::rls::context::unreachable_roles(&mut client).await?;
         if !unreachable.is_empty() {
+            let explanation = format!(
+                "this connection cannot switch to {unreachable:?}. The connecting role must be a \
+                 member of them, or be a superuser; see PLAN.md section 6. Set \
+                 LAZYPOCK_REQUIRE_RLS=off to serve without row-level security anyway (every \
+                 anonymous and authenticated request will then fail)."
+            );
+            if require_rls()? {
+                return Err(Error::config(format!(
+                    "row-level security would not be in force: {explanation}"
+                )));
+            }
             tracing::warn!(
                 unreachable = ?unreachable,
-                "row-level security is NOT in force: this connection cannot switch to those roles. \
-                 The connecting role must be a member of them, or be a superuser; see PLAN.md \
-                 section 6."
+                "row-level security is NOT in force: {explanation}"
             );
         }
     }

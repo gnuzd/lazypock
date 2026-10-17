@@ -13,6 +13,7 @@
 use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use lazypock_auth::superuser::SETUP_LOCK;
 use lazypock_core::error::Error;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -25,12 +26,6 @@ use crate::state::AppState;
 /// Setup is where the very first credential of an installation is chosen, and it is
 /// chosen once; a weak one there is the weakest link for everything behind it.
 const MIN_PASSWORD: usize = 8;
-
-/// The advisory lock key for the setup transaction.
-///
-/// Any constant works; it only has to be the same value in every process that could
-/// run setup, and it must not collide with the migration runner's key.
-const SETUP_LOCK: i64 = 0x6C61_7A79_7365_7475;
 
 /// The body setup accepts. The field is `email`, not the `identity` a login sends.
 #[derive(Debug, Deserialize)]

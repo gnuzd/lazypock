@@ -39,11 +39,12 @@ pub enum Command {
 pub enum SuperuserCommand {
     /// Create a superuser.
     Create {
-        /// Superuser email address.
-        #[arg(long)]
+        /// Superuser email address, from `--email` or `LAZYPOCK_SUPERUSER_EMAIL`.
+        #[arg(long, env = "LAZYPOCK_SUPERUSER_EMAIL")]
         email: String,
-        /// Password. Prefer the `LAZYPOCK_SUPERUSER_PASSWORD` environment
-        /// variable so the secret does not land in shell history.
+        /// Password, from `--password` or `LAZYPOCK_SUPERUSER_PASSWORD` so the
+        /// secret does not land in shell history. There is no prompt and no
+        /// default: a missing value is an error rather than an empty account.
         #[arg(long, env = "LAZYPOCK_SUPERUSER_PASSWORD", hide_env_values = true)]
         password: String,
     },

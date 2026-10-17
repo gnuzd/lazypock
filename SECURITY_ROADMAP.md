@@ -36,7 +36,7 @@ Findings keep stable `F` numbers; the P0 list refers to them.
 | F8 | `POST /api/settings/storage/test` is documented as a "Real upload round-trip against the bucket". For S3 it is a single `GET ?list-type=2&max-keys=1`. | Medium — a false doc claim about the thing that proves the bucket works | `crates/api/src/settings.rs:518-556`, `crates/files/src/s3.rs:698-717`, `docs/src/routes/files/+page.md` |
 | F9 | S3/R2 has only offline SigV4 assertions (timestamp, canonical query, signature shape); no PUT/GET/DELETE/LIST/presigned-PUT has ever run against a bucket, in CI or out. | Medium — unverified | `crates/files/src/s3.rs:833-1027` |
 | F10 | Serving a file (`GET /api/files/{id}`, `?preset=`, `?thumb=`, and the key-addressed path) takes no `Principal` and consults no rule: a file id is a never-expiring capability URL. Documented as "public" in the API table, but never stated as the design decision it is (PocketBase gates this with per-request file tokens). | Medium — undocumented decision | `crates/api/src/files.rs:978-1040`, `:800-820` |
-| F11 | There is no default or environment-driven superuser. `superuser create` needs `--password` or `LAZYPOCK_SUPERUSER_PASSWORD`, `--email` has no env counterpart, and the server docs claim the CLI "prompts for a password" — it errors. | Low — bootstrap footgun + false doc claim | `crates/app/src/cli.rs:40-48`, `docs/src/routes/server/+page.svelte:225-240` |
+| F11 | There was no environment-driven superuser at all: `superuser create` needed `--password` or `LAZYPOCK_SUPERUSER_PASSWORD`, `--email` had no env counterpart, and the server docs claimed the CLI "prompts for a password" — it errors. | Low — bootstrap footgun + false doc claim | `crates/app/src/cli.rs:40-48`, `docs/src/routes/server/+page.svelte:225-240` |
 | F12 | `_mfas` is synthesised as a Studio system collection with no table behind it, so it cannot hold a row. | Low — advertised capability that cannot function | `crates/api/src/collections.rs:344-380` |
 | F13 | `SECURITY.md` links `TEST_COVERAGE_AUDIT.md` and `HOOKS_SECURITY.md` (neither exists) and `README.md#what-the-rule-engine-tests-cover` (no such anchor); its supported-versions table says 0.12.x. | Low — stale docs | `SECURITY.md:5-40` |
 
@@ -68,9 +68,11 @@ who owns it or may write the owning record).
   model, stated: this separates "a leaked dump" from "a minted token"; it does not
   protect against a compromise of the environment.
 - **5. F11 — the bootstrap story.** `LAZYPOCK_SUPERUSER_EMAIL` for symmetry with
-  `LAZYPOCK_SUPERUSER_PASSWORD`, and the docs corrected: there is no prompt, and there
-  is deliberately **no default superuser and no default password** — first-run Setup
-  (gated on "no superuser exists", advisory-locked) and the CLI are the two paths.
+  `LAZYPOCK_SUPERUSER_PASSWORD`, and a boot-time path for a deployment with no browser
+  and no shell: both variables set creates the first account **only while none exists**,
+  under the same advisory lock as the Studio's Setup. There is deliberately **no default
+  superuser and no default password** — a redeploy must never reset a password, and half
+  of the pair is a boot error rather than a guess.
 
 ## P1 — blockers for real use
 
@@ -115,8 +117,11 @@ who owns it or may write the owning record).
 - **RLS enforcement is the default, not a warning.** A server that cannot switch roles
   is not "running without RLS", it is answering 500 to every end-user request.
 - **No default superuser, ever.** A baked-in password is the single most exploited
-  thing in this class of product. First-run Setup is gated on an advisory lock and on
-  "no superuser exists"; the CLI covers the headless case.
+  thing in this class of product. What exists instead: first-run Setup in the Studio,
+  the CLI, and `LAZYPOCK_SUPERUSER_EMAIL` + `LAZYPOCK_SUPERUSER_PASSWORD` at boot for a
+  container that has neither a browser nor a shell yet. All three are gated on "no
+  superuser exists" and serialised on one advisory lock, so a redeploy cannot reset a
+  password and two of them cannot race.
 
 ## Corrections
 
@@ -142,7 +147,7 @@ Corrections to the earlier review pass (the pre-verification draft of this roadm
 | F2 + F6 one delete path | done — regression test in `crates/api/tests/files.rs` |
 | F4 `LAZYPOCK_REQUIRE_RLS` | done |
 | F5 signing key at rest | done |
-| F11 bootstrap env + docs | done |
+| F11 bootstrap env + docs | done — boot, CLI, docs, compose example; verified end to end against a scratch database |
 | F13 stale `SECURITY.md` links | done |
 | F8 + F9 bucket round-trip + MinIO CI | open (P1) |
 | F10 file-read decision | open (P1, needs a decision) |

@@ -130,8 +130,15 @@ define your first collection — the collections it declares become real tables 
 are exposed over REST immediately.
 
 ```bash
-LAZYPOCK_SUPERUSER_PASSWORD=… cargo run -- superuser create --email you@example.com
+LAZYPOCK_SUPERUSER_EMAIL=you@example.com \
+  LAZYPOCK_SUPERUSER_PASSWORD=… cargo run -- superuser create
 ```
+
+There is no default superuser and no default password. A container deployment with
+no shell to run that command can set both variables and start the server instead:
+the account is created at boot **only while no superuser exists**, so a redeploy
+never resets it. The Studio's first-run Setup does the same thing, under the same
+lock.
 
 ### CLI
 
@@ -139,7 +146,7 @@ LAZYPOCK_SUPERUSER_PASSWORD=… cargo run -- superuser create --email you@exampl
 lazypock serve        # start the API server (the default)
 lazypock migrate      # apply pending database migrations
 lazypock migrate --status   # show which migrations are applied
-lazypock superuser create --email you@example.com
+lazypock superuser create --email you@example.com   # or LAZYPOCK_SUPERUSER_EMAIL
 lazypock config       # print the resolved configuration, secrets redacted
 lazypock healthcheck  # exit 0 when a running server reports healthy
 ```

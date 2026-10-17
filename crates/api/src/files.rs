@@ -932,7 +932,7 @@ async fn remove_file(
         }
     }
 
-    let usage = store::refs_for_file(&client, &id)
+    let usage = store::refs_for_file(&client, id)
         .await
         .map_err(ApiError::new)?;
     if !usage.is_empty() && !(query.force && principal.is_superuser()) {
@@ -949,7 +949,7 @@ async fn remove_file(
             .into_response());
     }
 
-    store::delete(&client, &id).await.map_err(ApiError::new)?;
+    store::delete(&client, id).await.map_err(ApiError::new)?;
     tracing::info!(
         id = %id,
         key = %file.storage_path,
