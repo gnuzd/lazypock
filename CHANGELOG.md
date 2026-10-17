@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.3](https://github.com/gnuzd/lazypock/compare/v0.23.2...v0.23.3) (2026-10-17)
+
+
+### Bug Fixes
+
+* **security:** the four credential findings from the audit ([71809cd](https://github.com/gnuzd/lazypock/commit/71809cd0e338ca341e8646a00bc4046b0a47ee1d))
+
 ## [0.23.2](https://github.com/gnuzd/lazypock/compare/v0.23.1...v0.23.2) (2026-10-17)
 
 
