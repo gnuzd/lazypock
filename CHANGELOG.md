@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.1](https://github.com/gnuzd/lazypock/compare/v0.23.0...v0.23.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **ci:** publish release images to Docker Hub as well as GHCR ([cb2e0f3](https://github.com/gnuzd/lazypock/commit/cb2e0f37be722502943d7e90875d5c836490f930))
+* **db,realtime:** make the dedicated LISTEN connections use TLS ([f205efe](https://github.com/gnuzd/lazypock/commit/f205efe7c0944680925ca99efd3936bb312df9c2))
+
 ## [0.23.0](https://github.com/gnuzd/lazypock/compare/v0.22.1...v0.23.0) (2026-10-16)
 
 
