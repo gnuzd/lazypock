@@ -32,10 +32,10 @@ Findings keep stable `F` numbers; the P0 list refers to them.
 | F4 | If the connection cannot switch to `lazypock_anon`/`lazypock_authenticated`, boot logs a warning and serves on. That is not a degraded mode: superusers use `RequestContext::owner()` (no `SET ROLE`) so the Studio keeps working while **every** anonymous and authenticated request fails in `apply()`. | **High** — RLS silently absent, end users 100% broken | `crates/app/src/main.rs:253-265`, `crates/api/src/auth.rs:97-108`, `crates/db/src/rls/context.rs:236-242` |
 | F5 | The token signing key is stored as plaintext base64 DER in `_settings.auth.signing_key`. Read-only DB access (a dump, a replica, a backup) plus that value mints a token for any user — including superusers. | **High** — DB read escalates to app takeover | `crates/auth/src/service.rs:433-478` |
 | F6 | `delete_by_id`'s doc comment claims "a caller who is neither a superuser nor the uploader may not delete somebody else's file". No `uploaded_by` check exists; only `deleteRule`. | Low — doc/code mismatch | `crates/api/src/files.rs:858-864` vs `:888-921` |
-| F7 | File rules are enforced by hand in `crates/api/src/files.rs`; `_files`, `_file_refs` and `_file_outbox` have **no row-level security** (only `_image_presets`, `_auth_origins`, `_external_auths`, `_otps` enable it). The one layer with hand-rolled authorization is where F1, F2 and F6 live. | Medium — structural | `migrations/0011_files.sql` (no `enable row level security`), `migrations/0005,0012,0013` |
+| F7 | File rules are enforced by hand in `crates/api/src/files.rs`; `_files`, `_file_refs` and `_file_outbox` have **no row-level security** (only `_image_presets`, `_auth_origins`, `_external_auths`, `_otps` enable it). The one layer with hand-rolled authorization is where F1, F2 and F6 live. Read/list and delete policies **are** expressible with what already exists — `rls::policies` compiles a rule that is *data* (in `_collections.rules`) into policies with inlined literals and `auth.*` GUC helpers, and file rules use the same parser and compiler. What is not expressible yet is the **write** side: an attach policy would have to reach into the target record, and `rls::policy` refuses dotted paths and subqueries. | Medium — structural | `migrations/0011_files.sql` (no `enable row level security`), `crates/db/src/rls/policies.rs:40-60`, `crates/db/src/rls/policy.rs:1-6`, `crates/files/src/rules.rs:1-30` |
 | F8 | `POST /api/settings/storage/test` is documented as a "Real upload round-trip against the bucket". For S3 it is a single `GET ?list-type=2&max-keys=1`. | Medium — a false doc claim about the thing that proves the bucket works | `crates/api/src/settings.rs:518-556`, `crates/files/src/s3.rs:698-717`, `docs/src/routes/files/+page.md` |
 | F9 | S3/R2 has only offline SigV4 assertions (timestamp, canonical query, signature shape); no PUT/GET/DELETE/LIST/presigned-PUT has ever run against a bucket, in CI or out. | Medium — unverified | `crates/files/src/s3.rs:833-1027` |
-| F10 | Serving a file (`GET /api/files/{id}`, `?preset=`, `?thumb=`, and the key-addressed path) takes no `Principal` and consults no rule: a file id is a never-expiring capability URL. Documented as "public" in the API table, but never stated as the design decision it is (PocketBase gates this with per-request file tokens). | Medium — undocumented decision | `crates/api/src/files.rs:978-1040`, `:800-820` |
+| F10 | Serving a file (`GET /api/files/{id}`, `?preset=`, `?thumb=`, and the key-addressed path) takes no `Principal` and consults no rule: a file id is a never-expiring capability URL. The decision *is* stated — `crates/files/src/rules.rs` says so at the top and the Studio's File rules modal repeats it ("files are still served publicly at their URL") — but the docs site lists the route as "public" without the consequence, and PocketBase's answer (short-lived file tokens) is not weighed anywhere. | Medium — undocumented trade-off, in one of the three places it is written | `crates/api/src/files.rs:978-1040`, `crates/files/src/rules.rs:24-27`, `studio/src/routes/(app)/settings/media/+page.svelte:106-108`, `docs/src/routes/files/+page.md:260` |
 | F11 | There was no environment-driven superuser at all: `superuser create` needed `--password` or `LAZYPOCK_SUPERUSER_PASSWORD`, `--email` had no env counterpart, and the server docs claimed the CLI "prompts for a password" — it errors. | Low — bootstrap footgun + false doc claim | `crates/app/src/cli.rs:40-48`, `docs/src/routes/server/+page.svelte:225-240` |
 | F12 | `_mfas` is synthesised as a Studio system collection with no table behind it, so it cannot hold a row. | Low — advertised capability that cannot function | `crates/api/src/collections.rs:344-380` |
 | F13 | `SECURITY.md` links `TEST_COVERAGE_AUDIT.md` and `HOOKS_SECURITY.md` (neither exists) and `README.md#what-the-rule-engine-tests-cover` (no such anchor); its supported-versions table says 0.12.x. | Low — stale docs | `SECURITY.md:5-40` |
@@ -85,10 +85,12 @@ who owns it or may write the owning record).
   and that is decided by `ImageFormat`.
 - **8. Benchmarks.** RAM and latency on 2 vCPU / 2 GB with several instances. The result
   may reorder 6 and 7. (The TypeScript SDK has `bench/`; the server has none.)
-- **9. F10 — decide file-read authorization.** Either document capability-URL semantics
-  as the contract (a file id is unguessable and permanent) or consult the owning
-  record's `viewRule`. PocketBase's answer is a short-lived file token; the migration
-  cost is real for every stored URL, so this is a decision, not a bug fix.
+- **9. F10 — decide file-read authorization.** Either keep capability-URL semantics as the
+  contract (a file id is unguessable and permanent) or consult the owning record's
+  `viewRule`. PocketBase's answer is a short-lived file token; the migration cost is real
+  for every stored URL, so this is a decision, not a bug fix. Whichever way it goes, the
+  docs site's file page has to say why — the Studio modal and `files/src/rules.rs`
+  already do, and the public page is the one that only says "public".
 
 ## P2 — capability expansion
 
@@ -151,4 +153,4 @@ Corrections to the earlier review pass (the pre-verification draft of this roadm
 | F13 stale `SECURITY.md` links | done |
 | F8 + F9 bucket round-trip + MinIO CI | open (P1) |
 | F10 file-read decision | open (P1, needs a decision) |
-| F7 RLS on `_files` | open (follow-up; the P0 fixes remove the reachable bugs, this removes the class) |
+| F7 RLS on `_files` | open. Read/list + delete policies are a day's work on the existing `rls::policies` machinery; the **attach** policy needs subquery support in `rls::policy` first, and every file query has to move under a request role (today they run as the owner, which bypasses RLS) |
