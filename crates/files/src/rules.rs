@@ -27,8 +27,10 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use lazypock_core::error::{Error, Result};
+use lazypock_db::pool::db_error;
 use lazypock_db::query::compile::{self, AuthContext, CompiledFilter, FilterContext};
 use lazypock_db::query::filter;
+use lazypock_db::runner::QueryRunner;
 
 /// The columns a file rule may name, with the Postgres type each one has.
 ///
@@ -155,6 +157,20 @@ impl FileRules {
             list: read("listRule"),
             delete: read("deleteRule"),
         }
+    }
+
+    /// Read both rules from the `files` setting in `_settings`.
+    ///
+    /// An absent row is the default (superusers only), which is what a fresh
+    /// installation has. This read feeds policy generation, both at boot and
+    /// after the setting changes, so it is not a request query.
+    pub async fn load(runner: &dyn QueryRunner) -> Result<Self> {
+        let row = runner
+            .run_query_opt("select value from _settings where key = 'files'", &[])
+            .await
+            .map_err(db_error)?;
+        let setting = row.map(|row| row.get::<_, Value>(0)).unwrap_or(Value::Null);
+        Ok(Self::from_setting(&setting))
     }
 
     /// What may list the library, and what to restrict the listing to.

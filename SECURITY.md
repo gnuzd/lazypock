@@ -56,11 +56,13 @@ verified against.
 - **CORS / WebSocket origin checking** is configured separately via the server
   settings; see the CORS notes in the documentation.
 - **File storage** has its own surface, with its own rules
-  (`files.rules.listRule` / `deleteRule`) and — unlike records — a serving path
-  that is public: a file id is an unguessable, non-expiring capability URL.
-  A caller may only attach a file they uploaded, and only to a record they may
-  write. See [the security roadmap](SECURITY_ROADMAP.md) for the open decision
-  on file-read authorization.
+  (`files.rules.listRule` / `deleteRule`) that are compiled to Postgres policies on
+  `_files` (`crates/files/src/policy.rs`), and — unlike records — a serving path that is
+  public: a file id is an unguessable, non-expiring capability URL. `_file_refs` is
+  owner-only bookkeeping. A caller may only attach a file they uploaded, and only to a
+  record they may write (the attach rule is application-level until F7b). See
+  [the security roadmap](SECURITY_ROADMAP.md) for the open decision on file-read
+  authorization.
 - **No default credentials.** There is no built-in superuser and no default
   password. The first superuser is created either by the Studio's first-run
   Setup (which works only while no superuser exists) or by

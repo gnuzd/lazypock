@@ -12,10 +12,11 @@ use axum::Json;
 use bytes::Bytes;
 use lazypock_core::error::Error;
 use lazypock_db::pool::db_error;
+use lazypock_db::rls;
+use lazypock_db::rls::context::Action;
 use lazypock_db::runner::QueryRunner;
-use lazypock_db::tokio_postgres::types::ToSql;
 use lazypock_db::types::validate_identifier;
-use lazypock_files::rules::{shift_placeholders, FileRules};
+use lazypock_files::rules::{FileRule, FileRules};
 use lazypock_files::storage::Files;
 use lazypock_files::store::{self, NewFile, Origin};
 use lazypock_files::{keys, outbox, presets, thumbnail, ImagePreset};
@@ -890,49 +891,47 @@ async fn remove_file(
         )));
     };
 
-    let client = state.db.client().await.map_err(ApiError::new)?;
-    let file = store::get(&client, id)
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+    let transaction = client
+        .transaction()
         .await
-        .map_err(ApiError::new)?
-        .ok_or_else(|| ApiError::new(Error::not_found(format!("no file {id:?}"))))?;
+        .map_err(|err| ApiError::new(db_error(err)))?;
 
-    // `files.rules.deleteRule` decides who may: a filter is asked about *this* file, the
-    // empty string opens it, and an absent rule leaves it to superusers. A superuser
-    // bypasses it, and every unreadable rule denies.
-    if !principal.is_superuser() {
-        let rules = file_rules(&client).await?;
-        match rules.delete_predicate(&principal.auth_context()) {
-            Ok(None) => {}
-            Ok(Some(predicate)) => {
-                let sql = format!(
-                    "select 1 from _files where id = $1::text and ({})",
-                    shift_placeholders(&predicate.sql, 1)
-                );
-                let mut parameters: Vec<&(dyn ToSql + Sync)> = vec![&id];
-                for value in &predicate.params {
-                    parameters.push(value);
-                }
-                let allowed = client
-                    .run_query_opt(&sql, &parameters)
-                    .await
-                    .map_err(|err| ApiError::new(db_error(err)))?
-                    .is_some();
-                if !allowed {
-                    tracing::info!(
-                        id = %id,
-                        user = %user_id,
-                        "file deleteRule does not match this file"
-                    );
-                    return Err(ApiError::new(Error::forbidden(
-                        "Access denied by file deleteRule",
-                    )));
-                }
-            }
-            Err(err) => return Err(ApiError::new(err)),
-        }
-    }
+    // The `_files` policies are the authorization: the `delete` action selects the
+    // deleteRule `SELECT` mirror, so a row the rule does not allow is not visible here.
+    rls::context::apply(&transaction, &principal.request_context(Action::Delete))
+        .await
+        .map_err(ApiError::new)?;
 
-    let usage = store::refs_for_file(&client, id)
+    let Some(file) = store::get(&transaction, id).await.map_err(ApiError::new)? else {
+        // Denied or absent. Tell them apart as the server did before, without letting
+        // the restricted role see the row.
+        rls::context::assume_owner(&transaction)
+            .await
+            .map_err(ApiError::new)?;
+        let exists = store::get(&transaction, id)
+            .await
+            .map_err(ApiError::new)?
+            .is_some();
+        return if exists {
+            tracing::info!(
+                id = %id,
+                user = %user_id,
+                "file deleteRule does not match this file"
+            );
+            Err(ApiError::new(Error::forbidden(
+                "Access denied by file deleteRule",
+            )))
+        } else {
+            Err(ApiError::new(Error::not_found(format!("no file {id:?}"))))
+        };
+    };
+
+    // The reference guard reads `_file_refs`, which is owner-only bookkeeping.
+    rls::context::assume_owner(&transaction)
+        .await
+        .map_err(ApiError::new)?;
+    let usage = store::refs_for_file(&transaction, id)
         .await
         .map_err(ApiError::new)?;
     if !usage.is_empty() && !(query.force && principal.is_superuser()) {
@@ -949,7 +948,24 @@ async fn remove_file(
             .into_response());
     }
 
-    store::delete(&client, id).await.map_err(ApiError::new)?;
+    // Back to the request role for the write itself, so the policy allows it.
+    rls::context::apply(&transaction, &principal.request_context(Action::Delete))
+        .await
+        .map_err(ApiError::new)?;
+    let deleted = store::delete(&transaction, id)
+        .await
+        .map_err(ApiError::new)?;
+    if deleted.is_none() {
+        return Err(ApiError::new(Error::forbidden(
+            "Access denied by file deleteRule",
+        )));
+    }
+
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
     tracing::info!(
         id = %id,
         key = %file.storage_path,
@@ -1121,18 +1137,12 @@ pub async fn delete(
 
 /// The file rules, read from the `files` setting the Studio's Media page writes.
 ///
-/// Read per request rather than cached: a settings change takes effect on the next
-/// request, and a rule that is enforced one request late is a rule nobody can reason
-/// about.
-async fn file_rules(
-    client: &lazypock_db::deadpool_postgres::Client,
-) -> Result<FileRules, ApiError> {
-    let row = client
-        .query_opt("select value from _settings where key = 'files'", &[])
-        .await
-        .map_err(|err| ApiError::new(db_error(err)))?;
-    let setting = row.map(|row| row.get::<_, Value>(0)).unwrap_or(Value::Null);
-    Ok(FileRules::from_setting(&setting))
+/// Used only for the 403 when `listRule` is nil: PocketBase answers that way rather
+/// than with an empty page, and RLS cannot tell "denied" from "no rows". The
+/// filtering itself is the `_files` policy, rebuilt in the same transaction as the
+/// setting.
+async fn file_rules(runner: &dyn QueryRunner) -> Result<FileRules, ApiError> {
+    FileRules::load(runner).await.map_err(ApiError::new)
 }
 
 /// Whether a record row exists.
@@ -1287,26 +1297,34 @@ pub async fn list(
     let per_page = query.per_page.clamp(1, MAX_PER_PAGE);
     let page = query.page.max(1);
 
-    let client = state.db.client().await.map_err(ApiError::new)?;
-    let rules = file_rules(&client).await?;
-    let restriction = match rules.list_predicate(&principal.auth_context()) {
-        Ok(predicate) => predicate,
-        // A superuser bypasses the rule rather than being exempted from reading it: an
-        // unreadable rule must not stop the operator who has to fix it.
-        Err(err) if principal.is_superuser() => {
-            tracing::debug!(error = %err, "file listRule does not allow this request; superuser");
-            None
+    let mut client = state.db.client().await.map_err(ApiError::new)?;
+
+    // PocketBase answers 403 when `listRule` is nil, and an unreadable rule denies. RLS
+    // cannot tell "denied" from "no rows", so that case is named here; a filter is
+    // enforced by the `_files` policy, not in Rust.
+    if !principal.is_superuser() {
+        let rules = file_rules(&client).await?;
+        if rules.list == FileRule::SuperusersOnly {
+            return Err(ApiError::new(Error::forbidden(
+                "Access denied by file listRule",
+            )));
         }
-        Err(err) => return Err(ApiError::new(err)),
-    };
-    let restriction = if principal.is_superuser() {
-        None
-    } else {
-        restriction
-    };
+    }
+
+    // `_image_presets` has its own RLS, so the presets a listing renders are read as the
+    // owner; they are not per-caller data.
+    let presets = presets::load(&client).await.map_err(ApiError::new)?;
+
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+    rls::context::apply(&transaction, &principal.request_context(Action::List))
+        .await
+        .map_err(ApiError::new)?;
 
     let (files, total) = store::list(
-        &client,
+        &transaction,
         &store::ListQuery {
             page,
             per_page,
@@ -1318,14 +1336,18 @@ pub async fn list(
             origin: None,
             status: None,
             uploaded_by: None,
-            restriction,
+            // The `_files` policy does the filtering; the query carries no rule predicate.
+            restriction: None,
         },
     )
     .await
     .map_err(ApiError::new)?;
 
-    // One query for the presets, so every item can offer its variants.
-    let presets = presets::load(&client).await.map_err(ApiError::new)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|err| ApiError::new(db_error(err)))?;
+
     let items: Vec<Value> = files
         .iter()
         .map(|file| file_json_with(file, &state.files, &presets))

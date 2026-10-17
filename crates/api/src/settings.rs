@@ -105,6 +105,15 @@ pub async fn update(
             .map_err(|err| ApiError::new(lazypock_db::pool::db_error(err)))?;
     }
 
+    // `files.rules` is data, so its policies are rebuilt in the same transaction as
+    // the setting. A rule that is stored but not applied reads as enforced and is not.
+    if let Some(setting) = object.get("files") {
+        let rules = lazypock_files::FileRules::from_setting(setting);
+        lazypock_files::policy::apply(&transaction, &rules)
+            .await
+            .map_err(ApiError::new)?;
+    }
+
     // Inside the transaction, so a settings write that cannot be attributed does
     // not happen. Names only, never values: these settings hold credentials — an
     // SMTP password, storage keys — and an audit log that copies them is one more

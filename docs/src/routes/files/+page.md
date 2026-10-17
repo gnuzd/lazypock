@@ -196,6 +196,11 @@ A superuser bypasses both rules, which is what keeps the media library usable wh
 has been locked down. A rule that cannot be read — whitespace only, a number, a broken
 filter — **denies** rather than quietly meaning "public", and says so in the log.
 
+The rules are compiled to Postgres row-level security policies on `_files` and rebuilt
+whenever `files.rules` changes, so a query that forgets to filter is denied by the
+database rather than returning every row. Serving is still not a rule check: a file URL
+is a capability, as described above.
+
 Nothing configured means superusers only: a fresh installation behaves as an admin tool
 until an operator opens it up.
 

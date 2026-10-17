@@ -444,7 +444,8 @@ pub async fn delete_record(
 /// The caller's identity is part of the operation, not a detail: attaching a file is
 /// what makes it this record's, so it is the point at which "may this caller make this
 /// file theirs" has to be answered. The record write itself is already authorised by
-/// row-level security; the file is not covered by it.
+/// row-level security; the file tables are internal bookkeeping, so this switches back
+/// to the owner for them (the ownership check below is what authorises the attach).
 pub(crate) async fn sync_files(
     runner: &dyn QueryRunner,
     collection: &Collection,
@@ -454,6 +455,13 @@ pub(crate) async fn sync_files(
     let Some(record_id) = record.get("id").and_then(Value::as_str) else {
         return Ok(());
     };
+
+    // `_files`/`_file_refs` have row-level security and no write policies: the attach is
+    // authorised by the ownership filter in `store::attach`, not by a policy. F7b moves
+    // that predicate into the database.
+    rls::context::assume_owner(runner)
+        .await
+        .map_err(ApiError::new)?;
 
     // `None` bypasses the ownership check: a superuser is the one identity that may
     // rearrange anybody's files.
@@ -538,6 +546,12 @@ async fn release_files(
     record_id: &str,
     record: Option<&Value>,
 ) -> Result<(), ApiError> {
+    // Internal cleanup, like `sync_files`: the file tables are owner-only, and the
+    // record delete itself was authorised before this runs.
+    rls::context::assume_owner(runner)
+        .await
+        .map_err(ApiError::new)?;
+
     // Everything owned by (collection, record). The row's deletion queues its object
     // through the trigger, in this transaction.
     store::delete_for_record(runner, &collection.name, record_id)
