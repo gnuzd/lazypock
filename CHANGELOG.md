@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.23.2](https://github.com/gnuzd/lazypock/compare/v0.23.1...v0.23.2) (2026-10-17)
+
+
+### Bug Fixes
+
+* **auth:** keep the access-token signing key encrypted at rest ([8e6c6fc](https://github.com/gnuzd/lazypock/commit/8e6c6fcb2cf00f70cb373ae923760fcc40317b0a))
+* **boot:** refuse to run without RLS, and bootstrap the first superuser ([d5b338e](https://github.com/gnuzd/lazypock/commit/d5b338e2de05d1b3cfe56e85894f1ee7b5723b17))
+* **files:** a file belongs to whoever uploaded it, and one delete path ([4a36186](https://github.com/gnuzd/lazypock/commit/4a36186345e0b79ad0f79a7d05493dfea2c9d25d))
+
 ## [0.23.1](https://github.com/gnuzd/lazypock/compare/v0.23.0...v0.23.1) (2026-10-16)
 
 
