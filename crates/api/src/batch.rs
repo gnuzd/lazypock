@@ -217,7 +217,7 @@ async fn run(
             .await
             .map_err(|error| (index, ApiError::new(error)))?;
 
-        let (status, body) = execute(runner, step, hooks)
+        let (status, body) = execute(runner, step, hooks, principal)
             .await
             .map_err(|error| (index, error))?;
         results.push(json!({ "status": status, "body": body }));
@@ -229,6 +229,7 @@ async fn execute(
     runner: &dyn QueryRunner,
     step: &Step,
     hooks: &dyn RecordHooks,
+    principal: &Principal,
 ) -> Result<(u16, Value), ApiError> {
     match step.method.as_str() {
         "POST" => {
@@ -246,6 +247,10 @@ async fn execute(
             )
             .await
             .map_err(ApiError::from)?;
+            // A batch step writes files exactly like the single-record route. Without
+            // this the upload stayed `pending`, so the reaper reclaimed it and a file
+            // field written through `/api/batch` quietly lost its file.
+            crate::records::sync_files(runner, &step.collection, &record, principal).await?;
             Ok((201, record))
         }
         "PATCH" => {
@@ -264,7 +269,10 @@ async fn execute(
             .await
             .map_err(ApiError::from)?
             {
-                Some(record) => Ok((200, record)),
+                Some(record) => {
+                    crate::records::sync_files(runner, &step.collection, &record, principal).await?;
+                    Ok((200, record))
+                }
                 None => Err(missing(&step.collection.name, &id)),
             }
         }

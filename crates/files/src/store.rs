@@ -362,6 +362,19 @@ pub async fn get(runner: &dyn QueryRunner, id: &str) -> Result<Option<FileRow>> 
     row.map(|row| FileRow::from_row(&row)).transpose()
 }
 
+/// One file, by the storage key its object lives under.
+///
+/// The key-addressed routes need this to reach the row a key names: without it they can
+/// only act on the object, and an object has no rules of its own.
+pub async fn get_by_key(runner: &dyn QueryRunner, key: &str) -> Result<Option<FileRow>> {
+    let sql = format!("select {COLUMNS} from _files where storage_path = $1::text");
+    let row = runner
+        .run_query_opt(&sql, &[&key.to_string()])
+        .await
+        .map_err(db_error)?;
+    row.map(|row| FileRow::from_row(&row)).transpose()
+}
+
 /// What to filter a listing by.
 #[derive(Debug, Clone, Default)]
 pub struct ListQuery {
@@ -531,33 +544,92 @@ pub async fn list(runner: &dyn QueryRunner, query: &ListQuery) -> Result<(Vec<Fi
     Ok((files, total))
 }
 
+/// What attaching a file to a record field did.
+///
+/// The distinctions matter to the caller: a file that is simply not there is ignored
+/// (a record body may name an id this server never stored, and the row is written with
+/// it, as it always was), while a file that belongs to someone else or to another record
+/// is refused. Collapsing them into `None` — which is what this returned before — is how
+/// a record write could quietly take over somebody else's upload.
+#[derive(Debug)]
+pub enum Attach {
+    /// Attached, or re-attached to the same record it already belonged to.
+    Attached(Box<FileRow>),
+    /// No file with that id.
+    Missing,
+    /// The file exists and was uploaded by a different account.
+    NotOwned,
+    /// The file already belongs to a different collection or record.
+    Elsewhere {
+        /// The collection it belongs to.
+        collection: String,
+        /// The record it belongs to.
+        record: String,
+        /// The field it belongs to.
+        field: String,
+    },
+}
+
 /// Attach an upload to a record, which is what takes it out of the reaper's reach.
+///
+/// Two guards, both of them the difference between "a client attaches its own upload"
+/// and "anyone can claim any file by id":
+///
+/// - `owner` is the caller's identity, and a row whose `uploaded_by` is somebody else is
+///   left alone. `None` means the caller bypasses the check (a superuser).
+/// - a row that is already attached to *another* record is left alone, so an id cannot be
+///   moved from one owner's record to a stranger's. Re-attaching to the same record is
+///   allowed, because an update that saves the same file field twice is not a claim.
 pub async fn attach(
     runner: &dyn QueryRunner,
     id: &str,
     collection: &str,
     record: &str,
     field: &str,
-) -> Result<Option<FileRow>> {
+    owner: Option<&str>,
+) -> Result<Attach> {
+    let owner = owner.map(str::to_string);
     let updated = runner
         .run_execute(
             "update _files set collection_name = $2::text, record_id = $3::text, \
              field_name = $4::text, status = 'ready', attached_at = now(), updated_at = now() \
-             where id = $1::text",
+             where id = $1::text \
+               and ($5::text is null or uploaded_by = $5::text) \
+               and (record_id = '' or (collection_name = $2::text and record_id = $3::text))",
             &[
                 &id.to_string(),
                 &collection.to_string(),
                 &record.to_string(),
                 &field.to_string(),
+                &owner,
             ],
         )
         .await
         .map_err(db_error)?;
 
     if updated == 0 {
-        return Ok(None);
+        // The write matched nothing, so say why: a caller that cannot tell "no such
+        // file" from "not yours" cannot report anything useful, and a silent no-op is
+        // what made the claim-by-id hole invisible in the first place.
+        return Ok(match get(runner, id).await? {
+            None => Attach::Missing,
+            Some(row) => match owner {
+                Some(owner) if row.uploaded_by != owner => Attach::NotOwned,
+                _ => Attach::Elsewhere {
+                    collection: row.collection_name,
+                    record: row.record_id,
+                    field: row.field_name,
+                },
+            },
+        });
     }
-    get(runner, id).await
+
+    // The row was just written, so it is there; a missing one here would mean it was
+    // deleted inside the same transaction, which cannot happen.
+    let row = get(runner, id)
+        .await?
+        .ok_or_else(|| Error::internal(format!("file {id} vanished while it was attached")))?;
+    Ok(Attach::Attached(Box::new(row)))
 }
 
 /// Record the generated variants for a file.
