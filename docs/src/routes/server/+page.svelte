@@ -606,7 +606,12 @@ cargo run -- serve`}
       Setting <code class="doc-inline px-1 py-0.5">LAZYPOCK_SIGNING_KEY</code>
       is optional, and it keeps the token signing key out of the database — and
       therefore out of every dump and replica. Left unset, it is generated on
-      first run and kept there.
+      first run and kept there, encrypted with
+      <code class="doc-inline px-1 py-0.5">LAZYPOCK_SECRET_KEY</code> when that
+      is set (a plaintext key from an older version is rewritten encrypted the
+      next time the server starts). A key that cannot be decrypted stops the
+      boot and names the variable, rather than quietly signing everybody out
+      with a new one.
     </p>
     <p class="mt-3 text-sm text-base-content/70">
       Behind a reverse proxy, set

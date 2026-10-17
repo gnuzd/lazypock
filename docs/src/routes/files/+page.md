@@ -46,6 +46,21 @@ without a record at all. Such a file is stored `pending`, under a `library/<id>/
 key, and appears in the media library immediately. A record write that names it attaches
 it (`status: ready`, `attached_at` set).
 
+**A file belongs to whoever uploaded it.** Uploading only requires an authenticated
+request; the authority to put a file *into* a record is the record write's own rules,
+which is where the attach happens. Two consequences worth knowing before writing a form:
+
+- only the uploader (or a superuser) can attach it — a record write by another account
+  that names somebody else's file id is refused with `403`, so a file id read off a
+  public record cannot be claimed by a stranger;
+- a file that already belongs to one record cannot be moved to another — that write is
+  refused with `409`. Re-saving the same file field on the same record is fine.
+
+An upload that names a record does not check that the caller may *write* that record, so
+a stray upload can still land in the library with another collection's name on it. That is
+a quota matter rather than a data one: it cannot attach itself, and every upload is
+bounded by `LAZYPOCK_UPLOAD_MAX_BYTES`.
+
 **Images only.** The four formats this server can read: **png, jpeg, gif, webp**. The
 type is decided by the bytes, never by the filename or the declared `Content-Type` — an
 SVG renamed to `.png` is refused, because an SVG served as an image can execute script.
@@ -258,6 +273,7 @@ be in a record, and a failure to attach it is not a reason to delete their uploa
 | `GET` | `/api/files/{id}` | public | The file, or one of its variants |
 | `DELETE` | `/api/files/{id}` | per `deleteRule` | Delete a file (409 while referenced) |
 | `GET` | `/api/files/{collection}/{record}/{filename}` | public | The file by its storage key |
+| `DELETE` | `/api/files/{collection}/{record}/{filename}` | per `deleteRule` | The same delete, addressed by key |
 
 ## Troubleshooting
 
