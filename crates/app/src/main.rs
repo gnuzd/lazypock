@@ -384,6 +384,20 @@ async fn serve(config: Config) -> Result<()> {
         }
     }
 
+    // File rules are data, so their row-level security policies are generated here
+    // rather than in the migration. Failing to apply them is a boot failure: the file
+    // tables have RLS enabled, and a rule that is stored but not applied reads as
+    // enforced and is not.
+    {
+        let client = db.client().await?;
+        let rules = lazypock_files::FileRules::load(&client)
+            .await
+            .map_err(|err| Error::config(format!("cannot read the file rules: {err}")))?;
+        lazypock_files::policy::apply(&client, &rules)
+            .await
+            .map_err(|err| Error::config(format!("cannot apply the file rules: {err}")))?;
+    }
+
     // Realtime is listening on this node now (see the watcher above).
     match lazypock_realtime::PgBus::connect(&config.database_url).await {
         Ok(bus) => {

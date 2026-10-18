@@ -20,6 +20,7 @@ pub mod config;
 pub mod image_service;
 pub mod keys;
 pub mod outbox;
+pub mod policy;
 pub mod presets;
 pub mod reaper;
 pub mod rules;
