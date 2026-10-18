@@ -336,19 +336,28 @@ for big tables. `GET .../records` accepts `filter`, `sort`, `fields`, `expand`.
 
 ```sql
 BEGIN;
-SET LOCAL ROLE app_authenticated;                      -- or app_anon, app_service
-SELECT set_config('request.auth.id',     $1, true);
-SELECT set_config('request.auth.claims', $2, true);    -- JSON claims
-SELECT set_config('request.connection_id', $3, true);  -- for realtime (8.7)
-SELECT set_config('request.action',      $4, true);  -- list | view | update | delete | write
+-- One statement: `set_config('role', …)` is the parameterised SET LOCAL ROLE,
+-- and NULL resets to the session user (the owner / superuser path).
+SELECT set_config('role',                     $1, true),  -- lazypock_anon | lazypock_authenticated | NULL
+       set_config('request.auth.id',          $2, true),
+       set_config('request.auth.email',       $3, true),
+       set_config('request.auth.collection_id',   $4, true),
+       set_config('request.auth.collection_name', $5, true),
+       set_config('request.connection_id',    $6, true),  -- for realtime (8.7)
+       set_config('request.action',           $7, true);  -- list | view | update | delete | write
 -- the user's query runs here (RLS applies automatically)
 COMMIT;
 ```
 
-- `set_config(..., true)` is transaction-local, so it is **safe with connection pooling**.
-  `SET LOCAL ROLE` also resets at commit, so it is safe with PgBouncer transaction pooling.
-- The server connects with a dedicated **non-superuser** role that is a member of
-  `app_anon`, `app_authenticated`, `app_service`. `app_service` bypasses RLS and is internal.
+- Everything is transaction-local (`set_config(..., true)`), so it is **safe with connection
+  pooling**: the role switch and the claims are undone at commit, which is also what makes it
+  safe with PgBouncer transaction pooling.
+- The role and the claims are published in **one statement** — one round trip instead of two on
+  every user-facing query. The role name comes from a closed set; `NULL` resets it to the
+  session user (the owner path), because `SET ROLE NONE` is special syntax that cannot be a
+  parameter.
+- The server connects with a dedicated role that **owns the tables** and is a member of
+  `lazypock_anon` and `lazypock_authenticated`. The owner bypasses RLS and is internal.
 - Tables are created with `ENABLE ROW LEVEL SECURITY` but **not** `FORCE ROW LEVEL SECURITY`:
   forcing it would subject the schema owner to the policies too and break the server's own
   internal reads (the login lookup is the obvious one). The owner *is* the service identity —
@@ -356,9 +365,10 @@ COMMIT;
   runs as a restricted role. Migration `0003_rls.sql` carries the same note.
 - SQL helpers: `auth.uid()`, `auth.claim('role')` reading `current_setting`.
 
-**Implementation note.** The names in this section are the design's; the code uses
-`lazypock_anon` / `lazypock_authenticated` (`migrations/0003_rls.sql`) and models the service
-bypass as the connecting **owner** role rather than a separate `app_service`.
+**Implementation note.** The design named a separate `app_service` role; the code models the
+service bypass as the connecting **owner** role instead, so there is one fewer role to grant.
+The restricted roles are `lazypock_anon` / `lazypock_authenticated`
+(`migrations/0003_rls.sql`).
 
 **`request.action` and the list/view divergence (resolved).** `listRule` and `viewRule` both
 compile to a `SELECT` policy, and Postgres OR-combines permissive policies — so a public
@@ -929,7 +939,8 @@ things about the implementation are worth recording because they are not obvious
   whenever the node connects as a non-superuser owner. Verified against Postgres: `FORCE` has no
   effect on a superuser, so it would add that risk without adding the guarantee. The owner is the
   service identity — internal work and superusers run as it and bypass policies — while every
-  user-facing request runs as `lazypock_anon` or `lazypock_authenticated` through `SET LOCAL ROLE`.
+  user-facing request runs as `lazypock_anon` or `lazypock_authenticated` through the
+  transaction-local role switch.
 * **Writes do not use `RETURNING`.** Postgres applies the *select* policies to an
   `INSERT ... RETURNING` row, so a caller allowed to create a record but not to see it was refused
   outright — which broke anonymous registration. A write now runs under the request's role, so the
