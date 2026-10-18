@@ -109,13 +109,14 @@ const RULE_KEYS: &[&str] = &[
 ];
 
 /// Fold the flat rule keys the Studio sends into the nested `rules` object the data
-/// layer reads, and refuse options the server cannot honour.
+/// layer reads, and the top-level `indexes` list into `options`.
 ///
 /// The Studio sends `listRule`, `viewRule`, … as siblings of `name`/`fields`, plus
 /// `indexes`. The data layer reads `rules.listRule`, and serde silently dropped the
 /// flat keys — so a rule set in the editor was never stored and every collection
-/// stayed default-deny. Folding them in is the fix; refusing a non-empty `indexes`
-/// list is the fail-loud half, because those would otherwise be silently ignored.
+/// stayed default-deny. Folding them in is the fix. `indexes` is folded into
+/// `options.indexes` for the same reason: the editor's index list is a top-level
+/// field, and refusing it meant the index editor could not save at all.
 fn normalize_collection_body(body: Value) -> Result<Value, ApiError> {
     let Value::Object(mut object) = body else {
         return Err(ApiError::new(Error::invalid(
@@ -123,17 +124,17 @@ fn normalize_collection_body(body: Value) -> Result<Value, ApiError> {
         )));
     };
 
-    if object
-        .get("indexes")
-        .and_then(Value::as_array)
-        .is_some_and(|indexes| !indexes.is_empty())
-    {
-        return Err(ApiError::new(Error::unsupported(
-            "custom collection indexes are not supported yet; the collection was not saved \
-             rather than stored without them",
-        )));
+    if let Some(indexes) = object.remove("indexes") {
+        let mut options = object
+            .get("options")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if !indexes.is_null() {
+            options.insert("indexes".to_string(), indexes);
+        }
+        object.insert("options".to_string(), Value::Object(options));
     }
-    object.remove("indexes");
 
     let mut rules = object
         .get("rules")
@@ -486,8 +487,11 @@ fn system_collection(name: &str, columns: &[(&str, FieldType)]) -> Collection {
 ///   Studio reads them. `hidden` is stored inside `options` (PocketBase's shape), and
 ///   `system` is derived from the auth collection's built-in columns.
 /// - `indexes`/`viewQuery`/`viewOrigin`/`viewBuilder` are the top-level
-///   conveniences `main` provided. Custom indexes and view collections are not
-///   implemented here yet, so they stay empty/null rather than disappearing.
+///   conveniences `main` provided. A collection's declared indexes are stored in
+///   `options.indexes` and served here too, so the Studio's index editor round-trips;
+///   view collections are still not implemented, so their fields stay empty/null.
+/// - each field's `indexed` flag and `default` are read out of its stored options
+///   rather than hardcoded, so what the editor shows is what the DDL applied.
 /// - `created`/`updated` are rendered as RFC 3339. Serde would otherwise render the
 ///   `SystemTime`s as `{secs_since_epoch, nanos_since_epoch}`, which is not what a
 ///   client parses.
@@ -510,9 +514,9 @@ fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiEr
                 "type": field.field_type.as_str(),
                 "required": field.required,
                 "unique": field.is_unique,
-                "default": null,
+                "default": field.default_value(),
                 "options": field.options,
-                "indexed": false,
+                "indexed": field.is_indexed(),
             })
         })
         .collect();
@@ -531,7 +535,7 @@ fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiEr
                 "system".to_string(),
                 json!(is_auth_system_field(collection, &field.name)),
             );
-            object.insert("indexed".to_string(), json!(false));
+            object.insert("indexed".to_string(), json!(field.is_indexed()));
         }
     }
 

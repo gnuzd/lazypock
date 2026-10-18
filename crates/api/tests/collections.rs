@@ -698,12 +698,14 @@ async fn field_order_round_trips_as_sort_order() {
 }
 
 #[tokio::test]
-async fn an_unsupported_index_list_is_refused_rather_than_ignored() {
+async fn a_declared_index_reaches_the_database_and_survives_a_round_trip() {
     let Some(app) = test_app("collections_indexes").await else {
         return;
     };
     let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
 
+    // The Studio sends `indexes` top-level, and PocketBase exports carry full
+    // statements; both must become real indexes rather than metadata.
     let reply = call_authed(
         &router(&app).await,
         Method::POST,
@@ -711,19 +713,95 @@ async fn an_unsupported_index_list_is_refused_rather_than_ignored() {
         Some(json!({
             "name": "posts",
             "type": "base",
-            "fields": [{ "name": "title", "type": "text" }],
-            "indexes": ["CREATE INDEX idx_title ON posts (title)"],
+            "fields": [
+                { "name": "title", "type": "text" },
+                { "name": "views", "type": "number" },
+            ],
+            "indexes": [
+                "CREATE INDEX idx_title ON posts (title)",
+                "UNIQUE views DESC",
+            ],
             "rules": {}
         })),
         &token,
     )
     .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    let body = reply.body.expect("a collection");
     assert_eq!(
-        reply.status,
-        StatusCode::NOT_IMPLEMENTED,
-        "a custom index must fail loud, not be stored without it: {:?}",
-        reply.body
+        body["indexes"],
+        json!([
+            "CREATE INDEX idx_title ON posts (title)",
+            "UNIQUE views DESC"
+        ])
     );
+
+    let client = app.client().await;
+    let rows = client
+        .query(
+            "select indexname, indexdef from pg_indexes \
+             where schemaname = current_schema() and tablename = 'posts'",
+            &[],
+        )
+        .await
+        .expect("indexes");
+    let indexes: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+        .collect();
+    assert!(
+        indexes.iter().any(|(name, _)| name == "idx_title"),
+        "the declared index was not created: {indexes:?}"
+    );
+    assert!(
+        indexes
+            .iter()
+            .any(|(name, definition)| name == "idx_posts_views"
+                && definition.contains("UNIQUE")
+                && definition.contains("DESC")),
+        "the generated unique index was not created: {indexes:?}"
+    );
+
+    // Saving the collection again (the editor sends the same list back) is a no-op,
+    // not a duplicate index or a rebuild.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({
+            "indexes": ["CREATE INDEX idx_title ON posts (title)", "UNIQUE views DESC"]
+        })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    // Dropping the declaration drops the index.
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({ "indexes": ["UNIQUE views DESC"] })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+
+    let rows = client
+        .query(
+            "select indexname from pg_indexes \
+             where schemaname = current_schema() and tablename = 'posts'",
+            &[],
+        )
+        .await
+        .expect("indexes");
+    let names: Vec<String> = rows.iter().map(|row| row.get::<_, String>(0)).collect();
+    assert!(
+        !names.iter().any(|name| name == "idx_title"),
+        "an index the declaration dropped is still there: {names:?}"
+    );
+    assert!(names.iter().any(|name| name == "idx_posts_views"));
 
     app.cleanup().await;
 }

@@ -186,8 +186,12 @@ removal (see below). Two guards:
 } } }
 ```
 
-Put the **field on the left** of a comparison. `@request.auth.id`, `@request.auth.email`
-and `@request.auth.role` refer to the authenticated user, and the columns available are
+`@request.auth.id`, `@request.auth.email` and any custom field of the authenticated
+record — `@request.auth.role` in this example — are available on **either** side of a
+comparison. The record's columns are read on each authenticated request and published to
+the database session, so `@request.auth.role = 'admin'` is true for an account whose
+`role` is `admin`; a rule that references a field the record does not have resolves to
+nothing and therefore matches no row. The columns available on the rule's own side are
 `_files`' own: `filename`, `mime_type`, `extension`, `size`, `origin`, `status`,
 `collection_name`, `field_name`, `record_id`, `uploaded_by`, `width`, `height`,
 `created_at`, and the rest of the row.

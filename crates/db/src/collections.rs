@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 use tokio_postgres::Client;
 
 use crate::ddl;
+use crate::indexes;
 use crate::pool::db_error;
 use crate::query::compile::FilterContext;
 use crate::rls;
@@ -137,6 +138,26 @@ impl Field {
     /// Whether the field stores multiple values.
     pub fn is_multiple(&self) -> bool {
         types::is_multiple(&self.options)
+    }
+
+    /// Whether the field asks for a plain (non-unique) index.
+    ///
+    /// The field-level `indexed` flag is part of the documented import format and of
+    /// the published JSON Schema. It was stored and never used, so the collection's
+    /// fields each read as indexed and none of them were.
+    pub fn is_indexed(&self) -> bool {
+        types::option_bool(&self.options, "indexed")
+    }
+
+    /// The default this field declares, if any.
+    ///
+    /// A reflected field's `default` is Postgres's own SQL text, which the database
+    /// already applies; it is not a declarable default and is not reported as one.
+    pub fn default_value(&self) -> Option<&Value> {
+        if self.options.get("reflected").and_then(Value::as_bool) == Some(true) {
+            return None;
+        }
+        self.options.get("default").filter(|value| !value.is_null())
     }
 
     /// Validate the field name and options for its collection type.
@@ -457,6 +478,16 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
                     field.name
                 ))
             })?;
+        } else if field.is_indexed() && !existing_table {
+            // The field-level `indexed` flag: a plain index, which the documented field
+            // options promise and nothing created.
+            let statement = ddl::create_index_statement(&collection.name, &field.name);
+            transaction.batch_execute(&statement).await.map_err(|err| {
+                Error::invalid(format!(
+                    "failed to create the index for {name:?}.{:?}: {err}",
+                    field.name
+                ))
+            })?;
         }
     }
 
@@ -506,6 +537,12 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
     // left to the caller, so a new call site cannot forget it and end up with a
     // table that has no policies at all.
     let rule_context = FilterContext::for_collection(&collection, &all)?;
+
+    // Custom indexes last, because a partial index's predicate is compiled against
+    // the same context the rules use. `None` for the previous declaration: this is a
+    // new collection, so every declared index is new.
+    apply_declared_indexes(&transaction, &collection, &rule_context, None).await?;
+
     rls::policies::apply(&transaction, &collection, &rule_context).await?;
 
     // The change-event trigger, for the same reason policies are applied here: a
@@ -563,6 +600,117 @@ async fn verify_adoptable(client: &Client, collection: &Collection) -> Result<()
     Ok(())
 }
 
+/// The `indexes` strings a collection's options declare.
+fn declared_indexes(options: &Value) -> Result<Vec<String>> {
+    let Some(value) = options.get("indexes").filter(|value| !value.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let Some(entries) = value.as_array() else {
+        return Err(Error::invalid(format!(
+            "`options.indexes` must be a list of index declarations, got {value}"
+        )));
+    };
+    entries
+        .iter()
+        .map(|entry| {
+            entry.as_str().map(str::to_string).ok_or_else(|| {
+                Error::invalid(format!(
+                    "an index declaration must be a string, got {entry}"
+                ))
+            })
+        })
+        .collect()
+}
+
+/// Apply a collection's `options.indexes` declaration.
+///
+/// Runs inside the caller's transaction, so a bad index leaves neither the table nor
+/// the metadata changed. `previous_options` is the declaration as it was before this
+/// call (`None` for a collection being created), which is what lets a removed or
+/// changed index be dropped rather than accumulating.
+async fn apply_declared_indexes(
+    transaction: &tokio_postgres::Transaction<'_>,
+    collection: &Collection,
+    context: &FilterContext,
+    previous_options: Option<&Value>,
+) -> Result<()> {
+    let declared = declared_indexes(&collection.options)?;
+    let specs = indexes::parse_all(collection, &declared, context)?;
+
+    let existing: HashSet<String> = transaction
+        .query(
+            "select indexname from pg_indexes \
+             where schemaname = current_schema() and tablename = $1",
+            &[&collection.name],
+        )
+        .await
+        .map_err(db_error)?
+        .iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect();
+
+    // Best effort: a previous declaration that no longer parses named a column that
+    // has since been dropped, and Postgres dropped the index along with the column.
+    let previous = match previous_options {
+        None => Vec::new(),
+        Some(options) => {
+            indexes::parse_all(collection, &declared_indexes(options)?, context).unwrap_or_default()
+        }
+    };
+
+    for old in &previous {
+        // Rebuilt indexes are dropped first; an unchanged one is left in place, so
+        // saving a collection does not rebuild every index it has.
+        if specs.iter().any(|spec| spec == old) {
+            continue;
+        }
+        if !existing.contains(&old.name) {
+            continue;
+        }
+        transaction
+            .batch_execute(&old.drop_statement())
+            .await
+            .map_err(|err| {
+                Error::invalid(format!(
+                    "failed to drop the index {:?} on {:?}: {err}",
+                    old.name, collection.name
+                ))
+            })?;
+    }
+
+    for spec in &specs {
+        let unchanged = previous.iter().any(|old| old == spec) && existing.contains(&spec.name);
+        if unchanged {
+            continue;
+        }
+        if existing.contains(&spec.name) && !previous.iter().any(|old| old.name == spec.name) {
+            // An index with that name exists but was not created from this
+            // declaration (reflected from a hand-made table, or created outside
+            // lazypock). Replacing it could drop a constraint lazypock depends on —
+            // the case-insensitive unique email index is the one that matters — so it
+            // is left alone and said out loud instead.
+            tracing::warn!(
+                collection = %collection.name,
+                index = %spec.name,
+                "an index with this name already exists and was left as it is; the declared \
+                 index was not applied. Rename the declared index to apply it."
+            );
+            continue;
+        }
+        transaction
+            .batch_execute(&spec.create_statement(&collection.name))
+            .await
+            .map_err(|err| {
+                Error::invalid(format!(
+                    "failed to create the index {:?} on {:?}: {err}",
+                    spec.name, collection.name
+                ))
+            })?;
+    }
+
+    Ok(())
+}
+
 /// Delete a collection's metadata, and optionally its data.
 ///
 /// Keeping the data (`drop_data = false`) is useful for recovering from an
@@ -592,20 +740,66 @@ async fn update_field(
 
     let transaction = client.transaction().await.map_err(db_error)?;
 
-    // A unique index is real DDL, so it has to follow the flag.
-    if wanted.unique && !current.is_unique {
-        transaction
-            .batch_execute(&crate::ddl::create_unique_index_statement(
-                table,
-                &wanted.name,
+    // The index a field implies is real DDL, so it has to follow the flags. `unique`
+    // and `indexed` share one index name (`idx_<table>_<column>`), so the transition
+    // is always "drop what is there, then create what is wanted": dropping first is
+    // what lets a unique index become a plain one (or the reverse) at all.
+    let wanted_index = if wanted.unique {
+        Some(ddl::create_unique_index_statement(table, &wanted.name))
+    } else if crate::types::option_bool(&wanted.options, "indexed") {
+        Some(ddl::create_index_statement(table, &wanted.name))
+    } else {
+        None
+    };
+    let current_index = if current.is_unique {
+        Some(ddl::create_unique_index_statement(table, &current.name))
+    } else if current.is_indexed() {
+        Some(ddl::create_index_statement(table, &current.name))
+    } else {
+        None
+    };
+    if current_index != wanted_index {
+        if current_index.is_some() {
+            transaction
+                .batch_execute(&ddl::drop_index_statement(table, &wanted.name))
+                .await
+                .map_err(db_error)?;
+        }
+        if let Some(statement) = wanted_index {
+            transaction.batch_execute(&statement).await.map_err(|err| {
+                Error::invalid(format!(
+                    "failed to update the index for {:?}.{:?}: {err}",
+                    table, wanted.name
+                ))
+            })?;
+        }
+    }
+
+    // The default is part of the column's DDL, so changing it is a real change to the
+    // table rather than only to the metadata.
+    if current.default_value()
+        != wanted
+            .options
+            .get("default")
+            .filter(|value| !value.is_null())
+    {
+        let column = ddl::quote_ident(&wanted.name);
+        let statement = match crate::types::default_sql(wanted.field_type, &wanted.options)? {
+            Some(literal) => format!(
+                "alter table {} alter column {column} set default {literal}",
+                ddl::quote_ident(table)
+            ),
+            None => format!(
+                "alter table {} alter column {column} drop default",
+                ddl::quote_ident(table)
+            ),
+        };
+        transaction.batch_execute(&statement).await.map_err(|err| {
+            Error::invalid(format!(
+                "failed to change the default of {:?}.{:?}: {err}",
+                table, wanted.name
             ))
-            .await
-            .map_err(db_error)?;
-    } else if !wanted.unique && current.is_unique {
-        transaction
-            .batch_execute(&crate::ddl::drop_index_statement(table, &wanted.name))
-            .await
-            .map_err(db_error)?;
+        })?;
     }
 
     transaction
@@ -746,6 +940,18 @@ pub async fn update(
     // unauthenticated read returned an empty list. `apply` rebuilds the policies
     // wholesale, so a rule that was removed stops applying too.
     let rule_context = FilterContext::for_collection(&updated, &all)?;
+
+    // The index list is a declaration as well: declared indexes are created or
+    // rebuilt, and one the new declaration dropped goes away. `existing.options` is
+    // the declaration before this call, which is what says what to drop.
+    apply_declared_indexes(
+        &transaction,
+        &updated,
+        &rule_context,
+        Some(&existing.options),
+    )
+    .await?;
+
     rls::policies::apply(&transaction, &updated, &rule_context).await?;
 
     notify_schema_changed(&transaction).await?;
@@ -832,6 +1038,14 @@ pub async fn add_field(client: &mut Client, name_or_id: &str, input: CreateField
         transaction.batch_execute(&statement).await.map_err(|err| {
             Error::invalid(format!(
                 "failed to add a unique index for {:?}.{:?}: {err}",
+                collection.name, field.name
+            ))
+        })?;
+    } else if field.is_indexed() {
+        let statement = ddl::create_index_statement(&collection.name, &field.name);
+        transaction.batch_execute(&statement).await.map_err(|err| {
+            Error::invalid(format!(
+                "failed to add an index for {:?}.{:?}: {err}",
                 collection.name, field.name
             ))
         })?;

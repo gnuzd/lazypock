@@ -240,6 +240,15 @@ impl FieldType {
     }
 
     /// Parse a stored field type, rejecting anything unknown.
+    ///
+    /// The documented import format (and PocketBase) spell some of these
+    /// differently from the names stored here, so the aliases are accepted too:
+    /// `datetime`, `multi_select`, `multi_file` and `geo`. They are synonyms, not
+    /// separate types — a multi select is a `select` with `maxSelect > 1` — so this
+    /// normalises them instead of carrying a second spelling through the DDL. The
+    /// published JSON Schema (`/backup.schema.json`) lists the aliases, and the
+    /// Studio's AI import prompt emits them, which is why refusing them made a
+    /// documented payload fail with `unknown field type "datetime"`.
     pub fn parse(raw: &str) -> Result<Self> {
         match raw {
             "text" => Ok(Self::Text),
@@ -248,16 +257,18 @@ impl FieldType {
             "url" => Ok(Self::Url),
             "number" => Ok(Self::Number),
             "bool" => Ok(Self::Bool),
-            "date" => Ok(Self::Date),
-            "select" => Ok(Self::Select),
-            "file" => Ok(Self::File),
+            "date" | "datetime" => Ok(Self::Date),
+            "select" | "multi_select" => Ok(Self::Select),
+            "file" | "multi_file" => Ok(Self::File),
             "relation" => Ok(Self::Relation),
             "json" => Ok(Self::Json),
-            "geoPoint" => Ok(Self::GeoPoint),
+            "geoPoint" | "geo" => Ok(Self::GeoPoint),
             "autodate" => Ok(Self::Autodate),
             "password" => Ok(Self::Password),
             other => Err(Error::invalid(format!(
-                "unknown field type {other:?}; see PLAN.md section 4.2 for the supported types"
+                "unknown field type {other:?}; supported types are text, editor, email, url, \
+                 number, bool, date (or datetime), select (or multi_select), file (or \
+                 multi_file), relation, json, geo (or geoPoint), autodate and password"
             ))),
         }
     }
@@ -456,8 +467,21 @@ pub fn validate_options(field_type: FieldType, options: &Value) -> Result<()> {
     }
 
     validate_file_options(field_type, options)?;
+    validate_default(field_type, options)?;
 
     Ok(())
+}
+
+/// The size limit a file field declares, under either spelling.
+///
+/// PocketBase — and therefore the documented import format and the Studio's field
+/// editor — call it `maxSize`, while this codebase's first spelling was
+/// `maxFileSize`. Only the latter was read, so a documented `"maxSize": 5242880`
+/// was stored and never enforced: a limit that reads as applied and is not. Both
+/// are accepted here, and [`default_file_size_limit`] is the one place that decides
+/// which value wins.
+pub fn file_size_limit(options: &Value) -> Option<u64> {
+    option_u64(options, "maxFileSize").or_else(|| option_u64(options, "maxSize"))
 }
 
 /// Check the options only a file field has.
@@ -470,7 +494,7 @@ fn validate_file_options(field_type: FieldType, options: &Value) -> Result<()> {
 
     // Each of these is a no-op anywhere else, so accepting one would mean
     // accepting a setting that can never apply.
-    for key in ["maxFileSize", "mimeTypes", "thumbs"] {
+    for key in ["maxFileSize", "maxSize", "mimeTypes", "thumbs"] {
         if !is_file && options.get(key).is_some_and(|value| !value.is_null()) {
             return Err(Error::invalid(format!(
                 "{key} is only meaningful for file fields, not {field_type}"
@@ -482,14 +506,14 @@ fn validate_file_options(field_type: FieldType, options: &Value) -> Result<()> {
         return Ok(());
     }
 
-    if options
-        .get("maxFileSize")
-        .is_some_and(|value| !value.is_null())
-        && !option_u64(options, "maxFileSize").is_some_and(|size| size > 0)
-    {
-        return Err(Error::invalid(
-            "maxFileSize must be a positive number of bytes",
-        ));
+    for key in ["maxFileSize", "maxSize"] {
+        if options.get(key).is_some_and(|value| !value.is_null())
+            && !option_u64(options, key).is_some_and(|size| size > 0)
+        {
+            return Err(Error::invalid(format!(
+                "{key} must be a positive number of bytes"
+            )));
+        }
     }
 
     if let Some(value) = options.get("mimeTypes").filter(|value| !value.is_null()) {
@@ -520,6 +544,132 @@ fn validate_file_options(field_type: FieldType, options: &Value) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The `default` a field declares, rendered as a SQL literal.
+///
+/// `default` is part of the documented import format ("Default value applied when
+/// the field is omitted on write") and of the published JSON Schema, but nothing
+/// read it: an import that set `"default": true` created a column with no default
+/// at all. It is rendered here, once, so the DDL and its validation cannot disagree,
+/// and every value is either typed correctly for the column or refused.
+///
+/// Returns `None` when the field declares no default (or `null`, which is treated as
+/// "no default" — a nullable column is already the default).
+pub fn default_sql(field_type: FieldType, options: &Value) -> Result<Option<String>> {
+    // A reflected column's default is the SQL text Postgres reported (`"0"`,
+    // `nextval('…')`), not a JSON value this server could apply. It belongs to the
+    // database, so it is left there rather than validated or re-declared.
+    if option_bool(options, "reflected") {
+        return Ok(None);
+    }
+
+    let Some(value) = options.get("default").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+
+    let literal = match field_type {
+        FieldType::Select if is_multiple(options) => {
+            return Err(Error::unsupported(
+                "a multiple-value select cannot declare a default; set the values on write",
+            ))
+        }
+        FieldType::Select => {
+            let text = value.as_str().ok_or_else(|| {
+                Error::invalid(format!(
+                    "a select field's default must be a string, got {value}"
+                ))
+            })?;
+            let allowed = option_str_list(options, "values");
+            if !allowed.iter().any(|allowed| allowed == text) {
+                return Err(Error::invalid(format!(
+                    "the default {text:?} is not one of the select values {allowed:?}"
+                )));
+            }
+            format!("{}::text", sql_literal(text))
+        }
+        FieldType::Text
+        | FieldType::Editor
+        | FieldType::Email
+        | FieldType::Url
+        | FieldType::Password => {
+            let text = value.as_str().ok_or_else(|| {
+                Error::invalid(format!(
+                    "a {} field's default must be a string, got {value}",
+                    field_type
+                ))
+            })?;
+            format!("{}::text", sql_literal(text))
+        }
+        FieldType::Number => {
+            let number = value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| {
+                    Error::invalid(format!(
+                        "a number field's default must be a finite number, got {value}"
+                    ))
+                })?;
+            if option_bool(options, "onlyInt") && number.fract() != 0.0 {
+                return Err(Error::invalid(format!(
+                    "a whole-number field's default must not have a fraction, got {number}"
+                )));
+            }
+            let cast = if option_bool(options, "onlyInt") {
+                "bigint"
+            } else {
+                "double precision"
+            };
+            format!("{number}::{cast}")
+        }
+        FieldType::Bool => {
+            let flag = value.as_bool().ok_or_else(|| {
+                Error::invalid(format!(
+                    "a bool field's default must be true or false, got {value}"
+                ))
+            })?;
+            format!("{flag}::boolean")
+        }
+        FieldType::Date | FieldType::Autodate => {
+            let text = value.as_str().ok_or_else(|| {
+                Error::invalid(format!(
+                    "a {} field's default must be a date string, got {value}",
+                    field_type
+                ))
+            })?;
+            format!("{}::timestamptz", sql_literal(text))
+        }
+        FieldType::Json | FieldType::GeoPoint => {
+            format!("{}::jsonb", sql_literal(&value.to_string()))
+        }
+        FieldType::File => format!(
+            "{}::text",
+            sql_literal(value.as_str().ok_or_else(|| {
+                Error::invalid(format!(
+                    "a file field's default must be a string, got {value}"
+                ))
+            })?)
+        ),
+        FieldType::Relation => {
+            return Err(Error::unsupported(
+                "a relation field cannot declare a default; write the record id on insert",
+            ))
+        }
+    };
+
+    Ok(Some(literal))
+}
+
+fn validate_default(field_type: FieldType, options: &Value) -> Result<()> {
+    default_sql(field_type, options).map(|_| ())
+}
+
+/// A SQL string literal.
+///
+/// Standard-conforming strings are assumed, so only the quote is doubled. The value
+/// never reaches the statement as anything but a literal: a default is user input.
+fn sql_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 /// Postgres column type for a field.

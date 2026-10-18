@@ -90,6 +90,13 @@ pub struct RequestContext {
     pub auth_collection_id: String,
     /// The authenticated record's collection name.
     pub auth_collection_name: String,
+    /// The authenticated record's own columns, as a JSON object.
+    ///
+    /// `@request.auth.<field>` resolves through this (`auth.claim`), which is what
+    /// makes a rule like `@request.auth.role = 'admin'` true for an account whose
+    /// `role` is `admin` rather than NULL for everyone. Empty for an anonymous or
+    /// superuser request.
+    pub auth_claims: String,
     /// The client's connection id, used by realtime to suppress echoes.
     pub connection_id: String,
 }
@@ -107,6 +114,7 @@ impl RequestContext {
             auth_email: String::new(),
             auth_collection_id: String::new(),
             auth_collection_name: String::new(),
+            auth_claims: empty_claims(),
             connection_id: String::new(),
         }
     }
@@ -133,8 +141,19 @@ impl RequestContext {
             auth_email: email.into(),
             auth_collection_id: collection_id.into(),
             auth_collection_name: collection_name.into(),
+            auth_claims: empty_claims(),
             connection_id: String::new(),
         }
+    }
+
+    /// Attach the authenticated record's columns, as a JSON object.
+    ///
+    /// `serde_json::to_string` of a map, so a value that is not a string (a number,
+    /// a boolean, an array) is still published as the claim's text form — which is
+    /// what `auth.claim` returns and what a rule compares against.
+    pub fn with_auth_claims(mut self, claims: impl Into<String>) -> Self {
+        self.auth_claims = claims.into();
+        self
     }
 
     /// Attach the client's connection id.
@@ -244,7 +263,8 @@ pub async fn apply(runner: &dyn QueryRunner, context: &RequestContext) -> Result
                     set_config('request.auth.collection_id', $4::text, true), \
                     set_config('request.auth.collection_name', $5::text, true), \
                     set_config('request.connection_id', $6::text, true), \
-                    set_config('request.action', $7::text, true)",
+                    set_config('request.action', $7::text, true), \
+                    set_config('request.auth.claims', $8::text, true)",
             &[
                 &role,
                 &context.auth_id,
@@ -253,6 +273,7 @@ pub async fn apply(runner: &dyn QueryRunner, context: &RequestContext) -> Result
                 &context.auth_collection_name,
                 &context.connection_id,
                 &context.action.name(),
+                &context.auth_claims,
             ],
         )
         .await
@@ -265,6 +286,11 @@ pub async fn apply(runner: &dyn QueryRunner, context: &RequestContext) -> Result
         })?;
 
     Ok(())
+}
+
+/// The empty claims document, so `auth.claim` always has valid JSON to read.
+fn empty_claims() -> String {
+    "{}".to_string()
 }
 
 #[cfg(test)]
@@ -297,6 +323,15 @@ mod tests {
         assert_eq!(context.auth_collection_id, "c1");
         assert_eq!(context.auth_collection_name, "users");
         assert_eq!(context.connection_id, "conn1");
+    }
+
+    #[test]
+    fn an_authenticated_context_carries_the_record_claims() {
+        let context = RequestContext::authenticated("u1", "a@example.com", "c1", "users")
+            .with_auth_claims(r#"{"role":"admin","level":3}"#);
+        assert_eq!(context.auth_claims, r#"{"role":"admin","level":3}"#);
+        // Anonymous requests publish an empty document, never a missing one.
+        assert_eq!(RequestContext::anonymous().auth_claims, "{}");
     }
 
     #[test]

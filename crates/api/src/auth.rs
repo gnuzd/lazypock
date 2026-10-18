@@ -38,6 +38,13 @@ pub const SUPERUSERS: &str = "_superusers";
 #[derive(Debug, Clone, Default)]
 pub struct Principal {
     claims: Option<Claims>,
+    /// The authenticated record's own columns, for `@request.auth.<field>`.
+    ///
+    /// Loaded once per authenticated request (see [`record_claims`]) because a rule
+    /// is evaluated in SQL, where the record is not otherwise reachable: publishing
+    /// the columns on the session is what lets `@request.auth.role = 'admin'` be
+    /// true for an account whose `role` is `admin`.
+    record_claims: std::collections::BTreeMap<String, String>,
     /// Whether this caller authenticated with an API key rather than a token.
     api_key: bool,
     /// The client's device/tab id, used by realtime to suppress echoes.
@@ -49,6 +56,7 @@ impl Principal {
     pub fn anonymous() -> Self {
         Self {
             claims: None,
+            record_claims: std::collections::BTreeMap::new(),
             api_key: false,
             connection_id: String::new(),
         }
@@ -58,9 +66,19 @@ impl Principal {
     pub fn from_claims(claims: Claims) -> Self {
         Self {
             claims: Some(claims),
+            record_claims: std::collections::BTreeMap::new(),
             api_key: false,
             connection_id: String::new(),
         }
+    }
+
+    /// Attach the authenticated record's own columns.
+    pub fn with_record_claims(
+        mut self,
+        claims: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.record_claims = claims;
+        self
     }
 
     /// A caller authenticated by an API key.
@@ -72,6 +90,7 @@ impl Principal {
     pub fn from_api_key() -> Self {
         Self {
             claims: None,
+            record_claims: std::collections::BTreeMap::new(),
             api_key: true,
             connection_id: String::new(),
         }
@@ -105,6 +124,9 @@ impl Principal {
         context
             .with_connection_id(self.connection_id.clone())
             .with_action(action)
+            .with_auth_claims(
+                serde_json::to_string(&self.record_claims).unwrap_or_else(|_| "{}".to_string()),
+            )
     }
 
     /// The verified claims, when there are any.
@@ -140,7 +162,11 @@ impl Principal {
                 email: Some(claims.email.clone()),
                 collection_id: non_empty(&claims.col),
                 collection_name: non_empty(&claims.name),
-                claims: Default::default(),
+                claims: self
+                    .record_claims
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect(),
             },
             None => AuthContext::default(),
         }
@@ -209,7 +235,10 @@ pub async fn authenticate(
             }
         }
         Some(token) => match state.auth.verify(&token) {
-            Ok(claims) => Principal::from_claims(claims),
+            Ok(claims) => {
+                let record_claims = record_claims(&state, &claims).await;
+                Principal::from_claims(claims).with_record_claims(record_claims)
+            }
             Err(err) => return ApiError::new(err).into_response(),
         },
     }
@@ -217,6 +246,79 @@ pub async fn authenticate(
 
     request.extensions_mut().insert(principal);
     next.run(request).await
+}
+
+/// The authenticated record's own columns, for `@request.auth.<field>`.
+///
+/// One query per authenticated request, and only when a record is behind the token:
+/// a superuser and an API key have no record and skip it. The record is read on the
+/// connecting (owner) role — this is the server establishing who the caller is, not
+/// a caller reading a row — and credential columns are dropped before anything is
+/// published to the database session.
+///
+/// A failure returns no claims rather than failing the request: a rule that depends
+/// on them then resolves to nothing, which is the fail-closed reading. The reason is
+/// logged, because "the token verifies but the record is gone" is worth seeing.
+async fn record_claims(
+    state: &AppState,
+    claims: &Claims,
+) -> std::collections::BTreeMap<String, String> {
+    let empty = std::collections::BTreeMap::new();
+    if claims.typ.is_superuser() || claims.name.is_empty() || claims.sub.is_empty() {
+        return empty;
+    }
+    // The collection name is signed, but it becomes an identifier in a statement —
+    // validated anyway, so nothing about the token is trusted more than it has to be.
+    if lazypock_db::types::validate_collection_name(&claims.name).is_err() {
+        return empty;
+    }
+    let Ok(client) = state.db.client().await else {
+        tracing::warn!(
+            collection = %claims.name,
+            "could not load the authenticated record's claims: no database connection"
+        );
+        return empty;
+    };
+    let statement = format!(
+        "select to_jsonb(t) from {} t where t.id = $1",
+        lazypock_db::ddl::quote_ident(&claims.name)
+    );
+    let row = match client.query_opt(statement.as_str(), &[&claims.sub]).await {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            tracing::debug!(
+                collection = %claims.name,
+                "the authenticated record no longer exists; its rules see no claims"
+            );
+            return empty;
+        }
+        Err(err) => {
+            tracing::warn!(
+                collection = %claims.name,
+                error = %err,
+                "could not load the authenticated record's claims"
+            );
+            return empty;
+        }
+    };
+
+    let value: serde_json::Value = row.get(0);
+    let mut out = std::collections::BTreeMap::new();
+    let Some(object) = value.as_object() else {
+        return empty;
+    };
+    for (name, value) in object {
+        // Credentials never become session state, whatever a rule asks for.
+        if lazypock_db::types::CREDENTIAL_COLUMNS.contains(&name.as_str()) || value.is_null() {
+            continue;
+        }
+        let text = match value {
+            serde_json::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        out.insert(name.clone(), text);
+    }
+    out
 }
 
 /// The client's device/tab id from `X-Connection-Id`.

@@ -9,7 +9,7 @@ use lazypock_core::error::{Error, Result};
 
 use crate::ddl::quote_ident;
 use crate::query::compile::{cast_for, check_operator_supported, escape_like, FilterContext};
-use crate::query::filter::{AuthRef, CompareOp, Expr, Operand};
+use crate::query::filter::{AuthRef, CompareOp, Expr, Operand, Side};
 
 /// Compile a rule expression into a SQL predicate.
 pub fn predicate(rule: &Expr, context: &FilterContext) -> Result<String> {
@@ -24,7 +24,32 @@ pub fn predicate(rule: &Expr, context: &FilterContext) -> Result<String> {
             predicate(left, context)?,
             predicate(right, context)?
         )),
-        Expr::Compare { path, op, operand } => compare(path, *op, operand, context),
+        Expr::Compare { left, op, right } => compare_sides(left, *op, right, context),
+    }
+}
+
+/// Compile one comparison, whichever side the field is on.
+///
+/// The documented rule shape puts the request reference on the left
+/// (`@request.auth.id != ""`, `@request.auth.role = "admin"`), which needs no column
+/// at all — so it must compile here, or a documented rule would be refused before it
+/// could become a policy.
+fn compare_sides(
+    left: &Side,
+    op: CompareOp,
+    right: &Side,
+    context: &FilterContext,
+) -> Result<String> {
+    match (left, right) {
+        (Side::Path(path), Side::Value(operand)) => compare(path, op, operand, false, context),
+        (Side::Value(operand), Side::Path(path)) => compare(path, op, operand, true, context),
+        (Side::Value(left), Side::Value(right)) => compare_values(left, op, right),
+        (Side::Path(left), Side::Path(right)) => Err(Error::unsupported(format!(
+            "a rule cannot compare two fields (`{}` and `{}`); compare a field with a value \
+             instead",
+            left.join("."),
+            right.join(".")
+        ))),
     }
 }
 
@@ -32,6 +57,7 @@ fn compare(
     path: &[String],
     op: CompareOp,
     operand: &Operand,
+    swapped: bool,
     context: &FilterContext,
 ) -> Result<String> {
     let [column] = path else {
@@ -85,6 +111,11 @@ fn compare(
                 Operand::Text(value) => sql_text(&format!("%{}%", escape_like(value))),
                 other => format!("'%' || {} || '%'", value_sql(other, "text")?),
             };
+            if swapped {
+                // `@request.auth.email ~ title`: the reference is the haystack and the
+                // column is the needle.
+                return Ok(format!("{expression} {keyword} {target} escape '\\'"));
+            }
             Ok(format!("{target} {keyword} {expression} escape '\\'"))
         }
         CompareOp::Eq
@@ -110,15 +141,86 @@ fn compare(
                          for date fields"
                     )));
                 }
-                return Ok(format!("{target} {sql_operator} now()"));
+                return Ok(if swapped {
+                    format!("now() {sql_operator} {target}")
+                } else {
+                    format!("{target} {sql_operator} now()")
+                });
             }
 
-            Ok(format!(
-                "{target} {sql_operator} {}",
-                value_sql(operand, column_type)?
-            ))
+            let value = value_sql(operand, column_type)?;
+            Ok(if swapped {
+                format!("{value} {sql_operator} {target}")
+            } else {
+                format!("{target} {sql_operator} {value}")
+            })
         }
     }
+}
+
+/// Compile a comparison in which both sides are values — no column at all.
+///
+/// `createRule: "@request.auth.id != ''"` is PocketBase's documented shape, and it is
+/// a condition on the *request*, not the row, so the predicate is the same for every
+/// record.
+fn compare_values(left: &Operand, op: CompareOp, right: &Operand) -> Result<String> {
+    if matches!(left, Operand::Null) || matches!(right, Operand::Null) {
+        return Err(Error::invalid(
+            "a rule cannot compare with null without a field; there is nothing to test for \
+             `is null` here",
+        ));
+    }
+
+    if matches!(op, CompareOp::Any | CompareOp::NotAny) {
+        return Err(Error::invalid(format!(
+            "`{}` needs a multiple-value field, and this comparison has none",
+            op.as_str()
+        )));
+    }
+
+    if matches!(op, CompareOp::Like | CompareOp::NotLike) {
+        let keyword = if op == CompareOp::Like {
+            "ilike"
+        } else {
+            "not ilike"
+        };
+        let haystack = value_sql(left, "text")?;
+        let needle = match right {
+            Operand::Text(value) => sql_text(&format!("%{}%", escape_like(value))),
+            other => format!("'%' || {} || '%'", value_sql(other, "text")?),
+        };
+        return Ok(format!("{haystack} {keyword} {needle} escape '\\'"));
+    }
+
+    let cast = if matches!(left, Operand::Now) || matches!(right, Operand::Now) {
+        "timestamptz"
+    } else if matches!(left, Operand::Number(_)) || matches!(right, Operand::Number(_)) {
+        "double precision"
+    } else {
+        "text"
+    };
+    let left_sql = rule_value_sql(left, cast)?;
+    let right_sql = rule_value_sql(right, cast)?;
+    Ok(format!(
+        "{left_sql} {} {right_sql}",
+        match op {
+            CompareOp::Eq => "=",
+            CompareOp::NotEq => "<>",
+            CompareOp::Gt => ">",
+            CompareOp::Gte => ">=",
+            CompareOp::Lt => "<",
+            CompareOp::Lte => "<=",
+            _ => unreachable!("handled above"),
+        }
+    ))
+}
+
+/// A value side cast to `cast`, with `@now` becoming the database clock.
+fn rule_value_sql(operand: &Operand, cast: &str) -> Result<String> {
+    if matches!(operand, Operand::Now) {
+        return Ok("now()".to_string());
+    }
+    value_sql(operand, cast)
 }
 
 /// The SQL for the right-hand side, cast to the column's type.
@@ -246,6 +348,24 @@ mod tests {
         assert_eq!(
             compiled("author = @request.auth.role"),
             "\"author\" = auth.claim('role')::text"
+        );
+    }
+
+    #[test]
+    fn a_request_reference_on_the_left_becomes_a_policy_predicate() {
+        // The documented rule shape with no column: `@request.auth.id != ""`.
+        assert_eq!(
+            compiled("@request.auth.id != ''"),
+            "auth.uid()::text <> ''::text"
+        );
+        assert_eq!(
+            compiled("@request.auth.role = 'admin'"),
+            "auth.claim('role')::text = 'admin'::text"
+        );
+        // ... and with a column on the right.
+        assert_eq!(
+            compiled("@request.auth.id = author"),
+            "auth.uid()::text = \"author\""
         );
     }
 
