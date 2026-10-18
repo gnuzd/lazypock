@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.3](https://github.com/gnuzd/lazypock/compare/v0.23.2...v0.23.3) (2026-10-18)
+
+
+### Bug Fixes
+
+* **files:** enforce the attach invariant with an update policy ([5700647](https://github.com/gnuzd/lazypock/commit/5700647de75a11237137dc829eeee295172b1155))
+* **files:** put the file layer under row-level security ([6f0a5fa](https://github.com/gnuzd/lazypock/commit/6f0a5faef24348615ed6734e5fa202c682e7465e))
+* **rls:** switch role and publish the claims in one round trip ([1b1eccb](https://github.com/gnuzd/lazypock/commit/1b1eccb42d894826a9a79ee9e31ad6ea1f68a004))
+* **security:** the four credential findings from the audit ([71809cd](https://github.com/gnuzd/lazypock/commit/71809cd0e338ca341e8646a00bc4046b0a47ee1d))
+
 ## [0.23.2](https://github.com/gnuzd/lazypock/compare/v0.23.1...v0.23.2) (2026-10-17)
 
 
