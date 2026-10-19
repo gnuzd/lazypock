@@ -42,6 +42,23 @@ async fn health_returns_the_pocketbase_envelope() {
 }
 
 #[tokio::test]
+async fn health_reports_the_running_version() {
+    let (status, body) = get("/api/health").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The build that answers is the build that reports: a deployment can tell a
+    // stale container from a fresh one from the probe alone.
+    let version = body["data"]["version"]
+        .as_str()
+        .expect("`data.version` must be a string");
+    assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    assert!(
+        version.split('.').count() >= 3,
+        "`{version}` does not look like a release version"
+    );
+}
+
+#[tokio::test]
 async fn unknown_route_returns_the_error_envelope() {
     let (status, body) = get("/api/does-not-exist").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
