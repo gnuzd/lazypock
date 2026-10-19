@@ -122,8 +122,13 @@ curl http://localhost:4000/api/health
 ```
 
 ```json
-{"code":200,"message":"OK","data":{}}
+{"code":200,"message":"OK","data":{"version":"<running version>"}}
 ```
+
+`data.version` is the running build's version (the workspace version, so a binary
+built from a release tag reports that tag). The probe stays database-free, and it
+adds `data.unavailable` only when a subsystem — the schema watcher or the realtime
+listener — has failed locally and could not recover.
 
 Create the first superuser, then open the Studio at <http://localhost:4000/> to
 define your first collection — the collections it declares become real tables and

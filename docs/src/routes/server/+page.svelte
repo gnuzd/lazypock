@@ -626,6 +626,13 @@ cargo run -- serve`}
       <code class="doc-inline px-1 py-0.5">ImageMagick</code>: thumbnails and
       scaled images are produced in-process. A health check is built in
       (<code class="doc-inline px-1 py-0.5">lazypock healthcheck</code>), and
+      <code class="doc-inline px-1 py-0.5">GET /api/health</code> reports the
+      running build's version in
+      <code class="doc-inline px-1 py-0.5">data.version</code> — so a probe can
+      answer which version is actually deployed — and
+      <code class="doc-inline px-1 py-0.5">data.unavailable</code> appears only
+      when a subsystem (the schema watcher or the realtime listener) has failed
+      locally.
       <code class="doc-inline px-1 py-0.5"
         >docker run … superuser create</code
       >

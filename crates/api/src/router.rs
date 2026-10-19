@@ -296,18 +296,23 @@ async fn batch_requires_state() -> ApiError {
 /// Deliberately does not touch the database: liveness should not flap when
 /// Postgres is briefly unavailable. Readiness is a separate concern.
 ///
-/// What it *does* report is a subsystem that has failed locally and cannot fix
-/// itself — the schema watcher and the realtime listener. Those are the failures
-/// that used to hide: the API kept answering, so the node looked healthy while it
-/// served a stale schema and delivered no realtime events. The extra field is
-/// present only when something is wrong, so the healthy payload is unchanged.
+/// What it *does* report is the build that is running (`data.version`, so a probe
+/// can answer "which version is actually deployed?"), and a subsystem that has
+/// failed locally and cannot fix itself — the schema watcher and the realtime
+/// listener. Those are the failures that used to hide: the API kept answering, so
+/// the node looked healthy while it served a stale schema and delivered no realtime
+/// events. The `unavailable` field is present only when something is wrong.
 async fn health() -> Json<Value> {
     let unavailable = lazypock_core::health::unavailable();
-    let data = if unavailable.is_empty() {
-        json!({})
-    } else {
-        json!({ "unavailable": unavailable })
-    };
+
+    let mut data = serde_json::Map::new();
+    // Compile-time, from the workspace version, so a binary built from a release tag
+    // reports that tag: a deployment can tell a stale container from a fresh one
+    // without shell access. `version` is always present; `unavailable` is not.
+    data.insert("version".to_string(), json!(env!("CARGO_PKG_VERSION")));
+    if !unavailable.is_empty() {
+        data.insert("unavailable".to_string(), json!(unavailable));
+    }
 
     Json(json!({
         "code": 200,
