@@ -980,8 +980,12 @@ cargo build --release --no-default-features`}
               ><code class="doc-inline px-1 py-0.5">LAZYPOCK_SIGNING_KEY</code></td
             >
             <td class="px-3 py-2"
-              >Access-token signing key (base64), kept out of the database
-              entirely. Without it the key is generated into
+              >Access-token signing key, kept out of the database entirely.
+              Base64 of 32 random bytes, or base64 of the PKCS#8 key — the
+              <code class="doc-inline px-1 py-0.5">der</code> value — copied from
+              an installation's
+              <code class="doc-inline px-1 py-0.5">auth.signing_key</code>
+              setting. Without it the key is generated into
               <code class="doc-inline px-1 py-0.5">_settings</code>, encrypted
               with <code class="doc-inline px-1 py-0.5">LAZYPOCK_SECRET_KEY</code>
               when that is set</td

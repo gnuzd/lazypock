@@ -80,9 +80,10 @@ services:
       #
       # Left unset, the server generates an access-token signing key on first
       # run and keeps it in `_settings`, so the key travels in every dump and
-      # replica. Setting it keeps it out of all of them:
-      #   openssl rand -base64 32
-      # LAZYPOCK_SIGNING_KEY: change-me
+      # replica. Setting it keeps it out of all of them: supply base64 of 32
+      # random bytes (`openssl rand -base64 32`) from the shell or the compose
+      # `.env` file. A PKCS#8 key copied from an existing installation works too.
+      # LAZYPOCK_SIGNING_KEY: ${LAZYPOCK_SIGNING_KEY}
       #
       # The database copy is encrypted with LAZYPOCK_SECRET_KEY above, so a dump
       # on its own no longer mints tokens. Setting this variable instead keeps the
