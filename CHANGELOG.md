@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.26.0](https://github.com/gnuzd/lazypock/compare/v0.25.0...v0.26.0) (2026-10-19)
+
+
+### Features
+
+* **files:** namespace object keys and allow forcing remote storage ([939ba9c](https://github.com/gnuzd/lazypock/commit/939ba9c164d9b421861c192b60b99db4e9edf52e))
+* **files:** namespace object keys and allow forcing remote storage ([39fa14b](https://github.com/gnuzd/lazypock/commit/39fa14bd7d914d98af3fedf980f2a1a80eabb86b))
+
+
+### Bug Fixes
+
+* **backup:** let an imported record omit a column with a default ([0ca7e56](https://github.com/gnuzd/lazypock/commit/0ca7e56ce7347fd9ed0b09e81d10c455573e6b41))
+* **backup:** let an imported record omit a column with a default ([e1448d8](https://github.com/gnuzd/lazypock/commit/e1448d87f00f8c8f97f1bf3ee565a561c87c9b91))
+* **db:** report a trigger's RAISE EXCEPTION as a conflict, not a 500 ([da9b25c](https://github.com/gnuzd/lazypock/commit/da9b25cd7da738a343c91bb2ed1fc363ee8a3964))
+* **db:** report a trigger's RAISE EXCEPTION as a conflict, not a 500 ([9910437](https://github.com/gnuzd/lazypock/commit/9910437b53cab37e66813eafd16fefc8f20ae3ec))
+* **realtime:** reconnect the listener instead of retiring it ([91b232b](https://github.com/gnuzd/lazypock/commit/91b232bdb075070b2d2902dd62cef4750962cd42))
+* **realtime:** reconnect the listener instead of retiring it ([bf3dc2a](https://github.com/gnuzd/lazypock/commit/bf3dc2a639351c13f5bc8781e592267461ca0cb6))
+
 ## [0.25.0](https://github.com/gnuzd/lazypock/compare/v0.24.0...v0.25.0) (2026-10-19)
 
 
