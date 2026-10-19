@@ -1,5 +1,6 @@
 import { createClient } from './lazypock.types';
 import { sseUrlFromBaseUrl, type HttpClient } from 'lazypock';
+import { ensureFreshSession, refreshAfterUnauthorized } from './session';
 
 // The studio SPA is served by the core Phoenix app, which proxies the
 // Lazypock API under `/api`.
@@ -27,12 +28,42 @@ function createConnectionId(): string {
 // Attach the connection id to every SDK request by wrapping the HTTP
 // request method — fetch itself is left untouched, so same-origin and
 // cross-origin requests outside the SDK are unaffected (no CORS issues).
+// ── Keep the session alive ───────────────────────────────────────────────
+// The server's access token lives 15 minutes and the SDK assumes 7 days, so a
+// long-lived Studio session needs the refresh token (see `session.ts`). Wrap the
+// request method: refresh just before the token lapses, and retry once with a
+// fresh token if a request is refused anyway.
 {
 	const http = client.http as HttpClient;
 	const origRequest = http.request.bind(http);
-	http.request = ((method, path, body, options) => {
-		const headers = { ...(options?.headers ?? {}), 'X-Connection-Id': connectionId };
-		return origRequest(method, path, body, { ...options, headers });
+
+	/** Requests whose own 401 is the answer (a bad password is not a stale session). */
+	const AUTH_PATHS = /\/(auth-[a-z-]+|superusers\/login|superusers\/setup)$/;
+
+	function isUnauthorized(error: unknown): boolean {
+		return (
+			typeof error === 'object' &&
+			error !== null &&
+			(error as { status?: unknown }).status === 401
+		);
+	}
+
+	http.request = (async (method, path, body, options) => {
+		const send = () =>
+			origRequest(method, path, body, {
+				...options,
+				headers: { ...(options?.headers ?? {}), 'X-Connection-Id': connectionId }
+			});
+
+		await ensureFreshSession();
+		try {
+			return await send();
+		} catch (err) {
+			if (isUnauthorized(err) && !AUTH_PATHS.test(path) && (await refreshAfterUnauthorized())) {
+				return await send();
+			}
+			throw err;
+		}
 	}) as typeof http.request;
 }
 

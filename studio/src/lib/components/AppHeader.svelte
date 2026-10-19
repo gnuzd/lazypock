@@ -2,6 +2,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import { client } from '$lib/client';
+	import { forgetSession } from '$lib/session';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
@@ -48,6 +49,7 @@
 	});
 
 	function logout() {
+		forgetSession();
 		client.logout();
 		window.location.href = base + '/login';
 	}

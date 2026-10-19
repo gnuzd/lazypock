@@ -6,6 +6,7 @@
 	import { onMount } from 'svelte';
 	import AppDialog from '$lib/components/AppDialog.svelte';
 	import { client } from '$lib/client';
+	import { forgetSession } from '$lib/session';
 	import { base, resolve } from '$app/paths';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
@@ -38,6 +39,7 @@
 					return;
 				} catch {
 					// Token is stale — clear it and show login
+					forgetSession();
 					client.authStore.clear();
 					if (!isLoginPage) {
 						goto(resolve('/login'));
