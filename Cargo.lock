@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "axum",
  "clap",
@@ -1907,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-api"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1940,7 +1940,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-auth"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "arc-swap",
  "argon2",
@@ -1958,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-core"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "getrandom 0.3.4",
  "ring",
@@ -1968,7 +1968,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-db"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "arc-swap",
  "deadpool",
@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-files"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -2007,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-hooks"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "lazypock-core",
  "lazypock-db",
@@ -2025,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-mail"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "lazypock-core",
  "lettre",
@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-realtime"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "lazypock-core",
  "lazypock-db",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "lazypock-studio-embed"
-version = "0.23.4"
+version = "0.24.0"
 dependencies = [
  "rust-embed",
 ]

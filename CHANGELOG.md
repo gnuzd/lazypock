@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.24.0](https://github.com/gnuzd/lazypock/compare/v0.23.4...v0.24.0) (2026-10-19)
+
+
+### Features
+
+* **health:** report the running version from GET /api/health ([616b5b9](https://github.com/gnuzd/lazypock/commit/616b5b913c02169fc4d291d29c64d60fa3170286))
+* **health:** report the running version from GET /api/health ([83edae9](https://github.com/gnuzd/lazypock/commit/83edae920a2c43331869152b42b7a6cac527d711))
+
+
+### Bug Fixes
+
+* **auth:** accept the documented `openssl rand -base64 32` signing key ([75d0433](https://github.com/gnuzd/lazypock/commit/75d043359b6f6e1b6431318bb73cdedfd2364063))
+* **auth:** accept the documented openssl rand -base64 32 signing key ([1342b7c](https://github.com/gnuzd/lazypock/commit/1342b7cb7d8257f9ed2bc84742a33fb9f418c3db))
+
 ## [0.23.4](https://github.com/gnuzd/lazypock/compare/v0.23.3...v0.23.4) (2026-10-19)
 
 
