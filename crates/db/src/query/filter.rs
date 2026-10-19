@@ -90,6 +90,15 @@ pub enum Operand {
     Auth(AuthRef),
 }
 
+/// One side of a comparison.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Side {
+    /// A dotted field path; length 1 is a plain column (`author`, `author.name`).
+    Path(Vec<String>),
+    /// A literal, `@now`, or `@request.auth.*`.
+    Value(Operand),
+}
+
 /// A filter expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -97,15 +106,34 @@ pub enum Expr {
     And(Box<Expr>, Box<Expr>),
     /// Either side may match.
     Or(Box<Expr>, Box<Expr>),
-    /// `path op operand`.
+    /// `side op side`.
+    ///
+    /// Either side may be a field or a value. PocketBase writes its documented rules
+    /// with the request reference on the **left** (`@request.auth.id != ""`,
+    /// `@request.auth.role = "admin"`), so a comparison that could only hold a field
+    /// path there refused half the documented vocabulary — including rules the
+    /// format's own examples use. A comparison of two field paths is parsed and then
+    /// refused by the compilers, because it needs a column-to-column predicate the
+    /// rule and query builders do not build.
     Compare {
-        /// Dotted field path; length 1 is a plain column.
-        path: Vec<String>,
+        /// Left-hand side.
+        left: Side,
         /// Comparison operator.
         op: CompareOp,
         /// Right-hand side.
-        operand: Operand,
+        right: Side,
     },
+}
+
+impl Expr {
+    /// Build a `path op operand` comparison, the shape most rules use.
+    pub fn compare(path: &[&str], op: CompareOp, operand: Operand) -> Self {
+        Expr::Compare {
+            left: Side::Path(path.iter().map(|segment| segment.to_string()).collect()),
+            op,
+            right: Side::Value(operand),
+        }
+    }
 }
 
 /// Parse a filter expression.
@@ -521,17 +549,13 @@ impl Parser {
                     None => Err(Error::invalid("unbalanced `(` in the filter")),
                 }
             }
-            Some(Token::Path(path)) => {
-                let Some(Token::Op(op)) = self.bump() else {
-                    return Err(Error::invalid(format!(
-                        "field `{}` must be followed by a comparison operator \
-                         (= != > >= < <= ~ !~ ?= ?!=)",
-                        path.join(".")
-                    )));
-                };
-                let operand = self.parse_operand()?;
-                Ok(Expr::Compare { path, op, operand })
+            Some(Token::Path(path)) => self.parse_compare_from(Side::Path(path), None),
+            // PocketBase's documented rules put the request reference on the left.
+            Some(Token::Auth(reference)) => {
+                let description = "the request reference";
+                self.parse_compare_from(Side::Value(Operand::Auth(reference)), Some(description))
             }
+            Some(Token::Now) => self.parse_compare_from(Side::Value(Operand::Now), Some("`@now`")),
             Some(other) => Err(Error::invalid(format!(
                 "expected a field or `(`, found {other} in the filter"
             ))),
@@ -541,14 +565,36 @@ impl Parser {
         }
     }
 
-    fn parse_operand(&mut self) -> Result<Operand> {
+    /// Read the operator and the right-hand side for an already-read left side.
+    fn parse_compare_from(&mut self, left: Side, left_description: Option<&str>) -> Result<Expr> {
+        let Some(Token::Op(op)) = self.bump() else {
+            return Err(match (&left, left_description) {
+                (Side::Path(path), _) => Error::invalid(format!(
+                    "field `{}` must be followed by a comparison operator \
+                     (= != > >= < <= ~ !~ ?= ?!=)",
+                    path.join(".")
+                )),
+                (_, Some(description)) => Error::invalid(format!(
+                    "{description} must be followed by a comparison operator \
+                     (= != > >= < <= ~ !~)"
+                )),
+                (_, None) => Error::invalid("expected a comparison operator"),
+            });
+        };
+        let right = self.parse_side()?;
+        Ok(Expr::Compare { left, op, right })
+    }
+
+    /// Read one comparison side that is not the leading field path.
+    fn parse_side(&mut self) -> Result<Side> {
         match self.bump() {
-            Some(Token::Text(value)) => Ok(Operand::Text(value)),
-            Some(Token::Number(value)) => Ok(Operand::Number(value)),
-            Some(Token::Bool(value)) => Ok(Operand::Bool(value)),
-            Some(Token::Null) => Ok(Operand::Null),
-            Some(Token::Now) => Ok(Operand::Now),
-            Some(Token::Auth(reference)) => Ok(Operand::Auth(reference)),
+            Some(Token::Path(path)) => Ok(Side::Path(path)),
+            Some(Token::Text(value)) => Ok(Side::Value(Operand::Text(value))),
+            Some(Token::Number(value)) => Ok(Side::Value(Operand::Number(value))),
+            Some(Token::Bool(value)) => Ok(Side::Value(Operand::Bool(value))),
+            Some(Token::Null) => Ok(Side::Value(Operand::Null)),
+            Some(Token::Now) => Ok(Side::Value(Operand::Now)),
+            Some(Token::Auth(reference)) => Ok(Side::Value(Operand::Auth(reference))),
             Some(other) => Err(Error::invalid(format!(
                 "expected a value after the operator, found {other} in the filter"
             ))),
@@ -576,11 +622,7 @@ mod tests {
     use super::*;
 
     fn compare(path: &[&str], op: CompareOp, operand: Operand) -> Expr {
-        Expr::Compare {
-            path: path.iter().map(|s| s.to_string()).collect(),
-            op,
-            operand,
-        }
+        Expr::compare(path, op, operand)
     }
 
     #[test]
@@ -676,6 +718,70 @@ mod tests {
                 Operand::Auth(AuthRef::Claim("realm".into()))
             )
         );
+    }
+
+    #[test]
+    fn the_request_reference_may_be_on_the_left() {
+        // PocketBase's documented rules use this shape: `@request.auth.id != ""`,
+        // `@request.auth.role = "admin"`.
+        assert_eq!(
+            parse("@request.auth.id != ''").unwrap(),
+            Expr::Compare {
+                left: Side::Value(Operand::Auth(AuthRef::Id)),
+                op: CompareOp::NotEq,
+                right: Side::Value(Operand::Text(String::new())),
+            }
+        );
+        assert_eq!(
+            parse("@request.auth.role = 'admin'").unwrap(),
+            Expr::Compare {
+                left: Side::Value(Operand::Auth(AuthRef::Claim("role".into()))),
+                op: CompareOp::Eq,
+                right: Side::Value(Operand::Text("admin".into())),
+            }
+        );
+        assert_eq!(
+            parse("@request.auth.id != '' && owner = @request.auth.id").unwrap(),
+            Expr::And(
+                Box::new(Expr::Compare {
+                    left: Side::Value(Operand::Auth(AuthRef::Id)),
+                    op: CompareOp::NotEq,
+                    right: Side::Value(Operand::Text(String::new())),
+                }),
+                Box::new(compare(
+                    &["owner"],
+                    CompareOp::Eq,
+                    Operand::Auth(AuthRef::Id)
+                )),
+            )
+        );
+    }
+
+    #[test]
+    fn a_request_reference_may_be_compared_with_a_field() {
+        assert_eq!(
+            parse("@request.auth.id = author").unwrap(),
+            Expr::Compare {
+                left: Side::Value(Operand::Auth(AuthRef::Id)),
+                op: CompareOp::Eq,
+                right: Side::Path(vec!["author".into()]),
+            }
+        );
+        assert_eq!(
+            parse("@now > created").unwrap(),
+            Expr::Compare {
+                left: Side::Value(Operand::Now),
+                op: CompareOp::Gt,
+                right: Side::Path(vec!["created".into()]),
+            }
+        );
+    }
+
+    #[test]
+    fn a_lone_request_reference_is_still_refused() {
+        for bad in ["@request.auth.id", "@now", "@request.auth.id ="] {
+            assert!(parse(bad).is_err(), "{bad:?} should have been rejected");
+        }
     }
 
     #[test]

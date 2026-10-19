@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use lazypock_core::error::{Error, Result};
 
-use super::filter::{AuthRef, CompareOp, Expr, Operand};
+use super::filter::{AuthRef, CompareOp, Expr, Operand, Side};
 use crate::collections::Collection;
 use crate::ddl::quote_ident;
 use crate::types::{self, CollectionType};
@@ -219,28 +219,72 @@ fn compile_expr(
             compile_expr(left, context, auth, root, params)?,
             compile_expr(right, context, auth, root, params)?
         )),
-        Expr::Compare { path, op, operand } => {
-            if path.len() > MAX_PATH_DEPTH {
-                return Err(Error::invalid(format!(
-                    "filter path `{}` is deeper than the supported {MAX_PATH_DEPTH} levels",
-                    path.join(".")
-                )));
-            }
-            let (column, hops) = path.split_last().expect("a comparison always has a path");
-            let mut alias_counter = 0;
-            compile_at(
-                context,
-                root,
-                hops,
-                column,
-                *op,
-                operand,
-                auth,
-                params,
-                &mut alias_counter,
-            )
+        Expr::Compare { left, op, right } => {
+            compile_comparison(left, *op, right, context, auth, root, params)
         }
     }
+}
+
+/// Compile one comparison, whichever side the field is on.
+fn compile_comparison(
+    left: &Side,
+    op: CompareOp,
+    right: &Side,
+    context: &FilterContext,
+    auth: &AuthContext,
+    root: &str,
+    params: &mut Vec<String>,
+) -> Result<String> {
+    match (left, right) {
+        (Side::Path(path), Side::Value(operand)) => {
+            compile_path(path, op, operand, false, context, auth, root, params)
+        }
+        // `@request.auth.id != ""`, `@request.auth.role = "admin"`: the documented
+        // rule shape, with the request reference on the left.
+        (Side::Value(operand), Side::Path(path)) => {
+            compile_path(path, op, operand, true, context, auth, root, params)
+        }
+        (Side::Value(left), Side::Value(right)) => compile_values(left, op, right, auth, params),
+        (Side::Path(left), Side::Path(right)) => Err(Error::unsupported(format!(
+            "a filter cannot compare two fields (`{}` and `{}`); compare a field with a \
+             value instead",
+            left.join("."),
+            right.join(".")
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_path(
+    path: &[String],
+    op: CompareOp,
+    operand: &Operand,
+    swapped: bool,
+    context: &FilterContext,
+    auth: &AuthContext,
+    root: &str,
+    params: &mut Vec<String>,
+) -> Result<String> {
+    if path.len() > MAX_PATH_DEPTH {
+        return Err(Error::invalid(format!(
+            "filter path `{}` is deeper than the supported {MAX_PATH_DEPTH} levels",
+            path.join(".")
+        )));
+    }
+    let (column, hops) = path.split_last().expect("a comparison always has a path");
+    let mut alias_counter = 0;
+    compile_at(
+        context,
+        root,
+        hops,
+        column,
+        op,
+        operand,
+        swapped,
+        auth,
+        params,
+        &mut alias_counter,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -251,6 +295,7 @@ fn compile_at(
     column: &str,
     op: CompareOp,
     operand: &Operand,
+    swapped: bool,
     auth: &AuthContext,
     params: &mut Vec<String>,
     alias_counter: &mut usize,
@@ -267,6 +312,7 @@ fn compile_at(
             column_type,
             op,
             operand,
+            swapped,
             auth,
             params,
         );
@@ -301,6 +347,7 @@ fn compile_at(
         column,
         op,
         operand,
+        swapped,
         auth,
         params,
         alias_counter,
@@ -317,6 +364,7 @@ fn compile_operator(
     column_type: &str,
     op: CompareOp,
     operand: &Operand,
+    swapped: bool,
     auth: &AuthContext,
     params: &mut Vec<String>,
 ) -> Result<String> {
@@ -335,6 +383,8 @@ fn compile_operator(
 
     match op {
         CompareOp::Any | CompareOp::NotAny => {
+            // `?=` reads "any of the field's values equals the operand", so it is the
+            // same predicate whichever side the value was written on.
             let value = literal_value(operand, auth)?;
             let placeholder = push_param(value, "text", params);
             let predicate = format!("{placeholder} = any({target})");
@@ -355,6 +405,15 @@ fn compile_operator(
             };
             // Concatenation keeps the wildcards out of the parameter, so a value
             // containing `%` or `_` stays a literal.
+            if swapped {
+                // `@request.auth.email ~ field`: the reference is the haystack and the
+                // column is the needle, so the pattern cannot be escaped — a wildcard
+                // in the column's own value is the data's, not the caller's, and
+                // matching it as a wildcard is what the expression asks for.
+                return Ok(format!(
+                    "{placeholder} {keyword} '%' || {target} || '%' escape '\\'"
+                ));
+            }
             Ok(format!(
                 "{target} {keyword} '%' || {placeholder} || '%' escape '\\'"
             ))
@@ -365,15 +424,7 @@ fn compile_operator(
         | CompareOp::Gte
         | CompareOp::Lt
         | CompareOp::Lte => {
-            let sql_operator = match op {
-                CompareOp::Eq => "=",
-                CompareOp::NotEq => "<>",
-                CompareOp::Gt => ">",
-                CompareOp::Gte => ">=",
-                CompareOp::Lt => "<",
-                CompareOp::Lte => "<=",
-                _ => unreachable!("handled above"),
-            };
+            let sql_operator = sql_operator(op);
 
             if matches!(operand, Operand::Now) {
                 // `now()` is a timestamptz; comparing it with anything else would
@@ -384,13 +435,104 @@ fn compile_operator(
                          it is only valid for date fields"
                     )));
                 }
-                return Ok(format!("{target} {sql_operator} now()"));
+                return Ok(if swapped {
+                    format!("now() {sql_operator} {target}")
+                } else {
+                    format!("{target} {sql_operator} now()")
+                });
             }
 
             let value = literal_value(operand, auth)?;
             let placeholder = push_param(value, cast_for(column_type), params);
-            Ok(format!("{target} {sql_operator} {placeholder}"))
+            Ok(if swapped {
+                format!("{placeholder} {sql_operator} {target}")
+            } else {
+                format!("{target} {sql_operator} {placeholder}")
+            })
         }
+    }
+}
+
+/// Compile a comparison in which both sides are values: `@request.auth.id != ""`,
+/// `@request.auth.role = "admin"`.
+///
+/// Such a predicate does not touch the row at all — it is entirely about the request —
+/// which is exactly what PocketBase's documented `createRule: "@request.auth.id != ''"`
+/// is. The same typing rules as a column comparison apply: `@now` is a timestamp, a
+/// number compares numerically, and everything else compares as text.
+fn compile_values(
+    left: &Operand,
+    op: CompareOp,
+    right: &Operand,
+    auth: &AuthContext,
+    params: &mut Vec<String>,
+) -> Result<String> {
+    if matches!(left, Operand::Null) || matches!(right, Operand::Null) {
+        return Err(Error::invalid(
+            "a comparison with null needs a field on one side; there is nothing to test \
+             for `is null` here",
+        ));
+    }
+
+    if matches!(op, CompareOp::Any | CompareOp::NotAny) {
+        return Err(Error::invalid(format!(
+            "`{}` needs a multiple-value field, and this comparison has none",
+            op.as_str()
+        )));
+    }
+
+    if matches!(op, CompareOp::Like | CompareOp::NotLike) {
+        let keyword = if op == CompareOp::Like {
+            "ilike"
+        } else {
+            "not ilike"
+        };
+        let haystack = value_sql(left, "text", auth, params)?;
+        let needle = escape_like(&literal_value(right, auth)?);
+        let placeholder = push_param(needle, "text", params);
+        return Ok(format!(
+            "{haystack} {keyword} '%' || {placeholder} || '%' escape '\\'"
+        ));
+    }
+
+    let cast = if matches!(left, Operand::Now) || matches!(right, Operand::Now) {
+        "timestamptz"
+    } else if matches!(left, Operand::Number(_)) || matches!(right, Operand::Number(_)) {
+        "double precision"
+    } else {
+        "text"
+    };
+    let left_sql = value_sql(left, cast, auth, params)?;
+    let right_sql = value_sql(right, cast, auth, params)?;
+    Ok(format!("{left_sql} {} {right_sql}", sql_operator(op)))
+}
+
+/// The SQL for one value side of a comparison, bound as a parameter (or `now()`).
+fn value_sql(
+    operand: &Operand,
+    cast: &str,
+    auth: &AuthContext,
+    params: &mut Vec<String>,
+) -> Result<String> {
+    if matches!(operand, Operand::Now) {
+        return Ok("now()".to_string());
+    }
+    let value = literal_value(operand, auth)?;
+    Ok(push_param(value, cast, params))
+}
+
+fn sql_operator(op: CompareOp) -> &'static str {
+    match op {
+        CompareOp::Eq => "=",
+        CompareOp::NotEq => "<>",
+        CompareOp::Gt => ">",
+        CompareOp::Gte => ">=",
+        CompareOp::Lt => "<",
+        CompareOp::Lte => "<=",
+        CompareOp::Like => "ilike",
+        CompareOp::NotLike => "not ilike",
+        CompareOp::Any => "= any",
+        CompareOp::NotAny => "<> all",
     }
 }
 
@@ -722,6 +864,66 @@ mod tests {
         // A missing auth value matches nothing rather than everything.
         let unauth = compile(&expr, &context, &AuthContext::default()).unwrap();
         assert_eq!(unauth.params, vec![""]);
+    }
+
+    #[test]
+    fn a_request_reference_on_the_left_compiles_to_a_bound_comparison() {
+        let (posts, all) = fixture();
+        let context = FilterContext::for_collection(&posts, &all).unwrap();
+        let auth = AuthContext {
+            id: Some("user1".into()),
+            claims: HashMap::from([("role".to_string(), "admin".to_string())]),
+            ..Default::default()
+        };
+
+        // `@request.auth.id != ""` — no column at all, the documented rule shape.
+        let expr = filter::parse("@request.auth.id != ''").unwrap();
+        let result = compile(&expr, &context, &auth).unwrap();
+        assert_eq!(result.sql, "$1::text <> $2::text");
+        assert_eq!(result.params, vec!["user1", ""]);
+
+        let expr = filter::parse("@request.auth.role = 'admin'").unwrap();
+        let result = compile(&expr, &context, &auth).unwrap();
+        assert_eq!(result.sql, "$1::text = $2::text");
+        assert_eq!(result.params, vec!["admin", "admin"]);
+
+        // ... and an unauthenticated request matches nothing, not everything.
+        let unauth = compile(
+            &filter::parse("@request.auth.id != ''").unwrap(),
+            &context,
+            &AuthContext::default(),
+        )
+        .unwrap();
+        assert_eq!(unauth.params, vec!["", ""]);
+    }
+
+    #[test]
+    fn a_request_reference_may_be_compared_with_a_field() {
+        let (posts, all) = fixture();
+        let context = FilterContext::for_collection(&posts, &all).unwrap();
+        let auth = AuthContext {
+            id: Some("user1".into()),
+            ..Default::default()
+        };
+
+        let expr = filter::parse("@request.auth.id = author").unwrap();
+        let result = compile(&expr, &context, &auth).unwrap();
+        assert_eq!(result.sql, "$1::text = \"posts\".\"author\"");
+        assert_eq!(result.params, vec!["user1"]);
+
+        assert_eq!(
+            compiled("@now < updated").sql,
+            "now() < \"posts\".\"updated\""
+        );
+    }
+
+    #[test]
+    fn comparing_two_fields_is_refused() {
+        let (posts, all) = fixture();
+        let context = FilterContext::for_collection(&posts, &all).unwrap();
+        let expr = filter::parse("title = author").unwrap();
+        let err = compile(&expr, &context, &AuthContext::default()).unwrap_err();
+        assert!(err.message().contains("two fields"), "{err}");
     }
 
     #[test]

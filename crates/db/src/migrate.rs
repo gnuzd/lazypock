@@ -121,6 +121,16 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "file_rls",
         sql: include_str!("../../../migrations/0015_file_rls.sql"),
     },
+    Migration {
+        version: 16,
+        name: "reflected_field_defaults",
+        sql: include_str!("../../../migrations/0016_reflected_field_defaults.sql"),
+    },
+    Migration {
+        version: 17,
+        name: "auth_claims",
+        sql: include_str!("../../../migrations/0017_auth_claims.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

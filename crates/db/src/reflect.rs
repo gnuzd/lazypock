@@ -200,12 +200,15 @@ pub async fn reflect(client: &Client) -> Result<ReflectionReport> {
             let labels = enums.get(&column.type_oid);
             let (field_type, mut field_options) = map_column(column, labels);
             if let Some(extra) = field_options.as_object_mut() {
+                // The marker the declarative path reads to leave this column's default
+                // to the database: `column.default` is Postgres's SQL text, not a JSON
+                // value a field `default` could declare.
+                extra.insert("reflected".to_string(), json!(true));
                 if column.is_primary {
                     extra.insert("primaryKey".to_string(), json!(true));
                 }
                 if let Some(default) = &column.default {
-                    // Kept so a write that omits the column behaves as the database
-                    // intends, and so the value is visible rather than assumed.
+                    // Kept so the value is visible rather than assumed.
                     extra.insert("default".to_string(), json!(default));
                 }
             }

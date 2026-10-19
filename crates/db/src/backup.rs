@@ -832,8 +832,6 @@ fn read_text<R: Read + std::io::Seek>(
 // Applying an archive
 // ---------------------------------------------------------------------------
 
-use crate::types::FieldType;
-
 /// How an import applies its changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AtomicMode {
@@ -1221,17 +1219,30 @@ fn undeclared_fields(
 /// validation. A field of the same *name* in a payload is still counted as declared
 /// (see [`declared_field_names`]), so stripping it here never makes it a prune
 /// candidate.
+///
+/// `sort_order` is honoured when a payload carries it, because that is what the format
+/// documents as the column order; a payload without it keeps the order of `schema`,
+/// which is what an export is written in.
 fn declared_fields(
     definition: &ArchiveCollection,
     collection_type: crate::types::CollectionType,
 ) -> Result<Vec<crate::collections::CreateField>> {
-    let mut fields = Vec::with_capacity(definition.schema.len());
-    for field in &definition.schema {
+    let mut fields: Vec<(usize, i64, crate::collections::CreateField)> =
+        Vec::with_capacity(definition.schema.len());
+    for (position, field) in definition.schema.iter().enumerate() {
         if let Some(field) = field_to_create(field, collection_type)? {
-            fields.push(field);
+            let declared_order = field
+                .options
+                .get("sort_order")
+                .and_then(Value::as_i64)
+                .unwrap_or(position as i64);
+            fields.push((position, declared_order, field));
         }
     }
-    Ok(fields)
+    // Stable, and keyed on the array position as a tie-breaker, so equal (or absent)
+    // `sort_order` values leave the declaration's order untouched.
+    fields.sort_by_key(|(position, declared_order, _)| (*declared_order, *position));
+    Ok(fields.into_iter().map(|(_, _, field)| field).collect())
 }
 
 /// Apply an existing collection's definition: its fields, rules and options.
@@ -1464,27 +1475,14 @@ fn field_to_create(
         return Ok(None);
     }
 
-    let field_type = value
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::invalid(format!("the field {name:?} has no type")))?;
-
-    Ok(Some(crate::collections::CreateField {
-        name: name.to_string(),
-        field_type: FieldType::parse(field_type)?,
-        required: value
-            .get("required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        unique: value
-            .get("unique")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        options: value
-            .get("options")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
-    }))
+    // Deserialised through the same type the collections API uses, which is what
+    // carries a field's settings — PocketBase's flat keys as well as a nested
+    // `options` — and the documented `default`/`indexed` flags. Reading the type and
+    // the options by hand here silently dropped every setting that was not `options`,
+    // so an import declared a `default` that never reached the table.
+    serde_json::from_value::<crate::collections::CreateField>(value.clone())
+        .map(Some)
+        .map_err(|err| Error::invalid(format!("the field {name:?} is invalid: {err}")))
 }
 
 /// Map an archive's collection type onto this server's.

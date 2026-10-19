@@ -174,24 +174,26 @@ curl -s https://lazypock.gnuzd.dev/backup.schema.json
 ```
 
 A bare array (`[ /* collection objects */ ]`) is also accepted. Each collection needs a `name` and
-`type`; every **non-view** collection also needs a `schema` (or PocketBase's `fields`) — an empty
-list is fine. View collections omit it (their columns come from the view query).
+`type`; every collection also needs a `schema` (or PocketBase's `fields`) — an empty list is fine.
+
+> **View collections are not implemented yet.** `"type": "view"` is refused with a 501 rather than
+> accepted and stored as something it cannot be, so generate `base`/`auth` collections only.
 
 ## Collection object
 
 | Key       | Type   | Required | Notes                                                                                                                      |
 | --------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `name`    | string | yes      | `^[a-z][a-z0-9_]*$` — lowercase table name.                                                                                |
-| `type`    | string | yes      | `"base"`, `"auth"` or `"view"`.                                                                                            |
+| `type`    | string | yes      | `"base"` or `"auth"` (`"view"` is not implemented yet and is refused).                                                     |
 | `schema`  | array  | no       | Field definitions (see below). PocketBase calls this `"fields"` — send either; if a collection has both, `fields` is used. |
 | `id`      | string | no       | Existing collection id. Omit it and the collection is matched/created by `name`.                                           |
 | `rules`   | object | no       | Access rules (see below).                                                                                                  |
-| `options` | object | no       | `{ "indexes": [...] }`, and for views the query (see below).                                                               |
+| `options` | object | no       | `{ "indexes": [...] }` (see below).                                                                                        |
 | `hooks`   | object | no       | Usually `{}`.                                                                                                              |
-| `records` | array  | no       | Records to upsert (see below). Omit for `view` collections.                                                                |
+| `records` | array  | no       | Records to upsert (see below).                                                                                             |
 
-> Auth collections always get a **unique `email`** field — if you declare one, its `unique` flag is
-> forced on for you.
+> Auth collections always get a **unique `email`** field — a payload that declares one has it treated
+> as the built-in column, so declaring it is harmless but achieves nothing.
 
 ## Field object (`schema[]`)
 
@@ -204,12 +206,28 @@ list is fine. View collections omit it (their columns come from the view query).
 | `indexed`    | boolean | Adds a plain index.                                                                              |
 | `hidden`     | boolean | Never returned by the API / hidden in the Studio (e.g. password).                                 |
 | `system`     | boolean | **Skip these.** System-managed fields (`id`, `created_at`, `updated_at`, `verified`, …) are stripped on import. |
-| `default`    | any     | Default value when the field is omitted on write.                                                |
+| `default`    | any     | A real column default: the value written when the field is omitted. See the note below.          |
 | `options`    | object  | Type-specific settings (see examples).                                                            |
-| `sort_order` | integer | Column order.                                                                                    |
+| `sort_order` | integer | Column order. The order of `schema` is used when it is absent.                                    |
 
-**Field types:** `text`, `editor`, `number`, `bool`, `email`, `url`, `date`, `datetime`, `autodate`,
-`select`, `multi_select`, `file`, `multi_file`, `relation`, `json`, `geo`, `password`.
+**Field types:** `text`, `editor`, `number`, `bool`, `email`, `url`, `date`, `autodate`, `select`,
+`file`, `relation`, `json`, `geo`, `password`.
+
+The multi-value spellings are accepted as aliases of the types that carry them, because a multi
+select *is* a `select` with `maxSelect > 1` and a multi file *is* a `file`:
+
+| Alias           | Stored as  | Meaning                                    |
+| --------------- | ---------- | ------------------------------------------ |
+| `datetime`      | `date`     | A timestamp (`timestamptz`).               |
+| `multi_select`  | `select`   | `select` with `maxSelect > 1`.             |
+| `multi_file`    | `file`     | `file` with `maxSelect > 1`.                |
+| `geo`/`geoPoint`| `geoPoint` | `{ "lon": …, "lat": … }`.                   |
+
+`default` is applied to the column itself, so both a write that omits the field and plain SQL get it.
+It must match the field's type: a string for text-like and select fields (a select default must be one
+of its `values`), a number for `number`, `true`/`false` for `bool`, a date string for `date`, and any
+JSON value for `json`/`geo`. A `multi_select`, `multi_file` or `relation` field cannot declare one —
+those are refused rather than silently ignored.
 
 Type options (`options` map) — a few common ones:
 
@@ -222,6 +240,8 @@ Type options (`options` map) — a few common ones:
 { "name": "body", "type": "editor" }
 { "name": "meta", "type": "json" }
 ```
+
+`maxSize` is enforced on uploads; `maxFileSize` is accepted as the equivalent older spelling.
 
 ## Rules (`rules`)
 
@@ -238,17 +258,37 @@ PocketBase-style filter expressions, per action. `null` = superusers only, `""` 
 }
 ```
 
-## Indexes and views (`options`)
+`@request.auth.*` may be on either side of a comparison — both `@request.auth.role = 'admin'` and
+`author = @request.auth.id` are valid. `@request.auth.role` reads the `role` column of the
+authenticated record (loaded once per authenticated request), so the rule follows the record rather
+than living in the token; a rule that names a column the record does not have matches nothing. A rule
+that compares two *fields* (`a = b`) is refused.
+
+## Indexes (`options.indexes`)
 
 ```json
 { "options": { "indexes": ["UNIQUE email", "created_at DESC, id"] } }
 ```
 
-View collections carry their query instead of a `schema`:
+Each entry is either an expression list — `[UNIQUE ]column [ASC|DESC][, …]` — or a full PocketBase
+statement, which is parsed and rebuilt rather than executed as given:
 
 ```json
-{ "name": "published_posts", "type": "view", "options": { "view_query": "SELECT id, title FROM posts WHERE status = 'published'" } }
+{ "options": { "indexes": ["CREATE UNIQUE INDEX idx_posts_slug ON posts (slug) WHERE published = true"] } }
 ```
+
+- Only the collection's **own columns** can be indexed. A generated name is `idx_<collection>_<columns>`;
+  an explicit statement keeps its name.
+- A `WHERE` predicate is a rule filter, compiled exactly like an access rule.
+- **Refused, with a message:** index *expressions* (`lower(email)`), `USING`, `COLLATE`, `INCLUDE`,
+  a statement that names a different collection, and an unknown column. Nothing is silently dropped.
+- A generated name that would collide with a name the collection already holds (a `unique` field's
+  index, the auth email index) gets a deterministic suffix, so re-importing the same file is a no-op.
+- An **explicit** name that already exists on a collection but was not declared before is left as it is
+  (replacing the case-insensitive unique email index would weaken it); the import logs a warning rather
+  than failing. Rename the declared index to apply it alongside.
+
+Dropping an entry from `options.indexes` on a later import drops the index.
 
 ## Records (`records[]`)
 
@@ -303,7 +343,8 @@ and `updated_at` itself:
 
 ## PocketBase 23+ compatibility
 
-A PocketBase export imports as-is. Differences the importer normalizes for you:
+A PocketBase export imports as-is, apart from the few differences the importer normalizes or refuses
+with a message:
 
 - `"fields"` instead of `"schema"`. A collection carrying **both** is fine too: `fields` is used.
   The Studio's own "Export Collections" file looks like that, because it posts back the collection
@@ -311,14 +352,20 @@ A PocketBase export imports as-is. Differences the importer normalizes for you:
 - camelCase field names and PocketBase collection ids in `relation` options.
 - Type options at the **top level** of a field (`"maxSelect": 3`) rather than nested under `"options"`.
 - PocketBase's `"system": true` fields (its own `id`, `tokenKey`, …) are stripped.
+- PocketBase index statements in `options.indexes` (see above). One that indexes an *expression* is
+  refused with a message rather than silently skipped, because it cannot be rebuilt safely.
+- A PocketBase `"type": "view"` collection is refused: views are not implemented yet.
 
 ## Common mistakes
 
 - Sending both `fields` **and** `schema` on the same collection → `fields` wins, `schema` is ignored
   (they mean the same thing; the derived `schema` beside `fields` is the poorer of the two).
 - Including a system `id` field in `schema` → stripped (harmless), but do not rely on it.
-- Using `geoPoint`/`multiSelect` style names from the Studio UI — use the canonical `geo` /
-  `multi_select` types.
+- Using a field type that is not listed above, or a `geoPoint`/`multiSelect`/`multiSelect` style name from
+  a PocketBase export — the aliases in the table above cover the PocketBase spellings (`geo`,
+  `multi_select`, `multi_file`, `datetime`); anything else is refused by name.
+- Declaring an index on another collection's column, or an index expression — the index list only covers
+  the collection's own columns (see above).
 - `deleteMissing` (**destructive**) drops every user collection **and field** the file does not
   declare. Leave it `false` when importing a partial file. System collections and built-in columns are
   never dropped.
@@ -329,7 +376,10 @@ If you are an AI assistant generating a Lazypock import file, use this contract:
 
 1. Output **only** a JSON object, `{ "collections": [ ... ] }`, with no prose or code fences inside the file.
 2. Validate against <https://lazypock.gnuzd.dev/backup.schema.json>.
-3. Use the canonical field types listed above and nest type settings under `options`.
+3. Use the canonical field types listed above and nest type settings under `options`. `default` is a
+   top-level key on the field, not an option.
 4. Give every record a stable UUID `id`; references use the target record's id.
 5. Omit system fields (`id`, `created_at`, `updated_at`, `verified`, `emailVisibility`, `tokenKey`) from `schema`.
-6. Never set `deleteMissing` and never emit SQL.
+6. Write indexes in `options.indexes` as expressions (`"UNIQUE email"`, `"created_at DESC, id"`), never
+   as SQL to be executed.
+7. Never set `deleteMissing` and never emit SQL.

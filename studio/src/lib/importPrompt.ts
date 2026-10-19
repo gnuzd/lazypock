@@ -114,9 +114,11 @@ Replace this line with what I want, e.g. "a blog with posts, comments and tags".
 OUTPUT RULES
 - Output ONLY one JSON object. No markdown fences, no explanation, no trailing text.
 - Top-level shape: { "collections": [ ... ] }, where each collection has "name", "type" and "schema".
-- "type" is "base", "auth" or "view". Use "auth" for accounts (it gets a unique email).
-- Canonical field types: ${FIELD_TYPES.join(', ')}.
+- "type" is "base" or "auth" (use "auth" for accounts — it gets a unique email). View collections are not supported yet, so never emit "type": "view".
+- Canonical field types: ${FIELD_TYPES.join(', ')}. "datetime", "multi_select", "multi_file" and "geo" are accepted as aliases of date/select/file/geoPoint.
 - Put type-specific settings under each field's "options", e.g. {"values": [...], "maxSelect": 3} for a select, {"collection": "users"} for a relation, {"onCreate": true} for an autodate.
+- A field-level "default" is a top-level key next to "options" (e.g. { "name": "status", "type": "select", "options": {"values": ["draft","published"]}, "default": "draft" }).
+- Custom indexes go in the collection's "options": { "indexes": ["UNIQUE email", "created_at DESC, id"] } — expressions, never SQL statements.
 - Do NOT put system fields in "schema" (id, created_at, updated_at, verified, emailVisibility, tokenKey) — the server manages them.
 - Every record needs a stable UUID "id". Relation fields hold the target record's id.
 - Records are upserted by id. Never emit SQL and never use "deleteMissing".

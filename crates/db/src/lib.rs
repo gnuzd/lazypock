@@ -10,6 +10,7 @@ pub mod collections;
 pub mod ddl;
 pub mod defaults;
 pub mod hooks;
+pub mod indexes;
 pub mod listen;
 pub mod migrate;
 pub mod pool;

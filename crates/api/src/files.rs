@@ -50,9 +50,11 @@ pub fn body_limit() -> DefaultBodyLimit {
 /// An upload with **no record** is the editor's and the media library's case: it is
 /// Enforce a file field's own limits on a file about to be attached to it.
 ///
-/// `maxFileSize` and `mimeTypes` live on the field, and until this existed they
-/// were stored and never read: a limit an operator had set that nothing checked,
-/// which reads as enforced and is not.
+/// `maxFileSize` — or PocketBase's and the documented `maxSize` — and `mimeTypes` live
+/// on the field, and until this existed they were stored and never read: a limit an
+/// operator had set that nothing checked, which reads as enforced and is not. Both
+/// spellings go through [`lazypock_db::types::file_size_limit`], so the documented one
+/// and the one this codebase grew are the same limit.
 ///
 /// Called from both places a file becomes attached to a field — this endpoint and
 /// a record write — because either can be the one that does it.
@@ -61,7 +63,7 @@ pub(crate) fn check_file_policy(
     size: i64,
     mime_type: &str,
 ) -> Result<(), Error> {
-    if let Some(max) = field.options.get("maxFileSize").and_then(Value::as_u64) {
+    if let Some(max) = lazypock_db::types::file_size_limit(&field.options) {
         if size > max as i64 {
             return Err(Error::invalid(format!(
                 "`{}` accepts files up to {max} bytes; this one is {size} bytes",

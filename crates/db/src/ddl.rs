@@ -94,6 +94,12 @@ fn column_definition(
     let column_type = field.column_type()?;
     let mut definition = format!("{column} {column_type}");
 
+    // The declared `default` is part of the column, so the database applies it to a
+    // row that omits the value — which is what the documented option promises.
+    if let Some(default) = types::default_sql(field.field_type, &field.options)? {
+        definition.push_str(&format!(" default {default}"));
+    }
+
     if field.required {
         definition.push_str(" not null");
     }
@@ -142,8 +148,20 @@ pub fn add_column_statements(table: &str, field: &Field) -> Result<Vec<String>> 
     let column_type = field.column_type()?;
 
     if !field.required {
+        let default = types::default_sql(field.field_type, &field.options)?
+            .map(|literal| format!(" default {literal}"))
+            .unwrap_or_default();
         return Ok(vec![format!(
-            "alter table {target} add column {column} {column_type}"
+            "alter table {target} add column {column} {column_type}{default}"
+        )]);
+    }
+
+    // A declared default is already a valid value for the rows that exist, and it is
+    // what the declaration asked for, so it is installed instead of the placeholder
+    // below — and kept, rather than dropped.
+    if let Some(literal) = types::default_sql(field.field_type, &field.options)? {
+        return Ok(vec![format!(
+            "alter table {target} add column {column} {column_type} not null default {literal}"
         )]);
     }
 
@@ -211,6 +229,16 @@ pub fn rename_column_statement(table: &str, from: &str, to: &str) -> Result<Stri
 pub fn create_unique_index_statement(table: &str, column: &str) -> String {
     format!(
         "create unique index {} on {} ({})",
+        quote_ident(&index_name(table, column)),
+        quote_ident(table),
+        quote_ident(column)
+    )
+}
+
+/// `create index` for a column: the DDL behind a field's `indexed` flag.
+pub fn create_index_statement(table: &str, column: &str) -> String {
+    format!(
+        "create index {} on {} ({})",
         quote_ident(&index_name(table, column)),
         quote_ident(table),
         quote_ident(column)
