@@ -65,6 +65,20 @@ pub struct FilesConfig {
     /// leaked one is useful should be small. Fifteen minutes is enough for a slow
     /// connection to start an upload.
     pub presign_ttl_seconds: i64,
+    /// A namespace every object key is written under, `/`-separated.
+    ///
+    /// Empty means "the root of the store". Setting it lets several deployments —
+    /// or several tenants — share one bucket without sharing a key space, which is
+    /// what makes the orphan sweeper safe: it lists its own prefix instead of the
+    /// whole bucket.
+    pub prefix: String,
+    /// Refuse the local adapter outright.
+    ///
+    /// A deployment whose files must live in object storage (a multi-tenant host, a
+    /// container with no persistent disk) cannot rely on the environment alone:
+    /// a saved Studio setting overrides it. This makes the requirement a boot
+    /// failure instead of a suggestion.
+    pub force_remote: bool,
 }
 
 impl FilesConfig {
@@ -74,6 +88,62 @@ impl FilesConfig {
     pub const DEFAULT_REGION: &'static str = "auto";
     /// Default lifetime of a presigned URL.
     pub const DEFAULT_PRESIGN_TTL_SECONDS: i64 = 15 * 60;
+
+    /// A configuration with every value at its default.
+    ///
+    /// Exists so a caller that only cares about one or two fields — a test, a
+    /// probe — does not have to restate the rest, and so adding a field does not
+    /// break every literal in the tree.
+    pub fn default_config() -> Self {
+        Self {
+            adapter: StorageAdapter::Local,
+            directory: Self::DEFAULT_DIRECTORY.to_string(),
+            public_base_url: None,
+            endpoint: None,
+            bucket: None,
+            region: Self::DEFAULT_REGION.to_string(),
+            access_key: None,
+            secret_key: None,
+            image_service_url: None,
+            image_service_token: None,
+            presign_ttl_seconds: Self::DEFAULT_PRESIGN_TTL_SECONDS,
+            prefix: String::new(),
+            force_remote: false,
+        }
+    }
+
+    /// Normalize and check a key prefix.
+    ///
+    /// Leading and trailing slashes are dropped (a prefix is a path, and the
+    /// separator is added when a key is built), every segment must be non-empty and
+    /// not `.`/`..`, and only key-safe characters are allowed — the same reasoning
+    /// as [`crate::keys::safe_filename`], because this value ends up in object keys.
+    fn normalize_prefix(raw: &str) -> Result<String> {
+        let trimmed = raw.trim().trim_matches('/');
+        if trimmed.is_empty() {
+            return Ok(String::new());
+        }
+
+        let mut segments = Vec::new();
+        for segment in trimmed.split('/') {
+            if segment.is_empty() || segment == "." || segment == ".." {
+                return Err(Error::config(format!(
+                    "LAZYPOCK_FILES_PREFIX must be a plain path prefix, got {raw:?}"
+                )));
+            }
+            if !segment.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+            }) {
+                return Err(Error::config(format!(
+                    "LAZYPOCK_FILES_PREFIX may only contain letters, digits, `-`, `_`, `.` and \
+                     `/`, got {raw:?}"
+                )));
+            }
+            segments.push(segment);
+        }
+
+        Ok(segments.join("/"))
+    }
 
     /// Read the configuration from the environment.
     pub fn from_env() -> Result<Self> {
@@ -116,6 +186,23 @@ impl FilesConfig {
                     ))
                 })?,
                 None => Self::DEFAULT_PRESIGN_TTL_SECONDS,
+            },
+            prefix: Self::normalize_prefix(
+                optional("LAZYPOCK_FILES_PREFIX")
+                    .as_deref()
+                    .unwrap_or_default(),
+            )?,
+            force_remote: match optional("LAZYPOCK_FILES_FORCE_REMOTE") {
+                None => false,
+                Some(raw) => match raw.to_ascii_lowercase().as_str() {
+                    "1" | "on" | "true" | "yes" => true,
+                    "0" | "off" | "false" | "no" => false,
+                    other => {
+                        return Err(Error::config(format!(
+                            "LAZYPOCK_FILES_FORCE_REMOTE must be on or off, got {other:?}"
+                        )))
+                    }
+                },
             },
         };
 
@@ -170,6 +257,24 @@ impl FilesConfig {
                 "a presigned URL lifetime must be between 1 second and 7 days, got {}",
                 self.presign_ttl_seconds
             )));
+        }
+
+        // Stored already normalized, so a literal that is not is a caller's mistake
+        // rather than something to silently repair here.
+        if Self::normalize_prefix(&self.prefix)? != self.prefix {
+            return Err(Error::config(format!(
+                "LAZYPOCK_FILES_PREFIX must be stored normalized (no leading, trailing or \
+                 repeated slashes), got {:?}",
+                self.prefix
+            )));
+        }
+
+        if self.force_remote && self.adapter == StorageAdapter::Local {
+            return Err(Error::config(
+                "LAZYPOCK_FILES_FORCE_REMOTE is on, so the local storage adapter is refused: \
+                 set LAZYPOCK_FILES_ADAPTER=s3 with the LAZYPOCK_S3_* credentials, or turn the \
+                 requirement off",
+            ));
         }
 
         if self.adapter == StorageAdapter::S3 {
@@ -347,6 +452,65 @@ mod tests {
         assert!(config.public_base_url.is_none());
         // Resizing happens in this process until a service is configured.
         assert!(config.image_service_url.is_none());
+        // No namespace and no forced backend: a single-deployment node behaves
+        // exactly as it did before either variable existed.
+        assert!(config.prefix.is_empty());
+        assert!(!config.force_remote);
+    }
+
+    #[test]
+    fn a_prefix_is_normalized_and_kept() {
+        let config = config(&[("LAZYPOCK_FILES_PREFIX", "  /tenants/abc/  ")]).expect("prefix");
+        assert_eq!(config.prefix, "tenants/abc");
+    }
+
+    #[test]
+    fn a_prefix_that_is_not_a_plain_path_is_refused() {
+        for bad in ["../escape", "a//b", "a/./b", "a b", "a/../b"] {
+            let err = config(&[("LAZYPOCK_FILES_PREFIX", bad)]).expect_err("refused");
+            assert!(
+                err.message().contains("LAZYPOCK_FILES_PREFIX"),
+                "{bad:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn forcing_remote_storage_refuses_the_local_adapter() {
+        // The default adapter is local, so asking for remote-only already refuses.
+        let err = config(&[("LAZYPOCK_FILES_FORCE_REMOTE", "on")]).expect_err("refused");
+        assert!(err.message().contains("FORCE_REMOTE"), "{err}");
+
+        // Naming it explicitly does not get around the requirement.
+        let err = config(&[
+            ("LAZYPOCK_FILES_FORCE_REMOTE", "on"),
+            ("LAZYPOCK_FILES_ADAPTER", "local"),
+        ])
+        .expect_err("refused");
+        assert!(err.message().contains("FORCE_REMOTE"), "{err}");
+    }
+
+    #[test]
+    fn forcing_remote_storage_accepts_a_complete_s3_configuration() {
+        let config = config(&[
+            ("LAZYPOCK_FILES_FORCE_REMOTE", "on"),
+            ("LAZYPOCK_FILES_ADAPTER", "s3"),
+            (
+                "LAZYPOCK_S3_ENDPOINT",
+                "https://account.r2.cloudflarestorage.com",
+            ),
+            ("LAZYPOCK_S3_BUCKET", "media"),
+            ("LAZYPOCK_S3_ACCESS_KEY", "AKIDEXAMPLE"),
+            ("LAZYPOCK_S3_SECRET_KEY", "secret"),
+        ])
+        .expect("s3 with forcing");
+        assert!(config.force_remote);
+    }
+
+    #[test]
+    fn a_force_remote_value_that_is_not_a_switch_is_refused() {
+        let err = config(&[("LAZYPOCK_FILES_FORCE_REMOTE", "maybe")]).expect_err("refused");
+        assert!(err.message().contains("FORCE_REMOTE"), "{err}");
     }
 
     #[test]

@@ -102,6 +102,13 @@ pub struct SweepOptions {
     pub dry_run: bool,
     /// Most objects to examine, so one run cannot take an unbounded amount of time.
     pub limit: usize,
+    /// Only list this key prefix (`LAZYPOCK_FILES_PREFIX`).
+    ///
+    /// Empty lists the whole store, which is only correct when the store is not
+    /// shared. When several deployments share a bucket, a sweep scoped to the
+    /// root would treat every other deployment's objects as orphans and queue
+    /// them for deletion.
+    pub prefix: String,
 }
 
 impl Default for SweepOptions {
@@ -109,6 +116,7 @@ impl Default for SweepOptions {
         Self {
             dry_run: true,
             limit: 10_000,
+            prefix: String::new(),
         }
     }
 }
@@ -148,7 +156,7 @@ pub async fn sweep(
         ..SweepReport::default()
     };
 
-    let keys = storage.list("").await?;
+    let keys = storage.list(&options.prefix).await?;
     let present: HashSet<&str> = keys.iter().map(String::as_str).collect();
 
     // The collections that exist, so a file under a dropped collection is
@@ -342,6 +350,7 @@ mod tests {
         let options = SweepOptions {
             dry_run: true,
             limit: 10,
+            ..SweepOptions::default()
         };
         let report = SweepReport {
             scanned: 10,

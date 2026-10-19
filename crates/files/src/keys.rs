@@ -1,8 +1,15 @@
 //! Object key layout.
 //!
-//! Keys are `{collection}/{record_id}/{random}_{filename}`: grouping by
+//! Keys are `{prefix}/{collection}/{record_id}/{random}_{filename}`: grouping by
 //! collection and record makes an orphan sweepable, and the random prefix keeps
-//! two uploads of the same name from colliding.
+//! two uploads of the same name from colliding. The leading `{prefix}` is the
+//! deployment's namespace (`LAZYPOCK_FILES_PREFIX`), empty for a store nobody
+//! shares.
+//!
+//! The prefix is part of the stored `storage_path`, not something a backend adds
+//! on the way out: that way the sweeper, the reaper and the presigner all compare
+//! the same string, and a shared bucket cannot have one deployment inspecting or
+//! deleting another's objects.
 
 use lazypock_core::error::Result;
 
@@ -65,8 +72,22 @@ pub fn safe_filename(original: &str) -> String {
     name
 }
 
+/// Put a key under the deployment's namespace.
+fn scoped(prefix: &str, key: String) -> String {
+    if prefix.is_empty() {
+        key
+    } else {
+        format!("{prefix}/{key}")
+    }
+}
+
 /// Build the object key for a new upload.
-pub fn storage_key(collection: &str, record_id: &str, filename: &str) -> Result<String> {
+pub fn storage_key(
+    prefix: &str,
+    collection: &str,
+    record_id: &str,
+    filename: &str,
+) -> Result<String> {
     // Reuses the identifier rules, so a collection name cannot introduce a path
     // segment of its own.
     lazypock_db::types::validate_identifier("collection name", collection)?;
@@ -82,10 +103,13 @@ pub fn storage_key(collection: &str, record_id: &str, filename: &str) -> Result<
         ));
     }
 
-    Ok(format!(
-        "{collection}/{record_id}/{}_{}",
-        lazypock_core::id::new_id(),
-        safe_filename(filename)
+    Ok(scoped(
+        prefix,
+        format!(
+            "{collection}/{record_id}/{}_{}",
+            lazypock_core::id::new_id(),
+            safe_filename(filename)
+        ),
     ))
 }
 
@@ -96,11 +120,14 @@ pub fn storage_key(collection: &str, record_id: &str, filename: &str) -> Result<
 /// The key-based orphan sweeper only attributes `{collection}/{record}/{filename}`,
 /// so it leaves these alone — an unattached upload is reclaimed by `_files` aging
 /// out ([`crate::reaper`]), which knows it was never attached.
-pub fn pending_key(filename: &str) -> String {
-    format!(
-        "library/{}/{}",
-        lazypock_core::id::new_id(),
-        safe_filename(filename)
+pub fn pending_key(prefix: &str, filename: &str) -> String {
+    scoped(
+        prefix,
+        format!(
+            "library/{}/{}",
+            lazypock_core::id::new_id(),
+            safe_filename(filename)
+        ),
     )
 }
 
@@ -139,27 +166,45 @@ mod tests {
 
     #[test]
     fn keys_group_by_collection_and_record() {
-        let key = storage_key("posts", "abcDEF123456789", "photo.png").expect("key");
+        let key = storage_key("", "posts", "abcDEF123456789", "photo.png").expect("key");
         let parts: Vec<&str> = key.split('/').collect();
         assert_eq!(parts.len(), 3, "{key}");
         assert_eq!(parts[0], "posts");
         assert_eq!(parts[1], "abcDEF123456789");
         assert!(parts[2].ends_with("_photo.png"), "{key}");
         // The random prefix means two uploads of the same name never collide.
-        let other = storage_key("posts", "abcDEF123456789", "photo.png").expect("key");
+        let other = storage_key("", "posts", "abcDEF123456789", "photo.png").expect("key");
         assert_ne!(key, other);
+    }
+
+    #[test]
+    fn a_prefix_namespaces_every_key() {
+        let key = storage_key("tenants/abc", "posts", "rec1", "photo.png").expect("key");
+        assert!(key.starts_with("tenants/abc/posts/rec1/"), "{key}");
+        assert!(
+            pending_key("tenants/abc", "photo.png").starts_with("tenants/abc/library/"),
+            "pending uploads belong to the namespace too"
+        );
+        // An empty prefix is exactly the old layout.
+        assert_eq!(
+            storage_key("", "posts", "rec1", "photo.png")
+                .expect("key")
+                .split('/')
+                .count(),
+            3
+        );
     }
 
     #[test]
     fn a_traversing_record_id_is_refused() {
         for bad in ["..", ".", "a/b", "a\\b", ""] {
             assert!(
-                storage_key("posts", bad, "photo.png").is_err(),
+                storage_key("", "posts", bad, "photo.png").is_err(),
                 "{bad:?} should be refused"
             );
         }
         assert!(
-            storage_key("Posts", "abc", "photo.png").is_err(),
+            storage_key("", "Posts", "abc", "photo.png").is_err(),
             "identifier rules apply"
         );
     }

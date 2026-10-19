@@ -341,6 +341,25 @@ impl Files {
         self.inner.load().config.clone()
     }
 
+    /// The key namespace every object is written under (`LAZYPOCK_FILES_PREFIX`).
+    pub fn prefix(&self) -> String {
+        self.inner.load().config.prefix.clone()
+    }
+
+    /// The object key for a new upload, under this deployment's namespace.
+    ///
+    /// The namespace is part of the stored `storage_path`, so a shared bucket splits
+    /// cleanly: the sweeper lists only this deployment's prefix, which is what stops
+    /// one tenant's sweep from deleting another tenant's files.
+    pub fn storage_key(&self, collection: &str, record_id: &str, filename: &str) -> Result<String> {
+        crate::keys::storage_key(&self.config().prefix, collection, record_id, filename)
+    }
+
+    /// The object key for an upload that has no record yet, under the namespace.
+    pub fn pending_key(&self, filename: &str) -> String {
+        crate::keys::pending_key(&self.config().prefix, filename)
+    }
+
     /// The backend in use **now**.
     ///
     /// A handle rather than a borrow: the service can be reconfigured at any moment, and a
@@ -425,15 +444,7 @@ mod tests {
         FilesConfig {
             adapter,
             directory: "/tmp/lazypock-files-test".into(),
-            public_base_url: None,
-            endpoint: None,
-            bucket: None,
-            region: "auto".into(),
-            access_key: None,
-            secret_key: None,
-            image_service_url: None,
-            image_service_token: None,
-            presign_ttl_seconds: FilesConfig::DEFAULT_PRESIGN_TTL_SECONDS,
+            ..FilesConfig::default_config()
         }
     }
 
@@ -465,6 +476,44 @@ mod tests {
         storage.delete(key).await.expect("delete again");
 
         let _ = tokio::fs::remove_dir_all(&directory).await;
+    }
+
+    #[tokio::test]
+    async fn a_prefix_scopes_keys_and_listing() {
+        let directory = std::env::temp_dir().join(format!(
+            "lazypock-files-prefix-{}",
+            lazypock_core::id::new_id()
+        ));
+        let mut prefixed = config(StorageAdapter::Local);
+        prefixed.directory = directory.display().to_string();
+        prefixed.prefix = "tenants/acme".into();
+
+        let files = Files::from_config(&prefixed).expect("service");
+        let key = files.storage_key("posts", "p1", "photo.png").expect("key");
+        assert!(key.starts_with("tenants/acme/posts/p1/"), "{key}");
+        files
+            .store(&key, "image/png", png(2, 2))
+            .await
+            .expect("stored");
+
+        // A neighbouring deployment's object, in the same bucket.
+        files
+            .storage()
+            .put("tenants/other/posts/p1/x.png", "image/png", png(2, 2))
+            .await
+            .expect("other stored");
+
+        // The sweeper lists this namespace only: this is what stops one tenant's
+        // sweep from queuing another tenant's objects as orphans.
+        let mine = files.storage().list(&files.prefix()).await.expect("list");
+        assert_eq!(mine, vec![key], "only this namespace");
+
+        // And the whole store really does hold more, so the assertion above is
+        // about the scope rather than about the store being empty.
+        assert!(
+            files.storage().list("").await.expect("list").len() > mine.len(),
+            "the other namespace is present in the store"
+        );
     }
 
     #[tokio::test]
