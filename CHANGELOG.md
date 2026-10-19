@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.4](https://github.com/gnuzd/lazypock/compare/v0.23.3...v0.23.4) (2026-10-19)
+
+
+### Bug Fixes
+
+* **import:** make the documented import format and rules actually work ([f632ce5](https://github.com/gnuzd/lazypock/commit/f632ce509e76809de42c6329f13f4c73507222c9))
+
 ## [0.23.3](https://github.com/gnuzd/lazypock/compare/v0.23.2...v0.23.3) (2026-10-18)
 
 
