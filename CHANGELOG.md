@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.25.0](https://github.com/gnuzd/lazypock/compare/v0.24.0...v0.25.0) (2026-10-19)
+
+
+### Features
+
+* **collections:** implement view collections ([6ad98bd](https://github.com/gnuzd/lazypock/commit/6ad98bd3d9d28a1e6be87948b27d9a3a8ee362eb))
+* **mail:** let application code send email through the configured SMTP ([fb7dd76](https://github.com/gnuzd/lazypock/commit/fb7dd76ae4067f0338de7b0a5c8ed5188a987228))
+* **mail:** let application code send email through the configured SMTP ([049cc64](https://github.com/gnuzd/lazypock/commit/049cc648ccca2bfffd5ebf6bc684bc500698bd00))
+
+
+### Bug Fixes
+
+* **auth:** make the refresh-race test deterministic ([ed58f93](https://github.com/gnuzd/lazypock/commit/ed58f933d8aa1068852ff506bad1d0056b32930c))
+* **auth:** make the refresh-race test deterministic ([262ab11](https://github.com/gnuzd/lazypock/commit/262ab11e86d9536a054225b9655a5a3249f68fa2))
+* **studio:** keep the session alive past the access token ([797048a](https://github.com/gnuzd/lazypock/commit/797048a7fc1ef2ed51046dd3251890991303360e))
+* **studio:** keep the session alive past the access token ([75a053e](https://github.com/gnuzd/lazypock/commit/75a053e49faebed87f87da44021ac18a9bbd4360))
+
 ## [0.24.0](https://github.com/gnuzd/lazypock/compare/v0.23.4...v0.24.0) (2026-10-19)
 
 
