@@ -106,12 +106,19 @@ pub fn build_list(
     params.push(offset.to_string());
     let offset_index = params.len();
 
+    // `keyset_created` / `keyset_id` accompany the document so the caller can mint the
+    // next page's cursor without re-reading the row. They are not part of the response
+    // body. A view may not expose `created`, and then there is no time-ordered cursor
+    // to mint — the caller uses offset paging instead.
+    let keyset_created = if context.has_column("created") {
+        "p.\"created\"".to_string()
+    } else {
+        "null::timestamptz".to_string()
+    };
+
     Ok(BuiltQuery {
-        // `keyset_created` / `keyset_id` accompany the document so the caller can
-        // mint the next page's cursor without re-reading the row. They are not
-        // part of the response body.
         sql: format!(
-            "select {document} as record, p.\"created\" as keyset_created, p.\"id\" as keyset_id \
+            "select {document} as record, {keyset_created} as keyset_created, p.\"id\" as keyset_id \
              from {table} p \
              where {where_clause} order by {order_by} \
              limit ${limit_index}::text::bigint offset ${offset_index}::text::bigint"

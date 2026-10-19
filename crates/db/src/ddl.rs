@@ -277,6 +277,61 @@ pub fn drop_index_statement(table: &str, column: &str) -> String {
     )
 }
 
+/// `create view` for a view collection.
+///
+/// `security_invoker = true` (Postgres 15+) is not optional: without it a view runs
+/// with the *owner's* privileges and silently bypasses the row-level security on the
+/// tables it reads, which would publish exactly what a rule was meant to hide.
+pub fn create_view_statement(name: &str, query: &str) -> Result<String> {
+    validate_identifier("collection name", name)?;
+    Ok(format!(
+        "create view {} with (security_invoker = true) as {}",
+        quote_ident(name),
+        view_query(name, query)?
+    ))
+}
+
+/// `create or replace view` — a view whose query changed.
+///
+/// Postgres only replaces a view when the column list is compatible (same names and
+/// types in the same order, or new columns appended). A change that renames or drops a
+/// column fails, and the caller reports the database's message: dropping and
+/// re-creating would silently discard whatever depends on it.
+pub fn replace_view_statement(name: &str, query: &str) -> Result<String> {
+    validate_identifier("collection name", name)?;
+    Ok(format!(
+        "create or replace view {} with (security_invoker = true) as {}",
+        quote_ident(name),
+        view_query(name, query)?
+    ))
+}
+
+/// `drop view if exists ... cascade`.
+pub fn drop_view_statement(name: &str) -> Result<String> {
+    validate_identifier("collection name", name)?;
+    Ok(format!("drop view if exists {} cascade", quote_ident(name)))
+}
+
+/// Validate a view's SQL.
+///
+/// The query is interpolated into a `CREATE VIEW`, so it must be **one statement**: a
+/// `;` would end the `CREATE VIEW` and let the rest run as separate SQL — the query is
+/// editable from the Studio as a superuser, but "a view definition is a SELECT" is the
+/// contract, and a definition that is not is refused rather than executed. A single
+/// `SELECT` never needs a trailing semicolon, so nothing legitimate is lost.
+fn view_query<'a>(name: &str, query: &'a str) -> Result<&'a str> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Err(Error::invalid(format!("the view {name:?} needs a query")));
+    }
+    if query.contains(';') {
+        return Err(Error::invalid(format!(
+            "the view {name:?} must be a single SELECT statement: remove the `;`"
+        )));
+    }
+    Ok(query)
+}
+
 /// `drop table if exists ... cascade`.
 ///
 /// `cascade` is what lets a collection another collection's relation points at be

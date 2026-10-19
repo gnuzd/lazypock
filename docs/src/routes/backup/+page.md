@@ -174,23 +174,23 @@ curl -s https://lazypock.gnuzd.dev/backup.schema.json
 ```
 
 A bare array (`[ /* collection objects */ ]`) is also accepted. Each collection needs a `name` and
-`type`; every collection also needs a `schema` (or PocketBase's `fields`) — an empty list is fine.
-
-> **View collections are not implemented yet.** `"type": "view"` is refused with a 501 rather than
-> accepted and stored as something it cannot be, so generate `base`/`auth` collections only.
+`type`; a **base** or **auth** collection also needs a `schema` (or PocketBase's `fields`) — an empty
+list is fine. A **view** collection needs its query instead (`viewQuery`, or `viewBuilder`), and
+carries no records.
 
 ## Collection object
 
-| Key       | Type   | Required | Notes                                                                                                                      |
-| --------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `name`    | string | yes      | `^[a-z][a-z0-9_]*$` — lowercase table name.                                                                                |
-| `type`    | string | yes      | `"base"` or `"auth"` (`"view"` is not implemented yet and is refused).                                                     |
-| `schema`  | array  | no       | Field definitions (see below). PocketBase calls this `"fields"` — send either; if a collection has both, `fields` is used. |
-| `id`      | string | no       | Existing collection id. Omit it and the collection is matched/created by `name`.                                           |
-| `rules`   | object | no       | Access rules (see below).                                                                                                  |
-| `options` | object | no       | `{ "indexes": [...] }` (see below).                                                                                        |
-| `hooks`   | object | no       | Usually `{}`.                                                                                                              |
-| `records` | array  | no       | Records to upsert (see below).                                                                                             |
+| Key           | Type   | Required | Notes                                                                                                                      |
+| ------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `name`        | string | yes      | `^[a-z][a-z0-9_]*$` — lowercase table name.                                                                                |
+| `type`        | string | yes      | `"base"`, `"auth"` or `"view"`.                                                                                            |
+| `schema`      | array  | no       | Field definitions (see below). PocketBase calls this `"fields"` — send either; if a collection has both, `fields` is used. A view's columns come from its query instead. |
+| `id`          | string | no       | Existing collection id. Omit it and the collection is matched/created by `name`.                                           |
+| `rules`       | object | no       | Access rules (see below).                                                                                                  |
+| `options`     | object | no       | `{ "indexes": [...] }` for a table; `{ "view_query": "SELECT …" }` or `{ "view_builder": {…} }` for a view (see below).    |
+| `viewQuery`   | string | no       | PocketBase's spelling of a view's SQL; folded into `options.view_query`. Also accepted as `viewBuilder` for the no-code spec. |
+| `hooks`       | object | no       | Usually `{}`.                                                                                                              |
+| `records`     | array  | no       | Records to upsert (see below). A view carries none — its rows are its query's.                                             |
 
 > Auth collections always get a **unique `email`** field — a payload that declares one has it treated
 > as the built-in column, so declaring it is harmless but achieves nothing.
@@ -290,6 +290,35 @@ statement, which is parsed and rebuilt rather than executed as given:
 
 Dropping an entry from `options.indexes` on a later import drops the index.
 
+## Views (`type: "view"`)
+
+A view is a read-only collection over a Postgres `VIEW`. Give it a query, and its columns are the
+query's:
+
+```json
+{ "name": "published_posts", "type": "view",
+  "options": { "view_query": "SELECT id, title, created FROM posts WHERE status = 'published'" },
+  "rules": { "listRule": "" } }
+```
+
+The no-code builder is accepted too, and its generated SQL is what is stored (so editing the SQL and
+the builder are the same thing downstream):
+
+```json
+{ "name": "titles", "type": "view",
+  "options": { "view_builder": { "source": "posts", "fields": [{ "source": "posts", "name": "title" }] } } }
+```
+
+- The query must be **one SELECT** and must expose an `id` column — the records API addresses records
+  by id. A `;` is refused, not executed.
+- Views are read-only: `POST`/`PATCH`/`DELETE` on its records answer 400, and the batch endpoint
+  refuses a view.
+- Views are created `WITH (security_invoker = true)`, so the source tables' policies still apply, and
+  the view's own `rules` are enforced by the query layer (a view cannot carry Postgres policies). An
+  absent rule is superuser-only, `""` is public, as on a table.
+- No indexes (a view uses its sources'), no realtime events, and keyset paging (`after=`) needs a
+  `created` column — a view without one uses offset paging.
+
 ## Records (`records[]`)
 
 Records are **upserted by `id`**: existing ids are updated, new ids inserted, so restoring the same
@@ -354,7 +383,9 @@ with a message:
 - PocketBase's `"system": true` fields (its own `id`, `tokenKey`, …) are stripped.
 - PocketBase index statements in `options.indexes` (see above). One that indexes an *expression* is
   refused with a message rather than silently skipped, because it cannot be rebuilt safely.
-- A PocketBase `"type": "view"` collection is refused: views are not implemented yet.
+- A PocketBase `"type": "view"` collection: its top-level `viewQuery` is folded into
+  `options.view_query`. The view is re-created with `security_invoker`, and its records are not
+  imported (a view has none of its own).
 
 ## Common mistakes
 

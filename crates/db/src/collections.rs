@@ -336,7 +336,347 @@ pub async fn list(client: &Client) -> Result<Vec<Collection>> {
         collections[position].fields.push(field);
     }
 
+    // A view's fields are its columns, which come from the query rather than from
+    // `_fields`: deriving them here is what keeps a redefined view — one with a new
+    // column — readable without a metadata edit.
+    load_view_fields(client, &mut collections).await?;
+
     Ok(collections)
+}
+
+/// Fill in the fields of every view collection from the catalog.
+async fn load_view_fields(client: &Client, collections: &mut [Collection]) -> Result<()> {
+    if !collections
+        .iter()
+        .any(|collection| collection.collection_type == CollectionType::View)
+    {
+        return Ok(());
+    }
+
+    let rows = client
+        .query(
+            "select c.relname as view_name, a.attname as name, t.typname as data_type, \
+                    a.attnum::int as position \
+               from pg_attribute a \
+               join pg_class c on c.oid = a.attrelid \
+               join pg_type t on t.oid = a.atttypid \
+               join pg_namespace n on n.oid = c.relnamespace \
+              where c.relkind = 'v' \
+                and n.nspname = current_schema() \
+                and a.attnum > 0 and not a.attisdropped \
+              order by c.relname, a.attnum",
+            &[],
+        )
+        .await
+        .map_err(db_error)?;
+
+    let mut by_view: HashMap<String, Vec<Field>> = HashMap::new();
+    for row in &rows {
+        let view_name: String = row.get("view_name");
+        let field = view_field(
+            &view_name,
+            "",
+            &row.get::<_, String>("name"),
+            &row.get::<_, String>("data_type"),
+            row.get("position"),
+        );
+        by_view.entry(view_name).or_default().push(field);
+    }
+
+    for collection in collections.iter_mut() {
+        if collection.collection_type != CollectionType::View {
+            continue;
+        }
+        if let Some(fields) = by_view.remove(&collection.name) {
+            collection.fields = fields
+                .into_iter()
+                .map(|mut field| {
+                    field.collection_id = collection.id.clone();
+                    field
+                })
+                .collect();
+        }
+    }
+
+    Ok(())
+}
+
+/// One field from a view column.
+///
+/// The mapping is the reflection mapping, on purpose: a view's column is the same
+/// kind of thing as an adopted table's column, and a second mapper would be a second
+/// set of rules for the same problem.
+fn view_field(
+    view: &str,
+    collection_id: &str,
+    name: &str,
+    data_type: &str,
+    position: i32,
+) -> Field {
+    let column = crate::reflect::Column {
+        table: view.to_string(),
+        name: name.to_string(),
+        data_type: data_type.to_string(),
+        type_oid: 0,
+        not_null: false,
+        is_primary: name == "id",
+        is_unique: false,
+        position,
+        default: None,
+    };
+    let (field_type, options) = crate::reflect::map_column(&column, None);
+    Field {
+        id: lazypock_core::id::new_id(),
+        collection_id: collection_id.to_string(),
+        name: name.to_string(),
+        field_type,
+        required: false,
+        is_unique: false,
+        options,
+        position,
+    }
+}
+
+/// The fields a view exposes, read inside the caller's transaction.
+async fn view_fields(
+    runner: &dyn crate::runner::QueryRunner,
+    view: &str,
+    collection_id: &str,
+) -> Result<Vec<Field>> {
+    let rows = runner
+        .run_query(
+            "select a.attname as name, t.typname as data_type, a.attnum::int as position \
+               from pg_attribute a \
+               join pg_class c on c.oid = a.attrelid \
+               join pg_type t on t.oid = a.atttypid \
+               join pg_namespace n on n.oid = c.relnamespace \
+              where c.relkind = 'v' \
+                and n.nspname = current_schema() \
+                and c.relname = $1 \
+                and a.attnum > 0 and not a.attisdropped \
+              order by a.attnum",
+            &[&view.to_string()],
+        )
+        .await
+        .map_err(db_error)?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            view_field(
+                view,
+                collection_id,
+                &row.get::<_, String>("name"),
+                &row.get::<_, String>("data_type"),
+                row.get("position"),
+            )
+        })
+        .collect())
+}
+
+/// Resolve a view collection's `options` into the SQL Postgres will run.
+///
+/// Two spellings, one meaning: `view_query` is the SQL, `view_builder` is the no-code
+/// spec it is generated from. The generated SQL is written back into `view_query` — the
+/// builder module's contract — so everything downstream (preview, import, export) sees
+/// one definition.
+fn view_options(options: &Value, all: &[Collection]) -> Result<Value> {
+    let mut normalized = options.as_object().cloned().unwrap_or_default();
+
+    if let Some(indexes) = normalized.get("indexes").and_then(Value::as_array) {
+        if !indexes.is_empty() {
+            return Err(Error::unsupported(
+                "a view collection cannot have indexes; the source tables' indexes are what a view uses",
+            ));
+        }
+    }
+
+    match normalized
+        .get("view_builder")
+        .filter(|value| !value.is_null())
+    {
+        Some(spec) => {
+            let query = crate::view_builder::to_query(spec, all)?;
+            normalized.insert("view_query".to_string(), Value::String(query));
+            normalized.insert(
+                "view_origin".to_string(),
+                Value::String("builder".to_string()),
+            );
+        }
+        None => {
+            let query = normalized
+                .get("view_query")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|query| !query.is_empty())
+                .ok_or_else(|| {
+                    Error::invalid(
+                        "a view collection needs `viewQuery` (SQL) or `viewBuilder` (the no-code spec)",
+                    )
+                })?;
+            normalized.insert("view_query".to_string(), Value::String(query.to_string()));
+            normalized
+                .entry("view_origin".to_string())
+                .or_insert_with(|| Value::String("sql".to_string()));
+        }
+    }
+
+    Ok(Value::Object(normalized))
+}
+
+/// Create a view collection: a read-only collection over a Postgres `VIEW`.
+async fn create_view(client: &mut Client, input: CreateCollection) -> Result<Collection> {
+    let name = input.name.clone();
+    if find(client, &name).await?.is_some() {
+        return Err(Error::conflict(format!(
+            "a collection named {name:?} already exists"
+        )));
+    }
+    if table_exists(client, &name).await? {
+        return Err(Error::conflict(format!(
+            "a table or view named {name:?} already exists"
+        )));
+    }
+    if !input.fields.is_empty() {
+        return Err(Error::invalid(
+            "a view's fields are its query's columns; send `viewQuery` or `viewBuilder` instead of fields",
+        ));
+    }
+
+    let all = list(client).await?;
+    let options = view_options(&input.options, &all)?;
+    let query = options
+        .get("view_query")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let id = lazypock_core::id::new_id();
+    let mut collection = Collection {
+        id: id.clone(),
+        name: name.clone(),
+        collection_type: CollectionType::View,
+        options,
+        rules: input.rules,
+        fields: Vec::new(),
+        created: SystemTime::now(),
+        updated: SystemTime::now(),
+    };
+
+    let transaction = client.transaction().await.map_err(db_error)?;
+    transaction
+        .batch_execute(&ddl::create_view_statement(&name, &query)?)
+        .await
+        .map_err(|err| Error::invalid(format!("failed to create the view {name:?}: {err}")))?;
+
+    let row = transaction
+        .query_one(
+            "insert into _collections (id, name, type, options, rules) \
+             values ($1, $2, $3, $4, $5) returning created, updated",
+            &[
+                &collection.id,
+                &collection.name,
+                &collection.collection_type.as_str(),
+                &collection.options,
+                &collection.rules,
+            ],
+        )
+        .await
+        .map_err(db_error)?;
+    collection.created = row.get("created");
+    collection.updated = row.get("updated");
+
+    collection.fields = view_fields(&transaction, &name, &id).await?;
+    if !collection.fields.iter().any(|field| field.name == "id") {
+        return Err(Error::invalid(format!(
+            "the view {name:?} must expose an `id` column; the records API addresses records by id"
+        )));
+    }
+
+    // No indexes (a view cannot have them), no policies (Postgres has no RLS on a
+    // view; `security_invoker` makes the source tables' policies apply instead) and
+    // no realtime trigger (a view fires none).
+    notify_schema_changed(&transaction).await?;
+    transaction.commit().await.map_err(db_error)?;
+
+    tracing::info!(collection = %collection.name, "view collection created");
+    Ok(collection)
+}
+
+/// Update a view collection: its rules, its definition, or both.
+async fn update_view(
+    client: &mut Client,
+    existing: Collection,
+    input: UpdateCollection,
+) -> Result<Collection> {
+    let all = list(client).await?;
+    let options = match input.options {
+        Some(options) => view_options(&options, &all)?,
+        None => existing.options.clone(),
+    };
+    let query = options
+        .get("view_query")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let query_changed = query
+        != existing
+            .options
+            .get("view_query")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+    let rules = input.rules.unwrap_or(existing.rules.clone());
+
+    // The Studio loads a view's derived fields and sends them back unchanged; that is
+    // not an attempt to edit the columns, so it is accepted. A payload that names
+    // different fields is, and it is refused: the columns come from the query.
+    if let Some(fields) = &input.fields {
+        let mut current: Vec<&str> = existing
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        let mut declared: Vec<&str> = fields.iter().map(|field| field.name.as_str()).collect();
+        current.sort_unstable();
+        declared.sort_unstable();
+        if !declared.is_empty() && current != declared {
+            return Err(Error::invalid(
+                "a view's columns come from its query; change `viewQuery` (or `viewBuilder`) instead of its fields",
+            ));
+        }
+    }
+
+    let transaction = client.transaction().await.map_err(db_error)?;
+    if query_changed {
+        transaction
+            .batch_execute(&ddl::replace_view_statement(&existing.name, &query)?)
+            .await
+            .map_err(|err| {
+                Error::invalid(format!(
+                    "failed to replace the view {:?}: {err}. A view can only be replaced with a \
+                     compatible column list; drop and re-create it to rename or remove a column",
+                    existing.name
+                ))
+            })?;
+    }
+
+    transaction
+        .execute(
+            "update _collections set rules = $2, options = $3, updated = now() where id = $1",
+            &[&existing.id, &rules, &options],
+        )
+        .await
+        .map_err(db_error)?;
+
+    let mut updated = existing;
+    updated.rules = rules;
+    updated.options = options;
+    updated.fields = view_fields(&transaction, &updated.name, &updated.id).await?;
+
+    notify_schema_changed(&transaction).await?;
+    transaction.commit().await.map_err(db_error)?;
+
+    get(client, &updated.id).await
 }
 
 /// Find a collection by id or name.
@@ -355,6 +695,10 @@ pub async fn get(client: &Client, name_or_id: &str) -> Result<Collection> {
 }
 
 /// Create a collection: table, indexes and metadata, atomically.
+///
+/// A **view** collection is created as a Postgres `VIEW` with `security_invoker = true`
+/// (see [`create_view`]): it is read-only, its fields are the query's columns, and it
+/// has no indexes, policies or realtime trigger.
 pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Collection> {
     // Validated as given, never silently normalised: `create("Posts")` is an
     // error rather than a collection that is quietly named "posts".
@@ -362,9 +706,7 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
     validate_collection_name(&name)?;
 
     if input.collection_type == CollectionType::View {
-        return Err(Error::unsupported(
-            "view collections are not implemented yet (PLAN.md section 4.4)",
-        ));
+        return create_view(client, input).await;
     }
 
     if find(client, &name).await?.is_some() {
@@ -862,6 +1204,10 @@ pub async fn update(
 ) -> Result<Collection> {
     let existing = get(client, name_or_id).await?;
 
+    if existing.collection_type == CollectionType::View {
+        return update_view(client, existing, input).await;
+    }
+
     let rules = input.rules.unwrap_or(existing.rules.clone());
     let options = input.options.unwrap_or(existing.options.clone());
 
@@ -965,7 +1311,17 @@ pub async fn delete(client: &mut Client, name_or_id: &str, drop_data: bool) -> R
 
     let transaction = client.transaction().await.map_err(db_error)?;
 
-    if drop_data && collection.collection_type.is_table() {
+    if drop_data && collection.collection_type == CollectionType::View {
+        transaction
+            .batch_execute(&ddl::drop_view_statement(&collection.name)?)
+            .await
+            .map_err(|err| {
+                Error::internal(format!(
+                    "failed to drop the view for {:?}: {err}",
+                    collection.name
+                ))
+            })?;
+    } else if drop_data && collection.collection_type.is_table() {
         transaction
             .batch_execute(&ddl::drop_table_statement(&collection.name)?)
             .await

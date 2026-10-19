@@ -17,7 +17,9 @@
 		"collection": {
 			"type": "object",
 			"required": ["name", "type"],
-			"anyOf": [{ "required": ["schema"] }, { "required": ["fields"] }],
+			"if": { "properties": { "type": { "const": "view" } }, "required": ["type"] },
+			"then": {},
+			"else": { "anyOf": [{ "required": ["schema"] }, { "required": ["fields"] }] },
 			"properties": {
 				"id": {
 					"type": "string",
@@ -29,8 +31,8 @@
 					"description": "Table name: starts with a letter, lowercase letters/numbers/underscores only."
 				},
 				"type": {
-					"enum": ["base", "auth"],
-					"description": "base = plain records; auth = accounts with email + write-only password. View collections are not implemented yet and are refused."
+					"enum": ["base", "auth", "view"],
+					"description": "base = plain records; auth = accounts with email + write-only password; view = a read-only collection over a SQL query."
 				},
 				"schema": {
 					"type": "array",
@@ -47,11 +49,11 @@
 				},
 				"options": {
 					"type": "object",
-					"description": "Collection-level options.",
+					"description": "Collection-level options: indexes for a table, or the query for a view.",
 					"properties": {
 						"indexes": {
 							"type": "array",
-							"description": "Custom indexes, as expressions (\"UNIQUE email\", \"created_at DESC, id\") or a full PocketBase `CREATE INDEX ...` statement. Only the collection's own columns, and only plain columns (no expressions).",
+							"description": "Custom indexes, as expressions (\"UNIQUE email\", \"created_at DESC, id\") or a full PocketBase `CREATE INDEX ...` statement. Only the collection's own columns, and only plain columns (no expressions). Not for a view collection.",
 							"items": { "type": "string" }
 						},
 						"view_query": { "type": "string" },
@@ -63,9 +65,17 @@
 					"type": "object",
 					"description": "Collection hook configuration. Usually {}."
 				},
+				"viewQuery": {
+					"type": "string",
+					"description": "PocketBase's spelling of a view's SQL; folded into options.view_query."
+				},
+				"viewBuilder": {
+					"type": "object",
+					"description": "The no-code view spec; rendered to SQL and stored as options.view_query."
+				},
 				"records": {
 					"type": "array",
-					"description": "Records to upsert by id.",
+					"description": "Records to upsert by id. A view carries none: its rows are its query's.",
 					"items": { "type": "object" }
 				}
 			},
