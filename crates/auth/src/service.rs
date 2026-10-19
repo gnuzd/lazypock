@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use crate::password;
 use crate::sessions;
 use crate::superuser;
-use crate::token::{Claims, SigningKeys, Subject, ACCESS_TOKEN_TTL};
+use crate::token::{Claims, SigningKeys, Subject, ACCESS_TOKEN_TTL, ED25519_SEED_LEN};
 
 /// The `_settings` key the signing key is stored under.
 const SIGNING_KEY_SETTING: &str = "auth.signing_key";
@@ -472,30 +472,72 @@ fn dummy_hash() -> &'static str {
     })
 }
 
-/// The signing key from `LAZYPOCK_SIGNING_KEY`, base64 of the raw key.
+/// The signing key from `LAZYPOCK_SIGNING_KEY`, as base64.
 ///
-/// The same encoding the database copy uses, so a key can be moved between the two
-/// without a conversion step, and an operator can copy one out of a running
-/// installation with a single query.
+/// Two values are accepted, because two kinds of operator arrive here:
+///
+/// - **base64 of 32 random bytes**, which is what the documentation and
+///   `.env.example` tell you to produce (`openssl rand -base64 32`). A 32-byte
+///   Ed25519 private key *is* the seed, so it is wrapped into the PKCS#8 document the
+///   token layer uses.
+/// - **base64 of a PKCS#8 Ed25519 key**, the encoding the database copy uses, so a key
+///   can be lifted out of an installation or a backup with one query and passed in
+///   unchanged.
+///
+/// A value that is neither is refused by name. The earlier version accepted only the
+/// PKCS#8 form, so the documented `openssl rand -base64 32` command failed the boot
+/// with "the signing key is not a valid Ed25519 key" — the instruction was wrong, not
+/// the operator.
 fn signing_key_from_env() -> Result<Option<SigningKeys>> {
     let Ok(raw) = std::env::var("LAZYPOCK_SIGNING_KEY") else {
         return Ok(None);
     };
-    let raw = raw.trim();
-    if raw.is_empty() {
+    if raw.trim().is_empty() {
         // A set-but-empty variable is almost always a deploy templating mistake, and
         // silently falling back to the database would hide it until the tokens
         // quietly changed signer.
         return Err(Error::config(
-            "LAZYPOCK_SIGNING_KEY is set but empty; unset it to use the database copy, \
-             or give it a base64 key",
+            "LAZYPOCK_SIGNING_KEY is set but empty; unset it to use the database copy, or \
+             give it base64 of 32 random bytes (`openssl rand -base64 32`)",
         ));
     }
 
-    let der = base64::engine::general_purpose::STANDARD
-        .decode(raw)
-        .map_err(|_| Error::config("LAZYPOCK_SIGNING_KEY is not valid base64"))?;
-    Ok(Some(SigningKeys::from_der(&der)?))
+    // Whitespace is stripped before decoding: a value pasted into a compose file or a
+    // secret manager often arrives wrapped, and a newline in the middle is not a reason
+    // to refuse an otherwise valid key.
+    let compact: String = raw
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&compact)
+        .map_err(|_| {
+            Error::config(
+                "LAZYPOCK_SIGNING_KEY is not valid base64. Give it base64 of 32 random bytes \
+                 (`openssl rand -base64 32`), or base64 of the PKCS#8 key copied out of an \
+                 installation",
+            )
+        })?;
+
+    // The document form first: a 32-byte value can never parse as PKCS#8, so the two
+    // are unambiguous, and the stored-key encoding keeps working unchanged.
+    if let Ok(keys) = SigningKeys::from_der(&bytes) {
+        return Ok(Some(keys));
+    }
+    if bytes.len() == ED25519_SEED_LEN {
+        return SigningKeys::from_seed(&bytes).map(Some).map_err(|err| {
+            Error::config(format!(
+                "LAZYPOCK_SIGNING_KEY could not be used as a 32-byte Ed25519 seed: {}",
+                err.message()
+            ))
+        });
+    }
+    Err(Error::config(format!(
+        "LAZYPOCK_SIGNING_KEY decodes to {} bytes, which is neither a 32-byte Ed25519 seed \
+         nor a PKCS#8 Ed25519 key. Generate one with `openssl rand -base64 32`, or copy the \
+         `auth.signing_key` value out of an installation",
+        bytes.len()
+    )))
 }
 
 /// A signing key as `_settings` holds it.

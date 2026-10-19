@@ -52,9 +52,10 @@ services:
 
       # Optional. Left unset, the server generates a signing key on first run
       # and keeps it in `_settings`, so the key travels in every dump and
-      # replica. Setting it keeps the key out of all of them:
-      #   openssl rand -base64 32
-      # LAZYPOCK_SIGNING_KEY: change-me
+      # replica. Setting it keeps the key out of all of them: pass in base64 of
+      # 32 random bytes (`openssl rand -base64 32`) from the shell or the compose
+      # `.env` file. A PKCS#8 key copied from an existing installation works too.
+      # LAZYPOCK_SIGNING_KEY: ${LAZYPOCK_SIGNING_KEY}
 
       LAZYPOCK_ENV: production
       # One connection per node is held for LISTEN. Keep this small: total
