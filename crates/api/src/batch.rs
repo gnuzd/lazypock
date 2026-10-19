@@ -155,6 +155,15 @@ fn plan(schema: &Schema, item: &BatchItem) -> Result<Step, ApiError> {
     let context =
         FilterContext::for_collection(&collection, schema.collections()).map_err(ApiError::new)?;
 
+    // A view is read-only, and a batch GET would have to carry the view's rule as a
+    // filter (a view has no policies); refusing is honest until both are implemented
+    // here, rather than serving rows a rule forbids.
+    if collection.collection_type == lazypock_db::types::CollectionType::View {
+        return Err(ApiError::new(Error::unsupported(format!(
+            "the collection {name:?} is a view: a batch does not support view collections",
+        ))));
+    }
+
     match method {
         Method::POST if id.is_some() => {
             return Err(ApiError::new(Error::invalid(

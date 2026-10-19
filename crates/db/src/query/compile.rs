@@ -71,8 +71,13 @@ impl FilterContext {
     fn build(collection: &Collection, all: &[Collection], depth: usize) -> Result<Self> {
         let mut columns: HashMap<String, String> = HashMap::new();
         columns.insert("id".into(), "text".into());
-        columns.insert("created".into(), "timestamptz".into());
-        columns.insert("updated".into(), "timestamptz".into());
+        // A view has only the columns its query selects — `created`/`updated` are
+        // table columns, not a guarantee. Assuming them made every view without them
+        // fail its default sort and its keyset columns.
+        if collection.collection_type != CollectionType::View {
+            columns.insert("created".into(), "timestamptz".into());
+            columns.insert("updated".into(), "timestamptz".into());
+        }
         // `email` and `verified` are ordinary columns. `password_hash` and
         // `token_key` are deliberately *absent*: everything in this map is both
         // filterable and, with `fields=*`, returned in the record document — and

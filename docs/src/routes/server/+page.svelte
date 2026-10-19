@@ -538,6 +538,57 @@ GET /api/posts?filter=deleted_at = null`}
   </section>
 
   <!-- EXISTING POSTGRES DATABASE -->
+  <section id="views" class="scroll-mt-20 mb-10">
+    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
+      View collections
+    </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      A view is a <strong>read-only</strong> collection over a Postgres
+      <code class="doc-inline px-1 py-0.5">VIEW</code>. Give it SQL — or the no-code
+      builder spec, which is rendered to SQL — and its columns are the query's:
+    </p>
+    <CodeBlock
+      lang="bash"
+      code={`POST /api/collections
+{
+  "name": "published_posts",
+  "type": "view",
+  "viewQuery": "SELECT id, title, created FROM posts WHERE status = 'published'",
+  "rules": { "listRule": "" }
+}
+
+# the same thing, from the builder
+POST /api/collections
+{
+  "name": "titles",
+  "type": "view",
+  "viewBuilder": { "source": "posts", "fields": [{ "source": "posts", "name": "title" }] }
+}`}
+    />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      The query must be <strong>one SELECT</strong> and must expose an
+      <code class="doc-inline px-1 py-0.5">id</code> column, because the records API
+      addresses records by id. A <code class="doc-inline px-1 py-0.5">;</code> is refused
+      rather than executed, so a definition cannot smuggle in a second statement.
+    </p>
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      Views are created
+      <code class="doc-inline px-1 py-0.5">WITH (security_invoker = true)</code>, so the
+      source tables' row-level security still applies. A view cannot carry Postgres
+      policies itself, so its own <code class="doc-inline px-1 py-0.5">rules</code> are
+      enforced by the query layer: an absent rule is superuser-only,
+      <code class="doc-inline px-1 py-0.5">""</code> is public, and a filter is applied to
+      every read. A superuser bypasses it, as it bypasses a table's policies.
+    </p>
+    <p class="mt-3 text-sm text-base-content/70">
+      What a view does not have: indexes (it uses its sources'), realtime events (a view
+      fires none, so a subscription is refused), <code class="doc-inline px-1 py-0.5">expand</code>
+      (there is no relation metadata), and keyset paging unless the query exposes
+      <code class="doc-inline px-1 py-0.5">created</code> — otherwise use page-based paging.
+      Writing to a view is refused: a view collection is read-only.
+    </p>
+  </section>
+
   <section id="existing-db" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
       Connect an existing PostgreSQL database

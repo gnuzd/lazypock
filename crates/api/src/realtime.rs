@@ -159,9 +159,16 @@ fn expand(state: &AppState, spec: &str) -> Result<Vec<(String, Option<String>)>,
     // Anything else is refused, so a typo is not silently a subscription that
     // never fires.
     let schema = state.schema.snapshot();
-    if schema.get(collection).is_none() {
+    let Some(resolved) = schema.get(collection) else {
         return Err(ApiError::new(Error::not_found(format!(
             "no collection named {collection:?}"
+        ))));
+    };
+    // A view fires no change events (there is no trigger on it), so a subscription
+    // would be an open stream that never delivers. Refusing says so.
+    if resolved.collection_type == lazypock_db::types::CollectionType::View {
+        return Err(ApiError::new(Error::invalid(format!(
+            "the collection {collection:?} is a view: views deliver no realtime events",
         ))));
     }
 

@@ -27,6 +27,7 @@ use lazypock_db::hooks::RecordHooks;
 use lazypock_db::pool::db_error;
 use lazypock_db::query::compile::FilterContext;
 use lazypock_db::query::filter;
+use lazypock_db::query::filter::{CompareOp, Expr, Operand, Side};
 use lazypock_db::query::pagination::{Cursor, Page};
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
 use lazypock_db::query::read::{self, BuiltQuery, ReadQuery};
@@ -36,6 +37,7 @@ use lazypock_db::rls;
 use lazypock_db::rls::context::Action;
 use lazypock_db::runner::QueryRunner;
 use lazypock_db::schema::Schema;
+use lazypock_db::types::CollectionType;
 use lazypock_files::store;
 
 use crate::auth::Principal;
@@ -89,6 +91,41 @@ pub(crate) fn resolve(state: &AppState, name: &str) -> Result<(Arc<Schema>, Reso
     ))
 }
 
+/// The rule a **view** must satisfy, as a filter.
+///
+/// A view cannot carry Postgres policies, so unlike a table its rules cannot be
+/// enforced by row-level security: they are compiled into the read query. The meanings
+/// are the same as for a table — `""` is public, a filter is itself, and an absent
+/// (or `null`) rule is superuser-only. A superuser bypasses it, as it bypasses the
+/// policies of a table.
+fn view_rule_filter(
+    collection: &Collection,
+    rule_key: &str,
+    _auth: &lazypock_db::query::compile::AuthContext,
+    principal: &Principal,
+) -> Result<Option<Expr>, ApiError> {
+    if collection.collection_type != CollectionType::View || principal.is_superuser() {
+        return Ok(None);
+    }
+    match collection.rules.get(rule_key) {
+        Some(Value::String(rule)) if rule.trim().is_empty() => Ok(None),
+        Some(Value::String(rule)) => filter::parse(rule).map(Some).map_err(ApiError::new),
+        _ => Err(ApiError::new(Error::forbidden(format!(
+            "only a superuser may read the view collection {:?}: it has no {rule_key}",
+            collection.name
+        )))),
+    }
+}
+
+/// Combine a view's rule with the caller's own filter.
+fn with_view_rule(filter: Option<Expr>, rule: Option<Expr>) -> Option<Expr> {
+    match (filter, rule) {
+        (Some(user), Some(rule)) => Some(Expr::And(Box::new(rule), Box::new(user))),
+        (None, Some(rule)) => Some(rule),
+        (filter, None) => filter,
+    }
+}
+
 fn build_read_query(params: &ListParams, context: &FilterContext) -> Result<ReadQuery, ApiError> {
     let selection =
         FieldSelection::parse(params.fields.as_deref(), context).map_err(ApiError::new)?;
@@ -97,7 +134,10 @@ fn build_read_query(params: &ListParams, context: &FilterContext) -> Result<Read
         .map_err(ApiError::new)?;
     let sort = match params.sort.as_deref().map(str::trim) {
         Some(raw) if !raw.is_empty() => sort::parse(raw),
-        _ => SortSpec::default_spec(),
+        // Newest first when the collection has `created`; a view without it sorts by
+        // its id, which is stable and always present.
+        _ if context.has_column("created") => SortSpec::default_spec(),
+        _ => sort::parse("id"),
     }
     .map_err(ApiError::new)?;
     let page = Page::from_params(
@@ -129,7 +169,17 @@ pub async fn list_records(
     // `@request.auth.*` inside a user-supplied filter.
     let auth = principal.auth_context();
 
-    let read_query = build_read_query(&params, &resolved.context)?;
+    let mut read_query = build_read_query(&params, &resolved.context)?;
+    if resolved.collection.collection_type == CollectionType::View {
+        let rule = view_rule_filter(&resolved.collection, "listRule", &auth, &principal)?;
+        read_query.filter = with_view_rule(read_query.filter.take(), rule);
+        if matches!(read_query.page, Page::Keyset { .. }) && !resolved.context.has_column("created")
+        {
+            return Err(ApiError::new(Error::invalid(
+                "`after` needs a `created` column, and this view does not expose one; use page-based paging",
+            )));
+        }
+    }
     let built = read::build_list(&read_query, &resolved.context, &auth).map_err(ApiError::new)?;
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
@@ -151,7 +201,8 @@ pub async fn list_records(
     let next_cursor = match &read_query.page {
         Page::Keyset { .. } if rows.len() as i64 == read_query.page.limit() => rows
             .last()
-            .map(|row| Cursor::from_time(row.created, row.id.clone()).map_err(ApiError::new))
+            .and_then(|row| row.created.map(|created| (created, row.id.clone())))
+            .map(|(created, id)| Cursor::from_time(created, id).map_err(ApiError::new))
             .transpose()?
             .map(|cursor| cursor.encode()),
         _ => None,
@@ -188,16 +239,46 @@ pub async fn view_record(
     let mut client = state.db.client().await.map_err(ApiError::new)?;
     let transaction = scoped(&mut client, &principal, Action::View).await?;
 
-    let record = records::get_one(
-        &transaction,
-        &resolved.collection,
-        &resolved.context,
-        &id,
-        &selection,
-        &expand,
-    )
-    .await
-    .map_err(ApiError::new)?;
+    let record = if resolved.collection.collection_type == CollectionType::View {
+        // A view has no policies, so `get_one` (which relies on them) would return a row
+        // the rule forbids. Read it through the query builder with the rule as a filter.
+        let id_filter = Expr::Compare {
+            left: Side::Path(vec!["id".to_string()]),
+            op: CompareOp::Eq,
+            right: Side::Value(Operand::Text(id.clone())),
+        };
+        let rule = view_rule_filter(
+            &resolved.collection,
+            "viewRule",
+            &principal.auth_context(),
+            &principal,
+        )?;
+        let query = ReadQuery {
+            selection,
+            expand,
+            filter: Some(with_view_rule(Some(id_filter), rule).expect("an id filter is present")),
+            sort: sort::parse("id").map_err(ApiError::new)?,
+            page: Page::from_params(Some(1), Some(1), true, None).map_err(ApiError::new)?,
+        };
+        let built = read::build_list(&query, &resolved.context, &principal.auth_context())
+            .map_err(ApiError::new)?;
+        run_list(&transaction, &built)
+            .await?
+            .into_iter()
+            .next()
+            .map(|row| row.record)
+    } else {
+        records::get_one(
+            &transaction,
+            &resolved.collection,
+            &resolved.context,
+            &id,
+            &selection,
+            &expand,
+        )
+        .await
+        .map_err(ApiError::new)?
+    };
 
     transaction
         .commit()
@@ -235,6 +316,12 @@ pub async fn create_record(
 ) -> Result<Response, ApiError> {
     let Json(body) = json_body(body)?;
     let (_schema, resolved) = resolve(&state, &collection)?;
+    if resolved.collection.collection_type == CollectionType::View {
+        return Err(ApiError::new(Error::invalid(format!(
+            "the collection {:?} is a view: views are read-only",
+            resolved.collection.name
+        ))));
+    }
 
     // One validation, in the record layer, *after* the before-hook. That is what
     // lets a hook supply a field the caller did not send — a generated slug is the
@@ -297,6 +384,12 @@ pub async fn update_record(
 ) -> Result<Response, ApiError> {
     let Json(body) = json_body(body)?;
     let (_schema, resolved) = resolve(&state, &collection)?;
+    if resolved.collection.collection_type == CollectionType::View {
+        return Err(ApiError::new(Error::invalid(format!(
+            "the collection {:?} is a view: views are read-only",
+            resolved.collection.name
+        ))));
+    }
 
     // One transaction, so a password change and the session revocation that must
     // accompany it either both happen or neither does.
@@ -367,6 +460,12 @@ pub async fn delete_record(
     Extension(principal): Extension<Principal>,
 ) -> Result<Response, ApiError> {
     let (_schema, resolved) = resolve(&state, &collection)?;
+    if resolved.collection.collection_type == CollectionType::View {
+        return Err(ApiError::new(Error::invalid(format!(
+            "the collection {:?} is a view: views are read-only",
+            resolved.collection.name
+        ))));
+    }
 
     let mut client = state.db.client().await.map_err(ApiError::new)?;
     // The before-hook below reads the record first, and the delete itself makes
@@ -689,7 +788,9 @@ fn list_body(
 
 struct ListRow {
     record: Value,
-    created: SystemTime,
+    /// The row's `created`, when the collection has that column: a view may not, and
+    /// then no keyset cursor can be minted from this page.
+    created: Option<SystemTime>,
     id: String,
 }
 
@@ -702,7 +803,7 @@ async fn run_list(runner: &dyn QueryRunner, built: &BuiltQuery) -> Result<Vec<Li
         .iter()
         .map(|row| ListRow {
             record: row.get("record"),
-            created: row.get("keyset_created"),
+            created: row.get::<_, Option<SystemTime>>("keyset_created"),
             id: row.get("keyset_id"),
         })
         .collect())

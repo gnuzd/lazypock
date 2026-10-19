@@ -124,15 +124,29 @@ fn normalize_collection_body(body: Value) -> Result<Value, ApiError> {
         )));
     };
 
+    // The Studio also sends a view's definition as top-level `viewQuery` /
+    // `viewBuilder`; the data layer reads `options.view_query` / `view_builder`.
+    let mut options = object
+        .get("options")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut options_changed = false;
     if let Some(indexes) = object.remove("indexes") {
-        let mut options = object
-            .get("options")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
         if !indexes.is_null() {
             options.insert("indexes".to_string(), indexes);
         }
+        options_changed = true;
+    }
+    if let Some(query) = object.remove("viewQuery") {
+        options.insert("view_query".to_string(), query);
+        options_changed = true;
+    }
+    if let Some(builder) = object.remove("viewBuilder") {
+        options.insert("view_builder".to_string(), builder);
+        options_changed = true;
+    }
+    if options_changed {
         object.insert("options".to_string(), Value::Object(options));
     }
 
@@ -488,8 +502,9 @@ fn system_collection(name: &str, columns: &[(&str, FieldType)]) -> Collection {
 ///   `system` is derived from the auth collection's built-in columns.
 /// - `indexes`/`viewQuery`/`viewOrigin`/`viewBuilder` are the top-level
 ///   conveniences `main` provided. A collection's declared indexes are stored in
-///   `options.indexes` and served here too, so the Studio's index editor round-trips;
-///   view collections are still not implemented, so their fields stay empty/null.
+///   `options.indexes` and served here too, so the Studio's index editor round-trips.
+///   A view collection's `fields` are its query's columns (derived by the data layer),
+///   and its `viewQuery`/`viewOrigin`/`viewBuilder` describe the definition.
 /// - each field's `indexed` flag and `default` are read out of its stored options
 ///   rather than hardcoded, so what the editor shows is what the DDL applied.
 /// - `created`/`updated` are rendered as RFC 3339. Serde would otherwise render the

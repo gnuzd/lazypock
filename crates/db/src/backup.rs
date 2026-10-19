@@ -128,6 +128,12 @@ impl<'de> Deserialize<'de> for ArchiveCollection {
             rules: Option<Value>,
             #[serde(default)]
             options: Option<Value>,
+            /// PocketBase puts a view's definition on the collection, not in its
+            /// options; accepted here so its export imports as-is.
+            #[serde(default, rename = "viewQuery")]
+            view_query: Option<String>,
+            #[serde(default, rename = "viewBuilder")]
+            view_builder: Option<Value>,
             #[serde(default)]
             records: Vec<Value>,
         }
@@ -135,6 +141,20 @@ impl<'de> Deserialize<'de> for ArchiveCollection {
         let wire = Wire::deserialize(deserializer)?;
         let fields = wire.fields.unwrap_or_default();
         let schema = wire.schema.unwrap_or_default();
+
+        // A view definition sent at the top level is folded into `options`, which is
+        // where the rest of the server reads it. A value already in `options` wins.
+        let mut options = wire.options.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(object) = options.as_object_mut() {
+            if let Some(query) = wire.view_query {
+                object
+                    .entry("view_query".to_string())
+                    .or_insert(Value::String(query));
+            }
+            if let Some(builder) = wire.view_builder.filter(|value| !value.is_null()) {
+                object.entry("view_builder".to_string()).or_insert(builder);
+            }
+        }
 
         Ok(ArchiveCollection {
             name: wire.name,
@@ -144,7 +164,7 @@ impl<'de> Deserialize<'de> for ArchiveCollection {
             // counts.
             schema: if fields.is_empty() { schema } else { fields },
             rules: wire.rules,
-            options: wire.options,
+            options: Some(options),
             records: wire.records,
         })
     }
@@ -498,22 +518,36 @@ pub async fn restore_snapshot(client: &mut Client, payload: &Value) -> Result<Im
         fields_removed.push((name.clone(), dropped));
     }
 
-    let transaction = client.transaction().await.map_err(db_error)?;
+    // Views hold no rows of their own: they take part in the definition phase above
+    // and are left out of the delete/insert phase, where `delete from <view>` would
+    // fail (and, worse, an insert would target a read-only relation).
+    let mut data_names = Vec::with_capacity(names.len());
     for name in &names {
+        let definition = definition_of(&archive, name)?;
+        if parse_collection_type(definition.collection_type.as_deref())?
+            == crate::types::CollectionType::View
+        {
+            continue;
+        }
+        data_names.push(name.clone());
+    }
+
+    let transaction = client.transaction().await.map_err(db_error)?;
+    for name in &data_names {
         let table = crate::ddl::quote_ident(name);
         transaction
             .batch_execute(&format!("alter table {table} disable trigger all"))
             .await
             .map_err(db_error)?;
     }
-    for name in &names {
+    for name in &data_names {
         let table = crate::ddl::quote_ident(name);
         transaction
             .batch_execute(&format!("delete from {table}"))
             .await
             .map_err(db_error)?;
     }
-    for name in &names {
+    for name in &data_names {
         apply_records(&transaction, &archive, name).await?;
         report.imported.push(imported_of(
             &archive,
@@ -563,22 +597,31 @@ pub async fn export(client: &Client) -> Result<Archive> {
             continue;
         }
 
+        // A view's rows are its query's, not its own: exporting them would make the
+        // import try to insert into a read-only relation, and restoring them would
+        // duplicate the source data. The definition is exported, the rows are not.
+        //
         // `to_jsonb(t)` renders the whole row, so Postgres decides how each type
         // becomes JSON. A hand-written match was wrong for `timestamptz` — which
         // every table here has, as `created` and `updated` — and would have been
         // wrong again for the next type somebody added.
-        let rows = client
-            .query(
-                &format!(
-                    "select to_jsonb(t) as row from {} t order by id",
-                    crate::ddl::quote_ident(&collection.name)
-                ),
-                &[],
-            )
-            .await
-            .map_err(db_error)?;
-
-        let records: Vec<Value> = rows.iter().map(|row| row.get("row")).collect();
+        let records: Vec<Value> = if collection.collection_type.is_table() {
+            client
+                .query(
+                    &format!(
+                        "select to_jsonb(t) as row from {} t order by id",
+                        crate::ddl::quote_ident(&collection.name)
+                    ),
+                    &[],
+                )
+                .await
+                .map_err(db_error)?
+                .iter()
+                .map(|row| row.get("row"))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         manifest_collections.push(ManifestCollection {
             name: collection.name.clone(),
@@ -1349,6 +1392,14 @@ async fn apply_records(
     archive: &Archive,
     name: &str,
 ) -> Result<()> {
+    // A view holds no rows to restore: its rows are whatever its query selects.
+    let definition = definition_of(archive, name)?;
+    if parse_collection_type(definition.collection_type.as_deref())?
+        == crate::types::CollectionType::View
+    {
+        return Ok(());
+    }
+
     let Some((_, records)) = archive
         .data
         .iter()
