@@ -1465,17 +1465,21 @@ async fn upsert(
         )));
     }
 
-    // Every column the table has, except `id`, is updated from the incoming row, so a
-    // restore is a faithful copy rather than a merge that keeps stale values. A key
-    // the table does not have is left out of the update rather than sent to Postgres
-    // as a column that does not exist.
-    let columns: Vec<&String> = object
+    // Every column the record declares that the table actually has. A key the table
+    // does not have is left out rather than sent to Postgres as a column that does not
+    // exist, and **a column the record omits is left out of the INSERT** so its default
+    // applies. `jsonb_populate_record` returns the *table's* shape, so `select *` would
+    // pass NULL for every omitted column — that defeats `default now()` and fails the
+    // NOT NULL constraint on a collection's `created`/`updated`, which made an imported
+    // record without explicit timestamps impossible.
+    let declared: Vec<&String> = object
         .keys()
-        .filter(|column| column.as_str() != "id")
         .filter(|column| table_columns.contains(column.as_str()))
         .collect();
-    let assignments = columns
+
+    let assignments = declared
         .iter()
+        .filter(|column| column.as_str() != "id")
         .map(|column| {
             format!(
                 "{quoted} = excluded.{quoted}",
@@ -1485,8 +1489,21 @@ async fn upsert(
         .collect::<Vec<_>>()
         .join(", ");
 
+    let inserted = declared
+        .iter()
+        .map(|column| crate::ddl::quote_ident(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let projection = declared
+        .iter()
+        .map(|column| format!("row.{}", crate::ddl::quote_ident(column)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     let sql = format!(
-        "insert into {table}          select * from jsonb_populate_record(null::{table}, $1::jsonb)          on conflict (\"id\") do {action}",
+        "insert into {table} ({inserted}) \
+         select {projection} from jsonb_populate_record(null::{table}, $1::jsonb) as row \
+         on conflict (\"id\") do {action}",
         table = crate::ddl::quote_ident(table),
         action = if assignments.is_empty() {
             // Nothing but an id: an insert that conflicts has nothing to change.

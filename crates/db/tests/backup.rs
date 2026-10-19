@@ -514,3 +514,45 @@ async fn delete_missing_drops_the_collections_and_fields_the_payload_omits() {
 
     db.cleanup().await;
 }
+
+#[tokio::test]
+async fn an_imported_record_may_omit_the_system_timestamps() {
+    let Some(db) = migrated_test_db("import_record_defaults").await else {
+        return;
+    };
+    let mut client = db.client().await;
+
+    // A record carrying neither `created` nor `updated`. Both columns are
+    // `not null default now()`, and the default is what has to fill them: a
+    // hand-written import file cannot be required to invent timestamps.
+    let payload = json!({
+        "collections": [{
+            "name": "notes",
+            "type": "base",
+            "schema": [{ "name": "title", "type": "text" }],
+            "records": [{ "id": "note00000000001", "title": "hello" }]
+        }]
+    });
+
+    backup::restore_snapshot(&mut client, &payload)
+        .await
+        .expect("a record without timestamps must import");
+
+    let row = client
+        .query_one(
+            "select title, created is not null as stamped, updated is not null as touched \
+             from notes where id = 'note00000000001'",
+            &[],
+        )
+        .await
+        .expect("row");
+    assert_eq!(row.get::<_, String>(0), "hello");
+    assert!(row.get::<_, bool>(1), "created was left NULL");
+    assert!(row.get::<_, bool>(2), "updated was left NULL");
+
+    // A restore of an existing collection replaces its rows (delete + insert), so the
+    // timestamps are re-stamped on the next import unless the payload supplies them.
+    // That is the documented "faithful copy" behaviour, not a property of this change.
+
+    db.cleanup().await;
+}
