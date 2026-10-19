@@ -452,6 +452,44 @@ POST /api/collections/users/confirm-email-change { "token", "password" }`}
   </section>
 
   <!-- FILTERS -->
+  <section id="sessions" class="scroll-mt-20 mb-10">
+    <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
+      Sessions and tokens
+    </h2>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      A sign-in returns an <strong>access token</strong> and a
+      <strong>refresh token</strong>. The access token lives
+      <strong>15 minutes</strong>; the refresh token lives <strong>30 days</strong> and
+      is rotated on every use, in a family: replaying an already-rotated refresh token
+      is treated as theft and revokes the whole family.
+    </p>
+    <CodeBlock
+      lang="http"
+      code={`POST /api/collections/users/auth-with-password
+{ "identity": "ada@example.com", "password": "…" }
+
+200 { "token": "<access, 15 min>", "refreshToken": "<30 days>", "expiresIn": 900, "record": { … } }
+
+# exchange it — the refresh token goes in the body or as the bearer,
+# and the collection must be the session's own ("_superusers" for a superuser)
+POST /api/collections/users/auth-refresh
+{ "refreshToken": "<refresh token>" }`}
+    />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      The TypeScript SDK and the Studio do this for you: they refresh shortly before
+      the access token lapses, retry a request once after a 401, and keep the session
+      across a reload. If you build requests by hand, read
+      <code class="doc-inline px-1 py-0.5">expiresIn</code> rather than assuming a
+      lifetime, and send the <strong>refresh</strong> token to
+      <code class="doc-inline px-1 py-0.5">auth-refresh</code> (the access token is the
+      wrong bearer there).
+    </p>
+    <p class="mt-3 text-sm text-base-content/70">
+      Both lifetimes are fixed constants today (`crates/auth/src/token.rs` and
+      `crates/auth/src/sessions.rs`); there is no environment variable for them.
+    </p>
+  </section>
+
   <section id="filters" class="scroll-mt-20 mb-10">
     <h2 class="text-xl font-semibold border-b border-base-300 pb-2">
       Filters
