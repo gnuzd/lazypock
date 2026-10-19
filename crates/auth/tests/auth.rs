@@ -316,8 +316,14 @@ async fn revoking_a_family_stops_every_token_in_it() {
 /// Before this, both calls read `revoked = false`, both updated, and both issued — which
 /// quietly defeated the replay detection above: a thief racing the victim's own refresh
 /// got a working token and no family revocation. The loser now looks exactly like the
-/// replay it is, which means the family is revoked: a client must not refresh
-/// concurrently, and that is the price of the detection actually working.
+/// replay it is.
+///
+/// The two assertions are deliberately separable. *Exactly one* of the concurrent calls
+/// may succeed, which is the guarantee. Whether the loser's family revocation also kills
+/// the winner's brand-new token depends on whether that token was inserted before the
+/// loser revoked — a real interleaving, not a bug — so the "family is revoked" half is
+/// asserted against an explicit replay of the rotated token, which happens after the
+/// winner exists and is therefore deterministic.
 #[tokio::test]
 async fn two_simultaneous_rotations_cannot_both_succeed() {
     let Some(test) = migrated_test_db("auth_refresh_race").await else {
@@ -346,8 +352,16 @@ async fn two_simultaneous_rotations_cannot_both_succeed() {
         right.as_ref().map(|_| "ok")
     );
 
-    // The loser was a replay, so the family is gone — including the winner's new token.
+    // A replay of the rotated token, after the winner's replacement exists, revokes the
+    // family — including that replacement. Deterministic, unlike relying on which of the
+    // two concurrent calls revoked first.
     let winner = left.or(right).expect("one rotation won");
+    let replay = service
+        .refresh(&login.refresh_token, &[], None)
+        .await
+        .expect_err("a rotated token must not rotate again");
+    assert_eq!(replay.status(), 401, "{replay}");
+
     let after = service
         .refresh(&winner.refresh_token, &[], None)
         .await
