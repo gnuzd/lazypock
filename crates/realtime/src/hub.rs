@@ -454,7 +454,9 @@ impl Hub {
         while let Some(event) = bus.next().await {
             self.dispatch(event).await;
         }
-        tracing::warn!("the realtime bus closed; no further events will be delivered");
+        // Reconnecting is the supervisor's job (`bus::run_supervised`), which
+        // reports the outage; this is the ordinary end of one session.
+        tracing::debug!("the realtime bus closed");
     }
 }
 

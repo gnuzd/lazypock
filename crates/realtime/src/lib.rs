@@ -9,6 +9,6 @@ pub mod bus;
 pub mod event;
 pub mod hub;
 
-pub use bus::{EventBus, PgBus};
+pub use bus::{run_supervised, EventBus, PgBus};
 pub use event::{ChangeEvent, ChangeOp};
 pub use hub::{Delivered, Hub, Subscription, REGISTRY_TOPIC};
