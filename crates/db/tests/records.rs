@@ -457,3 +457,47 @@ async fn empty_and_non_object_bodies_are_rejected() {
 
     test.cleanup().await;
 }
+
+#[tokio::test]
+async fn a_trigger_that_raises_reports_its_own_message_as_a_conflict() {
+    let Some(test) = migrated_test_db("record_trigger_raise").await else {
+        return;
+    };
+    let mut client = test.client().await;
+    let posts = fixture(&mut client).await;
+    let posts_context = context(&client, "posts").await;
+
+    // The shape a schema uses to refuse a row in SQL — a subdomain that is taken,
+    // a quota that is exhausted. `RAISE EXCEPTION`'s default SQLSTATE is P0001.
+    client
+        .batch_execute(
+            "create function reject_slug() returns trigger language plpgsql as $$
+             begin
+                 if new.slug = 'taken' then
+                     raise exception 'that slug is taken';
+                 end if;
+                 return new;
+             end $$;
+             create trigger reject_slug before insert on posts
+                 for each row execute function reject_slug();",
+        )
+        .await
+        .expect("trigger");
+
+    let err = records::create(
+        &client,
+        &posts,
+        &posts_context,
+        json!({"title": "Hello", "slug": "taken"}),
+    )
+    .await
+    .expect_err("the trigger refuses the row");
+
+    // A refusal written by the schema is a conflict carrying its own message, not
+    // a 500 that leaks `database error P0001: …`.
+    assert_eq!(err.status(), 409, "{err}");
+    assert_eq!(err.message(), "that slug is taken");
+    assert!(!err.message().contains("P0001"), "{err}");
+
+    test.cleanup().await;
+}

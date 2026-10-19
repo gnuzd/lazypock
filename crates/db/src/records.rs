@@ -482,6 +482,22 @@ fn map_write_error(err: tokio_postgres::Error, collection: &str) -> RecordWriteE
                     "a required column in {collection:?} was left empty"
                 )))
             }
+            // `RAISE EXCEPTION` from a trigger — PL/pgSQL's default SQLSTATE.
+            // The message is written by the schema, not by the client, and a rule
+            // expressed in SQL has no other way to say what it refused, so it is
+            // reported as a conflict with that message rather than as an opaque
+            // internal failure carrying `database error P0001: …`. A trigger that
+            // wants a different status raises a specific SQLSTATE instead
+            // (`23505` -> 409, `42501` -> 403).
+            "P0001" => {
+                let message = db_error.message().trim();
+                let message = if message.is_empty() {
+                    format!("a rule in {collection:?} refused the write")
+                } else {
+                    message.to_string()
+                };
+                return RecordWriteError::Other(Error::conflict(message));
+            }
             _ => {}
         }
     }
