@@ -843,6 +843,7 @@ mod transport_tests {
             image_service_url: None,
             image_service_token: None,
             presign_ttl_seconds: crate::config::FilesConfig::DEFAULT_PRESIGN_TTL_SECONDS,
+            ..FilesConfig::default_config()
         })
         .expect("storage")
     }

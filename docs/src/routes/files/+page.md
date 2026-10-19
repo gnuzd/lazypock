@@ -233,6 +233,25 @@ An incomplete S3 configuration is refused at boot rather than on the first uploa
 backend is health-checked. With a public base URL the URLs a client is handed point at the
 CDN; without one they point at this server.
 
+Two further variables cover a **shared bucket**:
+
+```bash
+# Every key becomes tenants/acme/{collection}/{record}/{file}.
+LAZYPOCK_FILES_PREFIX=tenants/acme
+# Refuse the local adapter, even as a saved setting.
+LAZYPOCK_FILES_FORCE_REMOTE=on
+```
+
+`LAZYPOCK_FILES_PREFIX` exists because the orphan sweeper lists the store and queues what
+`_files` does not reference: in a bucket shared by several deployments, a sweep scoped to the
+root would treat every other deployment's objects as orphans. The prefix is part of the stored
+`storage_path`, so the sweeper, the reaper and the presigner all agree on one key.
+
+`LAZYPOCK_FILES_FORCE_REMOTE` is not redundant with `LAZYPOCK_FILES_ADAPTER=s3`: a storage
+setting **saved in the Studio overrides the environment**, so an environment-only rule can be
+undone from the UI. With it on, both boot and `PATCH /api/settings/storage` refuse the local
+backend.
+
 **Settings → Files** shows this configuration (`GET /api/settings/storage`, with the secret
 reported only as "set"), **saves it** (`PATCH`, superuser-only) and probes the backend
 (`POST /api/settings/storage/test`).
@@ -250,8 +269,10 @@ Two things to know before you save a secret:
   replica and `pg_dump`. Losing the key means the saved secret cannot be read again and has
   to be entered once more.
 - Two form fields are refused rather than stored and ignored: **Force path style** has to stay
-  on (an object is addressed as `<endpoint>/<bucket>/<key>`) and **Key prefix** must be empty
-  (an object's key is `{collection}/{record}/{filename}`).
+  on (an object is addressed as `<endpoint>/<bucket>/<key>`) and the bucket's own **Key prefix**
+  must be empty (an object's key is `{collection}/{record}/{filename}`). A key namespace is set
+  with `LAZYPOCK_FILES_PREFIX` instead — that one is part of the key, so it is safe in a shared
+  bucket.
 
 `LAZYPOCK_PRESIGN_TTL` (or the page's **Presign TTL**) sets how long a presigned URL stays
 valid; the default is fifteen minutes.

@@ -217,6 +217,7 @@ pub async fn test_app_with(label: &str, extra: &[(&str, &str)]) -> Option<TestAp
             image_service_url: None,
             image_service_token: None,
             presign_ttl_seconds: lazypock_files::FilesConfig::DEFAULT_PRESIGN_TTL_SECONDS,
+            ..lazypock_files::FilesConfig::default_config()
         })
         .expect("files"),
     );

@@ -19,7 +19,7 @@ use lazypock_db::types::validate_identifier;
 use lazypock_files::rules::{FileRule, FileRules};
 use lazypock_files::storage::Files;
 use lazypock_files::store::{self, NewFile, Origin};
-use lazypock_files::{keys, outbox, presets, thumbnail, ImagePreset};
+use lazypock_files::{outbox, presets, thumbnail, ImagePreset};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -202,9 +202,12 @@ pub async fn upload(
     // Under the record when there is one — the shape the key-based sweeper attributes
     // — and in the library when there is not.
     let key = if collection.is_empty() || record_id.is_empty() {
-        keys::pending_key(&filename)
+        state.files.pending_key(&filename)
     } else {
-        keys::storage_key(&collection, &record_id, &filename).map_err(ApiError::new)?
+        state
+            .files
+            .storage_key(&collection, &record_id, &filename)
+            .map_err(ApiError::new)?
     };
 
     // What the bytes say, read before they are handed over: the sniffer decides the
@@ -550,9 +553,12 @@ pub async fn presign(
     }
 
     let key = if collection.is_empty() || record_id.is_empty() {
-        keys::pending_key(&body.filename)
+        state.files.pending_key(&body.filename)
     } else {
-        keys::storage_key(&collection, &record_id, &body.filename).map_err(ApiError::new)?
+        state
+            .files
+            .storage_key(&collection, &record_id, &body.filename)
+            .map_err(ApiError::new)?
     };
     let origin =
         Origin::parse(body.origin.as_deref().unwrap_or_default()).map_err(ApiError::new)?;
@@ -1203,6 +1209,9 @@ pub async fn sweep(
     let options = lazypock_files::SweepOptions {
         dry_run: body.dry_run,
         limit: body.limit,
+        // Only this deployment's namespace: in a shared bucket, listing the root
+        // would hand one tenant every other tenant's keys as orphans.
+        prefix: state.files.prefix(),
     };
     let client = state.db.client().await.map_err(ApiError::new)?;
     let storage = state.files.storage();

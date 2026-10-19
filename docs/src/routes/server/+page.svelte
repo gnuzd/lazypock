@@ -1219,6 +1219,28 @@ cargo build --release --no-default-features`}
           </tr>
           <tr>
             <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_FILES_PREFIX</code></td
+            >
+            <td class="px-3 py-2"
+              >Namespace every object key is written under. Set it when more than one
+              deployment shares a bucket: the orphan sweeper lists only this prefix.</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">—</td>
+          <td class="px-3 py-2">no</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5">LAZYPOCK_FILES_FORCE_REMOTE</code></td
+            >
+            <td class="px-3 py-2"
+              >Refuse the local adapter at boot, and refuse saving one in the Studio
+              (a saved setting overrides the environment).</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">off</td>
+          <td class="px-3 py-2">no</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
               ><code class="doc-inline px-1 py-0.5">LAZYPOCK_PRESIGN_TTL</code></td
             >
             <td class="px-3 py-2"
