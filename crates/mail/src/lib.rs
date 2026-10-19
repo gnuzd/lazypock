@@ -9,7 +9,9 @@
 //! * [`Templates`] renders the subject, the HTML body and the plain-text
 //!   alternative with [MiniJinja](https://docs.rs/minijinja). The defaults are
 //!   compiled in, and a deployment **overrides them with files** in a template
-//!   directory, so changing an email does not need a Rust build.
+//!   directory, so changing an email does not need a Rust build. A directory may
+//!   also define **new** names (`receipt.subject`, `receipt.html`,
+//!   `receipt.text`), which is how application mail is sent from `POST /api/mail`.
 //! * [`Mailer`] joins a rendered message to a transport. [`Mailer::capture`]
 //!   records instead of sending, which is what the tests use and what a
 //!   deployment can use to inspect what would go out.
@@ -17,6 +19,7 @@
 //! Sending is called from the job queue's `mail` kind, never from a request
 //! handler: a provider that is slow or down must not hold a request open.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -186,9 +189,12 @@ impl Part {
     }
 }
 
-/// The rendered templates: built-in defaults with any file overrides applied.
+/// The rendered templates: built-in defaults with any file overrides applied, plus
+/// any additional names a deployment's template directory defines.
 pub struct Templates {
     env: Environment<'static>,
+    /// Every template name the environment holds, built-in and custom.
+    names: BTreeSet<String>,
 }
 
 impl Templates {
@@ -202,6 +208,7 @@ impl Templates {
         // an OTP email rendered with an empty code is worse than one that fails.
         env.set_undefined_behavior(UndefinedBehavior::Strict);
 
+        let mut names = BTreeSet::new();
         for name in BUILTIN_NAMES {
             for part in [Part::Subject, Part::Html, Part::Text] {
                 let key = format!("{name}.{}", part.suffix());
@@ -214,9 +221,34 @@ impl Templates {
                 env.add_template_owned(key.clone(), source)
                     .map_err(|err| Error::config(format!("mail template {key:?}: {err}")))?;
             }
+            names.insert(name.to_string());
         }
 
-        Ok(Self { env })
+        // Application mail: names the directory defines beyond the built-ins. A name
+        // that is only partly there is refused at boot rather than at the first send,
+        // because "the email arrived without a body" is not a failure anyone notices
+        // in time.
+        for name in custom_names(directory)? {
+            for part in [Part::Subject, Part::Html, Part::Text] {
+                let key = format!("{name}.{}", part.suffix());
+                let Some(source) = read_override(directory, &key)? else {
+                    return Err(Error::config(format!(
+                        "mail template {name:?} is incomplete: it needs {name}.subject, \
+                         {name}.html and {name}.text in the template directory"
+                    )));
+                };
+                env.add_template_owned(key.clone(), source)
+                    .map_err(|err| Error::config(format!("mail template {key:?}: {err}")))?;
+            }
+            names.insert(name);
+        }
+
+        Ok(Self { env, names })
+    }
+
+    /// The template names that can be sent, built-in and custom.
+    pub fn names(&self) -> Vec<&str> {
+        self.names.iter().map(String::as_str).collect()
     }
 
     /// Render one part of a template with `context`.
@@ -225,13 +257,97 @@ impl Templates {
         let template = self.env.get_template(&key).map_err(|_| {
             Error::invalid(format!(
                 "no mail template named {name:?} (known: {})",
-                BUILTIN_NAMES.join(", ")
+                self.names().join(", ")
             ))
         })?;
         template
             .render(minijinja::Value::from_serialize(context))
             .map_err(|err| Error::internal(format!("cannot render mail template {key:?}: {err}")))
     }
+}
+
+/// Template names the directory defines that are not built in.
+///
+/// Derived from the directory listing (`<name>.<part>`), so adding a template is
+/// dropping files in, and a name with a typo'd part is simply not a name — its
+/// incompleteness is reported by the caller.
+fn custom_names(directory: Option<&Path>) -> Result<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    let Some(directory) = directory else {
+        return Ok(names);
+    };
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(names),
+        Err(err) => {
+            return Err(Error::config(format!(
+                "cannot read the mail template directory {}: {err}",
+                directory.display()
+            )))
+        }
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            Error::config(format!(
+                "cannot read the mail template directory {}: {err}",
+                directory.display()
+            ))
+        })?;
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        let Some((name, part)) = file_name.rsplit_once('.') else {
+            continue;
+        };
+        if !matches!(part, "subject" | "html" | "text") {
+            continue;
+        }
+        if BUILTIN_NAMES.contains(&name) {
+            continue;
+        }
+        names.insert(name.to_string());
+    }
+    Ok(names)
+}
+
+/// A readable plain-text alternative for a message sent as HTML only.
+///
+/// Deliberately crude: strip tags, collapse blank lines, decode the entities a
+/// sentence actually contains. It is a fallback for a caller who did not supply a
+/// text part, not an HTML-to-text converter.
+fn plain_text_from_html(html: &str) -> String {
+    let mut stripped = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => {
+                in_tag = true;
+                if !stripped.ends_with(' ') {
+                    stripped.push(' ');
+                }
+            }
+            '>' => in_tag = false,
+            other if !in_tag => stripped.push(other),
+            _ => {}
+        }
+    }
+
+    let decoded = stripped
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+
+    decoded
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn read_override(directory: Option<&Path>, key: &str) -> Result<Option<String>> {
@@ -326,6 +442,53 @@ impl Mailer {
             subject: self.templates.render(template, Part::Subject, &context)?,
             html: self.templates.render(template, Part::Html, &context)?,
             text: self.templates.render(template, Part::Text, &context)?,
+        };
+
+        match &self.transport {
+            Transport::Memory(buffer) => {
+                buffer
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(message);
+                Ok(())
+            }
+            Transport::Smtp(transport) => send_smtp(transport, &self.config, &message).await,
+        }
+    }
+
+    /// Send one fully rendered message.
+    ///
+    /// This is the application-mail path (`POST /api/mail` with a subject and a
+    /// body): no template, no context, the caller supplies the parts. A message with
+    /// only HTML gets a plain-text alternative derived from it, because some clients
+    /// show nothing for an HTML-only message.
+    pub async fn deliver_raw(
+        &self,
+        to_name: &str,
+        to: &str,
+        subject: &str,
+        html: &str,
+        text: &str,
+    ) -> Result<()> {
+        if subject.trim().is_empty() {
+            return Err(Error::invalid("a mail subject must not be empty"));
+        }
+        if html.trim().is_empty() && text.trim().is_empty() {
+            return Err(Error::invalid(
+                "a mail body must not be empty (html or text)",
+            ));
+        }
+
+        let message = Message {
+            to_name: to_name.to_string(),
+            to: to.to_string(),
+            subject: subject.to_string(),
+            html: html.to_string(),
+            text: if text.trim().is_empty() {
+                plain_text_from_html(html)
+            } else {
+                text.to_string()
+            },
         };
 
         match &self.transport {
@@ -584,6 +747,120 @@ mod tests {
             .contains("1"));
 
         std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// A template directory unique to one test, removed by the test.
+    fn template_directory(label: &str) -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("lazypock-mail-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("temp dir");
+        directory
+    }
+
+    #[test]
+    fn a_template_directory_can_add_a_name() {
+        let directory = template_directory("custom");
+        std::fs::write(directory.join("receipt.subject"), "Your receipt").expect("write");
+        std::fs::write(directory.join("receipt.html"), "<p>Thanks, {{ name }}</p>").expect("write");
+        std::fs::write(directory.join("receipt.text"), "Thanks, {{ name }}").expect("write");
+
+        let templates = Templates::load(Some(&directory)).expect("templates");
+        assert!(
+            templates.names().contains(&"receipt"),
+            "custom names: {:?}",
+            templates.names()
+        );
+        // The built-ins are still there.
+        assert!(templates.names().contains(&"otp"));
+        assert_eq!(
+            templates
+                .render("receipt", Part::Subject, &json!({}))
+                .unwrap(),
+            "Your receipt"
+        );
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn a_half_defined_custom_template_is_refused_at_load() {
+        let directory = template_directory("incomplete");
+        std::fs::write(directory.join("receipt.subject"), "Your receipt").expect("write");
+        // No `receipt.html` / `receipt.text`: an email that arrives empty is worse than
+        // one that refuses to load.
+        let err = match Templates::load(Some(&directory)) {
+            Ok(_) => panic!("an incomplete custom template must be refused"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("incomplete"), "{err}");
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn an_unknown_template_names_what_is_available() {
+        let err = templates()
+            .render("nope", Part::Html, &json!({}))
+            .expect_err("unknown template");
+        assert!(err.to_string().contains("otp"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_raw_message_is_recorded_with_the_parts_it_was_given() {
+        let mailer = Mailer::capture(templates(), config());
+        mailer
+            .deliver_raw(
+                "Ada",
+                "ada@example.com",
+                "Your order shipped",
+                "<p>It is on the way</p>",
+                "It is on the way",
+            )
+            .await
+            .expect("deliver");
+
+        let sent = mailer.captured();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].subject, "Your order shipped");
+        assert_eq!(sent[0].html, "<p>It is on the way</p>");
+        assert_eq!(sent[0].text, "It is on the way");
+    }
+
+    #[tokio::test]
+    async fn a_raw_message_without_a_text_part_gets_a_readable_one() {
+        let mailer = Mailer::capture(templates(), config());
+        mailer
+            .deliver_raw(
+                "Ada",
+                "ada@example.com",
+                "Hello",
+                "<p>Hello&nbsp;Ada</p><p>Second line &amp; more</p>",
+                "",
+            )
+            .await
+            .expect("deliver");
+
+        let text = mailer.captured()[0].text.clone();
+        assert!(
+            !text.contains('<'),
+            "markup leaked into the text part: {text}"
+        );
+        assert!(text.contains("Hello Ada"), "{text}");
+        assert!(text.contains("Second line & more"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_raw_message_is_refused() {
+        let mailer = Mailer::capture(templates(), config());
+        for (subject, html, text) in [("", "<p>x</p>", ""), ("Subject", "", "")] {
+            assert!(
+                mailer
+                    .deliver_raw("Ada", "ada@example.com", subject, html, text)
+                    .await
+                    .is_err(),
+                "should have been refused"
+            );
+        }
     }
 
     #[tokio::test]

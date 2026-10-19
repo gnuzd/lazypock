@@ -277,11 +277,16 @@ async fn run_one(state: &AppState, job: &Claimed) -> Result<(), ApiError> {
 }
 
 /// The payload a `mail` job carries.
+///
+/// Two shapes: a **named template** (the built-in auth emails, or a template file a
+/// deployment added) with its context, or a **raw message** (`subject` + `html`/
+/// `text`) for application mail sent through `POST /api/mail`.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MailJob {
-    /// The template name (`otp`, `verification`, `password_reset`, `email_change`).
-    template: String,
+    /// The template name, when the message comes from a template.
+    #[serde(default)]
+    template: Option<String>,
     /// The recipient's address.
     to: String,
     /// The recipient's display name.
@@ -289,6 +294,15 @@ struct MailJob {
     /// The template context.
     #[serde(default)]
     assigns: Value,
+    /// The subject, for a raw message.
+    #[serde(default)]
+    subject: Option<String>,
+    /// The HTML body, for a raw message.
+    #[serde(default)]
+    html: Option<String>,
+    /// The plain-text body, for a raw message.
+    #[serde(default)]
+    text: Option<String>,
 }
 
 /// A job that sends one templated email.
@@ -308,8 +322,22 @@ pub fn mail_job(template: &str, to_name: &str, to: &str, assigns: Value) -> NewJ
     )
 }
 
+/// A job that sends one message rendered by the caller (application mail).
+pub fn raw_mail_job(to_name: &str, to: &str, subject: &str, html: &str, text: &str) -> NewJob {
+    NewJob::new(
+        KIND_MAIL,
+        serde_json::json!({
+            "to": to,
+            "toName": to_name,
+            "subject": subject,
+            "html": html,
+            "text": text,
+        }),
+    )
+}
+
 /// The application settings, for a job that needs them (the mail config).
-async fn read_settings(client: &Client) -> Result<Value, String> {
+pub(crate) async fn read_settings(client: &Client) -> Result<Value, String> {
     let rows = client
         .query("select key, value from _settings", &[])
         .await
@@ -366,8 +394,25 @@ async fn perform(state: &AppState, job: &Claimed) -> Result<(), String> {
 
             let mailer = lazypock_mail::Mailer::new(state.mail_templates.clone(), config)
                 .map_err(|err| err.to_string())?;
+
+            if let Some(template) = mail.template.as_deref() {
+                return mailer
+                    .deliver(template, &mail.to_name, &mail.to, &mail.assigns)
+                    .await
+                    .map_err(|err| err.to_string());
+            }
+
+            let subject = mail.subject.as_deref().unwrap_or_default();
+            let html = mail.html.as_deref().unwrap_or_default();
+            let text = mail.text.as_deref().unwrap_or_default();
+            if subject.trim().is_empty() || (html.trim().is_empty() && text.trim().is_empty()) {
+                return Err(
+                    "a mail job needs a `template`, or a `subject` and an `html`/`text` body"
+                        .to_string(),
+                );
+            }
             mailer
-                .deliver(&mail.template, &mail.to_name, &mail.to, &mail.assigns)
+                .deliver_raw(&mail.to_name, &mail.to, subject, html, text)
                 .await
                 .map_err(|err| err.to_string())
         }

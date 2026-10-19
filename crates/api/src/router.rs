@@ -19,6 +19,7 @@ use crate::emails;
 use crate::error::ApiError;
 use crate::files;
 use crate::logs;
+use crate::mail;
 use crate::presets;
 use crate::rate_limit;
 use crate::realtime;
@@ -127,6 +128,9 @@ pub fn router(state: AppState) -> Router {
         // The admin audit trail. Superuser-only, like the request log and for the
         // same reason: it names who did what, and when.
         .route("/api/audit", get(audit::list))
+        // Application mail. Superuser or API key: the Studio's test button and an
+        // application server respectively. Queued, never sent inside the request.
+        .route("/api/mail", post(mail::send))
         // Cron jobs. Superuser-only: running one executes SQL or an HTTP request.
         .route("/api/crons", get(crons::list).post(crons::create))
         .route("/api/crons/validate", post(crons::validate))
