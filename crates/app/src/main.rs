@@ -398,17 +398,14 @@ async fn serve(config: Config) -> Result<()> {
             .map_err(|err| Error::config(format!("cannot apply the file rules: {err}")))?;
     }
 
-    // Realtime is listening on this node now (see the watcher above).
-    match lazypock_realtime::PgBus::connect(&config.database_url).await {
-        Ok(bus) => {
-            tokio::spawn(hub.clone().run(bus));
-            tracing::info!("realtime listening");
-        }
-        Err(err) => tracing::error!(
-            error = %err,
-            "realtime is unavailable: the LISTEN connection could not be established"
-        ),
-    }
+    // Realtime listens on its own connection and reconnects whenever that session
+    // ends — a server restart, a failover, an idle compute suspended. Connecting
+    // once here used to retire realtime for the life of the process while the API
+    // kept answering and `/api/health` kept saying OK.
+    tokio::spawn(lazypock_realtime::run_supervised(
+        hub.clone(),
+        config.database_url.clone(),
+    ));
 
     // File storage: configured from the environment, and it has to be usable at
     // boot rather than failing on the first upload.
