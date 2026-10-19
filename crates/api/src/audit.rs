@@ -60,6 +60,9 @@ pub mod action {
     pub const PRESET_CHANGE: &str = "preset.change";
     /// A cron job was run by hand.
     pub const CRON_RUN: &str = "cron.run";
+
+    /// A message queued through `POST /api/mail`.
+    pub const MAIL_SEND: &str = "mail.send";
 }
 
 /// The acting superuser's id, for [`record`].

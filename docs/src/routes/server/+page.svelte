@@ -371,6 +371,49 @@ POST /api/collections/users/auth-with-oauth2
       uses a variable the server did not supply fails loudly rather than sending
       an empty code.
     </p>
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      The same directory can add <strong>new</strong> names for your own email:
+      <code class="doc-inline px-1 py-0.5">receipt.subject</code>,
+      <code class="doc-inline px-1 py-0.5">receipt.html</code> and
+      <code class="doc-inline px-1 py-0.5">receipt.text</code> make a
+      <code class="doc-inline px-1 py-0.5">receipt</code> template. All three parts
+      are required, and a name missing one is refused at boot rather than sending a
+      half-empty email.
+    </p>
+    <h3 class="mt-5 font-semibold">Sending your own email</h3>
+    <p class="mt-2 text-base-content/80 leading-relaxed">
+      <code class="doc-inline px-1 py-0.5">POST /api/mail</code> queues one message
+      through the configured mailer. It accepts a superuser token or an
+      <strong>API key</strong> — so an application server does not need a superuser
+      password — and it is never public: an unauthenticated caller cannot use the
+      deployment as a relay.
+    </p>
+    <CodeBlock
+      lang="bash"
+      code={`# a template (the built-in auth emails, or one your directory adds)
+curl -X POST https://your-host/api/mail \
+  -H "Authorization: Bearer <superuser token or API key>" \
+  -H "Content-Type: application/json" \
+  -d '{"to":"ada@example.com","template":"receipt","assigns":{"order":"A-1042"}}'
+
+# or a fully rendered message
+curl -X POST https://your-host/api/mail \
+  -H "Authorization: Bearer <superuser token or API key>" \
+  -H "Content-Type: application/json" \
+  -d '{"to":"ada@example.com","subject":"Your order shipped","html":"<p>On the way</p>"}'`}
+    />
+    <p class="mt-3 text-base-content/80 leading-relaxed">
+      The answer is <code class="doc-inline px-1 py-0.5">&#123; "queued": true, "id": … &#125;</code>
+      — queued, not delivered. Sending happens in the job queue, which retries with
+      backoff; a message that cannot be delivered is recorded in the logs and the job
+      is retired with its reason. With a raw message
+      <code class="doc-inline px-1 py-0.5">text</code> is optional: when it is omitted a
+      plain-text alternative is derived from the HTML. All of it needs the
+      <code class="doc-inline px-1 py-0.5">mail</code> setting — an unconfigured server
+      refuses the request instead of queueing a job that can only fail. Studio →
+      Settings → Mail has a <strong>Send test email</strong> button that uses this
+      endpoint.
+    </p>
   </section>
 
   <!-- EMAIL FLOWS -->
