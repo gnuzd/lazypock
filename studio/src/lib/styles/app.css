@@ -4,6 +4,8 @@
 @import './themes/kanagawa-dragon.css';
 @import './themes/kanagawa-wave.css';
 @import './themes/tokyo-night.css';
+@import './themes/vscode-light.css';
+@import './themes/vscode-dark.css';
 @import './button.css';
 
 /* ── Base layer ── */
@@ -56,8 +58,8 @@ h6 {
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
-	-webkit-box-shadow: 0 0 0px 1000px transparent inset;
-	transition: background-color 5000s ease-in-out 0s;
+	-webkit-box-shadow: 0 0 0px 1000px transparent inset !important;
+	transition: background-color 5000s ease-in-out 0s !important;
 }
 
 /* Firefox tints autofilled fields (yellow) — neutralize it to keep the
@@ -65,9 +67,9 @@ input:-webkit-autofill:focus {
 input:autofill,
 input:autofill:hover,
 input:autofill:focus {
-	background-color: transparent;
-	box-shadow: 0 0 0px 1000px transparent inset;
-	transition: background-color 5000s ease-in-out 0s;
+	background-color: transparent !important;
+	box-shadow: 0 0 0px 1000px transparent inset !important;
+	transition: background-color 5000s ease-in-out 0s !important;
 }
 
 /* Hide scrollbars but keep scrolling (applied to the table's scroll area). */

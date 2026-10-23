@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Mona+Sans:ital,wght@0,200..900;1,200..900&display=swap');
+
 @theme {
 	--color-base-100: var(--color-base-100);
 	--color-base-200: var(--color-base-200);
@@ -39,4 +41,7 @@
 	--border: var(--border);
 	--depth: var(--depth);
 	--noise: var(--noise);
+
+	--font-sans: 'Mona Sans', -apple-system, sans-serif;
+	--font-mono: 'IBM Plex Mono', monospace;
 }

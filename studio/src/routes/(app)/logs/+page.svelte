@@ -7,6 +7,7 @@
 	import DataTable from '$lib/components/DataTable.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import { toast } from 'svelte-sonner';
+	import { fade, fly } from 'svelte/transition';
 
 	let logs = $state<Record<string, unknown>[]>([]);
 	let loading = $state(false);
@@ -461,14 +462,18 @@
 					bind:value={retention}
 					onchange={(value) => void saveRetention(String(value ?? ''))}
 				/>
-				<Button
-					class="btn-ghost"
-					disabled={retention === ''}
-					title={retention === ''
-						? 'Pick an auto-clean retention to enable this'
-						: `Delete logs older than ${retention} days`}
-					onclick={clearOldLogs}>Clean now</Button
-				>
+				{#if retention !== ''}
+					<div in:fly={{ duration: 200 }}>
+						<Button
+							class="btn-ghost"
+							title={`Delete logs older than ${retention} days`}
+							onclick={clearOldLogs}
+						>
+							Clean now
+						</Button>
+					</div>
+				{/if}
+
 				<Button class="btn-primary" onclick={clearLogs}>Clear all</Button>
 			</div>
 		</div>

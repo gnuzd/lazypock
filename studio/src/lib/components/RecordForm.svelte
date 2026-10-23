@@ -987,10 +987,10 @@
 		transition:
 			opacity 0.15s ease,
 			border-color 0.15s ease;
+		border-color: var(--color-base-content);
 	}
 	.file-upload:hover {
 		opacity: 1;
-		border-color: var(--color-base-content);
 	}
 	.file-upload.disabled {
 		opacity: 0.4;

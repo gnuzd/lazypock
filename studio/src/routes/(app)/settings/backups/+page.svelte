@@ -19,6 +19,7 @@
 		summarize,
 		uploadArchive
 	} from '$lib/importRestore';
+	import Input from '$lib/components/Input.svelte';
 
 	let backingUp = $state(false);
 	let restoring = $state(false);
@@ -361,19 +362,15 @@
 		</div>
 	{/if}
 
-	<div class="mb-4">
-		<label class="field-label" for="restore-password">Confirm your password</label>
-		<input
-			id="restore-password"
-			type="password"
-			class="field-input"
-			autocomplete="current-password"
-			bind:value={password}
-		/>
-		<p class="mt-1 text-xs text-base-content/50">
-			Restoring rewrites your collections and records — confirm your superuser password.
-		</p>
-	</div>
+	<Input
+		label="Confirm your password"
+		id="restore-password"
+		type="password"
+		class="mb-4"
+		autocomplete="current-password"
+		bind:value={password}
+		help="Restoring rewrites your collections and records — confirm your superuser password."
+	/>
 
 	<div class="flex items-center gap-3">
 		<Button

@@ -6,7 +6,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { base, resolve } from '$app/paths';
-	import { ArrowDown, ArrowUp, Search, Settings, Plus, Trash, X } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Search, Settings, Trash, X } from '@lucide/svelte';
 	import { getThumbUrl } from 'lazypock';
 	import type { FilterString, ListOptions, SortString } from 'lazypock';
 	import Button from '$lib/components/Button.svelte';
@@ -246,7 +246,7 @@
 		const params = new URLSearchParams(window.location.search);
 		const fromParam = params.get('collection');
 		const list = $collections.length > 0 ? $collections : [];
-		$activeName = fromParam ?? (list[0]?.name as string | undefined) ?? '';
+		$activeName = fromParam ?? '';
 	});
 
 	// Re-load when the URL param or active collection changes
@@ -423,16 +423,14 @@
 		if (!collection || selectedIds.length === 0 || deletingSelected) return;
 
 		const count = selectedIds.length;
+		const confirmed = await confirmDialog({
+			title: 'Delete records',
+			message: `Delete ${count} selected record${count > 1 ? 's' : ''}? This action cannot be undone.`,
+			confirmLabel: 'Delete',
+			variant: 'error'
+		});
 
-		if (
-			!(await confirmDialog({
-				title: 'Delete records',
-				message: `Delete ${count} selected record${count > 1 ? 's' : ''}? This action cannot be undone.`,
-				confirmLabel: 'Delete',
-				variant: 'error'
-			}))
-		)
-			return;
+		if (!confirmed) return;
 		deletingSelected = true;
 		try {
 			const collName = collection.name as string;
@@ -483,7 +481,7 @@
 				</button>
 			</nav>
 			{#if !isViewCollection}
-				<Button class="btn-primary w-fit" onclick={newRecord}><Plus size={18} /> New Record</Button>
+				<Button class="btn-primary w-fit" onclick={newRecord}>New Record</Button>
 			{:else}
 				<span class="text-sm text-base-content/50">Read-only view</span>
 			{/if}
@@ -556,7 +554,7 @@
 				emptyLabel={hasActiveFilter
 					? `No records match “${search.trim()}”.`
 					: 'No records yet. Create your first record to get started.'}
-				emptyActionLabel={isViewCollection || hasActiveFilter ? '' : '+ New Record'}
+				emptyActionLabel={isViewCollection || hasActiveFilter ? '' : 'New Record'}
 				onemptyaction={isViewCollection || hasActiveFilter ? undefined : newRecord}
 				onrowclick={(row) => editRecord(row)}
 			>
@@ -601,7 +599,9 @@
 		</div>
 	</div>
 {:else}
-	<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>
+	<div class="flex h-full items-center justify-center">
+		<p class="text-sm text-base-content/50">Select a collection from the sidebar.</p>
+	</div>
 {/if}
 
 <!-- Record create/edit SidePane -->

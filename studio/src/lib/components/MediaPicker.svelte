@@ -2,6 +2,7 @@
 	import { Check, CircleAlert, ImageOff, Images, X } from '@lucide/svelte';
 	import { client } from '$lib/client';
 	import type { MediaItem } from '$lib/components/MediaLibrary.svelte';
+	import { fade } from 'svelte/transition';
 
 	/**
 	 * Library picker modal: a clean grid of already-uploaded files with paging.
@@ -192,6 +193,7 @@
 
 {#if open}
 	<div
+		transition:fade={{ duration: 180 }}
 		class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4"
 		role="dialog"
 		aria-modal="true"
