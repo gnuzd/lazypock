@@ -90,16 +90,7 @@
 <div class="flex flex-1 overflow-hidden">
 	<Sidebar body={bodyContent} />
 	<main class="flex-1 overflow-auto p-6">
-		<div
-			class="mx-auto"
-			style="max-width: {page.url.pathname.endsWith('/export') ||
-			page.url.pathname.endsWith('/import') ||
-			page.url.pathname.endsWith('/media')
-				? '1200px'
-				: page.url.pathname.endsWith('/sql') || page.url.pathname.endsWith('/api-keys')
-					? '100%'
-					: '870px'}"
-		>
+		<div class="mx-auto w-full">
 			{@render children()}
 		</div>
 	</main>

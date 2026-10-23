@@ -14,6 +14,7 @@
 		loadCollections,
 		subscribeToCollectionChanges
 	} from '$lib/collectionsStore';
+	import { slide } from 'svelte/transition';
 
 	let { children } = $props();
 
@@ -115,45 +116,42 @@
 				<span>System ({systemCollections.length})</span>
 			</div>
 			{#if showSystem}
-				{#each systemCollections as coll (coll.id)}
-					<div
-						class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
-						class:bg-base-200={coll.name === $activeName}
-						class:font-medium={coll.name === $activeName}
-						role="button"
-						tabindex="0"
-						onclick={() => select(coll.name as string)}
-						onkeydown={(e) => {
-							if (e.key === 'Enter') select(coll.name as string);
-						}}
-					>
-						<svg
-							class="h-4 w-4 shrink-0"
-							fill="none"
-							viewBox="0 0 24 24"
-							stroke="currentColor"
-							stroke-width="2"
-							style="color:var(--color-warning)"
-							><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg
+				<div transition:slide>
+					{#each systemCollections as coll (coll.id)}
+						<div
+							class="mx-1.5 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-field border-none px-3 py-1.5 text-left text-sm text-base-content transition-[background] duration-(--animation-speed-fast) hover:bg-base-200"
+							class:bg-base-200={coll.name === $activeName}
+							class:font-medium={coll.name === $activeName}
+							role="button"
+							tabindex="0"
+							onclick={() => select(coll.name as string)}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') select(coll.name as string);
+							}}
 						>
-						<span class="flex-1 truncate">{coll.name as string}</span>
-						<span class="rounded bg-warning/20 px-1 py-0.5 text-[10px] font-medium text-warning"
-							>system</span
-						>
-					</div>
-				{/each}
+							<svg
+								class="h-4 w-4 shrink-0"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+								stroke-width="2"
+								style="color:var(--color-warning)"
+								><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg
+							>
+							<span class="flex-1 truncate">{coll.name as string}</span>
+							<span class="rounded bg-warning/20 px-1 py-0.5 text-[10px] font-medium text-warning"
+								>system</span
+							>
+						</div>
+					{/each}
+				</div>
 			{/if}
 		{/if}
 	{/if}
 {/snippet}
 
 {#snippet footerContent()}
-	<Button
-		class="btn-primary btn-full"
-		onclick={() => {
-			showNewPane = true;
-		}}><Plus size={18} /> New Collection</Button
-	>
+	<Button class="btn-primary btn-full" onclick={() => (showNewPane = true)}>New Collection</Button>
 {/snippet}
 
 <!-- Layout: sidebar left, main content right -->

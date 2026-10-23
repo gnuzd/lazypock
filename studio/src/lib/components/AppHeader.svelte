@@ -16,9 +16,11 @@
 		{ value: 'wabisabi-light', label: 'Wabisabi Light' },
 		{ value: 'kanagawa-dragon', label: 'Kanagawa Dragon' },
 		{ value: 'kanagawa-wave', label: 'Kanagawa Wave' },
-		{ value: 'tokyo-night', label: 'Tokyo Night' }
+		{ value: 'tokyo-night', label: 'Tokyo Night' },
+		{ value: 'vscode-light', label: 'VS Light' },
+		{ value: 'vscode-dark', label: 'VS Dark' }
 	];
-	let currentTheme = $state('wabisabi-light');
+	let currentTheme = $state('vscode-light');
 
 	function applyTheme(name: string) {
 		currentTheme = name;
@@ -69,7 +71,7 @@
 	}
 </script>
 
-<header class="flex h-11 shrink-0 items-center gap-2 bg-primary px-4 text-primary-content">
+<header class="flex shrink-0 items-center gap-2 bg-primary px-4 py-2.5 text-primary-content">
 	<span class=" mr-3 border-r border-primary-content/20 pr-3 font-semibold">
 		{appName || 'Lazypock'}
 	</span>

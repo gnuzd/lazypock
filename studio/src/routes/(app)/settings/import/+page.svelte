@@ -23,6 +23,7 @@
 		type ArchiveManifest
 	} from '$lib/importRestore';
 	import '../settings.css';
+	import Input from '$lib/components/Input.svelte';
 
 	const importSchema = z.object({
 		schemas: z.string(),
@@ -370,19 +371,15 @@
 			</div>
 		{/if}
 
-		<div class="field mb-4">
-			<label class="field-label" for="import-password">Confirm your password</label>
-			<input
-				id="import-password"
-				type="password"
-				class="field-input"
-				autocomplete="current-password"
-				bind:value={importForm.form.password}
-			/>
-			<p class="mt-1 text-xs text-base-content/50">
-				Importing rewrites your collections and records — confirm your superuser password.
-			</p>
-		</div>
+		<Input
+			label="Confirm your password"
+			class="mb-4"
+			id="import-password"
+			type="password"
+			autocomplete="current-password"
+			bind:value={importForm.form.password}
+			help="Importing rewrites your collections and records — confirm your superuser password."
+		/>
 
 		{#if progress !== null}
 			<div class="mb-4">

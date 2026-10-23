@@ -488,7 +488,7 @@
 		align-items: center;
 		gap: 2px;
 		padding: 6px 12px;
-		background: color-mix(in oklab, var(--color-base-content) 4%, transparent);
+		background: color-mix(in oklab, var(--color-base-content) 0%, transparent);
 		border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
 	}
 

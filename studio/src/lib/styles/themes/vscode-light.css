@@ -1,0 +1,35 @@
+:root:has(input.theme-controller[value='vscode-light']:checked),
+[data-theme='vscode-light'] {
+	--color-base-100: oklch(98.5% 0 0);
+	--color-base-200: oklch(95% 0 0);
+	--color-base-300: oklch(89% 0 0);
+	--color-base-content: oklch(22% 0 0);
+
+	--color-primary: oklch(54% 0.16 250);
+	--color-primary-content: oklch(99% 0 0);
+	--color-secondary: oklch(50% 0.12 280);
+	--color-secondary-content: oklch(99% 0 0);
+	--color-accent: oklch(62% 0.18 50);
+	--color-accent-content: oklch(99% 0 0);
+	--color-neutral: oklch(30% 0 0);
+	--color-neutral-content: oklch(98% 0 0);
+
+	/* State Colors */
+	--color-info: oklch(54% 0.16 250);
+	--color-info-content: oklch(99% 0 0);
+	--color-success: oklch(55% 0.15 145);
+	--color-success-content: oklch(99% 0 0);
+	--color-warning: oklch(68% 0.14 75);
+	--color-warning-content: oklch(20% 0 0);
+	--color-error: oklch(55% 0.2 25);
+	--color-error-content: oklch(99% 0 0);
+
+	--radius-selector: 0.25rem;
+	--radius-field: 0.25rem;
+	--radius-box: 0.375rem;
+	--size-selector: 0.25rem;
+	--size-field: 0.25rem;
+	--border: 1px;
+	--depth: 0;
+	--noise: 0;
+}

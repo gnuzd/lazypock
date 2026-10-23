@@ -5,6 +5,8 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import { createForm } from '$lib/createForm.svelte';
+	import Tabs from '$lib/components/Tabs.svelte';
+	import { toast } from 'svelte-sonner';
 
 	const appSchema = z.object({ appName: z.string().trim() });
 	const corsSchema = z.object({ origins: z.string().trim() });
@@ -13,6 +15,7 @@
 	let corsForm = $state(createForm(corsSchema, { origins: '' }));
 	let appSaved = $state(false);
 	let corsSaved = $state(false);
+	let activeTab = $state('General');
 
 	onMount(async () => {
 		try {
@@ -29,13 +32,11 @@
 	});
 
 	async function saveApp(data: { appName: string }) {
-		appSaved = false;
 		try {
 			await client.http.patch('/settings', { app_name: data.appName || null });
-			appSaved = true;
-			setTimeout(() => (appSaved = false), 2000);
-		} catch {
-			// ignore
+			toast.success('Saved');
+		} catch (err) {
+			toast.error("Can't save. Please try again later.");
 		}
 	}
 
@@ -58,47 +59,55 @@
 </script>
 
 <h2 class="mb-4 text-lg font-semibold">Application Settings</h2>
-<form class="rounded-box border border-base-300 bg-base-100 p-6" use:appForm.enhance={saveApp}>
-	<Input
-		label="App Name"
-		placeholder="Lazypock"
-		bind:value={appForm.form.appName}
-		help="Displayed in the admin UI header."
-	/>
-	<div class="mt-4 flex items-center gap-3">
-		<Button
-			class="btn-primary"
-			loading={appForm.submitting}
-			disabled={appForm.submitting}
-			type="submit">Save</Button
-		>
-		{#if appSaved}<span class="text-xs text-success">Saved!</span>{/if}
-	</div>
-</form>
 
-<form
-	class="mt-6 rounded-box border border-base-300 bg-base-100 p-6"
-	use:corsForm.enhance={saveCors}
->
-	<h3 class="mb-2 text-base font-semibold">Allowed Origins (CORS)</h3>
-	<p class="mb-3 text-xs text-base-content/70">
-		Comma-separated origins allowed to call the API and use the realtime socket. The app's own
-		origin and <code>LAZYPOCK_CORS_ORIGINS</code> env are always included. Changes apply without a restart.
-	</p>
-	<Input
-		label="Origins"
-		placeholder="http://localhost:1420, https://app.example.com"
-		bind:value={corsForm.form.origins}
-		help="Example: http://localhost:1420"
-		error={corsForm.errors.origins}
-	/>
-	<div class="mt-4 flex items-center gap-3">
-		<Button
-			class="btn-primary"
-			loading={corsForm.submitting}
-			disabled={corsForm.submitting}
-			type="submit">Save</Button
-		>
-		{#if corsSaved}<span class="text-xs text-success">Saved!</span>{/if}
-	</div>
-</form>
+<Tabs bind:active={activeTab} items={['General', 'Cors']} />
+
+{#if activeTab === 'General'}
+	<form
+		class="mt-6 rounded-box border border-base-300 bg-base-100 p-6"
+		use:appForm.enhance={saveApp}
+	>
+		<Input
+			label="App Name"
+			placeholder="Lazypock"
+			bind:value={appForm.form.appName}
+			help="Displayed in the admin UI header."
+		/>
+		<div class="mt-4 flex items-center gap-3">
+			<Button
+				class="btn-primary"
+				loading={appForm.submitting}
+				disabled={appForm.submitting}
+				type="submit">Save</Button
+			>
+			{#if appSaved}<span class="text-xs text-success">Saved!</span>{/if}
+		</div>
+	</form>
+{:else}
+	<form
+		class="mt-6 rounded-box border border-base-300 bg-base-100 p-6"
+		use:corsForm.enhance={saveCors}
+	>
+		<h3 class="mb-2 text-base font-semibold">Allowed Origins (CORS)</h3>
+		<p class="mb-3 text-xs text-base-content/70">
+			Comma-separated origins allowed to call the API and use the realtime socket. The app's own
+			origin and <code>LAZYPOCK_CORS_ORIGINS</code> env are always included. Changes apply without a restart.
+		</p>
+		<Input
+			label="Origins"
+			placeholder="http://localhost:1420, https://app.example.com"
+			bind:value={corsForm.form.origins}
+			help="Example: http://localhost:1420"
+			error={corsForm.errors.origins}
+		/>
+		<div class="mt-4 flex items-center gap-3">
+			<Button
+				class="btn-primary"
+				loading={corsForm.submitting}
+				disabled={corsForm.submitting}
+				type="submit">Save</Button
+			>
+			{#if corsSaved}<span class="text-xs text-success">Saved!</span>{/if}
+		</div>
+	</form>
+{/if}
