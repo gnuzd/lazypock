@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.26.1](https://github.com/gnuzd/lazypock/compare/v0.26.0...v0.26.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* minor ui ([6f0ac65](https://github.com/gnuzd/lazypock/commit/6f0ac65b9e07a4d4a95561e15665659bcb0248eb))
+* minor ui ([d87d2b4](https://github.com/gnuzd/lazypock/commit/d87d2b4554c4fd4b6b4ea8b3f2bda948c13b7be6))
+
 ## [0.26.0](https://github.com/gnuzd/lazypock/compare/v0.25.0...v0.26.0) (2026-10-19)
 
 
