@@ -74,6 +74,7 @@ pub fn columns() -> HashMap<String, String> {
 pub fn context() -> FilterContext {
     FilterContext {
         table: "_files".to_string(),
+        collection_id: String::new(),
         columns: columns(),
         relations: HashMap::new(),
     }
