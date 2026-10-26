@@ -197,6 +197,27 @@ fn object_expression(
         ));
     }
 
+    // PocketBase's `collectionId` / `collectionName`: constants of the collection, so
+    // they cost no join and no extra query. Included with every column (`fields=*`,
+    // or no `fields`) or when named, and never over a real column of the same name.
+    if !context.collection_id.is_empty() {
+        if (selection.all_columns || selection.collection_id) && !context.has_column("collectionId")
+        {
+            pairs.push(format!(
+                "'collectionId', {}",
+                sql_string_literal(&context.collection_id)
+            ));
+        }
+        if (selection.all_columns || selection.collection_name)
+            && !context.has_column("collectionName")
+        {
+            pairs.push(format!(
+                "'collectionName', {}",
+                sql_string_literal(&context.table)
+            ));
+        }
+    }
+
     let mut expand_pairs: Vec<String> = Vec::new();
     for relation_name in expand.relations_to_expand(context) {
         let relation = context.relations.get(relation_name).ok_or_else(|| {
@@ -388,6 +409,45 @@ mod tests {
             .sql
             .contains("limit $1::text::bigint offset $2::text::bigint"));
         assert_eq!(built.params, vec!["30", "0"]);
+    }
+
+    #[test]
+    fn records_carry_the_collection_id_and_name() {
+        let context = fixture();
+        let sql_for = |fields: Option<&str>| {
+            build_list(
+                &query(
+                    FieldSelection::parse(fields, &context).unwrap(),
+                    ExpandSpec::none(),
+                    None,
+                ),
+                &context,
+                &AuthContext::default(),
+            )
+            .unwrap()
+            .sql
+        };
+        let id_literal = format!("'collectionId', '{}'", context.collection_id);
+        let name_literal = format!("'collectionName', '{}'", context.table);
+
+        // Every column (no `fields`, or `*`) includes both keys.
+        for fields in [None, Some("*")] {
+            let sql = sql_for(fields);
+            assert!(sql.contains(&id_literal), "{sql}");
+            assert!(sql.contains(&name_literal), "{sql}");
+        }
+        // A narrow projection does not grow them unasked...
+        let sql = sql_for(Some("id,title"));
+        assert!(
+            !sql.contains("'collectionId'") && !sql.contains("'collectionName'"),
+            "{sql}"
+        );
+        // ...but naming them returns exactly those.
+        let sql = sql_for(Some("id,collectionName"));
+        assert!(
+            sql.contains(&name_literal) && !sql.contains("'collectionId'"),
+            "{sql}"
+        );
     }
 
     #[test]

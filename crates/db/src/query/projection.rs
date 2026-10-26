@@ -29,6 +29,11 @@ pub struct FieldSelection {
     pub columns: Vec<String>,
     /// Include every scalar column (`fields` absent, or `fields=*`).
     pub all_columns: bool,
+    /// `collectionId` was asked for by name. It is a key added to the record, not a
+    /// column, so it never appears in `columns`; `all_columns` includes it too.
+    pub collection_id: bool,
+    /// `collectionName` was asked for by name; see `collection_id`.
+    pub collection_name: bool,
     /// Per-relation nested selections.
     pub nested: BTreeMap<String, FieldSelection>,
 }
@@ -76,7 +81,12 @@ impl FieldSelection {
             selection.insert_path(&path, context)?;
         }
 
-        if !selection.all_columns && selection.columns.is_empty() && selection.nested.is_empty() {
+        if !selection.all_columns
+            && !selection.collection_id
+            && !selection.collection_name
+            && selection.columns.is_empty()
+            && selection.nested.is_empty()
+        {
             return Err(Error::invalid(
                 "`fields` must name at least one field, or be `*`",
             ));
@@ -100,6 +110,19 @@ impl FieldSelection {
         }
 
         if rest.is_empty() {
+            // `collectionId` / `collectionName` are record keys, not columns (PocketBase
+            // adds them when it serializes a record). A real column of the same name
+            // wins; a context that is not a collection has neither key.
+            if !context.has_column(segment) && !context.collection_id.is_empty() {
+                if segment == "collectionId" {
+                    self.collection_id = true;
+                    return Ok(());
+                }
+                if segment == "collectionName" {
+                    self.collection_name = true;
+                    return Ok(());
+                }
+            }
             if !context.has_column(segment) {
                 return Err(Error::invalid(format!(
                     "unknown field {segment:?} in collection {:?}",
@@ -354,6 +377,26 @@ mod tests {
         let mut sorted = columns.clone();
         sorted.sort();
         assert_eq!(columns, sorted);
+    }
+
+    #[test]
+    fn collection_keys_are_selectable_but_are_not_columns() {
+        let context = fixture();
+        let selection =
+            FieldSelection::parse(Some("id,collectionId,collectionName"), &context).unwrap();
+        assert!(selection.collection_id);
+        assert!(selection.collection_name);
+        assert_eq!(selection.columns, vec!["id"]);
+
+        // Either key alone is a valid selection.
+        let selection = FieldSelection::parse(Some("collectionName"), &context).unwrap();
+        assert!(selection.collection_name && !selection.collection_id);
+        assert!(selection.columns.is_empty());
+
+        // A context that is not a collection has neither key.
+        let mut files = fixture();
+        files.collection_id = String::new();
+        assert!(FieldSelection::parse(Some("collectionId"), &files).is_err());
     }
 
     #[test]

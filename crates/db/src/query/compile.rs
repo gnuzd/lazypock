@@ -53,8 +53,13 @@ pub struct RelationTarget {
 /// What the compiler needs to know about the collection being filtered.
 #[derive(Debug, Clone)]
 pub struct FilterContext {
-    /// Table name (unquoted).
+    /// Table name (unquoted). For a collection this is also its name, which is what
+    /// the record's `collectionName` key reports.
     pub table: String,
+    /// The collection's id, reported as the record's `collectionId` key. Empty for a
+    /// context that is not a collection (the `_files` rules context), which then
+    /// returns no `collectionId`/`collectionName` keys.
+    pub collection_id: String,
     /// Whitelisted column name to Postgres type.
     pub columns: HashMap<String, String>,
     /// Relation fields reachable by a dotted path.
@@ -163,6 +168,7 @@ impl FilterContext {
 
         Ok(Self {
             table: collection.name.clone(),
+            collection_id: collection.id.clone(),
             columns,
             relations,
         })
