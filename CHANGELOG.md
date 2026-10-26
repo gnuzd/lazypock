@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.27.0](https://github.com/gnuzd/lazypock/compare/v0.26.1...v0.27.0) (2026-10-26)
+
+
+### Features
+
+* **db:** return collectionId and collectionName on records ([1721866](https://github.com/gnuzd/lazypock/commit/1721866cd2823338e2d3bcec63bd4112936d074b))
+* **db:** return collectionId and collectionName on records ([f65f564](https://github.com/gnuzd/lazypock/commit/f65f5642ccf8a9143af8babcdac6bb3c9d59d8b9))
+
 ## [0.26.1](https://github.com/gnuzd/lazypock/compare/v0.26.0...v0.26.1) (2026-10-23)
 
 
