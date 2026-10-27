@@ -484,6 +484,48 @@ async fn serve(config: Config) -> Result<()> {
         }
     }
 
+    // The change log's retention. The trigger appends a row for **every** write,
+    // including writes that never passed through the server, so the log grows with the
+    // database rather than with the API. `Last-Event-ID` resume reads the same rows, so
+    // retention is a day count rather than a row count: a resuming client that is
+    // older than the window gets what is left, and is expected to refetch.
+    {
+        let days = rt_log_retention_days()?;
+        if days == 0 {
+            tracing::warn!(
+                "LAZYPOCK_RT_LOG_RETENTION_DAYS=0: the change log is kept for ever and \
+                 grows with every write, including direct writes to the database"
+            );
+        } else {
+            tracing::info!(days, "realtime log retention started");
+            let db = db.clone();
+            tokio::spawn(async move {
+                // Hourly: one indexed delete, and the first tick runs immediately so a
+                // log that grew before the setting existed is trimmed at boot.
+                let mut ticker = tokio::time::interval(Duration::from_secs(3600));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    ticker.tick().await;
+                    match db.client().await {
+                        Ok(client) => match lazypock_db::realtime::prune_log(&client, days).await {
+                            Ok(deleted) if deleted > 0 => {
+                                tracing::info!(deleted, "realtime log pruned")
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                tracing::warn!(error = %err, "a realtime log prune failed")
+                            }
+                        },
+                        Err(err) => tracing::warn!(
+                            error = %err,
+                            "the realtime log prune could not reach the database"
+                        ),
+                    }
+                }
+            });
+        }
+    }
+
     // The hook worker owns the QuickJS runtime on its own thread, because the
     // runtime is not `Send`. It starts even with no hook files: it costs an idle
     // thread, and it means a hook added later is picked up without a restart.
@@ -671,6 +713,23 @@ fn file_reaper_interval() -> Result<std::time::Duration> {
         })?,
     };
     Ok(std::time::Duration::from_secs(seconds))
+}
+
+/// How many days of change events `_rt_log` keeps.
+///
+/// `0` keeps everything, which is the behaviour before retention existed — loudly,
+/// because an unbounded log grows with every write, including writes that never went
+/// through the server. A week is long enough that a client reconnecting after a
+/// deploy, a network drop or an overnight outage can still resume.
+fn rt_log_retention_days() -> Result<i64> {
+    match std::env::var("LAZYPOCK_RT_LOG_RETENTION_DAYS") {
+        Err(_) => Ok(7),
+        Ok(raw) => raw.trim().parse::<i64>().map_err(|_| {
+            Error::config(format!(
+                "LAZYPOCK_RT_LOG_RETENTION_DAYS must be a whole number of days, got {raw:?}"
+            ))
+        }),
+    }
 }
 
 /// How often the cron scheduler looks for jobs that are due.

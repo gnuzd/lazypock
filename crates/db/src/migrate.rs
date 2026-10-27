@@ -131,6 +131,11 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "auth_claims",
         sql: include_str!("../../../migrations/0017_auth_claims.sql"),
     },
+    Migration {
+        version: 18,
+        name: "realtime_hardening",
+        sql: include_str!("../../../migrations/0018_realtime_hardening.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

@@ -1364,6 +1364,22 @@ cargo build --release --no-default-features`}
           <tr>
             <td class="px-3 py-2"
               ><code class="doc-inline px-1 py-0.5"
+                >LAZYPOCK_RT_LOG_RETENTION_DAYS</code
+              ></td
+            >
+            <td class="px-3 py-2"
+              >How long change events are kept for <code class="doc-inline px-1 py-0.5"
+                >Last-Event-ID</code
+              > resume, in days; 0 keeps them for ever (loudly, because the log
+              grows with every write, including writes that never went through
+              the server)</td
+            >
+            <td class="px-3 py-2 font-mono text-xs">7</td>
+          <td class="px-3 py-2">no</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2"
+              ><code class="doc-inline px-1 py-0.5"
                 >LAZYPOCK_IMPORT_CONFIRM_RECORDS</code
               ></td
             >

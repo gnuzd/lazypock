@@ -259,14 +259,32 @@ pub fn create_auth_email_index_statement(table: &str) -> String {
     )
 }
 
-/// The trigger that turns a collection's changes into realtime events.
-pub fn create_realtime_trigger_statement(table: &str) -> Result<String> {
+/// The name of the trigger that turns a collection's changes into realtime events.
+pub const REALTIME_TRIGGER: &str = "lazypock_change";
+
+/// The statements that make a collection publish change events, or stop it.
+///
+/// Idempotent in both directions. Postgres has no `create trigger if not exists`
+/// on the versions lazypock supports, so the trigger is dropped first and the
+/// pair is then safe to re-run.
+///
+/// Disabling **drops** the trigger rather than `disable trigger name`, because a
+/// disabled trigger still costs a lookup on every write. This switch exists to
+/// remove that cost, so dropping is the only form that delivers it.
+pub fn realtime_trigger_statements(table: &str, enabled: bool) -> Result<Vec<String>> {
     validate_identifier("collection name", table)?;
-    Ok(format!(
-        "create trigger lazypock_change after insert or update or delete on {} \
-         for each row execute function lazypock_change_event()",
-        quote_ident(table)
-    ))
+    let table = quote_ident(table);
+    let drop = format!("drop trigger if exists {REALTIME_TRIGGER} on {table}");
+    if !enabled {
+        return Ok(vec![drop]);
+    }
+    Ok(vec![
+        drop,
+        format!(
+            "create trigger {REALTIME_TRIGGER} after insert or update or delete on {table} \
+             for each row execute function lazypock_change_event()"
+        ),
+    ])
 }
 
 /// `drop index if exists`.
