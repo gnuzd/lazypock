@@ -12,6 +12,7 @@ pub mod defaults;
 pub mod hooks;
 pub mod indexes;
 pub mod listen;
+pub mod mail_templates;
 pub mod migrate;
 pub mod pool;
 pub mod query;
