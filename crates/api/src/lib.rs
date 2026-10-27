@@ -18,6 +18,7 @@ pub mod files;
 pub mod jobs;
 pub mod logs;
 pub mod mail;
+pub mod mail_templates;
 pub mod oauth2;
 pub mod presets;
 pub mod rate_limit;
