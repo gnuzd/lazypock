@@ -17,10 +17,32 @@ use lazypock_core::error::{Error, Result};
 use super::filter::{AuthRef, CompareOp, Expr, Operand, Side};
 use crate::collections::Collection;
 use crate::ddl::quote_ident;
-use crate::types::{self, CollectionType};
+use crate::types::{self, CollectionType, FieldType};
 
 /// Maximum depth of a dotted relation path inside a filter.
 pub const MAX_PATH_DEPTH: usize = 4;
+
+/// The columns a collection has before a single field is declared, as
+/// `(name, field type)`.
+///
+/// `id`/`created`/`updated` are table columns with no `_fields` row, so a client that
+/// reads only a collection's `fields` cannot see them — which is why the API serves
+/// them as fields as well. They are listed here, next to the context that consumes
+/// them, so what a client may name in a filter and what it sees in the definition
+/// cannot drift apart. `email` and `verified` are not here: an auth collection has
+/// real `_fields` rows for those.
+///
+/// A view is the exception. It has an `id` because the query must provide one, but
+/// `created`/`updated` are table columns rather than something a query guarantees,
+/// and assuming them made every view without them fail its default sort.
+pub fn implicit_fields(collection: &Collection) -> Vec<(&'static str, FieldType)> {
+    let mut fields = vec![("id", FieldType::Text)];
+    if collection.collection_type != CollectionType::View {
+        fields.push(("created", FieldType::Autodate));
+        fields.push(("updated", FieldType::Autodate));
+    }
+    fields
+}
 
 /// Values substituted for `@request.auth.*` references.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,13 +97,13 @@ impl FilterContext {
 
     fn build(collection: &Collection, all: &[Collection], depth: usize) -> Result<Self> {
         let mut columns: HashMap<String, String> = HashMap::new();
-        columns.insert("id".into(), "text".into());
-        // A view has only the columns its query selects — `created`/`updated` are
-        // table columns, not a guarantee. Assuming them made every view without them
-        // fail its default sort and its keyset columns.
-        if collection.collection_type != CollectionType::View {
-            columns.insert("created".into(), "timestamptz".into());
-            columns.insert("updated".into(), "timestamptz".into());
+        // A view has only the columns its query selects; for anything else these are
+        // `id`, `created` and `updated`.
+        for (name, field_type) in implicit_fields(collection) {
+            columns.insert(
+                name.to_string(),
+                types::column_type(field_type, &serde_json::json!({}))?.to_string(),
+            );
         }
         // `email` and `verified` are ordinary columns. `password_hash` and
         // `token_key` are deliberately *absent*: everything in this map is both

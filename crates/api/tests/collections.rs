@@ -209,8 +209,33 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
     let created = reply.body.expect("a collection");
     assert_eq!(
         created["schema"].as_array().map(Vec::len),
-        Some(1),
+        Some(4),
         "the create response carries the field list the sidebar counts: {created}"
+    );
+
+    // The columns with no `_fields` row are served as fields too. Without them a client
+    // that reads only the definition — the Studio's record table, for one — cannot see
+    // the columns the table actually has. `system` is what says they may not be edited
+    // or removed, and `created`/`updated` are `autodate` because the server owns them.
+    let implicit: Vec<(&str, &str)> = created["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .filter(|field| field["system"] == json!(true))
+        .map(|field| {
+            (
+                field["name"].as_str().expect("a name"),
+                field["type"].as_str().expect("a type"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        implicit,
+        [
+            ("id", "text"),
+            ("created", "autodate"),
+            ("updated", "autodate")
+        ]
     );
 
     // It is listed, with its field.
@@ -233,8 +258,9 @@ async fn a_collection_can_be_created_read_updated_and_deleted() {
     assert_eq!(posts["type"], json!("base"));
     assert_eq!(posts["fields"][0]["name"], json!("title"));
 
-    // The sidebar counts `schema`, which must track the field list.
-    assert_eq!(posts["schema"].as_array().map(Vec::len), Some(1));
+    // The sidebar counts `schema`, which must track the field list — including the
+    // implicit columns, or the two would disagree about the same table.
+    assert_eq!(posts["schema"].as_array().map(Vec::len), Some(4));
     assert_eq!(posts["schema"][0]["name"], json!("title"));
     assert_eq!(posts["schema"][0]["type"], json!("text"));
     // The field flags Studio reads sit at the top level of each field.
@@ -870,6 +896,77 @@ async fn a_reflected_table_shows_up_in_the_api_which_is_what_studio_needs() {
         json!({}),
         "an adopted collection must not be public"
     );
+
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_definition_that_echoes_the_system_fields_is_accepted() {
+    // The Studio's editor saves the definition it just read, and that definition now
+    // carries `id`/`created`/`updated`. They are system-managed and cannot be declared
+    // (`validate_field_name` refuses them), so the round trip has to drop them rather
+    // than fail the save — otherwise the first edit of any collection would be refused.
+    let Some(app) = test_app("collections_echo_system_fields").await else {
+        return;
+    };
+    let token = superuser_token(&app, "admin@example.com", "correct-horse").await;
+
+    let mut echoed = definition("posts");
+    let fields = echoed["fields"].as_array_mut().expect("fields");
+    for (name, field_type) in [
+        ("id", "text"),
+        ("created", "autodate"),
+        ("updated", "autodate"),
+    ] {
+        fields.push(json!({
+            "name": name,
+            "type": field_type,
+            "required": false,
+            "unique": false,
+            "hidden": false,
+            "system": true,
+            "indexed": false,
+            "options": {}
+        }));
+    }
+
+    let reply = call_authed(
+        &router(&app).await,
+        Method::POST,
+        "/api/collections",
+        Some(echoed),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.body);
+
+    // The echo is dropped, not stored: `id` is the primary key, and a second column
+    // called `id` is not something the table could have.
+    let created = reply.body.expect("a collection");
+    let declared: Vec<&str> = created["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .filter(|field| field["system"] == json!(false))
+        .map(|field| field["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(declared, vec!["title"]);
+    assert_eq!(created["fields"].as_array().map(Vec::len), Some(4));
+
+    // And the same on the update path, which is the one the editor uses.
+    let mut patch = definition("posts");
+    patch["fields"] = created["fields"].clone();
+    let reply = call_authed(
+        &router(&app).await,
+        Method::PATCH,
+        "/api/collections/posts",
+        Some(json!({ "fields": patch["fields"].clone() })),
+        &token,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    let updated = reply.body.expect("a collection");
+    assert_eq!(updated["fields"].as_array().map(Vec::len), Some(4));
 
     app.cleanup().await;
 }

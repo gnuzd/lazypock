@@ -17,6 +17,7 @@ use lazypock_core::error::Error;
 use lazypock_db::collections::{
     self, Collection, CreateCollection, CreateField, Field, UpdateCollection,
 };
+use lazypock_db::query::compile;
 use lazypock_db::types::{self, option_bool, CollectionType, FieldType};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -162,6 +163,18 @@ fn normalize_collection_body(body: Value) -> Result<Value, ApiError> {
     }
     if !rules.is_empty() {
         object.insert("rules".to_string(), Value::Object(rules));
+    }
+
+    // A client that echoes a collection back sends the implicit columns with it, now
+    // that they are served as fields — the Studio's editor saves the definition it just
+    // read. They are system-managed and not declarable (`validate_field_name` refuses
+    // `id`/`created`/`updated`), so the echo is dropped here instead of failing the
+    // save; anything else the payload names still fails.
+    if let Some(Value::Array(fields)) = object.get_mut("fields") {
+        fields.retain(|field| match field.get("name").and_then(Value::as_str) {
+            Some(name) => !types::SYSTEM_COLUMNS.contains(&name),
+            None => true,
+        });
     }
 
     Ok(Value::Object(object))
@@ -520,7 +533,14 @@ fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiEr
 
     value["system"] = json!(system);
 
-    let schema: Vec<Value> = collection
+    // The columns every collection has before a single field is declared. They are
+    // table columns with no `_fields` row, so a client that reads only `fields` — the
+    // Studio's record table, for one — cannot see them at all. The list comes from the
+    // filter context, so a column that may not be named in a filter is not advertised
+    // here either.
+    let implicit = implicit_field_entries(collection);
+
+    let mut schema: Vec<Value> = collection
         .fields
         .iter()
         .map(|field| {
@@ -535,6 +555,19 @@ fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiEr
             })
         })
         .collect();
+    // `schema` is the same list under its older spelling, which the Studio's sidebar
+    // counts. `hidden`/`system` belong to `fields`, not to this shape.
+    for entry in &implicit {
+        schema.push(json!({
+            "name": entry["name"],
+            "type": entry["type"],
+            "required": entry["required"],
+            "unique": entry["unique"],
+            "default": entry["default"],
+            "options": entry["options"],
+            "indexed": entry["indexed"],
+        }));
+    }
     value["schema"] = json!(schema);
 
     if let Some(fields) = value.get_mut("fields").and_then(Value::as_array_mut) {
@@ -552,6 +585,8 @@ fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiEr
             );
             object.insert("indexed".to_string(), json!(field.is_indexed()));
         }
+        // Appended after the `zip`, which pairs the two lists by position.
+        fields.extend(implicit);
     }
 
     value["indexes"] = collection
@@ -592,6 +627,42 @@ fn collection_json(collection: &Collection, system: bool) -> Result<Value, ApiEr
     value["updated"] = json!(rfc3339(collection.updated));
 
     Ok(value)
+}
+
+/// The implicit columns as field entries, in the shape the rest of `fields` is in.
+///
+/// `system: true` is what tells a client these may not be edited or removed, the same
+/// flag an auth collection's built-in columns carry.
+fn implicit_field_entries(collection: &Collection) -> Vec<Value> {
+    // An adopted table is the exception, and advertising `created`/`updated` for one
+    // would promise columns the record API cannot select: adopting a table runs no DDL
+    // on it, and reflection records **every** column it found as a field. So a name
+    // absent from a reflected collection's `fields` is a column that is genuinely not
+    // there, and there is nothing to add.
+    if option_bool(&collection.options, "reflected") {
+        return Vec::new();
+    }
+
+    compile::implicit_fields(collection)
+        .into_iter()
+        // A name that is already declared is already visible, so repeating it would
+        // show the same column twice.
+        .filter(|(name, _)| !collection.fields.iter().any(|field| field.name == *name))
+        .map(|(name, field_type)| {
+            json!({
+                "name": name,
+                "type": field_type.as_str(),
+                "required": false,
+                "unique": false,
+                "hidden": false,
+                "system": true,
+                // `id` is the primary key; the timestamps carry no index.
+                "indexed": name == "id",
+                "options": {},
+                "default": Value::Null,
+            })
+        })
+        .collect()
 }
 
 /// Whether a field is one of an auth collection's built-in columns.
