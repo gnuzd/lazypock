@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { client } from '$lib/client';
 	import { confirmDialog, promptDialog } from '$lib/dialog.svelte';
+	import type { MailTemplate, MailTemplateLayer } from 'lazypock';
 	import { onMount } from 'svelte';
 	import { Plus, Undo2 } from '@lucide/svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -24,16 +25,7 @@
 	// * Reset deletes the stored bodies, which is destructive enough to ask first;
 	//   it falls back to a file in the template directory, then to the built-in.
 
-	type Layer = 'database' | 'file' | 'builtin';
-
-	interface MailTemplate {
-		name: string;
-		source: Layer;
-		parts: Record<Part, Layer>;
-		subject: string;
-		html: string;
-		text: string;
-	}
+	type Layer = MailTemplateLayer;
 
 	const PARTS = ['subject', 'html', 'text'] as const;
 	type Part = (typeof PARTS)[number];
@@ -104,8 +96,7 @@
 	async function load() {
 		loading = true;
 		try {
-			const res = (await client.http.get('/mail/templates')) as { items?: MailTemplate[] } | null;
-			templates = res?.items ?? [];
+			templates = await client.mail.listTemplates();
 		} catch (err) {
 			templates = [];
 			toast.error(message(err, 'Could not load the mail templates'));
@@ -181,26 +172,18 @@
 		draft = { subject: '', html: '', text: '' };
 	}
 
-	/**
-	 * A save is a full replacement, so it is a `PUT` — but the SDK version the
-	 * Studio pins (lazypock 0.19) does not name `PUT` in its `Method` union yet.
-	 * One cast here, at the only call site, rather than a `PATCH` that would
-	 * describe the wrong intent.
-	 */
-	function put(path: string, body: unknown) {
-		const method = 'PUT' as unknown as Parameters<typeof client.http.request>[0];
-		return client.http.request<MailTemplate>(method, path, body);
-	}
-
 	async function save() {
 		if (!selected || saving || !complete) return;
 		saving = true;
 		try {
-			await put(`/mail/templates/${encodeURIComponent(selected)}`, { ...draft });
+			await client.mail.saveTemplate(selected, { ...draft });
 			toast.success(`Saved the ${selected} template.`);
 			creating = false;
+			// Reload rather than patching the list from the response: a new name is not in
+			// `templates` yet, and the reload is also what reports the layer each part now
+			// resolves from. `select()` is deliberately not called — it would blank the
+			// preview, which is already the render of what was just stored.
 			await load();
-			select(selected);
 		} catch (err) {
 			// A body that does not parse is refused at save time rather than
 			// queueing an email that would fail where nobody is watching.
@@ -227,16 +210,14 @@
 		if (!confirmed) return;
 		resetting = true;
 		try {
-			const res = (await client.http.delete(`/mail/templates/${encodeURIComponent(selected)}`)) as {
-				deleted?: number;
-			} | null;
+			const removed = (await client.mail.deleteTemplate(selected)).deleted;
 			const reset = selected;
 			await load();
 			if (templates.some((template) => template.name === reset)) {
 				select(reset);
 				toast.success(
-					res?.deleted
-						? `Reset ${reset} — ${res.deleted} stored part${res.deleted === 1 ? '' : 's'} removed.`
+					removed
+						? `Reset ${reset} — ${removed} stored part${removed === 1 ? '' : 's'} removed.`
 						: `${reset} was already at its default.`
 				);
 			} else {
@@ -287,17 +268,16 @@
 		const seq = ++previewSeq;
 		previewing = true;
 		try {
-			const res = (await client.http.request(
-				'POST',
-				`/mail/templates/${encodeURIComponent(selected)}/preview`,
+			const previewed = await client.mail.preview(
+				selected,
 				{ assigns: parsedSample.value, subject: draft.subject, html: draft.html, text: draft.text },
 				// Auto-cancellation would abort this render on the next keystroke and
 				// reject a promise nobody waits on; the sequence guard does the same
 				// job without the noise.
 				{ requestKey: null }
-			)) as { subject: string; html: string; text: string } | null;
+			);
 			if (seq !== previewSeq) return;
-			rendered = res;
+			rendered = previewed;
 			renderError = '';
 		} catch (err) {
 			if (seq !== previewSeq) return;
