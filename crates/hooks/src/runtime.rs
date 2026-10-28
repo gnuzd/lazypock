@@ -7,6 +7,9 @@ use lazypock_core::error::{Error, Result};
 use rquickjs::{Context, Function, Runtime};
 use serde_json::Value;
 
+use lazypock_db::hooks::HookContext;
+
+use crate::app::{AppOp, HookApp};
 use crate::http::{HookHttp, HttpCall};
 
 /// The bootstrap that defines the registration helpers, kept as a real `.js` file.
@@ -44,6 +47,8 @@ impl Default for HookLimits {
 pub struct HookSetup {
     pub limits: HookLimits,
     pub http: Arc<HookHttp>,
+    /// The database and mailer `$app` reaches, or the absence of them.
+    pub app: HookApp,
 }
 
 impl Default for HookSetup {
@@ -52,6 +57,7 @@ impl Default for HookSetup {
         Self {
             limits,
             http: Arc::new(HookHttp::disabled(limits.deadline)),
+            app: HookApp::disabled(),
         }
     }
 }
@@ -62,7 +68,14 @@ impl HookSetup {
         Self {
             limits,
             http: Arc::new(http),
+            app: HookApp::disabled(),
         }
+    }
+
+    /// Attach a `$app` host.
+    pub fn with_app(mut self, app: HookApp) -> Self {
+        self.app = app;
+        self
     }
 }
 
@@ -71,6 +84,7 @@ impl From<HookLimits> for HookSetup {
         Self {
             limits,
             http: Arc::new(HookHttp::disabled(limits.deadline)),
+            app: HookApp::disabled(),
         }
     }
 }
@@ -133,6 +147,13 @@ pub struct HookRuntime {
     limits: HookLimits,
     /// The outbound HTTP this runtime may make, with its rules.
     http: Arc<HookHttp>,
+    /// The database and mailer `$app` reaches.
+    app: HookApp,
+    /// The context of the dispatch currently running, which is what `$app` reads.
+    ///
+    /// One dispatch runs at a time on the worker thread, so this is a single slot
+    /// rather than a stack: it is set before the script runs and cleared after.
+    dispatch_context: Arc<Mutex<Option<HookContext>>>,
     /// When the current dispatch must give up. Shared with the interrupt handler,
     /// which QuickJS calls during execution.
     deadline: Arc<Mutex<Option<Instant>>>,
@@ -150,7 +171,7 @@ impl std::fmt::Debug for HookRuntime {
 impl HookRuntime {
     /// Create a runtime with limits applied and the bootstrap loaded.
     pub fn new(setup: impl Into<HookSetup>) -> Result<Self> {
-        let HookSetup { limits, http } = setup.into();
+        let HookSetup { limits, http, app } = setup.into();
         let runtime = Runtime::new()
             .map_err(|err| Error::internal(format!("cannot create the hook runtime: {err}")))?;
         runtime.set_memory_limit(limits.memory_bytes);
@@ -175,10 +196,13 @@ impl HookRuntime {
             context,
             limits,
             http,
+            app,
+            dispatch_context: Arc::new(Mutex::new(None)),
             deadline,
         };
         runtime.eval(BOOTSTRAP)?;
         runtime.install_http()?;
+        runtime.install_app()?;
         Ok(runtime)
     }
 
@@ -216,6 +240,34 @@ impl HookRuntime {
         self.runtime.memory_usage().memory_used_size.max(0) as usize
     }
 
+    /// Expose the one Rust binding the bootstrap builds `$app` on.
+    ///
+    /// `$app` answers from the dispatch's own context, so the binding reads the slot
+    /// [`HookRuntime::dispatch`] fills rather than taking one from the caller.
+    fn install_app(&self) -> Result<()> {
+        let app = self.app.clone();
+        let dispatch_context = Arc::clone(&self.dispatch_context);
+        self.context.with(|ctx| {
+            let binding = Function::new(ctx.clone(), move |payload: String| -> String {
+                let guard = dispatch_context
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let Some(current) = guard.as_ref() else {
+                    return serde_json::json!({
+                        "ok": false,
+                        "error": "$app is only available while a hook is running",
+                    })
+                    .to_string();
+                };
+                respond_app(&app, current, &payload)
+            })
+            .map_err(|err| Error::internal(format!("cannot register $app: {err}")))?;
+            ctx.globals()
+                .set("__lazypock_app", binding)
+                .map_err(|err| Error::internal(format!("cannot register $app: {err}")))
+        })
+    }
+
     /// Evaluate a hook file.
     ///
     /// A file that fails to compile leaves the runtime usable, so one bad hook
@@ -242,8 +294,17 @@ impl HookRuntime {
 
     /// Run the handlers for an event, returning the event they produced.
     ///
-    /// The record a "before" hook returns is what the caller should then write.
-    pub fn dispatch(&self, event: RecordEvent, collection: &str, payload: &Value) -> Result<Value> {
+    /// The record a "before" hook returns is what the caller should then write. The
+    /// context is the triggering request's, and it is what `$app` runs under — it is
+    /// set for the duration of the script and cleared afterwards, so a later
+    /// dispatch cannot inherit it.
+    pub fn dispatch(
+        &self,
+        event: RecordEvent,
+        collection: &str,
+        payload: &Value,
+        context: &HookContext,
+    ) -> Result<Value> {
         let source = format!(
             "__lazypock_dispatch({}, {}, {})",
             literal(event.key()),
@@ -252,11 +313,22 @@ impl HookRuntime {
         );
 
         self.deadline();
-        let rendered: String = self.context.with(|ctx| {
-            ctx.eval(source)
-                .map_err(|err| js_error(&ctx, "running hooks", err))
-        })?;
+        *self
+            .dispatch_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(context.clone());
+        let outcome = self.context.with(|js| {
+            js.eval::<String, _>(source)
+                .map_err(|err| js_error(&js, "running hooks", err))
+        });
+        // Cleared whatever happened: a failed dispatch must not leave its identity
+        // behind for the next one.
+        *self
+            .dispatch_context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 
+        let rendered = outcome?;
         serde_json::from_str(&rendered)
             .map_err(|err| Error::internal(format!("a hook returned unreadable JSON: {err}")))
     }
@@ -298,6 +370,19 @@ fn respond(http: &HookHttp, payload: &str) -> String {
         Err(err) => serde_json::json!({ "ok": false, "error": err.to_string() }),
     };
     envelope.to_string()
+}
+
+/// Run one `$app` operation and answer with the envelope the bootstrap reads.
+fn respond_app(app: &HookApp, context: &HookContext, payload: &str) -> String {
+    let outcome = serde_json::from_str::<Value>(payload)
+        .map_err(|err| Error::invalid(format!("$app: unreadable request: {err}")))
+        .and_then(|payload| AppOp::from_json(&payload))
+        .and_then(|op| app.call(context, op));
+
+    match outcome {
+        Ok(value) => serde_json::json!({ "ok": true, "value": value }).to_string(),
+        Err(err) => serde_json::json!({ "ok": false, "error": err.to_string() }).to_string(),
+    }
 }
 
 /// Render a Rust string as a JavaScript string literal.
@@ -377,6 +462,96 @@ mod tests {
         }
     }
 
+    /// An app host that records what reached it.
+    struct RecordingApp(Mutex<Vec<(HookContext, crate::app::AppOp)>>);
+
+    impl crate::app::AppHost for RecordingApp {
+        fn call(&self, context: &HookContext, op: crate::app::AppOp) -> Result<Value> {
+            self.0
+                .lock()
+                .expect("not poisoned")
+                .push((context.clone(), op));
+            Ok(serde_json::json!({ "id": "u1", "email": "ada@example.com" }))
+        }
+    }
+
+    fn app_runtime(app: Arc<RecordingApp>) -> HookRuntime {
+        HookRuntime::new(
+            HookSetup::default().with_app(HookApp::new(app as Arc<dyn crate::app::AppHost>)),
+        )
+        .expect("runtime")
+    }
+
+    #[test]
+    fn a_hook_reaches_the_app_host_with_the_dispatch_context() {
+        let recorder = Arc::new(RecordingApp(Mutex::new(Vec::new())));
+        let runtime = app_runtime(Arc::clone(&recorder));
+        runtime
+            .load(
+                r#"
+                onRecordAfterCreate("posts", (e) => {
+                    $app.save("audit", { note: e.record.id });
+                    const author = $app.findRecordById("users", "u1");
+                    e.record.author = author.email;
+                });
+                "#,
+            )
+            .expect("load");
+
+        let context = HookContext::anonymous("posts");
+        let produced = runtime
+            .dispatch(
+                RecordEvent::AfterCreate,
+                "posts",
+                &json!({ "collection": "posts", "record": { "id": "p1" } }),
+                &context,
+            )
+            .expect("dispatch");
+
+        // The JavaScript surface reached the host, and what it saw is the dispatch's
+        // own context — not an empty one, and not the server's.
+        assert_eq!(produced["record"]["author"], json!("ada@example.com"));
+        let seen = recorder.0.lock().expect("not poisoned");
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, context);
+        assert!(matches!(
+            &seen[0].1,
+            crate::app::AppOp::Save { collection, .. } if collection == "audit"
+        ));
+        assert!(matches!(
+            &seen[1].1,
+            crate::app::AppOp::FindRecordById { collection, id }
+                if collection == "users" && id == "u1"
+        ));
+    }
+
+    #[test]
+    fn a_hook_cannot_save_the_collection_it_is_reacting_to() {
+        let recorder = Arc::new(RecordingApp(Mutex::new(Vec::new())));
+        let runtime = app_runtime(Arc::clone(&recorder));
+        runtime
+            .load(
+                r#"
+                onRecordAfterCreate("posts", (e) => {
+                    $app.save("posts", { note: "again" });
+                });
+                "#,
+            )
+            .expect("load");
+
+        let err = runtime
+            .dispatch(
+                RecordEvent::AfterCreate,
+                "posts",
+                &json!({ "collection": "posts", "record": { "id": "p1" } }),
+                &HookContext::anonymous("posts"),
+            )
+            .expect_err("refused");
+        assert!(format!("{err}").contains("its own hook"), "{err}");
+        // The refusal happens before the host, so the database is never touched.
+        assert!(recorder.0.lock().expect("not poisoned").is_empty());
+    }
+
     fn http_runtime(allow: &str) -> HookRuntime {
         let limits = HookLimits::default();
         let gate = crate::http::HookHttp::with_parts(
@@ -409,6 +584,7 @@ mod tests {
                 RecordEvent::AfterCreate,
                 "posts",
                 &json!({ "collection": "posts", "record": { "id": "p1" } }),
+                &HookContext::anonymous("posts"),
             )
             .expect("dispatch");
         assert_eq!(produced["record"]["status"], "200:p1");
@@ -432,6 +608,7 @@ mod tests {
                 RecordEvent::AfterCreate,
                 "posts",
                 &json!({ "collection": "posts", "record": {} }),
+                &HookContext::anonymous("posts"),
             )
             .expect_err("refused");
         let message = format!("{err}");
@@ -503,6 +680,7 @@ mod tests {
                 RecordEvent::BeforeCreate,
                 "posts",
                 &event(json!({ "title": "Hello World" })),
+                &HookContext::default(),
             )
             .expect("dispatch");
 
@@ -525,6 +703,7 @@ mod tests {
                 RecordEvent::BeforeUpdate,
                 "posts",
                 &event(json!({ "id": "p1" })),
+                &HookContext::default(),
             )
             .expect("dispatch");
 
@@ -544,7 +723,12 @@ mod tests {
             .expect("load");
 
         let produced = runtime
-            .dispatch(RecordEvent::BeforeCreate, "posts", &event(json!({})))
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &event(json!({})),
+                &HookContext::default(),
+            )
             .expect("dispatch");
 
         assert_eq!(produced["record"]["order"], json!("first+second"));
@@ -558,7 +742,12 @@ mod tests {
             .expect("load");
 
         let error = runtime
-            .dispatch(RecordEvent::BeforeCreate, "posts", &event(json!({})))
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &event(json!({})),
+                &HookContext::default(),
+            )
             .expect_err("a throwing hook should be an error");
         assert!(
             error.message().contains("running hooks"),
@@ -577,7 +766,12 @@ mod tests {
             .expect("load");
 
         let error = runtime
-            .dispatch(RecordEvent::BeforeCreate, "posts", &event(json!({})))
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &event(json!({})),
+                &HookContext::default(),
+            )
             .expect_err("an async hook should be refused");
         assert!(error.message().contains("promise"), "{}", error.message());
     }
@@ -628,7 +822,12 @@ mod tests {
 
         let started = Instant::now();
         let error = runtime
-            .dispatch(RecordEvent::BeforeCreate, "posts", &event(json!({})))
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &event(json!({})),
+                &HookContext::default(),
+            )
             .expect_err("an endless hook should be interrupted");
         assert!(
             error.message().contains("running hooks"),
@@ -654,7 +853,12 @@ mod tests {
             .expect("load");
 
         let error = runtime
-            .dispatch(RecordEvent::BeforeCreate, "posts", &event(json!({})))
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &event(json!({})),
+                &HookContext::default(),
+            )
             .expect_err("an over-allocating hook should be refused");
         assert!(
             error.message().contains("running hooks"),
@@ -707,7 +911,12 @@ mod tests {
 
         for event in RecordEvent::all() {
             let produced = runtime
-                .dispatch(event, "posts", &event_payload(event))
+                .dispatch(
+                    event,
+                    "posts",
+                    &event_payload(event),
+                    &HookContext::default(),
+                )
                 .unwrap_or_else(|err| panic!("{event:?} failed: {err}"));
             assert!(
                 produced["record"]["seen"].is_string(),

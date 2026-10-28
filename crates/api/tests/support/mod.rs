@@ -233,9 +233,21 @@ pub async fn test_app_with(label: &str, extra: &[(&str, &str)]) -> Option<TestAp
 
     let hooks_directory = std::env::temp_dir().join(format!("lazypock-api-hooks-{schema}"));
     std::fs::create_dir_all(&hooks_directory).expect("hooks directory");
+    // The same `$app` host the real node builds, so a hook in a test that reaches the
+    // database does it under the triggering request's context — which is what the
+    // `$app` tests are about.
+    let mail_templates =
+        Arc::new(lazypock_mail::Templates::load(None).expect("the built-in mail templates"));
+    let hook_app = lazypock_api::hooks_host::HookAppHost::new(
+        db.clone(),
+        cache.clone(),
+        mail_templates.clone(),
+    )
+    .expect("the hook host");
     let hooks = Arc::new(lazypock_hooks::HookService::start(
         &hooks_directory,
-        lazypock_hooks::HookLimits::default(),
+        lazypock_hooks::HookSetup::default()
+            .with_app(lazypock_hooks::HookApp::new(Arc::new(hook_app))),
     ));
 
     Some(TestApp {

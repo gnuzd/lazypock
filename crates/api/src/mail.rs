@@ -77,13 +77,55 @@ pub async fn send(
 ) -> Result<Json<Value>, ApiError> {
     require_superuser_or_api_key(&principal)?;
 
-    let to = body.to.trim();
-    validate_address(to)?;
-    let to_name = body.to_name.trim().to_string();
-
     // Acquired before the message shape is settled: the names a send may use include
     // whatever a superuser has saved, which only the database knows.
     let client = state.db.client().await.map_err(ApiError::new)?;
+    let templates = crate::mail_templates::effective(&client, &state.mail_templates).await?;
+    let known = templates.names();
+    let (job, template, to) = job_for(&body, &known)?;
+
+    // Refuse before queueing when SMTP is not configured: a job that can only fail
+    // would retry and be marked dead, and the caller would learn nothing.
+    let settings = jobs::read_settings(&client)
+        .await
+        .map_err(|err| ApiError::new(Error::internal(err)))?;
+    lazypock_mail::MailConfig::from_settings(&settings)
+        .map_err(ApiError::new)?
+        .ok_or_else(|| {
+            ApiError::new(Error::invalid(
+                "mail is not configured: set it in Studio → Settings → Mail",
+            ))
+        })?;
+
+    let job_id = jobs::enqueue(&client, job).await?;
+
+    audit::record(
+        &client,
+        &audit::actor(&principal),
+        audit::action::MAIL_SEND,
+        Some(&to),
+        json!({ "template": template, "job": job_id }),
+    )
+    .await
+    .map_err(ApiError::new)?;
+
+    Ok(Json(json!({ "queued": true, "id": job_id })))
+}
+
+/// The job a `POST /api/mail` body describes, after every shape check.
+///
+/// Split out from the handler because a hook reaches the same queue through
+/// `$app.mailer.send`, and the two must not drift: a message a hook can queue is a
+/// message the endpoint would accept. `known` is the set of template names in effect —
+/// the database's bodies over the files and the built-ins — which is what a send may
+/// name.
+pub(crate) fn job_for(
+    body: &SendMail,
+    known: &[&str],
+) -> Result<(jobs::NewJob, Option<String>, String), ApiError> {
+    let to = body.to.trim();
+    validate_address(to)?;
+    let to_name = body.to_name.trim().to_string();
 
     let (job, template) = match (body.template.as_deref(), body.subject.as_deref()) {
         (Some(template), None) => {
@@ -93,16 +135,13 @@ pub async fn send(
                 ));
             }
             let template = template.trim();
-            let templates =
-                crate::mail_templates::effective(&client, &state.mail_templates).await?;
-            let known = templates.names();
             if !known.contains(&template) {
                 return Err(invalid(format!(
                     "no mail template named {template:?} (known: {})",
                     known.join(", ")
                 )));
             }
-            let assigns = body.assigns.unwrap_or(Value::Null);
+            let assigns = body.assigns.clone().unwrap_or(Value::Null);
             let size = serde_json::to_vec(&assigns)
                 .map(|encoded| encoded.len())
                 .unwrap_or(usize::MAX);
@@ -132,8 +171,8 @@ pub async fn send(
                 return Err(invalid("`subject` must not contain control characters"));
             }
 
-            let html = body.html.unwrap_or_default();
-            let text = body.text.unwrap_or_default();
+            let html = body.html.clone().unwrap_or_default();
+            let text = body.text.clone().unwrap_or_default();
             if html.trim().is_empty() && text.trim().is_empty() {
                 return Err(invalid("a message needs `html` or `text`"));
             }
@@ -157,32 +196,7 @@ pub async fn send(
         }
     };
 
-    // Refuse before queueing when SMTP is not configured: a job that can only fail
-    // would retry and be marked dead, and the caller would learn nothing.
-    let settings = jobs::read_settings(&client)
-        .await
-        .map_err(|err| ApiError::new(Error::internal(err)))?;
-    lazypock_mail::MailConfig::from_settings(&settings)
-        .map_err(ApiError::new)?
-        .ok_or_else(|| {
-            ApiError::new(Error::invalid(
-                "mail is not configured: set it in Studio → Settings → Mail",
-            ))
-        })?;
-
-    let job_id = jobs::enqueue(&client, job).await?;
-
-    audit::record(
-        &client,
-        &audit::actor(&principal),
-        audit::action::MAIL_SEND,
-        Some(to),
-        json!({ "template": template, "job": job_id }),
-    )
-    .await
-    .map_err(ApiError::new)?;
-
-    Ok(Json(json!({ "queued": true, "id": job_id })))
+    Ok((job, template, to.to_string()))
 }
 
 fn invalid(message: impl Into<String>) -> ApiError {

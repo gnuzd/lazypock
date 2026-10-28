@@ -68,6 +68,7 @@ export const nav: NavSection[] = [
 	{
 		title: "Reference",
 		items: [
+			{ href: "/hooks", label: "TypeScript hooks" },
 			{ href: "/files", label: "File storage & images" },
 			{ href: "/backup", label: "Backup & import JSON" },
 		],

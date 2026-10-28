@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 
 use lazypock_core::error::Error;
 use lazypock_db::collections::Collection;
-use lazypock_db::hooks::RecordHooks;
+use lazypock_db::hooks::{HookContext, HookEvent, RecordHooks, ScopedHooks};
 use lazypock_db::pool::db_error;
 use lazypock_db::query::compile::FilterContext;
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
@@ -106,11 +106,27 @@ pub async fn batch(
         .map_err(|err| ApiError::new(db_error(err)))?;
 
     match run(&transaction, &steps, &principal, state.hooks.as_ref()).await {
-        Ok(results) => {
+        Ok((results, after)) => {
             transaction
                 .commit()
                 .await
                 .map_err(|err| ApiError::new(db_error(err)))?;
+
+            // After-hooks run once the batch is durable, in the order the steps ran, for
+            // the same reason the single-record routes run them post-commit: a failure
+            // here cannot undo a write that already happened.
+            for pending in after {
+                state
+                    .hooks
+                    .after_ctx(
+                        &pending.context,
+                        pending.event,
+                        &pending.collection,
+                        pending.record,
+                    )
+                    .await
+                    .map_err(ApiError::new)?;
+            }
             Ok((StatusCode::OK, Json(Value::Array(results))).into_response())
         }
         Err((index, error)) => {
@@ -202,13 +218,26 @@ fn plan(schema: &Schema, item: &BatchItem) -> Result<Step, ApiError> {
     })
 }
 
+/// A hook run after the whole batch commits.
+///
+/// Collected during the steps and dispatched once the transaction is durable, which
+/// is what "after" means everywhere else: a failure cannot undo a write that is
+/// already committed.
+struct PendingAfter {
+    context: HookContext,
+    event: HookEvent,
+    collection: String,
+    record: Value,
+}
+
 async fn run(
     runner: &dyn QueryRunner,
     steps: &[Step],
     principal: &Principal,
     hooks: &dyn RecordHooks,
-) -> Result<Vec<Value>, (usize, ApiError)> {
+) -> Result<(Vec<Value>, Vec<PendingAfter>), (usize, ApiError)> {
     let mut results = Vec::with_capacity(steps.len());
+    let mut after = Vec::new();
     for (index, step) in steps.iter().enumerate() {
         // A sub-request declares its own action: a `GET` is a single-record
         // read, and an `UPDATE`/`DELETE` needs its rule's `SELECT` mirror to
@@ -226,12 +255,20 @@ async fn run(
             .await
             .map_err(|error| (index, ApiError::new(error)))?;
 
-        let (status, body) = execute(runner, step, hooks, principal)
+        let (status, body, produced) = execute(runner, step, hooks, principal)
             .await
             .map_err(|error| (index, error))?;
+        if let Some((event, record)) = produced {
+            after.push(PendingAfter {
+                context: crate::records::hook_context(&step.collection.name, principal, action),
+                event,
+                collection: step.collection.name.clone(),
+                record,
+            });
+        }
         results.push(json!({ "status": status, "body": body }));
     }
-    Ok(results)
+    Ok((results, after))
 }
 
 async fn execute(
@@ -239,11 +276,21 @@ async fn execute(
     step: &Step,
     hooks: &dyn RecordHooks,
     principal: &Principal,
-) -> Result<(u16, Value), ApiError> {
+) -> Result<(u16, Value, Option<(HookEvent, Value)>), ApiError> {
     match step.method.as_str() {
         "POST" => {
             let input = step.input.clone().expect("planned");
             let extra = crate::auth::auth_columns(&step.collection, &input)?;
+            // Bound to the caller, exactly as the single-record route does: a step
+            // that fires a hook must not hand it the server's own database access.
+            let scoped = ScopedHooks::new(
+                hooks,
+                crate::records::hook_context(
+                    &step.collection.name,
+                    principal,
+                    lazypock_db::rls::context::Action::Write,
+                ),
+            );
             let record = records::create_with(
                 runner,
                 &step.collection,
@@ -252,7 +299,7 @@ async fn execute(
                 &extra,
                 // The same seam the create route uses. A batch step must not be a
                 // way to bypass a hook.
-                hooks,
+                &scoped,
             )
             .await
             .map_err(ApiError::from)?;
@@ -260,12 +307,20 @@ async fn execute(
             // this the upload stayed `pending`, so the reaper reclaimed it and a file
             // field written through `/api/batch` quietly lost its file.
             crate::records::sync_files(runner, &step.collection, &record, principal).await?;
-            Ok((201, record))
+            Ok((201, record.clone(), Some((HookEvent::Create, record))))
         }
         "PATCH" => {
             let input = step.input.clone().expect("planned");
             let id = step.id.clone().expect("planned");
             let extra = crate::auth::auth_columns(&step.collection, &input)?;
+            let scoped = ScopedHooks::new(
+                hooks,
+                crate::records::hook_context(
+                    &step.collection.name,
+                    principal,
+                    lazypock_db::rls::context::Action::Update,
+                ),
+            );
             match records::update_with(
                 runner,
                 &step.collection,
@@ -273,7 +328,7 @@ async fn execute(
                 &id,
                 input,
                 &extra,
-                hooks,
+                &scoped,
             )
             .await
             .map_err(ApiError::from)?
@@ -281,18 +336,50 @@ async fn execute(
                 Some(record) => {
                     crate::records::sync_files(runner, &step.collection, &record, principal)
                         .await?;
-                    Ok((200, record))
+                    Ok((200, record.clone(), Some((HookEvent::Update, record))))
                 }
                 None => Err(missing(&step.collection.name, &id)),
             }
         }
         "DELETE" => {
             let id = step.id.clone().expect("planned");
+            let scoped = ScopedHooks::new(
+                hooks,
+                crate::records::hook_context(
+                    &step.collection.name,
+                    principal,
+                    lazypock_db::rls::context::Action::Delete,
+                ),
+            );
+            // A batch delete must not be a way around a before-delete hook that would
+            // refuse it — the single-record route runs that hook, so this one does too,
+            // on the same row it is about to remove.
+            let existing = records::get_one(
+                runner,
+                &step.collection,
+                &step.context,
+                &id,
+                &FieldSelection::all(),
+                &ExpandSpec::none(),
+            )
+            .await
+            .map_err(ApiError::new)?;
+            if let Some(existing) = &existing {
+                scoped
+                    .before(HookEvent::Delete, &step.collection.name, existing.clone())
+                    .await
+                    .map_err(ApiError::new)?;
+            }
+
             let removed = records::delete(runner, &step.collection, &id)
                 .await
                 .map_err(ApiError::from)?;
             if removed {
-                Ok((204, Value::Null))
+                Ok((
+                    204,
+                    Value::Null,
+                    existing.map(|record| (HookEvent::Delete, record)),
+                ))
             } else {
                 Err(missing(&step.collection.name, &id))
             }
@@ -310,7 +397,7 @@ async fn execute(
             .await
             .map_err(ApiError::new)?;
             match record {
-                Some(record) => Ok((200, record)),
+                Some(record) => Ok((200, record, None)),
                 None => Err(missing(&step.collection.name, &id)),
             }
         }

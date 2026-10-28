@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 
 use lazypock_core::error::Error;
 use lazypock_db::collections::Collection;
-use lazypock_db::hooks::RecordHooks;
+use lazypock_db::hooks::{HookContext, RecordHooks, ScopedHooks};
 use lazypock_db::pool::db_error;
 use lazypock_db::query::compile::FilterContext;
 use lazypock_db::query::filter;
@@ -339,13 +339,18 @@ pub async fn create_record(
     let mut client = state.db.client().await.map_err(ApiError::new)?;
     let transaction = scoped(&mut client, &principal, Action::Write).await?;
 
+    // Bound to the caller, so a hook's `$app` access is theirs and not the server's.
+    let hooks = ScopedHooks::new(
+        state.hooks.as_ref(),
+        hook_context(&resolved.collection.name, &principal, Action::Write),
+    );
     let record = records::create_with(
         &transaction,
         &resolved.collection,
         &resolved.context,
         body,
         &extra,
-        state.hooks.as_ref(),
+        &hooks,
     )
     .await
     .map_err(ApiError::from)?;
@@ -362,8 +367,7 @@ pub async fn create_record(
 
     // After-hooks run once the write is committed, so a failure here cannot undo a
     // record that is already durable.
-    state
-        .hooks
+    hooks
         .after(
             lazypock_db::hooks::HookEvent::Create,
             &resolved.collection.name,
@@ -402,6 +406,10 @@ pub async fn update_record(
     // it and rotates the token key), so a non-empty result *is* a password change.
     let changed_password = !extra.is_empty();
 
+    let hooks = ScopedHooks::new(
+        state.hooks.as_ref(),
+        hook_context(&resolved.collection.name, &principal, Action::Update),
+    );
     let record = records::update_with(
         &transaction,
         &resolved.collection,
@@ -409,7 +417,7 @@ pub async fn update_record(
         &id,
         body,
         &extra,
-        state.hooks.as_ref(),
+        &hooks,
     )
     .await
     .map_err(ApiError::from)?;
@@ -438,8 +446,7 @@ pub async fn update_record(
         Some(record) => {
             // After the commit, like create: a failure here cannot undo a write
             // that is already durable.
-            state
-                .hooks
+            hooks
                 .after(
                     lazypock_db::hooks::HookEvent::Update,
                     &resolved.collection.name,
@@ -488,9 +495,13 @@ pub async fn delete_record(
     .await
     .map_err(ApiError::new)?;
 
+    let hooks = ScopedHooks::new(
+        state.hooks.as_ref(),
+        hook_context(&resolved.collection.name, &principal, Action::Delete),
+    );
+
     if let Some(existing) = &existing {
-        state
-            .hooks
+        hooks
             .before(
                 lazypock_db::hooks::HookEvent::Delete,
                 &resolved.collection.name,
@@ -519,8 +530,7 @@ pub async fn delete_record(
 
     if removed {
         if let Some(existing) = existing {
-            state
-                .hooks
+            hooks
                 .after(
                     lazypock_db::hooks::HookEvent::Delete,
                     &resolved.collection.name,
@@ -724,6 +734,14 @@ async fn release_files(
 /// Every user-facing query goes through this: the context is `SET LOCAL`, so it
 /// is undone at commit and cannot leak onto the pooled connection the next
 /// request will reuse.
+/// The hook context a write made by `principal` runs its hooks under.
+///
+/// `$app` inside a hook runs as this caller: an anonymous write stays anonymous, and a
+/// superuser's write runs as the owner — the same access that caller already has.
+pub(crate) fn hook_context(collection: &str, principal: &Principal, action: Action) -> HookContext {
+    HookContext::new(collection, principal.request_context(action))
+}
+
 async fn scoped<'a>(
     client: &'a mut lazypock_db::deadpool_postgres::Client,
     principal: &Principal,

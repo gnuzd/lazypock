@@ -15,6 +15,7 @@ pub mod crons;
 pub mod emails;
 pub mod error;
 pub mod files;
+pub mod hooks_host;
 pub mod jobs;
 pub mod logs;
 pub mod mail;

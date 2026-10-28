@@ -16,6 +16,7 @@ use lazypock_auth::token::Claims;
 use lazypock_auth::AuthOutcome;
 use lazypock_core::error::Error;
 use lazypock_db::collections::Collection;
+use lazypock_db::hooks::{HookContext, ScopedHooks};
 use lazypock_db::query::compile::AuthContext;
 use lazypock_db::query::projection::{ExpandSpec, FieldSelection};
 use lazypock_db::records;
@@ -746,13 +747,20 @@ pub async fn auth_with_oauth2(
                     oauth2_create_input(&resolved.collection, &user, request.create_data.as_ref());
                 validate_first(&resolved.collection, &input, false)?;
                 let extra = auth_columns(&resolved.collection, &input)?;
+                // A signup is an anonymous request, so that is what a hook sees: this
+                // create happens on the owning connection (the account does not exist
+                // yet), and `$app` must not inherit that.
+                let scoped = ScopedHooks::new(
+                    state.hooks.as_ref(),
+                    HookContext::anonymous(&resolved.collection.name),
+                );
                 let record = records::create_with(
                     &client,
                     &resolved.collection,
                     &resolved.context,
                     input,
                     &extra,
-                    state.hooks.as_ref(),
+                    &scoped,
                 )
                 .await
                 .map_err(ApiError::from)?;
