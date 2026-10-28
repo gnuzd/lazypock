@@ -100,6 +100,54 @@
         };
     })();
 
+    /**
+     * `$app` — the database and the mailer, under the triggering request's rules.
+     *
+     * Runs with the context of whoever made the request that fired the hook: an
+     * anonymous write stays anonymous, a user's write sees what that user sees, and
+     * a write made through `$app` does not fire hooks (so a hook cannot recurse).
+     * Writing the collection whose hook is running is refused: that write has not
+     * committed yet.
+     *
+     *     const author = $app.findRecordById("users", e.record.author);
+     *     $app.save("audit", { note: "post " + e.record.id + " by " + author.email });
+     *     $app.mailer.send({ to: author.email, template: "receipt", assigns: { id: e.record.id } });
+     */
+    globalThis.$app = (function () {
+        function call(request) {
+            const envelope = JSON.parse(__lazypock_app(JSON.stringify(request)));
+            if (!envelope.ok) {
+                throw new Error(envelope.error);
+            }
+            return envelope.value;
+        }
+
+        return {
+            /** One record by id, or null when the caller's rules do not allow seeing it. */
+            findRecordById: function (collection, id) {
+                return call({ op: "findRecordById", collection: collection, id: id });
+            },
+            /** Create, or update when the record carries an `id`. Returns the stored record. */
+            save: function (collection, record) {
+                return call({ op: "save", collection: collection, record: record });
+            },
+            /** Delete one record by id. */
+            delete: function (collection, id) {
+                return call({ op: "delete", collection: collection, id: id });
+            },
+            mailer: {
+                /**
+                 * Queue an email. Same shape as `POST /api/mail`: `{ to, toName? }`
+                 * with either a `template` and `assigns`, or a `subject` and a body.
+                 * It is queued, not delivered — a failure shows in the logs.
+                 */
+                send: function (message) {
+                    return call({ op: "mailerSend", message: message });
+                }
+            }
+        };
+    })();
+
     /** How many handlers are registered for an event and collection. */
     globalThis.__lazypock_count = function (eventName, collection) {
         const handlers = registry.get(eventName + ":" + collection);

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lazypock_core::error::{Error, Result};
-use lazypock_db::hooks::{HookEvent, RecordHooks};
+use lazypock_db::hooks::{HookContext, HookEvent, RecordHooks};
 use lazypock_db::runner::BoxFuture;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
@@ -32,17 +32,23 @@ use crate::runtime::{HookSetup, RecordEvent};
 /// edit takes effect on the next hook run after this interval, not instantly.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(1);
 
+/// One dispatch on its way to the worker.
+///
+/// Boxed in [`Request`]: the context alone is a couple of hundred bytes, and the
+/// queue would otherwise carry that size around for every message.
+struct Dispatch {
+    event: RecordEvent,
+    collection: String,
+    payload: Value,
+    /// The triggering request's context, which is what `$app` runs under.
+    context: HookContext,
+    reply: oneshot::Sender<Result<Option<Value>>>,
+}
+
 /// A request to the worker thread.
 enum Request {
-    Dispatch {
-        event: RecordEvent,
-        collection: String,
-        payload: Value,
-        reply: oneshot::Sender<Result<Option<Value>>>,
-    },
-    Reload {
-        reply: oneshot::Sender<LoadReport>,
-    },
+    Dispatch(Box<Dispatch>),
+    Reload { reply: oneshot::Sender<LoadReport> },
 }
 
 /// A handle to the hook worker.
@@ -91,12 +97,14 @@ impl HookService {
                 // The queue closing is how the last handle going away stops the worker.
                 while let Some(request) = queue.blocking_recv() {
                     match request {
-                        Request::Dispatch {
-                            event,
-                            collection,
-                            payload,
-                            reply,
-                        } => {
+                        Request::Dispatch(dispatch) => {
+                            let Dispatch {
+                                event,
+                                collection,
+                                payload,
+                                context,
+                                reply,
+                            } = *dispatch;
                             // Look for edits here rather than in a watcher thread:
                             // one place owns the runtime, so one place reloads it.
                             if last_check.elapsed() >= RELOAD_INTERVAL {
@@ -113,7 +121,7 @@ impl HookService {
                             }
 
                             let produced = if loader.is_active() {
-                                match loader.dispatch(event, &collection, &payload) {
+                                match loader.dispatch(event, &collection, &payload, &context) {
                                     Ok(Some(value)) => Ok(Some(value)),
                                     Ok(None) => Ok(None),
                                     Err(err) => {
@@ -178,15 +186,17 @@ impl HookService {
         event: RecordEvent,
         collection: &str,
         payload: Value,
+        context: HookContext,
     ) -> Result<Option<Value>> {
         let (reply, received) = oneshot::channel();
         self.requests
-            .send(Request::Dispatch {
+            .send(Request::Dispatch(Box::new(Dispatch {
                 event,
                 collection: collection.to_string(),
                 payload,
+                context,
                 reply,
-            })
+            })))
             .map_err(|_| Error::internal("the hook worker is not running"))?;
         received
             .await
@@ -213,6 +223,20 @@ impl RecordHooks for HookService {
         collection: &'a str,
         record: Value,
     ) -> BoxFuture<'a, Result<Value>> {
+        // A caller that did not say who triggered the write gets the anonymous
+        // context: a hook that reaches the database can then only do what the
+        // public rules allow, rather than inheriting the server's own access.
+        let context = HookContext::anonymous(collection);
+        Box::pin(async move { self.before_ctx(&context, event, collection, record).await })
+    }
+
+    fn before_ctx<'a>(
+        &'a self,
+        context: &'a HookContext,
+        event: HookEvent,
+        collection: &'a str,
+        record: Value,
+    ) -> BoxFuture<'a, Result<Value>> {
         Box::pin(async move {
             // Nothing loaded: skip the channel entirely, so an installation with no
             // hooks pays only an atomic load.
@@ -226,7 +250,12 @@ impl RecordHooks for HookService {
                 "record": record,
             });
             let produced = self
-                .dispatch(runtime_event(event, true), collection, payload)
+                .dispatch(
+                    runtime_event(event, true),
+                    collection,
+                    payload,
+                    context.clone(),
+                )
                 .await?;
 
             // A hook that changed the record decides what is written.
@@ -243,6 +272,17 @@ impl RecordHooks for HookService {
         collection: &'a str,
         record: Value,
     ) -> BoxFuture<'a, Result<()>> {
+        let context = HookContext::anonymous(collection);
+        Box::pin(async move { self.after_ctx(&context, event, collection, record).await })
+    }
+
+    fn after_ctx<'a>(
+        &'a self,
+        context: &'a HookContext,
+        event: HookEvent,
+        collection: &'a str,
+        record: Value,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             if !self.is_active() {
                 return Ok(());
@@ -253,8 +293,13 @@ impl RecordHooks for HookService {
                 "action": event.as_str(),
                 "record": record,
             });
-            self.dispatch(runtime_event(event, false), collection, payload)
-                .await?;
+            self.dispatch(
+                runtime_event(event, false),
+                collection,
+                payload,
+                context.clone(),
+            )
+            .await?;
             Ok(())
         })
     }

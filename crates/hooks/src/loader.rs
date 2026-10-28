@@ -21,6 +21,7 @@ use serde_json::Value;
 use crate::runtime::HookLimits;
 use crate::runtime::{HookRuntime, HookSetup, RecordEvent};
 use crate::strip::strip_types;
+use lazypock_db::hooks::HookContext;
 
 /// The suffix a hook file has.
 pub const HOOK_SUFFIX: &str = ".pb.ts";
@@ -219,11 +220,14 @@ impl HookLoader {
         event: RecordEvent,
         collection: &str,
         payload: &Value,
+        context: &HookContext,
     ) -> Result<Option<Value>> {
         let Some(runtime) = &self.runtime else {
             return Ok(None);
         };
-        runtime.dispatch(event, collection, payload).map(Some)
+        runtime
+            .dispatch(event, collection, payload, context)
+            .map(Some)
     }
 
     /// How many handlers are registered for an event and collection.
@@ -347,7 +351,12 @@ mod tests {
         assert!(!loader.is_active(), "no files means no runtime at all");
         // ... and dispatch is a no-op rather than an error.
         assert!(loader
-            .dispatch(RecordEvent::BeforeCreate, "posts", &payload())
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &payload(),
+                &HookContext::default(),
+            )
             .expect("dispatch")
             .is_none());
     }
@@ -375,7 +384,12 @@ mod tests {
         assert_eq!(loader.registered(RecordEvent::BeforeCreate, "posts"), 1);
 
         let produced = loader
-            .dispatch(RecordEvent::BeforeCreate, "posts", &payload())
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &payload(),
+                &HookContext::default(),
+            )
             .expect("dispatch")
             .expect("a runtime");
         assert_eq!(produced["record"]["slug"], json!("slug-Hello"));
@@ -423,7 +437,12 @@ mod tests {
         assert!(loader.last_error().is_some());
 
         let produced = loader
-            .dispatch(RecordEvent::BeforeCreate, "posts", &payload())
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &payload(),
+                &HookContext::default(),
+            )
             .expect("dispatch")
             .expect("a runtime");
         assert_eq!(produced["record"]["slug"], json!("good"));
@@ -451,7 +470,12 @@ mod tests {
         assert_eq!(report.error, None, "{report:?}");
 
         let produced = loader
-            .dispatch(RecordEvent::BeforeCreate, "posts", &payload())
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &payload(),
+                &HookContext::default(),
+            )
             .expect("dispatch")
             .expect("a runtime");
         assert_eq!(
@@ -478,7 +502,12 @@ mod tests {
 
         assert!(!loader.is_active(), "no files means no runtime");
         assert!(loader
-            .dispatch(RecordEvent::BeforeCreate, "posts", &payload())
+            .dispatch(
+                RecordEvent::BeforeCreate,
+                "posts",
+                &payload(),
+                &HookContext::default(),
+            )
             .expect("dispatch")
             .is_none());
     }

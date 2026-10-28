@@ -542,9 +542,28 @@ async fn serve(config: Config) -> Result<()> {
             "hooks may make outbound requests"
         );
     }
+    // The mail templates: the built-in defaults, with any file in the directory
+    // overriding them, so an operator changes an email without a rebuild. A syntax
+    // error is refused here rather than when the first email is sent.
+    let mail_templates = Arc::new(
+        lazypock_mail::Templates::load(mail_templates_directory().as_deref())
+            .map_err(|err| Error::config(format!("cannot load the mail templates: {err}")))?,
+    );
+
+    // `$app` hands a hook the pool and the job queue, under the triggering request's
+    // own database context. The host is built here rather than from `AppState`
+    // because the hooks service is *inside* the state; the pieces it needs (the pool
+    // and the schema cache) are already in hand.
+    let hook_app = lazypock_api::hooks_host::HookAppHost::new(
+        db.clone(),
+        Arc::clone(&schema),
+        Arc::clone(&mail_templates),
+    )
+    .map_err(|err| Error::config(format!("cannot build the hook host: {err}")))?;
     let hooks = Arc::new(lazypock_hooks::HookService::start(
         hooks_directory(),
-        lazypock_hooks::HookSetup::new(hook_limits, hook_http),
+        lazypock_hooks::HookSetup::new(hook_limits, hook_http)
+            .with_app(lazypock_hooks::HookApp::new(Arc::new(hook_app))),
     ));
 
     // CORS is enforced from the `cors_origins` setting, so it is a runtime value
@@ -556,14 +575,6 @@ async fn serve(config: Config) -> Result<()> {
             .await
             .map_err(|err| Error::config(format!("cannot load the CORS allowlist: {err}")))?;
     }
-
-    // The mail templates: the built-in defaults, with any file in the directory
-    // overriding them, so an operator changes an email without a rebuild. A syntax
-    // error is refused here rather than when the first email is sent.
-    let mail_templates = Arc::new(
-        lazypock_mail::Templates::load(mail_templates_directory().as_deref())
-            .map_err(|err| Error::config(format!("cannot load the mail templates: {err}")))?,
-    );
 
     let state = AppState::new(
         config,
