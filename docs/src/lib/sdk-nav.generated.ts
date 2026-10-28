@@ -48,6 +48,10 @@ export const sdkNav: SdkNavEntry[] = [
 			{
 				"slug": "api-reference",
 				"label": "API Reference"
+			},
+			{
+				"slug": "mail",
+				"label": "Mail"
 			}
 		]
 	}
