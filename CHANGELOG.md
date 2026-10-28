@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.28.0](https://github.com/gnuzd/lazypock/compare/v0.27.0...v0.28.0) (2026-10-28)
+
+
+### Features
+
+* **api:** mail template endpoints, with a preview that renders a draft ([73d15ad](https://github.com/gnuzd/lazypock/commit/73d15ad15cd8bc74c37b179e1f50ad88f0b06d92))
+* **collections:** serve id, created and updated as system fields ([116f7a2](https://github.com/gnuzd/lazypock/commit/116f7a279f05fa38bd2b82613865576a7f08d186))
+* **hooks:** give a hook $app, under the triggering request's own rules ([511e05d](https://github.com/gnuzd/lazypock/commit/511e05dcff6485b4d5493217cfe49f7c0449ed95))
+* **hooks:** give a hook $http, bounded so it cannot reach the deployment's own network ([7f6a1b2](https://github.com/gnuzd/lazypock/commit/7f6a1b2c5a9d60b6f8b012e9544d4f9061535993))
+* **mail:** resolve templates from the database, then files, then the built-ins ([3ddf5e8](https://github.com/gnuzd/lazypock/commit/3ddf5e8aad8e88783e0e24fc01b915fdbe4b5b67))
+* **realtime:** make change events switchable per collection and instance-wide ([69538e0](https://github.com/gnuzd/lazypock/commit/69538e0de30a41c56eebd5b361fa5643805586b3))
+* **studio:** edit, preview and reset mail templates ([d1c66be](https://github.com/gnuzd/lazypock/commit/d1c66be2c0e28c94e56c6b4d34960ff6a67b1164))
+* **studio:** show every column in the record table, marking hidden ones ([0dd9c0a](https://github.com/gnuzd/lazypock/commit/0dd9c0abfe85f3ae9a707430d3c9bf71864fb5b8))
+* **studio:** switch realtime off per collection and instance-wide ([12c2fff](https://github.com/gnuzd/lazypock/commit/12c2fff242459cbed0e824279b47463a671e9180))
+
 ## [0.27.0](https://github.com/gnuzd/lazypock/compare/v0.26.1...v0.27.0) (2026-10-26)
 
 
