@@ -5,9 +5,9 @@
 	import { z } from 'zod';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
+	import MailTestSend from '$lib/components/MailTestSend.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import Switch from '$lib/components/Switch.svelte';
-	import { toast } from 'svelte-sonner';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
 
@@ -47,40 +47,7 @@
 	});
 	let showMoreMail = $state(false);
 
-	// ── Test message ──
-	// The settings are read at send time, so a test right after saving proves the
-	// configuration end to end (SMTP credentials included) without waiting for a
-	// verification email.
-	let testRecipient = $state('');
-	let sendingTest = $state(false);
-
-	async function sendTestEmail() {
-		const to = testRecipient.trim();
-		if (!to || sendingTest) return;
-		sendingTest = true;
-		try {
-			await client.http.post('/mail', {
-				to,
-				subject: 'Lazypock test email',
-				text: 'This is a test email from your Lazypock server. If you can read it, SMTP is configured correctly.',
-				html: '<p>This is a test email from your Lazypock server.</p><p>If you can read it, SMTP is configured correctly.</p>'
-			});
-			toast.success('Test email queued — check the inbox in a moment.');
-		} catch (err) {
-			toast.error((err as { message?: string }).message || 'Could not queue the test email');
-		} finally {
-			sendingTest = false;
-		}
-	}
-
 	onMount(async () => {
-		try {
-			const me = (await client.me()) as Record<string, unknown> | null;
-			if (typeof me?.email === 'string') testRecipient = me.email;
-		} catch {
-			// no identity to prefill; the field stays empty
-		}
-
 		try {
 			const res = (await client.http.get('/settings')) as Record<string, unknown> | null;
 			if (!res) return;
@@ -244,31 +211,7 @@
 	</div>
 </form>
 
-<div class="rounded-box mt-4 border border-base-300 bg-base-100 p-6">
-	<div class="mb-4 text-sm text-base-content/60">
-		<p>
-			<strong class="text-base-content">Send a test email.</strong> Uses the saved settings, so save
-			first. The message is queued like any other — a delivery failure shows in the logs rather than
-			here.
-		</p>
-	</div>
-	<div class="flex flex-col gap-3 sm:flex-row sm:items-end">
-		<div class="flex-1">
-			<Input
-				id="test-recipient"
-				label="Send to"
-				type="email"
-				placeholder="you@example.com"
-				bind:value={testRecipient}
-			/>
-		</div>
-		<Button
-			class="btn-outline"
-			loading={sendingTest}
-			disabled={sendingTest || !testRecipient.trim()}
-			onclick={sendTestEmail}
-		>
-			Send test email
-		</Button>
-	</div>
+<!-- The same control the Mail page uses, so both queue a test through one path. -->
+<div class="mt-4">
+	<MailTestSend />
 </div>

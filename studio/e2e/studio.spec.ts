@@ -300,6 +300,7 @@ test('every Studio page loads for a superuser', async ({ page }) => {
 	const pages: [string, string][] = [
 		['/settings/application', 'Application Settings'],
 		['/settings/mail', 'Mail Settings'],
+		['/settings/mail-templates', 'Mail Templates'],
 		['/settings/files', 'Files Storage'],
 		['/settings/media', 'Media Library'],
 		['/settings/api-keys', 'API Keys'],
@@ -571,4 +572,40 @@ test('a cron job can be created and deleted through the UI', async ({ page }) =>
 	await row.getByTitle('Delete').click();
 	await page.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click();
 	await expect(page.getByRole('row').filter({ hasText: name })).toHaveCount(0);
+});
+
+test('a mail template can be created, previewed and reset through the UI', async ({ page }) => {
+	await signIn(page);
+	const name = `e2e_tpl_${Date.now().toString(36)}`;
+	await page.goto('/_/settings/mail-templates');
+
+	await page.getByRole('button', { name: 'New template' }).click();
+	const prompt = page.getByRole('dialog');
+	await prompt.locator('input').fill(name);
+	await prompt.getByRole('button', { name: 'Start' }).click();
+
+	// The three parts, with a variable the sample supplies.
+	await page.getByPlaceholder('Your receipt from {{ app_name }}').fill('Receipt for {{ total }}');
+	await page.locator('#mail-template-html').fill('<p>Hello {{ name }}, you spent {{ total }}.</p>');
+	await page.locator('#mail-template-text').fill('Hello {{ name }}, you spent {{ total }}.');
+	await page.locator('#mail-template-sample').fill('{"total": 42, "name": "Ada"}');
+
+	// The server renders the draft; the frame is sandboxed with no permissions, so
+	// a template body can never run script in the Studio's origin.
+	const frame = page.locator('iframe[title="Rendered email"]');
+	await expect(frame).toHaveAttribute('sandbox', '');
+	await expect(
+		page.frameLocator('iframe[title="Rendered email"]').getByText('Hello Ada, you spent 42.')
+	).toBeVisible();
+
+	await page.getByRole('button', { name: 'Create template' }).click();
+
+	// Stored, so it can be reset — and it now shows the database layer.
+	await expect(page.getByRole('button', { name: 'Reset' })).toBeVisible();
+	await page.getByRole('button', { name: 'Reset' }).click();
+
+	// Nothing (no file, no built-in) sits under that name, so a reset removes it and
+	// the editor moves to a template that still exists.
+	await page.getByRole('dialog').getByRole('button', { name: 'Reset', exact: true }).click();
+	await expect(page.locator('aside').getByText(name)).toHaveCount(0);
 });
