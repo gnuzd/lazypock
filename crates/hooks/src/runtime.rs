@@ -4,8 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use lazypock_core::error::{Error, Result};
-use rquickjs::{Context, Runtime};
+use rquickjs::{Context, Function, Runtime};
 use serde_json::Value;
+
+use crate::http::{HookHttp, HttpCall};
 
 /// The bootstrap that defines the registration helpers, kept as a real `.js` file.
 const BOOTSTRAP: &str = include_str!("bootstrap.js");
@@ -28,6 +30,47 @@ impl Default for HookLimits {
             memory_bytes: 32 * 1024 * 1024,
             stack_bytes: 512 * 1024,
             deadline: Duration::from_secs(2),
+        }
+    }
+}
+
+/// Everything a hook runtime is built with: its limits, and the outbound HTTP it is
+/// allowed to make.
+///
+/// `From<HookLimits>` means a caller that does not care about `$http` keeps writing
+/// `HookRuntime::new(HookLimits::default())` — and gets a runtime where every `$http`
+/// call is refused, which is the right default rather than no `$http` at all.
+#[derive(Debug, Clone)]
+pub struct HookSetup {
+    pub limits: HookLimits,
+    pub http: Arc<HookHttp>,
+}
+
+impl Default for HookSetup {
+    fn default() -> Self {
+        let limits = HookLimits::default();
+        Self {
+            limits,
+            http: Arc::new(HookHttp::disabled(limits.deadline)),
+        }
+    }
+}
+
+impl HookSetup {
+    /// A setup whose `$http` may reach `http`, within `limits`.
+    pub fn new(limits: HookLimits, http: HookHttp) -> Self {
+        Self {
+            limits,
+            http: Arc::new(http),
+        }
+    }
+}
+
+impl From<HookLimits> for HookSetup {
+    fn from(limits: HookLimits) -> Self {
+        Self {
+            limits,
+            http: Arc::new(HookHttp::disabled(limits.deadline)),
         }
     }
 }
@@ -88,6 +131,8 @@ pub struct HookRuntime {
     runtime: Runtime,
     context: Context,
     limits: HookLimits,
+    /// The outbound HTTP this runtime may make, with its rules.
+    http: Arc<HookHttp>,
     /// When the current dispatch must give up. Shared with the interrupt handler,
     /// which QuickJS calls during execution.
     deadline: Arc<Mutex<Option<Instant>>>,
@@ -104,7 +149,8 @@ impl std::fmt::Debug for HookRuntime {
 
 impl HookRuntime {
     /// Create a runtime with limits applied and the bootstrap loaded.
-    pub fn new(limits: HookLimits) -> Result<Self> {
+    pub fn new(setup: impl Into<HookSetup>) -> Result<Self> {
+        let HookSetup { limits, http } = setup.into();
         let runtime = Runtime::new()
             .map_err(|err| Error::internal(format!("cannot create the hook runtime: {err}")))?;
         runtime.set_memory_limit(limits.memory_bytes);
@@ -128,15 +174,36 @@ impl HookRuntime {
             runtime,
             context,
             limits,
+            http,
             deadline,
         };
         runtime.eval(BOOTSTRAP)?;
+        runtime.install_http()?;
         Ok(runtime)
     }
 
     /// The limits in force.
     pub fn limits(&self) -> HookLimits {
         self.limits
+    }
+
+    /// Expose the one Rust binding the bootstrap builds `$http` on.
+    ///
+    /// The binding answers with an envelope rather than throwing, so a refusal is
+    /// the same shape as a failure and the JavaScript side turns both into an
+    /// `Error` with the message intact. Nothing a hook can pass reaches the network
+    /// without going through [`HookHttp::call`].
+    fn install_http(&self) -> Result<()> {
+        let http = Arc::clone(&self.http);
+        self.context.with(|ctx| {
+            let binding = Function::new(ctx.clone(), move |payload: String| -> String {
+                respond(&http, &payload)
+            })
+            .map_err(|err| Error::internal(format!("cannot register $http: {err}")))?;
+            ctx.globals()
+                .set("__lazypock_http", binding)
+                .map_err(|err| Error::internal(format!("cannot register $http: {err}")))
+        })
     }
 
     /// Heap currently held by the runtime, in bytes.
@@ -215,6 +282,24 @@ impl HookRuntime {
     }
 }
 
+/// Run one `$http` call and answer with the envelope the bootstrap reads.
+fn respond(http: &HookHttp, payload: &str) -> String {
+    let outcome = serde_json::from_str::<Value>(payload)
+        .map_err(|err| Error::invalid(format!("$http: unreadable request: {err}")))
+        .and_then(|payload| HttpCall::from_json(&payload))
+        .and_then(|call| http.call(&call));
+
+    let envelope = match outcome {
+        Ok(response) => {
+            let mut value = response.to_json();
+            value["ok"] = Value::Bool(true);
+            value
+        }
+        Err(err) => serde_json::json!({ "ok": false, "error": err.to_string() }),
+    };
+    envelope.to_string()
+}
+
 /// Render a Rust string as a JavaScript string literal.
 ///
 /// JSON string escaping is a subset of JavaScript's, so this is exact rather than
@@ -261,6 +346,99 @@ mod tests {
 
     fn runtime() -> HookRuntime {
         HookRuntime::new(HookLimits::default()).expect("runtime")
+    }
+
+    /// A resolver that always answers with one address.
+    struct OneAddress(std::net::IpAddr);
+
+    impl crate::http::Resolver for OneAddress {
+        fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<std::net::IpAddr>> {
+            Ok(vec![self.0])
+        }
+    }
+
+    /// A transport that echoes the request body's `id`, so a test can see that what
+    /// the hook sent is what arrived.
+    struct EchoTransport;
+
+    impl crate::http::Transport for EchoTransport {
+        fn send(&self, request: &crate::http::Prepared) -> Result<crate::http::HttpResponse> {
+            let id = request
+                .body
+                .as_deref()
+                .and_then(|body| serde_json::from_str::<Value>(body).ok())
+                .and_then(|body| body.get("id").cloned())
+                .unwrap_or(Value::Null);
+            Ok(crate::http::HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: serde_json::json!({ "echo": id }).to_string(),
+            })
+        }
+    }
+
+    fn http_runtime(allow: &str) -> HookRuntime {
+        let limits = HookLimits::default();
+        let gate = crate::http::HookHttp::with_parts(
+            lazypock_core::net::HostAllowlist::parse(allow).expect("allowlist"),
+            limits.deadline,
+            Arc::new(OneAddress(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                93, 184, 216, 34,
+            )))),
+            Arc::new(EchoTransport),
+        );
+        HookRuntime::new(HookSetup::new(limits, gate)).expect("runtime")
+    }
+
+    #[test]
+    fn a_hook_can_call_an_allowed_host_and_read_the_answer() {
+        let runtime = http_runtime("api.example.com");
+        runtime
+            .load(
+                r#"
+                onRecordAfterCreate("posts", (e) => {
+                    const res = $http.post("https://api.example.com/hook", { id: e.record.id });
+                    e.record.status = res.status + ":" + res.json().echo;
+                });
+                "#,
+            )
+            .expect("load");
+
+        let produced = runtime
+            .dispatch(
+                RecordEvent::AfterCreate,
+                "posts",
+                &json!({ "collection": "posts", "record": { "id": "p1" } }),
+            )
+            .expect("dispatch");
+        assert_eq!(produced["record"]["status"], "200:p1");
+    }
+
+    #[test]
+    fn a_hook_cannot_reach_a_host_that_was_not_allowed() {
+        let runtime = http_runtime("");
+        runtime
+            .load(
+                r#"
+                onRecordAfterCreate("posts", () => {
+                    $http.get("https://api.example.com/x");
+                });
+                "#,
+            )
+            .expect("load");
+
+        let err = runtime
+            .dispatch(
+                RecordEvent::AfterCreate,
+                "posts",
+                &json!({ "collection": "posts", "record": {} }),
+            )
+            .expect_err("refused");
+        let message = format!("{err}");
+        assert!(
+            message.contains("LAZYPOCK_HOOK_HTTP_ALLOWLIST"),
+            "the hook author is told how to allow the host: {message}"
+        );
     }
 
     fn event(record: Value) -> Value {

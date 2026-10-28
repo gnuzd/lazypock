@@ -32,6 +32,74 @@
     globalThis.onRecordBeforeDelete = register("recordBeforeDelete");
     globalThis.onRecordAfterDelete = register("recordAfterDelete");
 
+    /**
+     * `$http` — the outbound requests a hook may make.
+     *
+     * Synchronous, because this runtime has no job queue: the call runs on the hook
+     * worker's own thread and is bounded by its timeout. Every rule (host
+     * allowlist, public-address-only, https, no redirects, size caps) is enforced
+     * on the Rust side; this object only shapes the calls and the responses.
+     *
+     *     const res = $http.get("https://api.example.com/thing");
+     *     if (!res.ok) throw new Error("upstream said " + res.status);
+     *     const body = res.json();
+     */
+    globalThis.$http = (function () {
+        function send(options) {
+            const request = {
+                method: options && options.method ? String(options.method).toUpperCase() : "GET",
+                url: options && options.url ? String(options.url) : "",
+                headers: (options && options.headers) || {}
+            };
+            if (options && options.body !== undefined && options.body !== null) {
+                request.body =
+                    typeof options.body === "string" ? options.body : JSON.stringify(options.body);
+            }
+            if (options && options.timeoutMs !== undefined && options.timeoutMs !== null) {
+                request.timeoutMs = options.timeoutMs;
+            }
+
+            const envelope = JSON.parse(__lazypock_http(JSON.stringify(request)));
+            if (!envelope.ok) {
+                throw new Error(envelope.error);
+            }
+            return {
+                status: envelope.status,
+                ok: envelope.status >= 200 && envelope.status < 300,
+                headers: envelope.headers,
+                body: envelope.body,
+                text: function () {
+                    return envelope.body;
+                },
+                json: function () {
+                    try {
+                        return JSON.parse(envelope.body);
+                    } catch (err) {
+                        throw new Error("$http: the response body is not JSON: " + err.message);
+                    }
+                }
+            };
+        }
+
+        function shorthand(method, withBody) {
+            return function (url, bodyOrOptions, maybeOptions) {
+                const options = withBody
+                    ? Object.assign({}, maybeOptions || {}, { method: method, url: url, body: bodyOrOptions })
+                    : Object.assign({}, bodyOrOptions || {}, { method: method, url: url });
+                return send(options);
+            };
+        }
+
+        return {
+            send: send,
+            get: shorthand("GET", false),
+            delete: shorthand("DELETE", false),
+            post: shorthand("POST", true),
+            put: shorthand("PUT", true),
+            patch: shorthand("PATCH", true)
+        };
+    })();
+
     /** How many handlers are registered for an event and collection. */
     globalThis.__lazypock_count = function (eventName, collection) {
         const handlers = registry.get(eventName + ":" + collection);

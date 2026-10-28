@@ -529,9 +529,22 @@ async fn serve(config: Config) -> Result<()> {
     // The hook worker owns the QuickJS runtime on its own thread, because the
     // runtime is not `Send`. It starts even with no hook files: it costs an idle
     // thread, and it means a hook added later is picked up without a restart.
+    //
+    // `$http` is only as open as the allowlist says. With none configured every
+    // call is refused, and each allowed call is still limited to a public address
+    // and the hook deadline.
+    let hook_limits = lazypock_hooks::HookLimits::default();
+    let hook_http =
+        lazypock_hooks::HookHttp::new(config.hooks_http_allowlist.clone(), hook_limits.deadline);
+    if hook_http.allows_any() {
+        tracing::info!(
+            allowed_hosts = config.hooks_http_allowlist.len(),
+            "hooks may make outbound requests"
+        );
+    }
     let hooks = Arc::new(lazypock_hooks::HookService::start(
         hooks_directory(),
-        lazypock_hooks::HookLimits::default(),
+        lazypock_hooks::HookSetup::new(hook_limits, hook_http),
     ));
 
     // CORS is enforced from the `cors_origins` setting, so it is a runtime value
