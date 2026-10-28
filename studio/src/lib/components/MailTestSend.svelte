@@ -49,8 +49,7 @@
 		if (!to || sending) return;
 		sending = true;
 		try {
-			await client.http.post(
-				'/mail',
+			await client.mail.send(
 				template
 					? { to, template, assigns }
 					: {
