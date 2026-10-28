@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.29.0](https://github.com/gnuzd/lazypock/compare/v0.28.0...v0.29.0) (2026-10-28)
+
+
+### Features
+
+* **studio:** call client.mail.* instead of hand-rolled HTTP ([dceecdf](https://github.com/gnuzd/lazypock/commit/dceecdf8f8e416e17a053c81c070df063efae7be))
+
+
+### Bug Fixes
+
+* **studio:** let the SDK own token refresh ([a2df80c](https://github.com/gnuzd/lazypock/commit/a2df80c8678eb53482e55a05c8574de86b8b7fae))
+* **studio:** make the e2e suite pass on a first real run ([4895269](https://github.com/gnuzd/lazypock/commit/4895269e34ba5a9cccb2c9e66dcdbfb18cf2c23b))
+
 ## [0.28.0](https://github.com/gnuzd/lazypock/compare/v0.27.0...v0.28.0) (2026-10-28)
 
 
