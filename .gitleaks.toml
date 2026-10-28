@@ -1,0 +1,27 @@
+# gitleaks — secret scanning for this repository.
+#
+# The scanner runs with `--no-git`, so it walks everything in the working tree,
+# including build output. Rust compiler metadata (`target/**/*.rmeta`) embeds the
+# test fixtures of the crates that are compiled — private keys that belong to
+# `pem-rfc7468`, `pkcs1` and `pkcs8` — and a scan of them reports keys that were
+# never in this repository. Build output and vendored dependencies are therefore
+# skipped; source, migrations, deployment files and any `.env` deliberately kept
+# in the tree are still scanned.
+#
+# A local `.env` that is gitignored is *not* exempt: it holds real credentials, and
+# the point of scanning the working tree is to notice one that leaked into it.
+
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''^target/''',
+    '''^node_modules/''',
+    '''^studio/node_modules/''',
+    '''^docs/node_modules/''',
+    '''^studio/build/''',
+    '''^studio/.svelte-kit/''',
+    '''^docs/.svelte-kit/''',
+    '''^docs/.sdk-cache/''',
+]
