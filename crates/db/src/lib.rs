@@ -15,6 +15,7 @@ pub mod listen;
 pub mod migrate;
 pub mod pool;
 pub mod query;
+pub mod realtime;
 pub mod records;
 pub mod reflect;
 pub mod rls;

@@ -114,6 +114,19 @@ pub async fn update(
             .map_err(ApiError::new)?;
     }
 
+    // The realtime switch is a declaration as well: the setting alone would only
+    // decide for collections created afterwards, so a deployment that turned
+    // realtime off would keep publishing from every collection it already had —
+    // and would keep paying for a log row and a `NOTIFY` on every write, including
+    // writes that never went through the server. Applied here, inside the settings
+    // transaction, so a failure leaves the setting unsaved rather than half applied.
+    if let Some(setting) = object.get(lazypock_db::realtime::SETTING) {
+        let enabled = lazypock_db::realtime::enabled_from_setting(setting);
+        lazypock_db::realtime::apply_global(&transaction, enabled)
+            .await
+            .map_err(ApiError::new)?;
+    }
+
     // Inside the transaction, so a settings write that cannot be attributed does
     // not happen. Names only, never values: these settings hold credentials — an
     // SMTP password, storage keys — and an audit log that copies them is one more

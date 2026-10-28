@@ -258,6 +258,20 @@
 		<div class="mt-6">
 			<FlowSteps steps={realtimeSteps} />
 		</div>
+
+		<p class="mt-4 text-base-content/80 leading-relaxed">
+			Publishing is switchable, and both switches act on the <strong>trigger</strong> rather than
+			on delivery: turning realtime off drops it, so a write stops costing a log row and a
+			<code class="doc-inline px-1 py-0.5">NOTIFY</code> — including a write made straight from
+			<code class="doc-inline px-1 py-0.5">psql</code>, a migration or another service, none of
+			which pass through the server. A collection opts out with
+			<code class="doc-inline px-1 py-0.5">{`{ "realtime": false }`}</code> in its options, and
+			the instance-wide
+			<code class="doc-inline px-1 py-0.5">realtime</code> setting
+			(<code class="doc-inline px-1 py-0.5">PATCH /api/settings</code>, superuser only) switches
+			every collection at once. A collection publishes when both say yes, and both default to on,
+			which is what every collection did before the switches existed.
+		</p>
 	</section>
 
 	<!-- DESIGN DECISIONS -->

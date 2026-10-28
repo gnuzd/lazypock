@@ -57,6 +57,18 @@ impl Collection {
     pub fn validate(&self) -> Result<()> {
         validate_collection_name(&self.name)?;
 
+        // The realtime switch is read as a boolean by the DDL that adds or drops the
+        // change-event trigger. A string here would silently read as "on", so a
+        // malformed value is an error rather than a switch that does nothing.
+        if let Some(value) = self.options.get(crate::realtime::OPTION) {
+            if !value.is_boolean() {
+                return Err(Error::invalid(format!(
+                    "the {} option must be true or false, got {value}",
+                    crate::realtime::OPTION
+                )));
+            }
+        }
+
         let mut seen: HashSet<&str> = HashSet::new();
         for field in &self.fields {
             if !seen.insert(field.name.as_str()) {
@@ -73,6 +85,18 @@ impl Collection {
     /// Field lookup by name.
     pub fn field(&self, name: &str) -> Option<&Field> {
         self.fields.iter().find(|field| field.name == name)
+    }
+
+    /// Whether this collection publishes realtime change events.
+    ///
+    /// On unless the collection says otherwise: that is what every collection did
+    /// before the option existed, and turning realtime off is something an operator
+    /// asks for, never something they discover.
+    pub fn realtime_enabled(&self) -> bool {
+        self.options
+            .get(crate::realtime::OPTION)
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
     }
 
     /// The collection's password field, when it has one.
@@ -888,16 +912,12 @@ pub async fn create(client: &mut Client, input: CreateCollection) -> Result<Coll
     rls::policies::apply(&transaction, &collection, &rule_context).await?;
 
     // The change-event trigger, for the same reason policies are applied here: a
-    // collection that is not wired up would silently never publish anything.
+    // collection that is not wired up would silently never publish anything. The
+    // collection's own switch and the instance-wide one both decide, so this is
+    // `realtime::apply` rather than a bare `create trigger`.
     if !existing_table {
-        transaction
-            .batch_execute(&ddl::create_realtime_trigger_statement(&collection.name)?)
-            .await
-            .map_err(|err| {
-                Error::invalid(format!(
-                    "failed to add the realtime trigger to {name:?}: {err}"
-                ))
-            })?;
+        let globally_enabled = crate::realtime::global_enabled(&transaction).await?;
+        crate::realtime::apply(&transaction, &collection, globally_enabled).await?;
     }
 
     notify_schema_changed(&transaction).await?;
@@ -1299,6 +1319,13 @@ pub async fn update(
     .await?;
 
     rls::policies::apply(&transaction, &updated, &rule_context).await?;
+
+    // The realtime switch is part of the definition, so it is reconciled with the
+    // trigger here rather than only when the collection is created: an operator who
+    // turns it off expects the trigger to go, not to take effect on the next
+    // collection.
+    let globally_enabled = crate::realtime::global_enabled(&transaction).await?;
+    crate::realtime::apply(&transaction, &updated, globally_enabled).await?;
 
     notify_schema_changed(&transaction).await?;
     transaction.commit().await.map_err(db_error)?;
