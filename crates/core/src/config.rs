@@ -5,7 +5,7 @@
 //! must fail at boot, not at request time.
 
 use crate::error::{Error, Result};
-use crate::net::TrustedProxies;
+use crate::net::{HostAllowlist, TrustedProxies};
 use std::{env, fmt, net::SocketAddr, path::PathBuf};
 
 /// Default bind address for the API server.
@@ -168,6 +168,14 @@ pub struct Config {
     /// believing one without saying which proxy set it is believing the caller's
     /// own claim about who they are.
     pub trusted_proxies: TrustedProxies,
+    /// Hosts a TypeScript hook may reach with `$http`.
+    ///
+    /// Empty by default, and empty means nothing is reachable: a hook's egress is
+    /// a capability granted host by host. Even an allowlisted host is refused when
+    /// it resolves to a private, loopback or link-local address, so an allowlist
+    /// entry cannot be used to reach the deployment's own network or a cloud
+    /// metadata endpoint.
+    pub hooks_http_allowlist: HostAllowlist,
     /// Requests per minute per address that spend credentials. Zero disables.
     pub rate_limit_credentials_per_minute: u32,
     /// Requests per minute per address for everything else. Zero disables.
@@ -278,6 +286,15 @@ impl Config {
             None => TrustedProxies::default(),
         };
 
+        // An entry that cannot be read is refused at boot: silently allowing
+        // nothing, or something, is not a state an operator can notice from the
+        // outside.
+        let hooks_http_allowlist = match optional(&get, "LAZYPOCK_HOOK_HTTP_ALLOWLIST") {
+            Some(raw) => HostAllowlist::parse(&raw)
+                .map_err(|err| Error::config(format!("LAZYPOCK_HOOK_HTTP_ALLOWLIST: {err}")))?,
+            None => HostAllowlist::default(),
+        };
+
         let rate_limit_credentials_per_minute = match optional(&get, "LAZYPOCK_RATE_LIMIT_AUTH") {
             None => DEFAULT_RATE_LIMIT_AUTH,
             Some(raw) => raw.trim().parse::<u32>().map_err(|_| {
@@ -335,6 +352,7 @@ impl Config {
             pg_prepared_statements,
             public_url,
             trusted_proxies,
+            hooks_http_allowlist,
             rate_limit_credentials_per_minute,
             rate_limit_requests_per_minute,
             rate_limit_account_failures,
@@ -376,6 +394,10 @@ impl Config {
             ("data_dir", self.data_dir.display().to_string()),
             ("hooks_dir", self.hooks_dir.display().to_string()),
             ("trusted_proxies", self.trusted_proxies.len().to_string()),
+            (
+                "hooks_http_allowlist",
+                self.hooks_http_allowlist.len().to_string(),
+            ),
             (
                 "rate_limit_credentials_per_minute",
                 self.rate_limit_credentials_per_minute.to_string(),
@@ -496,6 +518,37 @@ mod tests {
             "LAZYPOCK_DATABASE_URL",
             "postgres://user:pass@localhost:5432/lazypock",
         )]
+    }
+
+    #[test]
+    fn hooks_reach_no_host_unless_one_is_named() {
+        let config = config(&minimal()).expect("valid config");
+        assert!(
+            config.hooks_http_allowlist.is_empty(),
+            "egress is opt-in: nothing is reachable by default"
+        );
+        assert!(!config.hooks_http_allowlist.allows("example.com"));
+    }
+
+    #[test]
+    fn hook_egress_hosts_are_read_and_a_bad_one_is_refused_at_boot() {
+        let mut pairs = minimal();
+        pairs.push((
+            "LAZYPOCK_HOOK_HTTP_ALLOWLIST",
+            "api.example.com, *.hooks.example.com",
+        ));
+        let allowed = config(&pairs).expect("valid config");
+        assert_eq!(allowed.hooks_http_allowlist.len(), 2);
+        assert!(allowed.hooks_http_allowlist.allows("api.example.com"));
+        assert!(allowed.hooks_http_allowlist.allows("a.hooks.example.com"));
+
+        let mut broken = minimal();
+        broken.push(("LAZYPOCK_HOOK_HTTP_ALLOWLIST", "https://example.com"));
+        let err = config(&broken).expect_err("a URL is not a host");
+        assert!(
+            format!("{err}").contains("LAZYPOCK_HOOK_HTTP_ALLOWLIST"),
+            "the error names the variable: {err}"
+        );
     }
 
     #[test]

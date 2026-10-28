@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use lazypock_core::error::Result;
 use serde_json::Value;
 
-use crate::runtime::{HookLimits, HookRuntime, RecordEvent};
+#[cfg(test)]
+use crate::runtime::HookLimits;
+use crate::runtime::{HookRuntime, HookSetup, RecordEvent};
 use crate::strip::strip_types;
 
 /// The suffix a hook file has.
@@ -48,7 +50,7 @@ struct FileSignature {
 #[derive(Debug)]
 pub struct HookLoader {
     directory: PathBuf,
-    limits: HookLimits,
+    setup: HookSetup,
     /// The runtime currently serving, if hooks have ever loaded cleanly.
     runtime: Option<HookRuntime>,
     /// When the loaded runtime was actually replaced.
@@ -59,10 +61,14 @@ pub struct HookLoader {
 
 impl HookLoader {
     /// Point a loader at a directory. Nothing is read until `load`.
-    pub fn new(directory: impl Into<PathBuf>, limits: HookLimits) -> Self {
+    ///
+    /// A [`crate::HookLimits`] on its own is accepted: it builds a runtime whose
+    /// `$http` is refused, which is the right default for a caller that has not
+    /// said which hosts, if any, hooks may reach.
+    pub fn new(directory: impl Into<PathBuf>, setup: impl Into<HookSetup>) -> Self {
         Self {
             directory: directory.into(),
-            limits,
+            setup: setup.into(),
             runtime: None,
             signature: Vec::new(),
             last_error: None,
@@ -111,7 +117,7 @@ impl HookLoader {
             return report;
         }
 
-        let runtime = match HookRuntime::new(self.limits) {
+        let runtime = match HookRuntime::new(self.setup.clone()) {
             Ok(runtime) => runtime,
             Err(err) => {
                 let message = err.message().to_string();

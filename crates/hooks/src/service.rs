@@ -21,7 +21,9 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::loader::{HookLoader, LoadReport};
-use crate::runtime::{HookLimits, RecordEvent};
+#[cfg(test)]
+use crate::runtime::HookLimits;
+use crate::runtime::{HookSetup, RecordEvent};
 
 /// How often the worker will look for edited hook files.
 ///
@@ -61,7 +63,8 @@ impl HookService {
     /// The worker starts even when the directory holds no hooks: it costs a thread
     /// that is idle, and it means a hook file appearing later is picked up without
     /// a restart.
-    pub fn start(directory: impl Into<PathBuf>, limits: HookLimits) -> Self {
+    pub fn start(directory: impl Into<PathBuf>, setup: impl Into<HookSetup>) -> Self {
+        let setup = setup.into();
         let (requests, mut queue) = mpsc::unbounded_channel::<Request>();
         let active = Arc::new(AtomicBool::new(false));
         let shared = Arc::clone(&active);
@@ -70,7 +73,7 @@ impl HookService {
         std::thread::Builder::new()
             .name("lazypock-hooks".to_string())
             .spawn(move || {
-                let mut loader = HookLoader::new(&directory, limits);
+                let mut loader = HookLoader::new(&directory, setup);
                 // Load once at startup so a misconfigured hook is reported at boot
                 // rather than on the first write.
                 let report = loader.load();
