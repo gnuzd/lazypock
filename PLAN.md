@@ -859,11 +859,14 @@ than plumbing, so it is left undone rather than half-done.
 
 `$http` needed the domain allowlist from section 11.3 before it was safe to expose,
 and it is now in, bounded on every axis that matters: `LAZYPOCK_HOOK_HTTP_ALLOWLIST`
-(empty by default, so nothing is reachable), the resolved address must be public
-(checked before connecting and pinned, which is what defeats DNS rebinding),
-plaintext is refused, redirects are not followed, there is a hard per-call timeout
-inside the hook deadline, and the response is capped. Nothing from the triggering
-request — cookies, authorization, client headers — is ever forwarded.
+(empty by default, so nothing is reachable; an entry grants one port, 443 unless it
+names another), the resolved address must be public (checked before connecting and
+pinned, which is what defeats DNS rebinding), plaintext is refused, redirects are not
+followed, there is a hard per-call timeout inside the hook deadline, and the response
+is capped. Nothing from the triggering request — cookies, authorization, client
+headers — is ever forwarded, and no proxy is consulted. Error messages carry the URL
+with its query string removed, because a query is where a hook puts a token and a
+hook failure is logged.
 
 ### Configuration convention
 

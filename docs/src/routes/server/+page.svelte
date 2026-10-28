@@ -961,9 +961,11 @@ cargo build --release --no-default-features`}
             <td class="px-3 py-2"
               >Hosts a hook may reach with <code class="doc-inline px-1 py-0.5">$http</code>
               (<code class="doc-inline px-1 py-0.5">example.com</code>,
-              <code class="doc-inline px-1 py-0.5">*.example.com</code>). Empty
-              refuses every call; a host resolving to a private, loopback or
-              link-local address is refused too</td
+              <code class="doc-inline px-1 py-0.5">*.example.com</code>,
+              <code class="doc-inline px-1 py-0.5">example.com:8443</code>); an
+              entry without a port grants 443 only. Empty refuses every call, and a
+              host resolving to a private, loopback or link-local address is
+              refused too</td
             >
             <td class="px-3 py-2 font-mono text-xs">(empty)</td>
           <td class="px-3 py-2">no</td>

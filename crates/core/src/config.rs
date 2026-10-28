@@ -527,7 +527,7 @@ mod tests {
             config.hooks_http_allowlist.is_empty(),
             "egress is opt-in: nothing is reachable by default"
         );
-        assert!(!config.hooks_http_allowlist.allows("example.com"));
+        assert!(!config.hooks_http_allowlist.allows("example.com", 443));
     }
 
     #[test]
@@ -539,8 +539,10 @@ mod tests {
         ));
         let allowed = config(&pairs).expect("valid config");
         assert_eq!(allowed.hooks_http_allowlist.len(), 2);
-        assert!(allowed.hooks_http_allowlist.allows("api.example.com"));
-        assert!(allowed.hooks_http_allowlist.allows("a.hooks.example.com"));
+        assert!(allowed.hooks_http_allowlist.allows("api.example.com", 443));
+        assert!(allowed
+            .hooks_http_allowlist
+            .allows("a.hooks.example.com", 443));
 
         let mut broken = minimal();
         broken.push(("LAZYPOCK_HOOK_HTTP_ALLOWLIST", "https://example.com"));

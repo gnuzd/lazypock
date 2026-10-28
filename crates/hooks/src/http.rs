@@ -47,6 +47,8 @@ pub const MAX_URL_LEN: usize = 2048;
 const MAX_HEADERS: usize = 32;
 /// How many response headers are handed back.
 const MAX_RESPONSE_HEADERS: usize = 64;
+/// How many bytes of response headers are handed back, all told.
+const MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const MAX_HEADER_NAME: usize = 64;
 const MAX_HEADER_VALUE: usize = 4096;
 
@@ -228,20 +230,24 @@ impl Transport for ReqwestTransport {
 
         let response = request
             .send()
-            .map_err(|err| Error::internal(format!("$http: {}: {err}", prepared.url)))?;
+            // `without_url` because reqwest's own message quotes the URL, query
+            // string included; the gate adds the redacted one.
+            .map_err(|err| Error::internal(err.without_url().to_string()))?;
 
         let status = response.status().as_u16();
-        let headers: Vec<(String, String)> = response
-            .headers()
-            .iter()
-            .take(MAX_RESPONSE_HEADERS)
-            .map(|(name, value)| {
-                (
-                    name.as_str().to_string(),
-                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
-                )
-            })
-            .collect();
+        let mut headers: Vec<(String, String)> = Vec::new();
+        let mut header_bytes = 0usize;
+        for (name, value) in response.headers() {
+            if headers.len() >= MAX_RESPONSE_HEADERS {
+                break;
+            }
+            let value = String::from_utf8_lossy(value.as_bytes()).into_owned();
+            header_bytes += name.as_str().len() + value.len();
+            if header_bytes > MAX_RESPONSE_HEADER_BYTES {
+                break;
+            }
+            headers.push((name.as_str().to_string(), value));
+        }
 
         // One byte past the cap, so "exactly at the cap" is still readable and
         // "over it" is detectable without reading the whole response.
@@ -249,7 +255,7 @@ impl Transport for ReqwestTransport {
         response
             .take(MAX_RESPONSE_BYTES as u64 + 1)
             .read_to_end(&mut body)
-            .map_err(|err| Error::internal(format!("$http: cannot read the response: {err}")))?;
+            .map_err(|err| Error::internal(format!("cannot read the response: {err}")))?;
 
         Ok(HttpResponse {
             status,
@@ -318,13 +324,34 @@ impl HookHttp {
     /// Check the call against every rule, then send it.
     pub fn call(&self, call: &HttpCall) -> Result<HttpResponse> {
         let prepared = self.prepare(call)?;
-        let response = self.transport.send(&prepared)?;
+        // One place adds the URL to a message, and it adds the redacted form: a
+        // transport's own error text may name the request, and a request may carry a
+        // token in its query string.
+        let response = self.transport.send(&prepared).map_err(|err| {
+            Error::internal(format!(
+                "$http: {}: {}",
+                redact(&prepared.url),
+                err.message()
+            ))
+        })?;
         // The transport stops reading one byte past the cap; refusing here keeps
         // that bound true for any transport an embedder supplies.
         if response.body.len() > MAX_RESPONSE_BYTES {
             return Err(Error::invalid(format!(
                 "$http: the response from {} is larger than {MAX_RESPONSE_BYTES} bytes",
-                prepared.url
+                redact(&prepared.url)
+            )));
+        }
+        let header_bytes: usize = response
+            .headers
+            .iter()
+            .map(|(name, value)| name.len() + value.len())
+            .sum();
+        if header_bytes > MAX_RESPONSE_HEADER_BYTES {
+            return Err(Error::invalid(format!(
+                "$http: the response headers from {} are larger than \
+                 {MAX_RESPONSE_HEADER_BYTES} bytes",
+                redact(&prepared.url)
             )));
         }
         Ok(response)
@@ -345,7 +372,7 @@ impl HookHttp {
         if url.scheme() != "https" {
             return Err(Error::invalid(format!(
                 "$http: {} is {}, and only https is allowed",
-                call.url,
+                redact(&call.url),
                 url.scheme()
             )));
         }
@@ -361,14 +388,18 @@ impl HookHttp {
             .trim_end_matches('.')
             .to_string();
 
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| Error::invalid(format!("$http: {} has no port", redact(&call.url))))?;
+
         if self.allow.is_empty() {
             return Err(Error::invalid(
                 "$http: no hosts are allowed — set LAZYPOCK_HOOK_HTTP_ALLOWLIST to name them",
             ));
         }
-        if !self.allow.allows(&host) {
+        if !self.allow.allows(&host, port) {
             return Err(Error::invalid(format!(
-                "$http: {host} is not in LAZYPOCK_HOOK_HTTP_ALLOWLIST"
+                "$http: {host}:{port} is not in LAZYPOCK_HOOK_HTTP_ALLOWLIST"
             )));
         }
 
@@ -386,10 +417,6 @@ impl HookHttp {
             .timeout
             .unwrap_or(DEFAULT_TIMEOUT)
             .clamp(Duration::from_millis(50), self.budget);
-
-        let port = url
-            .port_or_known_default()
-            .ok_or_else(|| Error::invalid(format!("$http: {} has no port", call.url)))?;
 
         // Resolve once, check every answer, then pin the first. A host that answers
         // with one public and one private address is refused outright rather than
@@ -470,6 +497,24 @@ impl HookHttp {
             return Err(Error::invalid("$http: a request body cannot hold a NUL"));
         }
         Ok(Some(body.to_string()))
+    }
+}
+
+/// A URL as it may appear in an error message: scheme, host, port and path only.
+///
+/// A query string is exactly where a hook puts a token, and a hook failure is
+/// logged — so the query and the fragment never reach a message, and neither do
+/// credentials.
+fn redact(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut parsed) => {
+            parsed.set_query(None);
+            parsed.set_fragment(None);
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.to_string()
+        }
+        Err(_) => "<unparseable url>".to_string(),
     }
 }
 
@@ -716,6 +761,119 @@ mod tests {
             Duration::from_millis(50),
             "and not for less than a floor that would only produce noise"
         );
+    }
+
+    #[test]
+    fn an_allowlist_entry_grants_its_port_and_no_other() {
+        let (gate, transport) = gate("api.example.com:8443", &["93.184.216.34"]);
+
+        // The same host on the default port is a different grant, and is refused.
+        let err = gate
+            .call(&call("GET", "https://api.example.com/x"))
+            .expect_err("refused");
+        assert!(format!("{err}").contains("api.example.com:443"), "{err}");
+
+        gate.call(&call("GET", "https://api.example.com:8443/x"))
+            .expect("allowed");
+        assert_eq!(
+            transport.seen.lock().expect("not poisoned")[0]
+                .address
+                .port(),
+            8443
+        );
+    }
+
+    #[test]
+    fn an_error_message_never_carries_the_query_string() {
+        // A hook that puts a token in a query string must not see it echoed into a
+        // message that the server then logs.
+        struct Failing;
+
+        impl Transport for Failing {
+            fn send(&self, _request: &Prepared) -> Result<HttpResponse> {
+                Err(Error::internal("connection refused"))
+            }
+        }
+
+        let gate = HookHttp::with_parts(
+            HostAllowlist::parse("api.example.com").expect("allowlist"),
+            Duration::from_secs(2),
+            Arc::new(FakeResolver(vec!["93.184.216.34".parse().expect("an IP")])),
+            Arc::new(Failing) as Arc<dyn Transport>,
+        );
+
+        let err = gate
+            .call(&call(
+                "GET",
+                "https://api.example.com/x?token=super-secret&other=1",
+            ))
+            .expect_err("fails");
+        let message = format!("{err}");
+        assert!(
+            !message.contains("super-secret") && !message.contains("other=1"),
+            "the query must not reach the message: {message}"
+        );
+        assert!(
+            message.contains("api.example.com/x"),
+            "the useful part stays: {message}"
+        );
+
+        // Neither does a plaintext URL's credentials, which the scheme check
+        // refuses before anything else looks at it.
+        let scheme = gate
+            .call(&call("GET", "http://user:pass@api.example.com/x"))
+            .expect_err("refused");
+        let scheme = format!("{scheme}");
+        assert!(!scheme.contains("pass"), "{scheme}");
+    }
+
+    #[test]
+    fn oversized_response_headers_are_refused() {
+        // A transport that ignores the cap still cannot get past the gate.
+        let huge: Vec<(String, String)> = (0..80)
+            .map(|index| (format!("x-header-{index}"), "v".repeat(1024)))
+            .collect();
+        let gate = HookHttp::with_parts(
+            HostAllowlist::parse("api.example.com").expect("allowlist"),
+            Duration::from_secs(2),
+            Arc::new(FakeResolver(vec!["93.184.216.34".parse().expect("an IP")])),
+            Arc::new(FixedTransport(HttpResponse {
+                status: 200,
+                headers: huge,
+                body: String::new(),
+            })) as Arc<dyn Transport>,
+        );
+        let err = gate
+            .call(&call("GET", "https://api.example.com/x"))
+            .expect_err("refused");
+        assert!(format!("{err}").contains("headers"), "{err}");
+    }
+
+    #[test]
+    fn an_oversized_body_from_a_transport_is_refused() {
+        let gate = HookHttp::with_parts(
+            HostAllowlist::parse("api.example.com").expect("allowlist"),
+            Duration::from_secs(2),
+            Arc::new(FakeResolver(vec!["93.184.216.34".parse().expect("an IP")])),
+            Arc::new(FixedTransport(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: "x".repeat(MAX_RESPONSE_BYTES + 1),
+            })) as Arc<dyn Transport>,
+        );
+        let err = gate
+            .call(&call("GET", "https://api.example.com/x"))
+            .expect_err("refused");
+        assert!(format!("{err}").contains("larger than"), "{err}");
+    }
+
+    /// A transport that always answers with one fixed response.
+    struct FixedTransport(HttpResponse);
+
+    impl Transport for FixedTransport {
+        fn send(&self, _request: &Prepared) -> Result<HttpResponse> {
+            Ok(self.0.clone())
+        }
     }
 
     #[test]
