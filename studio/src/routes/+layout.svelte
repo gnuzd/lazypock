@@ -6,7 +6,6 @@
 	import { onMount } from 'svelte';
 	import AppDialog from '$lib/components/AppDialog.svelte';
 	import { client } from '$lib/client';
-	import { forgetSession } from '$lib/session';
 	import { base, resolve } from '$app/paths';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
@@ -19,6 +18,11 @@
 			if (theme) document.documentElement.setAttribute('data-theme', theme);
 
 			if (!browser) return;
+
+			// The SDK loads its persisted session (token, record, refresh token, expiry)
+			// asynchronously at construction. Reading `isValid` before that lands would
+			// look like a signed-out tab on every reload.
+			await client.authReady;
 
 			const path = window.location.pathname;
 			const isLoginPage = path === base + '/login';
@@ -39,7 +43,6 @@
 					return;
 				} catch {
 					// Token is stale — clear it and show login
-					forgetSession();
 					client.authStore.clear();
 					if (!isLoginPage) {
 						goto(resolve('/login'));
