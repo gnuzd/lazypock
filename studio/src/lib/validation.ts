@@ -62,6 +62,10 @@ export const collectionSchema = z.object({
 	viewQuery: z.string().optional(),
 	viewBuilder: viewBuilderSpecSchema.optional(),
 	indexes: z.array(z.string()).optional(),
+	// Type-specific settings. The collection editor only knows about `realtime`,
+	// but it writes the whole object back, so a key it does not understand — an
+	// auth collection's options, say — must survive a save.
+	options: z.record(z.string(), z.unknown()).optional(),
 	fields: z.array(collectionFieldSchema),
 	listRule: z.string().nullable().optional(),
 	viewRule: z.string().nullable().optional(),

@@ -10,6 +10,7 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import NewFieldButton from '$lib/components/NewFieldButton.svelte';
 	import RuleField from '$lib/components/RuleField.svelte';
+	import Switch from '$lib/components/Switch.svelte';
 	import { slugify } from '$lib/fieldTypes';
 	import type { FieldDefinition } from '$lib/fieldTypes';
 	import { collectionSchema } from '$lib/validation';
@@ -82,6 +83,12 @@
 	let deleteRule = $state<string | null>(null);
 	let manageRule = $state<string | null>(null);
 	let showRulesInfo = $state(false);
+	// ── Settings tab ──
+	// Every other key in a collection's options is written back untouched: this
+	// editor only owns `realtime`, and replacing the object wholesale would drop
+	// options it does not render (an auth collection's, for instance).
+	let existingOptions = $state<Record<string, unknown>>({});
+	let realtimeEnabled = $state(true);
 	let showIndexesModal = $state(false);
 	let showCloseConfirm = $state(false);
 	let deleting = $state(false);
@@ -117,6 +124,9 @@
 					(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
 				) as unknown as FieldDefinition[];
 			newIndexes = ((coll.indexes as string[]) ?? []).filter(Boolean);
+			existingOptions = (coll.options as Record<string, unknown>) ?? {};
+			// Absent means on, which is what a collection did before the switch existed.
+			realtimeEnabled = existingOptions.realtime !== false;
 			viewQuery = (coll.viewQuery as string) ?? '';
 			viewOrigin = (coll.viewOrigin as string) === 'builder' ? 'builder' : 'sql';
 			viewBuilder = ((coll.viewBuilder as ViewBuilderSpec | undefined) ??
@@ -346,6 +356,8 @@
 			type: newType,
 			...(newType === 'view' && viewMode === 'sql' ? { viewQuery: viewQuery.trim() } : {}),
 			...(newType === 'view' && viewMode === 'builder' ? { viewBuilder } : {}),
+			// A view is a query, so it has no trigger and no options of its own.
+			...(newType === 'view' ? {} : { options: { ...existingOptions, realtime: realtimeEnabled } }),
 			indexes: newIndexes,
 			fields: newFields
 				.filter((f) => !f['@toDelete'])
@@ -472,8 +484,8 @@
 				Auth collections get <code class="rounded bg-base-200 px-1 py-0.5">email</code>,
 				<code class="rounded bg-base-200 px-1 py-0.5">password</code>,
 				<code class="rounded bg-base-200 px-1 py-0.5">verified</code> and
-				<code class="rounded bg-base-200 px-1 py-0.5">emailVisibility</code> automatically
-				(the password field is write-only, so it is created for you rather than added here).
+				<code class="rounded bg-base-200 px-1 py-0.5">emailVisibility</code> automatically (the password
+				field is write-only, so it is created for you rather than added here).
 			</p>
 		{/if}
 	</div>
@@ -494,6 +506,13 @@
 				? 'border-primary text-primary'
 				: 'border-transparent text-base-content/60'}"
 			onclick={() => (activeTab = 'API rules')}>API rules</button
+		>
+		<button
+			type="button"
+			class="cursor-pointer border-b-2 px-3 py-2 text-sm transition-colors {activeTab === 'Settings'
+				? 'border-primary text-primary'
+				: 'border-transparent text-base-content/60'}"
+			onclick={() => (activeTab = 'Settings')}>Settings</button
 		>
 	</nav>
 
@@ -661,7 +680,7 @@
 				>
 				<span>Unique constraints and indexes ({newIndexes.length})</span>
 			</button>
-		{:else}
+		{:else if activeTab === 'API rules'}
 			<!-- API Rules tab -->
 			<div class="flex flex-col gap-2">
 				<div class="flex items-center gap-1 text-xs text-base-content/60">
@@ -724,6 +743,23 @@
 					<p class="text-xs text-base-content/50">
 						View collections are read-only — only the List and View rules apply.
 					</p>
+				{/if}
+			</div>
+		{:else}
+			<!-- Settings tab -->
+			<div class="flex flex-col gap-3">
+				{#if newType === 'view'}
+					<p class="text-xs text-base-content/50">
+						A view collection is a query, so it has no change-event trigger to switch.
+					</p>
+				{:else}
+					<Switch
+						variant="inline"
+						bind:checked={realtimeEnabled}
+						description="Writes to this collection are published as realtime events. Turning it off drops the change-event trigger, so no write publishes an event — including writes made directly in the database — and no write pays for one. Saves with the rest of the form."
+					>
+						Publish realtime change events
+					</Switch>
 				{/if}
 			</div>
 		{/if}
