@@ -81,6 +81,10 @@ pub async fn send(
     validate_address(to)?;
     let to_name = body.to_name.trim().to_string();
 
+    // Acquired before the message shape is settled: the names a send may use include
+    // whatever a superuser has saved, which only the database knows.
+    let client = state.db.client().await.map_err(ApiError::new)?;
+
     let (job, template) = match (body.template.as_deref(), body.subject.as_deref()) {
         (Some(template), None) => {
             if body.html.is_some() || body.text.is_some() {
@@ -89,7 +93,9 @@ pub async fn send(
                 ));
             }
             let template = template.trim();
-            let known = state.mail_templates.names();
+            let templates =
+                crate::mail_templates::effective(&client, &state.mail_templates).await?;
+            let known = templates.names();
             if !known.contains(&template) {
                 return Err(invalid(format!(
                     "no mail template named {template:?} (known: {})",
@@ -150,8 +156,6 @@ pub async fn send(
             ))
         }
     };
-
-    let client = state.db.client().await.map_err(ApiError::new)?;
 
     // Refuse before queueing when SMTP is not configured: a job that can only fail
     // would retry and be marked dead, and the caller would learn nothing.

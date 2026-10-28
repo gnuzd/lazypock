@@ -63,6 +63,10 @@ pub mod action {
 
     /// A message queued through `POST /api/mail`.
     pub const MAIL_SEND: &str = "mail.send";
+    /// A mail template body was saved through the API.
+    pub const MAIL_TEMPLATE_SAVE: &str = "mail.template.save";
+    /// A stored mail template body was removed, restoring the file or built-in.
+    pub const MAIL_TEMPLATE_DELETE: &str = "mail.template.delete";
 }
 
 /// The acting superuser's id, for [`record`].

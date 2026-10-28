@@ -20,6 +20,7 @@ use crate::error::ApiError;
 use crate::files;
 use crate::logs;
 use crate::mail;
+use crate::mail_templates;
 use crate::presets;
 use crate::rate_limit;
 use crate::realtime;
@@ -131,6 +132,20 @@ pub fn router(state: AppState) -> Router {
         // Application mail. Superuser or API key: the Studio's test button and an
         // application server respectively. Queued, never sent inside the request.
         .route("/api/mail", post(mail::send))
+        // Mail templates. Superuser-only, and deliberately not API-keyable: a template
+        // is rendered with the variables of an auth email, so a key that could write
+        // one could mail itself somebody else's password-reset token.
+        .route("/api/mail/templates", get(mail_templates::list))
+        .route(
+            "/api/mail/templates/{name}",
+            get(mail_templates::get)
+                .put(mail_templates::save)
+                .delete(mail_templates::delete),
+        )
+        .route(
+            "/api/mail/templates/{name}/preview",
+            post(mail_templates::preview),
+        )
         // Cron jobs. Superuser-only: running one executes SQL or an HTTP request.
         .route("/api/crons", get(crons::list).post(crons::create))
         .route("/api/crons/validate", post(crons::validate))

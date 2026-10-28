@@ -136,6 +136,14 @@ pub static SYSTEM_MIGRATIONS: &[Migration] = &[
         name: "realtime_hardening",
         sql: include_str!("../../../migrations/0018_realtime_hardening.sql"),
     },
+    // The numbers are only an order, not a sequence: the ledger applies whatever is
+    // not yet recorded, so a binary carrying this migration and not the realtime one
+    // applies both when it sees them.
+    Migration {
+        version: 19,
+        name: "mail_templates",
+        sql: include_str!("../../../migrations/0019_mail_templates.sql"),
+    },
 ];
 
 /// Outcome of a migration run.

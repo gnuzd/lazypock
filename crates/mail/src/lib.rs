@@ -7,11 +7,13 @@
 //!   superuser can change SMTP settings in the Studio without a restart — which is
 //!   what the reference does.
 //! * [`Templates`] renders the subject, the HTML body and the plain-text
-//!   alternative with [MiniJinja](https://docs.rs/minijinja). The defaults are
-//!   compiled in, and a deployment **overrides them with files** in a template
-//!   directory, so changing an email does not need a Rust build. A directory may
-//!   also define **new** names (`receipt.subject`, `receipt.html`,
-//!   `receipt.text`), which is how application mail is sent from `POST /api/mail`.
+//!   alternative with [MiniJinja](https://docs.rs/minijinja). Three layers, newest
+//!   first: a body **saved through the API** (stored in `_mail_templates`), a **file**
+//!   in a template directory, and the **built-in** compiled into the binary. Which
+//!   layer a part came from is reported alongside it, so an editor can say whether an
+//!   edit is in effect and what a reset would restore. A deployment can add a name
+//!   (`receipt.subject`, `receipt.html`, `receipt.text`) from either layer, which is
+//!   how application mail is sent from `POST /api/mail`.
 //! * [`Mailer`] joins a rendered message to a transport. [`Mailer::capture`]
 //!   records instead of sending, which is what the tests use and what a
 //!   deployment can use to inspect what would go out.
@@ -19,7 +21,7 @@
 //! Sending is called from the job queue's `mail` kind, never from a request
 //! handler: a provider that is slow or down must not hold a request open.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -180,6 +182,9 @@ enum Part {
 }
 
 impl Part {
+    /// Every part, in the order an editor shows them.
+    const ALL: [Part; 3] = [Part::Subject, Part::Html, Part::Text];
+
     fn suffix(self) -> &'static str {
         match self {
             Self::Subject => "subject",
@@ -187,63 +192,240 @@ impl Part {
             Self::Text => "text",
         }
     }
+
+    /// The part a stored row names, or `None` for anything else.
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "subject" => Some(Self::Subject),
+            "html" => Some(Self::Html),
+            "text" => Some(Self::Text),
+            _ => None,
+        }
+    }
 }
 
-/// The rendered templates: built-in defaults with any file overrides applied, plus
-/// any additional names a deployment's template directory defines.
+/// The layer a template body was resolved from.
+///
+/// Reporting it is what lets an editor say whether an edit is in effect and what a
+/// reset would restore: a body served from the database and one served from the
+/// binary are otherwise indistinguishable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// Saved through the API and stored in `_mail_templates`.
+    Database,
+    /// A file in the template directory.
+    File,
+    /// Compiled into the binary.
+    Builtin,
+}
+
+impl Origin {
+    /// The name the API reports this layer by.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Database => "database",
+            Self::File => "file",
+            Self::Builtin => "builtin",
+        }
+    }
+}
+
+/// One resolved part of a template.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    /// `subject`, `html` or `text`.
+    pub part: &'static str,
+    /// The body to render.
+    pub body: String,
+    /// Where the body came from.
+    pub origin: Origin,
+}
+
+/// A body applied on top of the files and built-ins.
+///
+/// Named rather than a tuple so a caller building one from a database row cannot
+/// transpose the part and the body.
+#[derive(Debug, Clone)]
+pub struct Override {
+    /// The template name.
+    pub name: String,
+    /// `subject`, `html` or `text`.
+    pub part: String,
+    /// The body.
+    pub body: String,
+}
+
+/// All three rendered parts of one template.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rendered {
+    /// The rendered subject.
+    pub subject: String,
+    /// The rendered HTML body.
+    pub html: String,
+    /// The rendered plain-text alternative.
+    pub text: String,
+}
+
+/// One part's body and the layer it came from.
+#[derive(Debug, Clone)]
+struct Entry {
+    body: String,
+    origin: Origin,
+}
+
+/// The templates this node serves: the built-in defaults, the file overrides in the
+/// template directory, and the bodies saved through the API.
 pub struct Templates {
     env: Environment<'static>,
     /// Every template name the environment holds, built-in and custom.
     names: BTreeSet<String>,
+    /// The body of every part, with the layer it was resolved from.
+    entries: BTreeMap<(String, &'static str), Entry>,
 }
 
 impl Templates {
-    /// Load the templates, applying file overrides from `directory` when given.
+    /// Load the built-in templates, applying file overrides from `directory`.
     ///
     /// A template with a syntax error is refused here rather than when the first
     /// email is sent, so a bad edit is caught at boot.
     pub fn load(directory: Option<&Path>) -> Result<Self> {
+        Self::load_with(directory, &[])
+    }
+
+    /// Load the templates, then apply `overrides` on top of the files and built-ins.
+    pub fn load_with(directory: Option<&Path>, overrides: &[Override]) -> Result<Self> {
+        let mut entries: BTreeMap<(String, &'static str), Entry> = BTreeMap::new();
+
+        for name in BUILTIN_NAMES {
+            for part in Part::ALL {
+                let key = format!("{name}.{}", part.suffix());
+                let (body, origin) = match read_override(directory, &key)? {
+                    Some(body) => (body, Origin::File),
+                    None => (
+                        builtin(name, part)
+                            .ok_or_else(|| {
+                                Error::internal(format!("no built-in template {key:?}"))
+                            })?
+                            .to_string(),
+                        Origin::Builtin,
+                    ),
+                };
+                entries.insert((name.to_string(), part.suffix()), Entry { body, origin });
+            }
+        }
+
+        // Application mail: a name the directory defines beyond the built-ins.
+        for name in custom_names(directory)? {
+            for part in Part::ALL {
+                let key = format!("{name}.{}", part.suffix());
+                let Some(body) = read_override(directory, &key)? else {
+                    continue;
+                };
+                entries.insert(
+                    (name.clone(), part.suffix()),
+                    Entry {
+                        body,
+                        origin: Origin::File,
+                    },
+                );
+            }
+        }
+
+        apply(&mut entries, overrides)?;
+        Self::from_entries(entries)
+    }
+
+    /// A copy of these templates with `overrides` applied on top.
+    ///
+    /// The bodies already resolved are carried over rather than re-read, so an
+    /// override changes only the parts it names and cannot disturb the layers beneath
+    /// it.
+    pub fn with_overrides(&self, overrides: &[Override]) -> Result<Self> {
+        let mut entries = self.entries.clone();
+        apply(&mut entries, overrides)?;
+        Self::from_entries(entries)
+    }
+
+    /// Build the environment from a resolved body map.
+    ///
+    /// The one construction path, so a template loaded at boot and one saved through
+    /// the API are validated the same way. A name that is only partly there is refused
+    /// here — at boot, or at save time — rather than at the first send, because "the
+    /// email arrived without a body" is not a failure anyone notices in time.
+    fn from_entries(entries: BTreeMap<(String, &'static str), Entry>) -> Result<Self> {
+        let names: BTreeSet<String> = entries.keys().map(|(name, _)| name.clone()).collect();
+        for name in &names {
+            for part in Part::ALL {
+                if !entries.contains_key(&(name.clone(), part.suffix())) {
+                    return Err(Error::config(format!(
+                        "mail template {name:?} is incomplete: it needs a subject, an html \
+                         and a text part"
+                    )));
+                }
+            }
+        }
+
         let mut env = Environment::new();
         // A variable a template uses but the caller did not supply is an error:
         // an OTP email rendered with an empty code is worse than one that fails.
         env.set_undefined_behavior(UndefinedBehavior::Strict);
-
-        let mut names = BTreeSet::new();
-        for name in BUILTIN_NAMES {
-            for part in [Part::Subject, Part::Html, Part::Text] {
-                let key = format!("{name}.{}", part.suffix());
-                let source = match read_override(directory, &key)? {
-                    Some(source) => source,
-                    None => builtin(name, part)
-                        .ok_or_else(|| Error::internal(format!("no built-in template {key:?}")))?
-                        .to_string(),
-                };
-                env.add_template_owned(key.clone(), source)
-                    .map_err(|err| Error::config(format!("mail template {key:?}: {err}")))?;
-            }
-            names.insert(name.to_string());
+        for ((name, part), entry) in &entries {
+            env.add_template_owned(format!("{name}.{part}"), entry.body.clone())
+                .map_err(|err| Error::config(format!("mail template {name}.{part}: {err}")))?;
         }
 
-        // Application mail: names the directory defines beyond the built-ins. A name
-        // that is only partly there is refused at boot rather than at the first send,
-        // because "the email arrived without a body" is not a failure anyone notices
-        // in time.
-        for name in custom_names(directory)? {
-            for part in [Part::Subject, Part::Html, Part::Text] {
-                let key = format!("{name}.{}", part.suffix());
-                let Some(source) = read_override(directory, &key)? else {
-                    return Err(Error::config(format!(
-                        "mail template {name:?} is incomplete: it needs {name}.subject, \
-                         {name}.html and {name}.text in the template directory"
-                    )));
-                };
-                env.add_template_owned(key.clone(), source)
-                    .map_err(|err| Error::config(format!("mail template {key:?}: {err}")))?;
-            }
-            names.insert(name);
-        }
+        Ok(Self {
+            env,
+            names,
+            entries,
+        })
+    }
 
-        Ok(Self { env, names })
+    /// Every part of one template, in editor order, with the layer each came from.
+    pub fn template(&self, name: &str) -> Option<Vec<Resolved>> {
+        if !self.names.contains(name) {
+            return None;
+        }
+        Some(
+            Part::ALL
+                .iter()
+                .map(|part| {
+                    let entry = &self.entries[&(name.to_string(), part.suffix())];
+                    Resolved {
+                        part: part.suffix(),
+                        body: entry.body.clone(),
+                        origin: entry.origin,
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// Check that the parts of `name` parse, before they are stored.
+    ///
+    /// Parsing in a scratch environment is what makes a syntax error a rejected save
+    /// rather than a job that fails later, on an email nobody is watching.
+    pub fn check(name: &str, parts: &[(&str, &str)]) -> Result<()> {
+        let mut env = Environment::new();
+        for (part, body) in parts {
+            let Some(parsed) = Part::parse(part) else {
+                return Err(Error::invalid(format!(
+                    "a mail template part must be subject, html or text, got {part:?}"
+                )));
+            };
+            env.add_template_owned(format!("{name}.{}", parsed.suffix()), (*body).to_string())
+                .map_err(|err| Error::invalid(format!("mail template {name}.{part}: {err}")))?;
+        }
+        Ok(())
+    }
+
+    /// Render all three parts with `context`.
+    pub fn render_all(&self, name: &str, context: &Value) -> Result<Rendered> {
+        Ok(Rendered {
+            subject: self.render(name, Part::Subject, context)?,
+            html: self.render(name, Part::Html, context)?,
+            text: self.render(name, Part::Text, context)?,
+        })
     }
 
     /// The template names that can be sent, built-in and custom.
@@ -350,6 +532,55 @@ fn plain_text_from_html(html: &str) -> String {
         .join("\n")
 }
 
+/// Apply saved bodies over resolved ones.
+///
+/// A name the API adds is a new template; a part it names replaces the body beneath
+/// it, which is what makes a reset a delete rather than a copy of the default.
+fn apply(
+    entries: &mut BTreeMap<(String, &'static str), Entry>,
+    overrides: &[Override],
+) -> Result<()> {
+    for template in overrides {
+        let Some(part) = Part::parse(&template.part) else {
+            return Err(Error::invalid(format!(
+                "a mail template part must be subject, html or text, got {:?}",
+                template.part
+            )));
+        };
+        if template.name.trim().is_empty() {
+            return Err(Error::invalid("a mail template needs a name"));
+        }
+        entries.insert(
+            (template.name.clone(), part.suffix()),
+            Entry {
+                body: template.body.clone(),
+                origin: Origin::Database,
+            },
+        );
+    }
+    Ok(())
+}
+
+/// The context a send fills in: the caller's assigns, with `name` and `app_name`
+/// added when they are absent.
+///
+/// Shared by a send and by a preview, so what an editor is shown cannot differ from
+/// what goes out.
+pub fn context_for(to_name: &str, app_name: &str, assigns: &Value) -> Result<Value> {
+    let mut context: Map<String, Value> = match assigns {
+        Value::Object(map) => map.clone(),
+        Value::Null => Map::new(),
+        _ => return Err(Error::invalid("mail assigns must be an object")),
+    };
+    context
+        .entry("name".to_string())
+        .or_insert_with(|| json!(to_name));
+    context
+        .entry("app_name".to_string())
+        .or_insert_with(|| json!(app_name));
+    Ok(Value::Object(context))
+}
+
 fn read_override(directory: Option<&Path>, key: &str) -> Result<Option<String>> {
     let Some(directory) = directory else {
         return Ok(None);
@@ -423,25 +654,17 @@ impl Mailer {
         to: &str,
         assigns: &Value,
     ) -> Result<()> {
-        let mut context: Map<String, Value> = match assigns {
-            Value::Object(map) => map.clone(),
-            Value::Null => Map::new(),
-            _ => return Err(Error::invalid("mail assigns must be an object")),
-        };
-        context
-            .entry("name".to_string())
-            .or_insert_with(|| json!(to_name));
-        context
-            .entry("app_name".to_string())
-            .or_insert_with(|| json!(self.config.app_name));
-        let context = Value::Object(context);
+        let context = context_for(to_name, &self.config.app_name, assigns)?;
+        // The same path a preview renders through, so what an editor shows and what is
+        // sent cannot drift apart.
+        let rendered = self.templates.render_all(template, &context)?;
 
         let message = Message {
             to_name: to_name.to_string(),
             to: to.to_string(),
-            subject: self.templates.render(template, Part::Subject, &context)?,
-            html: self.templates.render(template, Part::Html, &context)?,
-            text: self.templates.render(template, Part::Text, &context)?,
+            subject: rendered.subject,
+            html: rendered.html,
+            text: rendered.text,
         };
 
         match &self.transport {
@@ -803,6 +1026,102 @@ mod tests {
             .render("nope", Part::Html, &json!({}))
             .expect_err("unknown template");
         assert!(err.to_string().contains("otp"), "{err}");
+    }
+
+    /// An override as the API builds one from a `_mail_templates` row.
+    fn override_of(name: &str, part: &str, body: &str) -> Override {
+        Override {
+            name: name.to_string(),
+            part: part.to_string(),
+            body: body.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_saved_body_wins_over_the_file_and_the_built_in() {
+        let directory = template_directory("layers");
+        std::fs::write(directory.join("otp.subject"), "From the file").expect("write");
+
+        let templates = Templates::load_with(
+            Some(&directory),
+            &[
+                override_of("otp", "subject", "From the database"),
+                override_of("otp", "html", "<p>Saved {{ code }}</p>"),
+            ],
+        )
+        .expect("templates");
+
+        let parts = templates.template("otp").expect("a template");
+        let by_part = |part: &str| {
+            parts
+                .iter()
+                .find(|resolved| resolved.part == part)
+                .expect("a part")
+                .clone()
+        };
+        assert_eq!(by_part("subject").body, "From the database");
+        assert_eq!(by_part("subject").origin, Origin::Database);
+        assert_eq!(by_part("html").body, "<p>Saved {{ code }}</p>");
+        assert_eq!(by_part("html").origin, Origin::Database);
+        // A part nobody overrode keeps the layer beneath it, and the origin is reported
+        // per part rather than per template: a deployment that changed only the subject
+        // did not change the body.
+        assert_eq!(by_part("text").origin, Origin::Builtin);
+        assert!(by_part("text").body.contains("{{ code }}"));
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn a_saved_body_can_add_a_name_and_only_needs_the_parts_it_sets() {
+        // A built-in name may be overridden one part at a time — the layers beneath
+        // fill the rest — but a new name must arrive complete, because there is
+        // nothing beneath it to fall back to.
+        assert!(
+            Templates::load_with(None, &[override_of("receipt", "subject", "Receipt")]).is_err()
+        );
+
+        let templates = Templates::load_with(
+            None,
+            &[
+                override_of("receipt", "subject", "Your receipt"),
+                override_of("receipt", "html", "<p>Thanks {{ name }}</p>"),
+                override_of("receipt", "text", "Thanks {{ name }}"),
+            ],
+        )
+        .expect("templates");
+        assert!(templates.names().contains(&"receipt"));
+        let rendered = templates
+            .render_all("receipt", &json!({ "name": "Ada" }))
+            .expect("render");
+        assert_eq!(rendered.subject, "Your receipt");
+        assert_eq!(rendered.text, "Thanks Ada");
+    }
+
+    #[test]
+    fn a_syntax_error_is_refused_before_the_body_is_stored() {
+        assert!(Templates::check("otp", &[("html", "{% if x %}unclosed")]).is_err());
+        Templates::check("otp", &[("html", "<p>{{ code }}</p>")]).expect("parses");
+        assert!(Templates::check("otp", &[("body", "<p>x</p>")]).is_err());
+    }
+
+    #[test]
+    fn an_override_leaves_the_parts_it_does_not_name_alone() {
+        let base = Templates::load(None).expect("built-ins");
+        let overlaid = base
+            .with_overrides(&[override_of("otp", "subject", "Just the subject")])
+            .expect("overlaid");
+
+        let before = base.template("otp").expect("a template");
+        let after = overlaid.template("otp").expect("a template");
+        for (before, after) in before.iter().zip(&after) {
+            if before.part == "subject" {
+                assert_eq!(after.body, "Just the subject");
+                assert_eq!(after.origin, Origin::Database);
+            } else {
+                assert_eq!(after, before, "{} must be untouched", before.part);
+            }
+        }
     }
 
     #[tokio::test]

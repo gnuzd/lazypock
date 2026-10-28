@@ -18,6 +18,7 @@
 //! Two kinds today: `sql`, which exercises the machinery end to end, and `mail`,
 //! which sends a templated email. The "after" hooks are the next caller.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use lazypock_core::error::Error;
@@ -392,7 +393,27 @@ async fn perform(state: &AppState, job: &Claimed) -> Result<(), String> {
                         .to_string()
                 })?;
 
-            let mailer = lazypock_mail::Mailer::new(state.mail_templates.clone(), config)
+            // Resolved at send time, with whatever a superuser has saved applied. A job
+            // queued before an edit should still send the edited body: the alternative
+            // is a typo in a password-reset email that keeps going out until the queue
+            // drains.
+            let stored = lazypock_db::mail_templates::load(&client)
+                .await
+                .map_err(|err| err.to_string())?;
+            let overrides: Vec<lazypock_mail::Override> = stored
+                .iter()
+                .map(|row| lazypock_mail::Override {
+                    name: row.name.clone(),
+                    part: row.part.clone(),
+                    body: row.body.clone(),
+                })
+                .collect();
+            let templates = state
+                .mail_templates
+                .with_overrides(&overrides)
+                .map_err(|err| err.to_string())?;
+
+            let mailer = lazypock_mail::Mailer::new(Arc::new(templates), config)
                 .map_err(|err| err.to_string())?;
 
             if let Some(template) = mail.template.as_deref() {
