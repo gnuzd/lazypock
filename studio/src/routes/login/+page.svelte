@@ -6,7 +6,6 @@
 	import { browser } from '$app/environment';
 
 	import { client } from '$lib/client';
-	import { rememberSession } from '$lib/session';
 	import { createForm } from '$lib/createForm.svelte';
 	import { loginSchema, setupSchema } from '$lib/validation';
 
@@ -32,8 +31,9 @@
 
 	async function handleLogin(data: { email: string; password: string }) {
 		try {
-			// Keep the refresh token: the access token the SDK stores lives 15 minutes.
-			rememberSession(await client.login(data.email, data.password));
+			// The SDK's login keeps the token, the record, the refresh token and the
+			// server's `expiresIn`, and refreshes from them on its own.
+			await client.login(data.email, data.password);
 			await client.me();
 			if (browser) goto(base + '/collections?collection=users', { replaceState: true });
 		} catch (err) {
@@ -43,8 +43,8 @@
 
 	async function handleSetup(data: { email: string; password: string; confirmPassword: string }) {
 		try {
-			rememberSession(await client.setup(data.email, data.password));
-			rememberSession(await client.login(data.email, data.password));
+			await client.setup(data.email, data.password);
+			await client.login(data.email, data.password);
 			await client.me();
 			const res = await client.collections.getList({ page: 1, perPage: 200 });
 			const name = res?.items?.[0]?.name ?? '';
