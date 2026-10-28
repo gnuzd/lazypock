@@ -99,11 +99,21 @@
 			label: string;
 			class?: string;
 			sortable?: boolean;
+			/** Marks a column the collection hides by default; the header says so. */
+			hidden?: boolean;
 			render: (r: Record<string, unknown>) => string;
 			thumbs?: (r: Record<string, unknown>) => string[];
 		}[] = [{ key: 'id', label: 'ID', class: 'w-72', render: (r) => (r.id as string) ?? '' }];
 		const fields = ((collection?.fields as Record<string, unknown>[]) ?? [])
-			.filter((f) => !f.hidden && f.type !== 'password')
+			// Every column the API returns is shown, including the ones the collection
+			// marks `hidden`. Hiding is a display hint rather than access control — the
+			// value is still in the response — so leaving those columns out only hid data
+			// from the person looking for it. They carry a `hidden` badge in the header
+			// instead, which is what says the collection hides them by default.
+			//
+			// Passwords are the one genuine exception: the API never returns a credential
+			// column, so the column would render a value it does not have.
+			.filter((f) => f.type !== 'password')
 			// The ID column is always rendered explicitly above. A view collection
 			// auto-generates a system `id` field, so it must be skipped here —
 			// otherwise the keyed each blocks in DataTable ({@code col.key}) receive
@@ -120,6 +130,7 @@
 			cols.push({
 				key: f.name as string,
 				label: f.name as string,
+				hidden: f.hidden === true,
 				// Postgres can't ORDER BY JSONB (no ordering operator), so those
 				// columns get a non-sortable header.
 				sortable: !UNSORTABLE_TYPES.has(String(f.type ?? '')),
@@ -245,7 +256,6 @@
 	onMount(async () => {
 		const params = new URLSearchParams(window.location.search);
 		const fromParam = params.get('collection');
-		const list = $collections.length > 0 ? $collections : [];
 		$activeName = fromParam ?? '';
 	});
 

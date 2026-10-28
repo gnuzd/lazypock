@@ -15,6 +15,12 @@
 		thumbs?: (row: Record<string, unknown>) => string[];
 		/** Per-column opt-out when the table is `sortable` (defaults to true). */
 		sortable?: boolean;
+		/**
+		 * Marks a column the collection hides by default. The value is still returned —
+		 * hiding is a display hint, not access control — so the header says so rather
+		 * than the column being dropped.
+		 */
+		hidden?: boolean;
 	};
 
 	let {
@@ -209,6 +215,13 @@
 								</button>
 							{:else}
 								{col.label}
+							{/if}
+							{#if col.hidden}
+								<span
+									class="ml-1.5 rounded bg-base-300 px-1 py-0.5 text-[9px] font-semibold tracking-wide text-base-content/70 uppercase"
+									title="Hidden: the collection hides this column by default, but the API still returns it"
+									>hidden</span
+								>
 							{/if}
 						</th>
 					{/each}
