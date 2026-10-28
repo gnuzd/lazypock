@@ -600,9 +600,11 @@ test('a mail template can be created, previewed and reset through the UI', async
 
 	await page.getByRole('button', { name: 'Create template' }).click();
 
-	// Stored, so it can be reset — and it now shows the database layer.
-	await expect(page.getByRole('button', { name: 'Reset' })).toBeVisible();
-	await page.getByRole('button', { name: 'Reset' }).click();
+	// Stored, so it can be reset — and it now shows the database layer. Exact names only:
+	// the sidebar lists `password_reset builtin`, which a substring match would also hit.
+	const reset = page.getByRole('button', { name: 'Reset', exact: true });
+	await expect(reset).toBeVisible();
+	await reset.click();
 
 	// Nothing (no file, no built-in) sits under that name, so a reset removes it and
 	// the editor moves to a template that still exists.
