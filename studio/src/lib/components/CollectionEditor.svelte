@@ -118,7 +118,12 @@
 			newFields = ((coll.fields as Record<string, unknown>[]) ?? [])
 				.map((f): Record<string, unknown> => ({
 					...f,
-					id: (f.id as string) ?? crypto.randomUUID()
+					// crypto.randomUUID only exists in a secure context; the Studio is also served
+					// over plain http on a server address, where it is undefined.
+					id:
+						(f.id as string) ??
+						crypto.randomUUID?.() ??
+						Math.random().toString(36).slice(2) + Date.now().toString(36)
 				}))
 				.sort(
 					(a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0)
@@ -144,8 +149,9 @@
 			queueMicrotask(() => {
 				loadedSnapshot = snapshot();
 			});
-		} catch {
+		} catch (err) {
 			// failed to load — leave form at defaults
+			console.error('[studio] could not load the collection', editingCollectionId, err);
 		}
 	});
 
