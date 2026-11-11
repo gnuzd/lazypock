@@ -159,154 +159,161 @@
 	}
 </script>
 
-<h2 class="mb-1 text-lg font-semibold">Files Storage</h2>
-<p class="mb-4 text-sm text-base-content/60">
-	Uploads are stored on the local disk by default. Connect an S3-compatible bucket (AWS S3,
-	Cloudflare R2, MinIO) to keep them off the server — the secret key is encrypted at rest and never
-	returned by the API.
-</p>
-
-{#if loading}
-	<p class="text-sm text-base-content/60">Loading…</p>
-{:else}
-	<form
-		class="rounded-box border border-base-300 bg-base-100 p-6"
-		onsubmit={(e) => {
-			e.preventDefault();
-			void save();
-		}}
-	>
-		{#if envManaged}
-			<p
-				class="mb-4 rounded-field border border-base-300 bg-base-200/50 p-3 text-xs text-base-content/80"
-			>
-				Storage is configured by the environment, so this page shows the running configuration and
-				can test it, but cannot change it. Set
-				<code>LAZYPOCK_FILES_*</code> / <code>LAZYPOCK_S3_*</code> and restart the server.
+<div class="flex flex-col gap-4">
+	<header class="flex flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-4">
+		<div>
+			<h1 class="text-xl font-semibold">Files Storage</h1>
+			<p class="mt-1 text-sm text-base-content/50">
+				Connect an S3-compatible bucket (AWS S3, Cloudflare R2, MinIO) to keep them off the server —
+				the secret key is encrypted at rest and never returned by the API.
 			</p>
-		{/if}
-
-		<Switch class="mb-4" bind:checked={useS3} disabled={locked('backend')}
-			>Use S3-compatible storage</Switch
-		>
-
-		{#if useS3}
-			<div transition:slide={{ duration: 150 }}>
-				<div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-					<Input
-						label="Endpoint"
-						placeholder="https://<account>.r2.cloudflarestorage.com"
-						bind:value={form.endpoint}
-						disabled={locked('endpoint')}
-						help={locked('endpoint') ? 'Set by LAZYPOCK_S3_ENDPOINT' : ''}
-						required
-					/>
-					<Input
-						label="Bucket"
-						placeholder="my-bucket"
-						bind:value={form.bucket}
-						disabled={locked('bucket')}
-						help={locked('bucket') ? 'Set by LAZYPOCK_S3_BUCKET' : ''}
-						required
-					/>
-				</div>
-
-				<div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-					<Input
-						label="Region"
-						placeholder="auto"
-						bind:value={form.region}
-						disabled={locked('region')}
-						help={locked('region') ? 'Set by LAZYPOCK_S3_REGION' : ''}
-					/>
-					<Input
-						label="Key prefix"
-						placeholder="lazypock/my-app/"
-						bind:value={form.prefix}
-						disabled={locked('prefix')}
-						help={locked('prefix')
-							? 'Not configurable: objects are keyed by collection, record and filename'
-							: 'Objects are stored under <prefix><file id>/'}
-					/>
-				</div>
-
-				<div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-					<Input
-						label="Access key id"
-						bind:value={form.access_key_id}
-						disabled={locked('access_key_id')}
-						help={locked('access_key_id') ? 'Set by LAZYPOCK_S3_ACCESS_KEY' : ''}
-						required
-					/>
-					<Input
-						label="Secret access key"
-						type="password"
-						autocomplete="new-password"
-						placeholder={secretSet ? '•••••••• (unchanged)' : ''}
-						bind:value={form.secret_access_key}
-						disabled={locked('secret_access_key')}
-						help={locked('secret_access_key')
-							? 'Set by LAZYPOCK_S3_SECRET_KEY'
-							: secretSet
-								? 'Leave blank to keep the stored secret'
-								: ''}
-						required={!secretSet}
-					/>
-				</div>
-
-				<div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-					<Input
-						label="Public base URL (optional)"
-						placeholder="https://cdn.example.com"
-						bind:value={form.public_base_url}
-						disabled={locked('public_base_url')}
-						help="Served URLs point here (CDN) instead of through the app"
-					/>
-					<Input
-						label="Presign TTL (seconds)"
-						type="number"
-						value={String(form.presign_ttl)}
-						oninput={(e) =>
-							(form.presign_ttl = Number((e.target as HTMLInputElement).value) || 900)}
-						help="Lifetime of direct-upload and protected-file URLs"
-					/>
-				</div>
-
-				<Switch bind:checked={form.force_path_style}>Force path style</Switch>
-				<p class="mt-1 text-xs text-base-content/50">
-					Leave on for R2 and MinIO; disable for virtual-hosted AWS S3.
-				</p>
-			</div>
-		{/if}
-
-		{#if error}
-			<p class="mt-4 text-sm text-error">{error}</p>
-		{/if}
-		{#if notice}
-			<p class="mt-4 text-sm text-success">{notice}</p>
-		{/if}
-
-		{#if steps.length > 0}
-			<ul class="mt-4 flex flex-col gap-1 text-sm">
-				{#each steps as step (step.step)}
-					<li class:opacity-60={!step.ok}>
-						<span class={step.ok ? 'text-success' : 'text-error'}>{step.ok ? '✓' : '✗'}</span>
-						<strong class="ml-1 capitalize">{step.step}</strong>
-						{#if step.error}<span class="ml-1 text-base-content/60">{step.error}</span>{/if}
-					</li>
-				{/each}
-			</ul>
-		{/if}
-
-		<div class="mt-4 flex items-center justify-end gap-3">
-			{#if useS3}
-				<Button class="btn-sm" loading={testing} onclick={() => void testConnection()}>
-					Test connection
-				</Button>
-			{/if}
-			<Button class="btn-primary" loading={saving} type="submit" disabled={envManaged}
-				>Save changes</Button
-			>
 		</div>
-	</form>
-{/if}
+	</header>
+
+	<div class="mt-3">
+		{#if loading}
+			<p class="text-sm text-base-content/60">Loading��</p>
+		{:else}
+			<form
+				class="rounded-box border border-base-300 bg-base-100 p-6"
+				onsubmit={(e) => {
+					e.preventDefault();
+					void save();
+				}}
+			>
+				{#if envManaged}
+					<p
+						class="mb-4 rounded-field border border-base-300 bg-base-200/50 p-3 text-xs text-base-content/80"
+					>
+						Storage is configured by the environment, so this page shows the running configuration
+						and can test it, but cannot change it. Set
+						<code>LAZYPOCK_FILES_*</code> / <code>LAZYPOCK_S3_*</code> and restart the server.
+					</p>
+				{/if}
+
+				<Switch class="mb-4" bind:checked={useS3} disabled={locked('backend')}
+					>Use S3-compatible storage</Switch
+				>
+
+				{#if useS3}
+					<div transition:slide={{ duration: 150 }}>
+						<div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+							<Input
+								label="Endpoint"
+								placeholder="https://<account>.r2.cloudflarestorage.com"
+								bind:value={form.endpoint}
+								disabled={locked('endpoint')}
+								help={locked('endpoint') ? 'Set by LAZYPOCK_S3_ENDPOINT' : ''}
+								required
+							/>
+							<Input
+								label="Bucket"
+								placeholder="my-bucket"
+								bind:value={form.bucket}
+								disabled={locked('bucket')}
+								help={locked('bucket') ? 'Set by LAZYPOCK_S3_BUCKET' : ''}
+								required
+							/>
+						</div>
+
+						<div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+							<Input
+								label="Region"
+								placeholder="auto"
+								bind:value={form.region}
+								disabled={locked('region')}
+								help={locked('region') ? 'Set by LAZYPOCK_S3_REGION' : ''}
+							/>
+							<Input
+								label="Key prefix"
+								placeholder="lazypock/my-app/"
+								bind:value={form.prefix}
+								disabled={locked('prefix')}
+								help={locked('prefix')
+									? 'Not configurable: objects are keyed by collection, record and filename'
+									: 'Objects are stored under <prefix><file id>/'}
+							/>
+						</div>
+
+						<div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+							<Input
+								label="Access key id"
+								bind:value={form.access_key_id}
+								disabled={locked('access_key_id')}
+								help={locked('access_key_id') ? 'Set by LAZYPOCK_S3_ACCESS_KEY' : ''}
+								required
+							/>
+							<Input
+								label="Secret access key"
+								type="password"
+								autocomplete="new-password"
+								placeholder={secretSet ? '•••••••• (unchanged)' : ''}
+								bind:value={form.secret_access_key}
+								disabled={locked('secret_access_key')}
+								help={locked('secret_access_key')
+									? 'Set by LAZYPOCK_S3_SECRET_KEY'
+									: secretSet
+										? 'Leave blank to keep the stored secret'
+										: ''}
+								required={!secretSet}
+							/>
+						</div>
+
+						<div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+							<Input
+								label="Public base URL (optional)"
+								placeholder="https://cdn.example.com"
+								bind:value={form.public_base_url}
+								disabled={locked('public_base_url')}
+								help="Served URLs point here (CDN) instead of through the app"
+							/>
+							<Input
+								label="Presign TTL (seconds)"
+								type="number"
+								value={String(form.presign_ttl)}
+								oninput={(e) =>
+									(form.presign_ttl = Number((e.target as HTMLInputElement).value) || 900)}
+								help="Lifetime of direct-upload and protected-file URLs"
+							/>
+						</div>
+
+						<Switch bind:checked={form.force_path_style}>Force path style</Switch>
+						<p class="mt-1 text-xs text-base-content/50">
+							Leave on for R2 and MinIO; disable for virtual-hosted AWS S3.
+						</p>
+					</div>
+				{/if}
+
+				{#if error}
+					<p class="mt-4 text-sm text-error">{error}</p>
+				{/if}
+				{#if notice}
+					<p class="mt-4 text-sm text-success">{notice}</p>
+				{/if}
+
+				{#if steps.length > 0}
+					<ul class="mt-4 flex flex-col gap-1 text-sm">
+						{#each steps as step (step.step)}
+							<li class:opacity-60={!step.ok}>
+								<span class={step.ok ? 'text-success' : 'text-error'}>{step.ok ? '✓' : '✗'}</span>
+								<strong class="ml-1 capitalize">{step.step}</strong>
+								{#if step.error}<span class="ml-1 text-base-content/60">{step.error}</span>{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+
+				<div class="mt-4 flex items-center justify-end gap-3">
+					{#if useS3}
+						<Button class="btn-sm" loading={testing} onclick={() => void testConnection()}>
+							Test connection
+						</Button>
+					{/if}
+					<Button class="btn-primary" loading={saving} type="submit" disabled={envManaged}
+						>Save changes</Button
+					>
+				</div>
+			</form>
+		{/if}
+	</div>
+</div>

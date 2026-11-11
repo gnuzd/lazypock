@@ -13,7 +13,7 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { LayoutGrid, List, Trash2 } from '@lucide/svelte';
+	import { Images, ImageUpIcon, LayoutGrid, List, Trash2 } from '@lucide/svelte';
 	import { client } from '$lib/client';
 	import { confirmDialog } from '$lib/dialog.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -24,7 +24,7 @@
 	 * Shared media library.
 	 *
 	 * Used by the richtext editor and the record file field so both offer the
-	 * same two paths: **pick an image that was already uploaded** (Library tab)
+	 * same two paths: **pick an image that was already uploaded** (library tab)
 	 * or **upload a new file** (Upload tab). In `manage` mode it is also the
 	 * place to review and delete uploads.
 	 */
@@ -52,7 +52,7 @@
 	const PER_PAGE = 24;
 	const VIEW_KEY = 'lazypock-media-view';
 
-	let tab = $state<'Library' | 'Upload'>('Library');
+	let tab = $state<string>('library');
 	let items = $state<MediaItem[]>([]);
 	let selected = $state<string[]>([]);
 	let preview = $state<MediaItem | null>(null);
@@ -195,7 +195,7 @@
 			preview = null;
 			detailOpen = false;
 			q = '';
-			tab = 'Library';
+			tab = 'library';
 			error = '';
 			notice = '';
 		}
@@ -273,9 +273,7 @@
 			for (const file of accepted) {
 				// `origin` is understood by lazypock >= 0.10 (library uploads are
 				// never garbage-collected); the cast keeps older SDK types happy.
-				const meta = { origin: 'library' } as unknown as Parameters<
-					typeof client.files.upload
-				>[3];
+				const meta = { origin: 'library' } as unknown as Parameters<typeof client.files.upload>[3];
 				const res = await client.files.upload(file, file.name, undefined, meta);
 				if (res?.id) uploaded.push(res as unknown as MediaItem);
 			}
@@ -285,7 +283,7 @@
 				choose(uploaded);
 			} else {
 				await load();
-				tab = 'Library';
+				tab = 'library';
 				notice = `Uploaded ${uploaded.length} file${uploaded.length === 1 ? '' : 's'}.`;
 			}
 		} catch (e) {
@@ -380,7 +378,13 @@
 {#snippet panel()}
 	<div class="media-panel">
 		{@render toolbar()}
-		<Tabs items={['Library', 'Upload']} bind:active={tab} />
+		<Tabs
+			items={[
+				{ key: 'library', icon: Images, label: 'library' },
+				{ key: 'upload', icon: ImageUpIcon, label: 'Upload' }
+			]}
+			bind:active={tab}
+		/>
 
 		{#if error}
 			<p class="media-alert media-alert-error">{error}</p>
@@ -389,7 +393,7 @@
 			<p class="media-alert">{notice}</p>
 		{/if}
 
-		{#if tab === 'Library'}
+		{#if tab === 'library'}
 			{@render library()}
 		{:else}
 			{@render uploader()}
@@ -433,7 +437,7 @@
 				onclick={() => setView('list')}><List size={15} /></button
 			>
 		</div>
-		<Button class="btn-sm" loading={loading} onclick={() => void load()}>Refresh</Button>
+		<Button class="btn-sm" {loading} onclick={() => void load()}>Refresh</Button>
 	</div>
 {/snippet}
 
@@ -562,7 +566,6 @@
 				</div>
 			{/each}
 		</div>
-
 	{/if}
 
 	{#if items.length > 0}
@@ -622,7 +625,7 @@
 			choose files
 			<input
 				type="file"
-				accept={accept}
+				{accept}
 				multiple
 				disabled={uploading}
 				onchange={(e) => {
@@ -644,12 +647,7 @@
 {#if inline}
 	{@render panel()}
 {:else}
-	<Modal
-		bind:show={open}
-		{title}
-		size="xl"
-		bodyClass="flex min-h-0 flex-col overflow-hidden"
-	>
+	<Modal bind:show={open} {title} size="xl" bodyClass="flex min-h-0 flex-col overflow-hidden">
 		{@render panel()}
 	</Modal>
 {/if}
@@ -665,9 +663,7 @@
 			<div class="detail-meta">
 				<strong class="detail-name" title={preview.filename}>{preview.filename}</strong>
 				<span>
-					{preview.mimeType ?? 'unknown type'}{preview.size
-						? ` · ${formatSize(preview.size)}`
-						: ''}
+					{preview.mimeType ?? 'unknown type'}{preview.size ? ` · ${formatSize(preview.size)}` : ''}
 				</span>
 				<code class="detail-url" title={bestUrl(preview)}>{bestUrl(preview)}</code>
 				<span class="detail-id">id: {preview.id}</span>

@@ -26,6 +26,7 @@
 	import { toast } from 'svelte-sonner';
 	import { createForm } from '$lib/createForm.svelte';
 	import '../settings.css';
+	import Tabs from '$lib/components/Tabs.svelte';
 
 	// One page for everything about mail: the SMTP settings, and the templates the
 	// server sends. The three tabs are views of the same two sections — the
@@ -47,13 +48,11 @@
 	// * Reset deletes the stored bodies, which is destructive enough to ask first;
 	//   it falls back to a file in the template directory, then to the built-in.
 
-	type Tab = 'all' | 'settings' | 'templates';
-	const TABS: { id: Tab; label: string; icon: typeof Cog }[] = [
-		{ id: 'all', label: 'All-in-One View', icon: Layers },
-		{ id: 'settings', label: 'Mail Settings', icon: Cog },
-		{ id: 'templates', label: 'Mail Templates', icon: MailPlus }
+	const TABS = [
+		{ key: 'settings', label: 'Mail Settings', icon: Cog },
+		{ key: 'templates', label: 'Mail Templates', icon: MailPlus }
 	];
-	let tab = $state<Tab>('all');
+	let tab = $state<string>('settings');
 
 	// ── Server & sender settings ──
 
@@ -646,132 +645,113 @@
 
 {#snippet serverSection()}
 	<section>
-		<h2 class="mb-3 flex items-center gap-2 text-lg font-semibold">
-			<SlidersHorizontal size={18} class="opacity-60" />
-			Mail Server &amp; Sender Configuration
-		</h2>
 		<!--
 			The form is `contents` so its two cards are grid cells while the test-send
 			card — which has a recipient picker, and Enter-driven fields of its own —
 			stays outside the form it does not submit.
 		-->
-		<div class="grid gap-4 xl:grid-cols-3">
-			<form class="contents" autocomplete="off" use:mailForm.enhance={saveMail}>
-				<div class="rounded-box border border-base-300 bg-base-100 p-6">
-					<h3 class="font-semibold">Sender Information</h3>
-					<p class="mt-0.5 mb-4 text-xs text-base-content/50">
-						Default email address and label seen by recipients.
-					</p>
-					<div class="grid gap-3">
-						<Input
-							label="Sender Name"
-							placeholder="John Doe"
-							bind:value={mailForm.form.senderName}
-						/>
-						<Input
-							label="Sender Address"
-							placeholder="no-reply@example.com"
-							type="email"
-							bind:value={mailForm.form.senderAddress}
-							error={mailForm.errors.senderAddress}
-						/>
-					</div>
-				</div>
+		<form class="contents" autocomplete="off" use:mailForm.enhance={saveMail}>
+			<div class="col-span-2 rounded-box border border-base-300 bg-base-100 p-6">
+				<h3 class="font-semibold">Server Settings</h3>
+				<p class="mt-0.5 mb-4 text-xs text-base-content/50">
+					Configure external SMTP mail gateway.
+				</p>
+				<Switch bind:checked={mailForm.form.mailEnabled}>
+					Use SMTP mail server <strong>(recommended)</strong>
+				</Switch>
 
-				<div class="rounded-box border border-base-300 bg-base-100 p-6">
-					<h3 class="font-semibold">Server Settings</h3>
-					<p class="mt-0.5 mb-4 text-xs text-base-content/50">
-						Configure external SMTP mail gateway.
-					</p>
-					<Switch bind:checked={mailForm.form.mailEnabled}>
-						Use SMTP mail server <strong>(recommended)</strong>
-					</Switch>
+				{#if mailForm.form.mailEnabled}
+					<div class="mt-4 space-y-4" transition:slide={{ duration: 150 }}>
+						<div class="flex gap-3">
+							<Input
+								label="Sender Name"
+								placeholder="John Doe"
+								bind:value={mailForm.form.senderName}
+							/>
+							<Input
+								label="Sender Address"
+								placeholder="no-reply@example.com"
+								type="email"
+								bind:value={mailForm.form.senderAddress}
+								error={mailForm.errors.senderAddress}
+							/>
+						</div>
+						<div class="flex gap-3 sm:grid-cols-2">
+							<Input
+								label="SMTP Host"
+								placeholder="smtp.mailgun.org"
+								bind:value={mailForm.form.smtpHost}
+								error={mailForm.errors.smtpHost}
+								required
+							/>
+							<Input
+								label="Port"
+								placeholder="587"
+								bind:value={mailForm.form.smtpPort}
+								error={mailForm.errors.smtpPort}
+								required
+							/>
+							<Input
+								label="Username"
+								placeholder="postmaster@mg.example.com"
+								bind:value={mailForm.form.smtpUser}
+							/>
+							<Input
+								label="Password"
+								type="password"
+								autocomplete="new-password"
+								bind:value={mailForm.form.smtpPass}
+							/>
+						</div>
 
-					{#if mailForm.form.mailEnabled}
-						<div transition:slide={{ duration: 150 }}>
-							<div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-								<Input
-									label="SMTP Host"
-									placeholder="smtp.mailgun.org"
-									bind:value={mailForm.form.smtpHost}
-									error={mailForm.errors.smtpHost}
-									required
-								/>
-								<Input
-									label="Port"
-									placeholder="587"
-									bind:value={mailForm.form.smtpPort}
-									error={mailForm.errors.smtpPort}
-									required
-								/>
-								<Input
-									label="Username"
-									placeholder="postmaster@mg.example.com"
-									bind:value={mailForm.form.smtpUser}
-								/>
-								<Input
-									label="Password"
-									type="password"
-									autocomplete="new-password"
-									bind:value={mailForm.form.smtpPass}
-								/>
-							</div>
+						<button
+							type="button"
+							class="mt-3 cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
+							onclick={() => (showMoreMail = !showMoreMail)}
+						>
+							{showMoreMail ? 'Hide more options' : 'Show more options'}
+						</button>
 
-							<button
-								type="button"
-								class="mt-3 cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
-								onclick={() => (showMoreMail = !showMoreMail)}
+						{#if showMoreMail}
+							<div
+								transition:slide={{ duration: 150 }}
+								class="grid grid-cols-1 gap-3 sm:grid-cols-2"
 							>
-								{showMoreMail ? 'Hide more options' : 'Show more options'}
-							</button>
-
-							{#if showMoreMail}
-								<div
-									transition:slide={{ duration: 150 }}
-									class="grid grid-cols-1 gap-3 sm:grid-cols-2"
-								>
-									<div class="field">
-										<span class="field-label">TLS encryption</span>
-										<Select
-											variant="plain"
-											triggerClass="w-full py-2.5"
-											options={[
-												{ value: false, label: 'Auto (StartTLS)' },
-												{ value: true, label: 'Always' }
-											]}
-											bind:value={mailForm.form.smtpTls}
-										/>
-									</div>
-									<div class="field">
-										<span class="field-label">AUTH method</span>
-										<Select
-											variant="plain"
-											triggerClass="w-full py-2.5"
-											options={[
-												{ value: 'PLAIN', label: 'PLAIN (default)' },
-												{ value: 'LOGIN', label: 'LOGIN' }
-											]}
-											bind:value={mailForm.form.smtpAuthMethod}
-										/>
-									</div>
-									<Input
-										label="EHLO/HELO domain"
-										placeholder="Default to localhost"
-										bind:value={mailForm.form.smtpLocalName}
+								<div class="field">
+									<span class="field-label">TLS encryption</span>
+									<Select
+										variant="plain"
+										triggerClass="w-full py-2.5"
+										options={[
+											{ value: false, label: 'Auto (StartTLS)' },
+											{ value: true, label: 'Always' }
+										]}
+										bind:value={mailForm.form.smtpTls}
 									/>
 								</div>
-							{/if}
-						</div>
-					{/if}
-				</div>
-			</form>
-
-			<MailTestSend
-				id="test-recipient-server"
-				title="Send a Test Email"
-				description="Use saved settings to verify delivery."
-			/>
-		</div>
+								<div class="field">
+									<span class="field-label">AUTH method</span>
+									<Select
+										variant="plain"
+										triggerClass="w-full py-2.5"
+										options={[
+											{ value: 'PLAIN', label: 'PLAIN (default)' },
+											{ value: 'LOGIN', label: 'LOGIN' }
+										]}
+										bind:value={mailForm.form.smtpAuthMethod}
+									/>
+								</div>
+								<Input
+									label="EHLO/HELO domain"
+									placeholder="Default to localhost"
+									bind:value={mailForm.form.smtpLocalName}
+								/>
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		</form>
 	</section>
 {/snippet}
 
@@ -1050,7 +1030,7 @@
 				the click handler rather than a submit button outside the form.
 			-->
 			<Button
-				class="btn-primary gap-1.5"
+				class="btn-primary btn-sm gap-1.5"
 				loading={savingPage}
 				disabled={!pageDirty}
 				onclick={() => void savePage()}
@@ -1061,25 +1041,17 @@
 		</div>
 	</header>
 
-	<nav class="flex gap-1 border-b border-base-300" aria-label="Mail views">
-		{#each TABS as t (t.id)}
-			<button
-				type="button"
-				class="-mb-px flex cursor-pointer items-center gap-2 border-b-2 border-transparent px-3 py-2 text-sm text-base-content/60 hover:text-base-content"
-				class:border-primary={tab === t.id}
-				class:font-medium={tab === t.id}
-				class:text-base-content={tab === t.id}
-				aria-current={tab === t.id ? 'page' : undefined}
-				onclick={() => (tab = t.id)}
-			>
-				<t.icon size={15} class="opacity-60" />
-				{t.label}
-			</button>
-		{/each}
-	</nav>
+	<Tabs
+		active={TABS[0].key}
+		class="mb-3"
+		items={TABS}
+		onselect={(item) => {
+			if (typeof item !== 'string') tab = item.key;
+		}}
+	/>
 
 	<div class="grid gap-8">
-		{#if tab === 'all' || tab === 'settings'}{@render serverSection()}{/if}
-		{#if tab === 'all' || tab === 'templates'}{@render templatesSection()}{/if}
+		{#if tab === 'settings'}{@render serverSection()}{/if}
+		{#if tab === 'templates'}{@render templatesSection()}{/if}
 	</div>
 </div>

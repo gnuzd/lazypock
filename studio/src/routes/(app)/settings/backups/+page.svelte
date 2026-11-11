@@ -215,7 +215,7 @@
 </script>
 
 <div class="flex flex-col gap-4">
-	<header class="border-b border-base-300 pb-4">
+	<header class="mb-3 border-b border-base-300 pb-4">
 		<h1 class="text-xl font-semibold">Backups</h1>
 		<p class="mt-1 text-sm text-base-content/50">
 			Download a full copy of every collection, or restore one into this instance.

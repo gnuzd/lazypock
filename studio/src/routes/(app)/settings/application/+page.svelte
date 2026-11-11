@@ -1,14 +1,18 @@
 <script lang="ts">
-	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
+
 	import { z } from 'zod';
 	import { Info, Save, Shield, SlidersHorizontal, Zap } from '@lucide/svelte';
+
+	import { client } from '$lib/client';
+	import { createForm } from '$lib/createForm.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import SettingsCard from '$lib/components/SettingsCard.svelte';
-	import { createForm } from '$lib/createForm.svelte';
-	import { toast } from 'svelte-sonner';
+	import Tabs from '$lib/components/Tabs.svelte';
+
 	import '../settings.css';
 
 	const schema = z.object({
@@ -84,7 +88,7 @@
 			</p>
 		</div>
 		<Button
-			class="btn-primary gap-1.5"
+			class="btn-primary btn-sm gap-1.5"
 			loading={saving}
 			disabled={saving}
 			onclick={() => void save()}
@@ -94,26 +98,13 @@
 		</Button>
 	</header>
 
-	<!--
-		The only tab there is: the mail tabs from the design belong to pages that
-		already exist, and more settings tabs can be added here later.
-	-->
-	<nav class="flex gap-1 border-b border-base-300" aria-label="Settings sections">
-		<span
-			class="-mb-px flex items-center gap-2 border-b-2 border-primary px-3 py-2 text-sm font-medium text-base-content"
-			aria-current="page"
-		>
-			<SlidersHorizontal size={15} class="opacity-60" />
-			Application Settings
-		</span>
-	</nav>
+	<Tabs
+		active="application"
+		class="mb-3"
+		items={[{ icon: SlidersHorizontal, label: 'Application Settings', key: 'application' }]}
+	/>
 
 	<section class="flex flex-col gap-4">
-		<h2 class="flex items-center gap-2 text-sm font-semibold">
-			<SlidersHorizontal size={15} class="opacity-60" />
-			Application Configurations
-		</h2>
-
 		<div class="grid gap-4 xl:grid-cols-3">
 			<SettingsCard title="General Info" badge="Basic" icon={Info}>
 				<Input

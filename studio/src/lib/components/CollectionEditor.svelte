@@ -760,7 +760,6 @@
 					</p>
 				{:else}
 					<Switch
-						variant="inline"
 						bind:checked={realtimeEnabled}
 						description="Writes to this collection are published as realtime events. Turning it off drops the change-event trigger, so no write publishes an event — including writes made directly in the database — and no write pays for one. Saves with the rest of the form."
 					>

@@ -383,270 +383,271 @@
 	];
 </script>
 
-<h2 class="mb-4 text-lg font-semibold">Cron Jobs</h2>
-<div class="mb-4 text-sm text-base-content/60">
-	<p>
-		Schedule recurring jobs: HTTP webhooks, SQL statements, or custom Elixir hook events. Each job
-		runs on its own timezone (wall-clock), executes in a background task, and records the last run
-		outcome here. Cron expressions accept 5-field (<code>min hour day month weekday</code>) or
-		6-field (with seconds) formats.
-	</p>
-</div>
+<div class="flex flex-col gap-4">
+	<header
+		class="mb-3 flex flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-4"
+	>
+		<div class="flex-1">
+			<h1 class="text-xl font-semibold">Cron Jobs</h1>
+			<p class="mt-1 text-sm text-base-content/50">
+				Schedule recurring jobs: HTTP webhooks, SQL statements, or custom Elixir hook events. Each
+				job runs on its own timezone (wall-clock), executes in a background task, and records the
+				last run outcome here. Cron expressions accept 5-field (<code
+					>min hour day month weekday</code
+				>) or 6-field (with seconds) formats.
+			</p>
+		</div>
+		<Button loading={busy} class="btn-primary btn-sm" onclick={openNew}>New cron job</Button>
+	</header>
 
-<div class="mb-4 flex items-center gap-3">
-	<Button class="btn-primary" onclick={openNew}>New cron job</Button>
-	{#if busy}
-		<span class="text-xs text-base-content/40">working…</span>
+	{#if error}
+		<div class="mb-3 rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
+			{error}
+		</div>
 	{/if}
-</div>
 
-{#if error}
-	<div class="mb-3 rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
-		{error}
-	</div>
-{/if}
-
-<DataTable
-	{columns}
-	rows={jobs as unknown as Record<string, unknown>[]}
-	emptyLabel="No cron jobs yet. Create your first one above."
->
-	{#snippet cell(row, col)}
-		{@const job = row as unknown as CronJob}
-		{#if col.key === 'name'}
-			<span class="font-medium">{job.name}</span>
-		{:else if col.key === 'expression'}
-			<span class="font-mono text-xs">{job.expression}</span>
-			{#if !job.enabled}
-				<span class="badge badge-neutral badge-xs ml-2">disabled</span>
-			{/if}
-		{:else if col.key === 'timezone'}
-			<span class="text-xs">{job.timezone}</span>
-		{:else if col.key === 'next_run'}
-			<span class="text-xs">{job.enabled ? formatDate(job.next_run_at) : '—'}</span>
-		{:else if col.key === 'last_run'}
-			<span class="text-xs">
-				{formatDate(job.last_run_at)}
-				{#if job.last_duration_ms != null}
-					<span class="text-base-content/40"> ({formatDuration(job.last_duration_ms)})</span>
+	<DataTable
+		{columns}
+		rows={jobs as unknown as Record<string, unknown>[]}
+		emptyLabel="No cron jobs yet. Create your first one above."
+	>
+		{#snippet cell(row, col)}
+			{@const job = row as unknown as CronJob}
+			{#if col.key === 'name'}
+				<span class="font-medium">{job.name}</span>
+			{:else if col.key === 'expression'}
+				<span class="font-mono text-xs">{job.expression}</span>
+				{#if !job.enabled}
+					<span class="badge badge-neutral badge-xs ml-2">disabled</span>
 				{/if}
-			</span>
-		{:else if col.key === 'status'}
-			{#if job.last_status === 'ok'}
-				<span class="badge badge-success badge-sm">ok</span>
-			{:else if job.last_status === 'error'}
-				<span class="badge badge-error badge-sm" title={job.last_error ?? ''}>error</span>
-			{:else if job.last_status === 'skipped'}
-				<span class="badge badge-neutral badge-sm" title={job.last_error ?? ''}>skipped</span>
-			{:else}
-				<span class="badge badge-ghost badge-sm">never</span>
-			{/if}
-		{:else if col.key === 'actions'}
-			<div class="flex items-center justify-end gap-2">
-				<input
-					type="checkbox"
-					class="toggle cursor-pointer"
-					checked={job.enabled}
-					onchange={() => toggleEnabled(job)}
-					title={job.enabled ? 'Disable' : 'Enable'}
-				/>
-				<button
-					class="btn-icon cursor-pointer active:scale-90"
-					title="Run now"
-					disabled={busy}
-					onclick={() => runNow(job)}
-				>
-					<Play size={14} />
-				</button>
-				<button
-					class="btn-icon cursor-pointer active:scale-90"
-					title="Edit"
-					disabled={busy}
-					onclick={() => openEdit(job)}
-				>
-					<Pencil size={14} />
-				</button>
-				<button
-					class="btn-icon btn-icon-danger cursor-pointer active:scale-90"
-					title="Delete"
-					disabled={busy}
-					onclick={() => remove(job)}
-				>
-					<Trash2 size={14} />
-				</button>
-			</div>
-		{:else}
-			{col.render ? col.render(row) : String(row[col.key] ?? '—')}
-		{/if}
-	{/snippet}
-</DataTable>
-
-<Modal bind:show={showEditor} title={editingId ? 'Edit cron job' : 'New cron job'}>
-	<div class="grid gap-4">
-		<Input label="Name" placeholder="e.g. nightly cleanup" bind:value={form.name} />
-
-		<div class="flex gap-3">
-			<Input
-				label="Cron expression"
-				placeholder="*/5 * * * *"
-				bind:value={form.expression}
-				class="bg-transparent!"
-			/>
-			<div class="flex-1">
-				<span class="mb-1 block text-xs text-base-content/50">Timezone</span>
-				<Select options={timezoneOptions} bind:value={form.timezone} />
-			</div>
-		</div>
-
-		<div
-			class="h-33.5 rounded-box border bg-base-200/40 p-3 text-xs text-base-content/50"
-			class:box-error={preview.error}
-		>
-			{#if preview.loading}
-				<div class="flex h-full items-center justify-center">Checking expression…</div>
-			{:else if preview.error}
-				{preview.error}
-			{:else if preview.runs.length}
-				<p class="mb-1 font-medium text-base-content/60">
-					Next 5 runs (in {form.timezone}):
-				</p>
-				<ul class="space-y-0.5 font-mono">
-					{#each preview.runs as run (run)}
-						<li>{formatDate(run)}</li>
-					{/each}
-				</ul>
-			{/if}
-		</div>
-
-		<Switch bind:checked={form.enabled}>Enabled — schedule this job</Switch>
-
-		<div>
-			<span class="mb-1 block text-xs text-base-content/50">Action</span>
-			<Tabs items={actionTabs} bind:active={actionTab} />
-			{#if actionTab === 'HTTP Request'}
-				<div class="mt-4 grid gap-3">
-					<div class="grid grid-cols-[130px_1fr] gap-3">
-						<div>
-							<span class="mb-1 block text-xs text-base-content/50">Method</span>
-							<Select options={httpMethodOptions} bind:value={form.method} />
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-base-content/50">URL</span>
-							<input
-								class="input w-full font-mono text-xs"
-								placeholder="https://example.com/webhook"
-								bind:value={form.url}
-							/>
-						</div>
-					</div>
-					<div>
-						<span class="mb-1 block text-xs text-base-content/50">Headers</span>
-						<div class="overflow-hidden rounded-box border border-base-300">
-							<div class="flex border-b bg-base-200/50 text-xs text-base-content/50">
-								<div class="w-1/2 px-3 py-1.5">Header</div>
-								<div class="w-1/2 border-l px-3 py-1.5">Value</div>
-								<div class="w-9 shrink-0"></div>
-							</div>
-							{#each form.headers as header, i (i)}
-								<div class="flex items-center border-b last:border-b-0">
-									<input
-										class="w-1/2 bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
-										placeholder="X-Custom-Header"
-										bind:value={header.key}
-									/>
-									<input
-										class="w-1/2 border-l bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
-										placeholder="value"
-										bind:value={header.value}
-									/>
-									<div class="flex w-9 shrink-0 justify-center">
-										<button
-											class="btn-icon btn-icon-danger"
-											title="Remove header"
-											onclick={() => form.headers.splice(i, 1)}
-											disabled={form.headers.length <= 1}
-										>
-											×
-										</button>
-									</div>
-								</div>
-							{/each}
-						</div>
-						<button
-							class="mt-1 cursor-pointer border-none bg-transparent text-xs text-primary hover:underline"
-							onclick={() => form.headers.push({ key: '', value: '' })}
-						>
-							+ Add header
-						</button>
-					</div>
-					<div>
-						<span class="mb-1 block text-xs text-base-content/50">Body (optional)</span>
-						<textarea
-							class="input w-full font-mono text-xs outline-none focus:outline-none"
-							rows="4"
-							placeholder={'{"message": "hello"}'}
-							bind:value={form.body}></textarea>
-					</div>
-				</div>
-			{:else if actionTab === 'SQL'}
-				<div class="mt-4 grid gap-3">
-					<div>
-						<span class="mb-1 block text-xs text-base-content/50">SQL statement</span>
-						<textarea
-							class="input w-full font-mono text-xs outline-none focus:outline-none"
-							rows="6"
-							placeholder="DELETE FROM logs WHERE created_at < now() - interval '30 days'"
-							bind:value={form.statement}></textarea>
-					</div>
-					<p class="text-xs text-base-content/50">
-						Runs against your database with full privileges (superuser-owned). Useful for cleanup,
-						archival and backfills.
-					</p>
-				</div>
-			{:else}
-				<div class="mt-4 grid gap-3">
-					<Input
-						label="Event name (optional)"
-						placeholder="e.g. night_cleanup"
-						help="Subscribe in priv/hooks/*.ex via Lazypock.Hooks.Cron.on_cron/1."
-						bind:value={form.hookEvent}
+			{:else if col.key === 'timezone'}
+				<span class="text-xs">{job.timezone}</span>
+			{:else if col.key === 'next_run'}
+				<span class="text-xs">{job.enabled ? formatDate(job.next_run_at) : '—'}</span>
+			{:else if col.key === 'last_run'}
+				<span class="text-xs">
+					{formatDate(job.last_run_at)}
+					{#if job.last_duration_ms != null}
+						<span class="text-base-content/40"> ({formatDuration(job.last_duration_ms)})</span>
+					{/if}
+				</span>
+			{:else if col.key === 'status'}
+				{#if job.last_status === 'ok'}
+					<span class="badge badge-success badge-sm">ok</span>
+				{:else if job.last_status === 'error'}
+					<span class="badge badge-error badge-sm" title={job.last_error ?? ''}>error</span>
+				{:else if job.last_status === 'skipped'}
+					<span class="badge badge-neutral badge-sm" title={job.last_error ?? ''}>skipped</span>
+				{:else}
+					<span class="badge badge-ghost badge-sm">never</span>
+				{/if}
+			{:else if col.key === 'actions'}
+				<div class="flex items-center justify-end gap-2">
+					<input
+						type="checkbox"
+						class="toggle cursor-pointer"
+						checked={job.enabled}
+						onchange={() => toggleEnabled(job)}
+						title={job.enabled ? 'Disable' : 'Enable'}
 					/>
-					<p class="text-xs text-base-content/50">
-						The on_cron hook event fires with the job attached; hook modules can run arbitrary
-						Elixir — the escape hatch for anything the other actions can't do.
-					</p>
+					<button
+						class="btn-icon cursor-pointer active:scale-90"
+						title="Run now"
+						disabled={busy}
+						onclick={() => runNow(job)}
+					>
+						<Play size={14} />
+					</button>
+					<button
+						class="btn-icon cursor-pointer active:scale-90"
+						title="Edit"
+						disabled={busy}
+						onclick={() => openEdit(job)}
+					>
+						<Pencil size={14} />
+					</button>
+					<button
+						class="btn-icon btn-icon-danger cursor-pointer active:scale-90"
+						title="Delete"
+						disabled={busy}
+						onclick={() => remove(job)}
+					>
+						<Trash2 size={14} />
+					</button>
 				</div>
+			{:else}
+				{col.render ? col.render(row) : String(row[col.key] ?? '—')}
 			{/if}
+		{/snippet}
+	</DataTable>
+
+	<Modal bind:show={showEditor} title={editingId ? 'Edit cron job' : 'New cron job'}>
+		<div class="grid gap-4">
+			<Input label="Name" placeholder="e.g. nightly cleanup" bind:value={form.name} />
+
+			<div class="flex gap-3">
+				<Input
+					label="Cron expression"
+					placeholder="*/5 * * * *"
+					bind:value={form.expression}
+					class="bg-transparent!"
+				/>
+				<div class="flex-1">
+					<span class="mb-1 block text-xs text-base-content/50">Timezone</span>
+					<Select options={timezoneOptions} bind:value={form.timezone} />
+				</div>
+			</div>
+
+			<div
+				class="h-33.5 rounded-box border bg-base-200/40 p-3 text-xs text-base-content/50"
+				class:box-error={preview.error}
+			>
+				{#if preview.loading}
+					<div class="flex h-full items-center justify-center">Checking expression��</div>
+				{:else if preview.error}
+					{preview.error}
+				{:else if preview.runs.length}
+					<p class="mb-1 font-medium text-base-content/60">
+						Next 5 runs (in {form.timezone}):
+					</p>
+					<ul class="space-y-0.5 font-mono">
+						{#each preview.runs as run (run)}
+							<li>{formatDate(run)}</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+
+			<Switch bind:checked={form.enabled}>Enabled — schedule this job</Switch>
+
+			<div>
+				<span class="mb-1 block text-xs text-base-content/50">Action</span>
+				<Tabs items={actionTabs} bind:active={actionTab} />
+				{#if actionTab === 'HTTP Request'}
+					<div class="mt-4 grid gap-3">
+						<div class="grid grid-cols-[130px_1fr] gap-3">
+							<div>
+								<span class="mb-1 block text-xs text-base-content/50">Method</span>
+								<Select options={httpMethodOptions} bind:value={form.method} />
+							</div>
+							<div>
+								<span class="mb-1 block text-xs text-base-content/50">URL</span>
+								<input
+									class="input w-full font-mono text-xs"
+									placeholder="https://example.com/webhook"
+									bind:value={form.url}
+								/>
+							</div>
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-base-content/50">Headers</span>
+							<div class="overflow-hidden rounded-box border border-base-300">
+								<div class="flex border-b bg-base-200/50 text-xs text-base-content/50">
+									<div class="w-1/2 px-3 py-1.5">Header</div>
+									<div class="w-1/2 border-l px-3 py-1.5">Value</div>
+									<div class="w-9 shrink-0"></div>
+								</div>
+								{#each form.headers as header, i (i)}
+									<div class="flex items-center border-b last:border-b-0">
+										<input
+											class="w-1/2 bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
+											placeholder="X-Custom-Header"
+											bind:value={header.key}
+										/>
+										<input
+											class="w-1/2 border-l bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:bg-base-200/40"
+											placeholder="value"
+											bind:value={header.value}
+										/>
+										<div class="flex w-9 shrink-0 justify-center">
+											<button
+												class="btn-icon btn-icon-danger"
+												title="Remove header"
+												onclick={() => form.headers.splice(i, 1)}
+												disabled={form.headers.length <= 1}
+											>
+												×
+											</button>
+										</div>
+									</div>
+								{/each}
+							</div>
+							<button
+								class="mt-1 cursor-pointer border-none bg-transparent text-xs text-primary hover:underline"
+								onclick={() => form.headers.push({ key: '', value: '' })}
+							>
+								+ Add header
+							</button>
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-base-content/50">Body (optional)</span>
+							<textarea
+								class="input w-full font-mono text-xs outline-none focus:outline-none"
+								rows="4"
+								placeholder={'{"message": "hello"}'}
+								bind:value={form.body}></textarea>
+						</div>
+					</div>
+				{:else if actionTab === 'SQL'}
+					<div class="mt-4 grid gap-3">
+						<div>
+							<span class="mb-1 block text-xs text-base-content/50">SQL statement</span>
+							<textarea
+								class="input w-full font-mono text-xs outline-none focus:outline-none"
+								rows="6"
+								placeholder="DELETE FROM logs WHERE created_at < now() - interval '30 days'"
+								bind:value={form.statement}></textarea>
+						</div>
+						<p class="text-xs text-base-content/50">
+							Runs against your database with full privileges (superuser-owned). Useful for cleanup,
+							archival and backfills.
+						</p>
+					</div>
+				{:else}
+					<div class="mt-4 grid gap-3">
+						<Input
+							label="Event name (optional)"
+							placeholder="e.g. night_cleanup"
+							help="Subscribe in priv/hooks/*.ex via Lazypock.Hooks.Cron.on_cron/1."
+							bind:value={form.hookEvent}
+						/>
+						<p class="text-xs text-base-content/50">
+							The on_cron hook event fires with the job attached; hook modules can run arbitrary
+							Elixir — the escape hatch for anything the other actions can't do.
+						</p>
+					</div>
+				{/if}
+			</div>
+
+			{#if formError}
+				<p class="text-xs text-error">{formError}</p>
+			{/if}
+
+			<div class="flex justify-end gap-2">
+				<Button class="btn-outline" onclick={closeEditor}>Cancel</Button>
+				<Button class="btn-primary" loading={saving} onclick={save}>
+					{editingId ? 'Save changes' : 'Create job'}
+				</Button>
+			</div>
 		</div>
+	</Modal>
 
-		{#if formError}
-			<p class="text-xs text-error">{formError}</p>
-		{/if}
-
-		<div class="flex justify-end gap-2">
-			<Button class="btn-outline" onclick={closeEditor}>Cancel</Button>
-			<Button class="btn-primary" loading={saving} onclick={save}>
-				{editingId ? 'Save changes' : 'Create job'}
-			</Button>
+	<!-- Delete collection confirm -->
+	<Modal bind:show={showDeleteConfirm} title="Delete collection?">
+		<p class="text-sm">
+			Delete <strong>{selectedCron?.name}</strong>? The table and all its records will be
+			permanently removed. This cannot be undone.
+		</p>
+		<div class="mt-4 flex justify-end gap-2">
+			<Button type="button" class="btn-ghost btn-sm" onclick={() => (showDeleteConfirm = false)}
+				>Cancel</Button
+			>
+			<Button type="button" class="btn-error btn-sm" loading={busy} onclick={deleteCron}
+				>Delete</Button
+			>
 		</div>
-	</div>
-</Modal>
-
-<!-- Delete collection confirm -->
-<Modal bind:show={showDeleteConfirm} title="Delete collection?">
-	<p class="text-sm">
-		Delete <strong>{selectedCron?.name}</strong>? The table and all its records will be permanently
-		removed. This cannot be undone.
-	</p>
-	<div class="mt-4 flex justify-end gap-2">
-		<Button type="button" class="btn-ghost btn-sm" onclick={() => (showDeleteConfirm = false)}
-			>Cancel</Button
-		>
-		<Button type="button" class="btn-error btn-sm" loading={busy} onclick={deleteCron}
-			>Delete</Button
-		>
-	</div>
-</Modal>
+	</Modal>
+</div>
 
 <style>
 	@reference '$lib/styles/app.css';

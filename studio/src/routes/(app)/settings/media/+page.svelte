@@ -78,108 +78,115 @@
 	}
 </script>
 
-<div class="mb-4 flex items-start justify-between gap-4">
-	<div>
-		<h2 class="mb-1 text-lg font-semibold">Media Library</h2>
-		<p class="text-sm text-base-content/60">
-			Every file uploaded through the app, the SDK or the richtext editor. Click a file to see its
-			details, or delete it — deleting removes the file and all of its variants from storage, and a
-			file that a record still references asks for confirmation first.
-		</p>
-	</div>
-	<Button class="btn-outline btn-sm shrink-0" onclick={openRules}>
-		<ShieldCheck size={15} />
-		File rules
-	</Button>
-</div>
-
-<Modal bind:show={showRules} title="File rules" size="lg">
-	<form
-		class="grid gap-4"
-		onsubmit={(e) => {
-			e.preventDefault();
-			save();
-		}}
-	>
-		<p class="text-xs text-base-content/70">
-			Control who can list and delete files through the API. Rules follow the same three states as
-			collection rules: <strong>locked</strong> (superusers only), <strong>empty</strong> (anyone), or
-			a filter evaluated against each file. Superusers always bypass. Uploads require authentication regardless,
-			and files are still served publicly at their URL.
-		</p>
-
-		{#if error}
-			<p class="text-xs text-error">{error}</p>
-		{/if}
-
-		<div class="space-y-4">
-			<RuleField
-				label="List/Search rule"
-				name="fileListRule"
-				bind:value={listRule}
-				placeholder="uploaded_by = @request.auth.id"
-				disabled={loading}
-			/>
-			<RuleField
-				label="Delete rule"
-				name="fileDeleteRule"
-				bind:value={deleteRule}
-				placeholder="uploaded_by = @request.auth.id"
-				disabled={loading}
-			/>
+<div class="flex flex-col gap-4">
+	<header class="flex flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-4">
+		<div class="flex-1">
+			<h1 class="text-xl font-semibold">Media Library</h1>
+			<p class="mt-1 text-sm text-base-content/50">
+				Every file uploaded through the app, the SDK or the richtext editor. Click a file to see its
+				details, or delete it — deleting removes the file and all of its variants from storage, and
+				a file that a record still references asks for confirmation first.
+			</p>
 		</div>
+		<Button class="btn-outline btn-sm shrink-0" onclick={openRules}>
+			<ShieldCheck size={15} />
+			File rules
+		</Button>
+	</header>
 
-		<div>
-			<button
-				type="button"
-				class="cursor-pointer text-xs font-medium text-primary hover:underline"
-				onclick={() => (showFields = !showFields)}
-			>
-				{showFields ? 'Hide available fields' : 'Show available fields'}
-			</button>
+	<Modal bind:show={showRules} title="File rules" size="lg">
+		<form
+			class="grid gap-4"
+			onsubmit={(e) => {
+				e.preventDefault();
+				save();
+			}}
+		>
+			<p class="text-xs text-base-content/70">
+				Control who can list and delete files through the API. Rules follow the same three states as
+				collection rules: <strong>locked</strong> (superusers only), <strong>empty</strong> (anyone),
+				or a filter evaluated against each file. Superusers always bypass. Uploads require authentication
+				regardless, and files are still served publicly at their URL.
+			</p>
 
-			{#if showFields}
-				<div
-					transition:slide
-					class="mt-2 rounded-field border border-base-300 bg-base-200/50 p-3 text-xs text-base-content/80"
-				>
-					<p class="mb-2">
-						Example — let uploaders manage their own files, and app admins manage everything:
-					</p>
-					<pre
-						class="mb-2 overflow-x-auto rounded bg-base-300/40 p-2 font-mono text-[11px]">uploaded_by = @request.auth.id || @request.auth.role = 'admin'</pre>
-					<p class="mb-1">
-						Put the field on the left of the comparison. <code>@request.auth.id</code>,
-						<code>@request.auth.email</code> and <code>@request.auth.role</code> refer to the authenticated
-						user.
-					</p>
-					<table class="w-full">
-						<tbody>
-							{#each availableFields as field (field.name)}
-								<tr>
-									<td class="py-0.5 pr-3 font-mono whitespace-nowrap">{field.name}</td>
-									<td class="py-0.5 text-base-content/60">{field.type}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
+			{#if error}
+				<p class="text-xs text-error">{error}</p>
 			{/if}
-		</div>
 
-		<div class="flex items-center justify-end gap-3">
-			{#if saved}<span class="text-xs text-success">Saved!</span>{/if}
-			<Button
-				class="btn-ghost btn-sm"
-				type="button"
-				disabled={saving}
-				onclick={() => (showRules = false)}>Close</Button
-			>
-			<Button class="btn-primary btn-sm" loading={saving} disabled={saving || loading} type="submit"
-				>Save rules</Button
-			>
-		</div>
-	</form>
-</Modal>
+			<div class="space-y-4">
+				<RuleField
+					label="List/Search rule"
+					name="fileListRule"
+					bind:value={listRule}
+					placeholder="uploaded_by = @request.auth.id"
+					disabled={loading}
+				/>
+				<RuleField
+					label="Delete rule"
+					name="fileDeleteRule"
+					bind:value={deleteRule}
+					placeholder="uploaded_by = @request.auth.id"
+					disabled={loading}
+				/>
+			</div>
 
-<MediaLibrary inline mode="manage" title="Media Library" />
+			<div>
+				<button
+					type="button"
+					class="cursor-pointer text-xs font-medium text-primary hover:underline"
+					onclick={() => (showFields = !showFields)}
+				>
+					{showFields ? 'Hide available fields' : 'Show available fields'}
+				</button>
+
+				{#if showFields}
+					<div
+						transition:slide
+						class="mt-2 rounded-field border border-base-300 bg-base-200/50 p-3 text-xs text-base-content/80"
+					>
+						<p class="mb-2">
+							Example — let uploaders manage their own files, and app admins manage everything:
+						</p>
+						<pre
+							class="mb-2 overflow-x-auto rounded bg-base-300/40 p-2 font-mono text-[11px]">uploaded_by = @request.auth.id || @request.auth.role = 'admin'</pre>
+						<p class="mb-1">
+							Put the field on the left of the comparison. <code>@request.auth.id</code>,
+							<code>@request.auth.email</code> and <code>@request.auth.role</code> refer to the authenticated
+							user.
+						</p>
+						<table class="w-full">
+							<tbody>
+								{#each availableFields as field (field.name)}
+									<tr>
+										<td class="py-0.5 pr-3 font-mono whitespace-nowrap">{field.name}</td>
+										<td class="py-0.5 text-base-content/60">{field.type}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</div>
+
+			<div class="flex items-center justify-end gap-3">
+				{#if saved}<span class="text-xs text-success">Saved!</span>{/if}
+				<Button
+					class="btn-ghost btn-sm"
+					type="button"
+					disabled={saving}
+					onclick={() => (showRules = false)}>Close</Button
+				>
+				<Button
+					class="btn-primary btn-sm"
+					loading={saving}
+					disabled={saving || loading}
+					type="submit">Save rules</Button
+				>
+			</div>
+		</form>
+	</Modal>
+
+	<div class="mt-3">
+		<MediaLibrary inline mode="manage" title="Media Library" />
+	</div>
+</div>

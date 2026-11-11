@@ -109,77 +109,88 @@
 	];
 </script>
 
-<h2 class="mb-4 text-lg font-semibold">API Keys</h2>
-<div class="mb-4 text-sm text-base-content/60">
-	<p>
-		API keys let you authenticate programmatic access to Lazypock without a browser session — for
-		example running the TypeScript codegen CLI (<code>npx lazypock --url ... --apikey ...</code>).
-	</p>
-	<p class="mt-1">
-		Keys are stored as a SHA-256 hash (the raw key is shown only once, when generated). Each key has
-		an optional expiry and can be revoked individually. Treat them like passwords.
-	</p>
-</div>
-
-{#if freshlyGenerated}
-	<div class="mb-4 rounded border border-success/40 bg-success/10 p-4 text-sm">
-		<div class="mb-2 font-semibold text-success">
-			Your new API key — copy it now, it won't be shown again.
+<div class="flex flex-col gap-4">
+	<header class="flex flex-wrap items-start justify-between gap-3 border-b border-base-300 pb-4">
+		<div>
+			<h1 class="text-xl font-semibold">API Keys</h1>
+			<div class="mt-1 text-sm text-base-content/50">
+				<p>
+					API keys let you authenticate programmatic access to Lazypock without a browser session —
+					for example running the TypeScript codegen CLI (<code
+						>npx lazypock --url ... --apikey ...</code
+					>).
+				</p>
+				<p class="mt-1">
+					Keys are stored as a SHA-256 hash (the raw key is shown only once, when generated). Each
+					key has an optional expiry and can be revoked individually. Treat them like passwords.
+				</p>
+			</div>
 		</div>
-		<div class="flex items-center gap-2">
-			<code class="rounded bg-base-200 px-3 py-2 break-all select-all">{freshlyGenerated}</code>
-			<Button
-				class="btn-outline btn-sm"
-				onclick={() => navigator.clipboard?.writeText(freshlyGenerated)}
-			>
-				Copy
-			</Button>
-		</div>
-	</div>
-{/if}
+	</header>
 
-<div class="mb-4 flex items-end gap-3">
-	<div>
-		<span class="mb-1 block text-xs text-base-content/50">Expiry</span>
-		<Select options={expiryOptions} bind:value={expires} />
-	</div>
-	<Button class="btn-primary" loading={busy} onclick={generate}>Generate API key</Button>
-</div>
-
-<DataTable
-	{columns}
-	rows={keys as unknown as Record<string, unknown>[]}
-	loading={busy}
-	emptyLabel="No API keys yet. Generate your first one above."
->
-	{#snippet cell(row, col)}
-		{#if col.key === 'id'}
-			<span class="font-mono text-xs">{String(row.id ?? '').slice(0, 8)}…</span>
-		{:else if col.key === 'created_at'}
-			<span class="text-xs text-base-content/60">{formatDate(row.created_at as string | null)}</span
-			>
-		{:else if col.key === 'expires_at'}
-			<span class="text-xs">{formatDate(row.expires_at as string | null)}</span>
-		{:else if col.key === 'status'}
-			{#if statusOf(row as unknown as ApiKey) === 'active'}
-				<span class="badge badge-success badge-sm">active</span>
-			{:else if statusOf(row as unknown as ApiKey) === 'revoked'}
-				<span class="badge badge-neutral badge-sm">revoked</span>
-			{:else}
-				<span class="badge badge-warning badge-sm">expired</span>
-			{/if}
-		{:else if col.key === 'actions'}
-			{#if statusOf(row as unknown as ApiKey) === 'active'}
-				<Button
-					class="btn-error btn-outline btn-xs"
-					loading={busy}
-					onclick={() => revoke(row.id as string)}
-				>
-					Revoke
-				</Button>
-			{/if}
-		{:else}
-			{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
+	<div class="mt-3">
+		{#if freshlyGenerated}
+			<div class="mb-4 rounded border border-success/40 bg-success/10 p-4 text-sm">
+				<div class="mb-2 font-semibold text-success">
+					Your new API key — copy it now, it won't be shown again.
+				</div>
+				<div class="flex items-center gap-2">
+					<code class="rounded bg-base-200 px-3 py-2 break-all select-all">{freshlyGenerated}</code>
+					<Button
+						class="btn-outline btn-sm"
+						onclick={() => navigator.clipboard?.writeText(freshlyGenerated)}
+					>
+						Copy
+					</Button>
+				</div>
+			</div>
 		{/if}
-	{/snippet}
-</DataTable>
+
+		<div class="mb-4 flex items-end gap-3">
+			<div>
+				<span class="mb-1 block text-xs text-base-content/50">Expiry</span>
+				<Select options={expiryOptions} bind:value={expires} />
+			</div>
+			<Button class="btn-primary" loading={busy} onclick={generate}>Generate API key</Button>
+		</div>
+
+		<DataTable
+			{columns}
+			rows={keys as unknown as Record<string, unknown>[]}
+			loading={busy}
+			emptyLabel="No API keys yet. Generate your first one above."
+		>
+			{#snippet cell(row, col)}
+				{#if col.key === 'id'}
+					<span class="font-mono text-xs">{String(row.id ?? '').slice(0, 8)}…</span>
+				{:else if col.key === 'created_at'}
+					<span class="text-xs text-base-content/60"
+						>{formatDate(row.created_at as string | null)}</span
+					>
+				{:else if col.key === 'expires_at'}
+					<span class="text-xs">{formatDate(row.expires_at as string | null)}</span>
+				{:else if col.key === 'status'}
+					{#if statusOf(row as unknown as ApiKey) === 'active'}
+						<span class="badge badge-success badge-sm">active</span>
+					{:else if statusOf(row as unknown as ApiKey) === 'revoked'}
+						<span class="badge badge-neutral badge-sm">revoked</span>
+					{:else}
+						<span class="badge badge-warning badge-sm">expired</span>
+					{/if}
+				{:else if col.key === 'actions'}
+					{#if statusOf(row as unknown as ApiKey) === 'active'}
+						<Button
+							class="btn-error btn-outline btn-xs"
+							loading={busy}
+							onclick={() => revoke(row.id as string)}
+						>
+							Revoke
+						</Button>
+					{/if}
+				{:else}
+					{col.render ? col.render(row) : ((row[col.key] as string) ?? '—')}
+				{/if}
+			{/snippet}
+		</DataTable>
+	</div>
+</div>

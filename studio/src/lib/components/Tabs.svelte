@@ -1,19 +1,43 @@
 <script lang="ts">
-	let {
-		items = [],
-		active = $bindable(''),
-		class: className = ''
-	}: {
-		items: string[];
+	import type { Component } from 'svelte';
+	import type { IconProps } from '@lucide/svelte';
+
+	interface Item {
+		icon?: Component<IconProps>;
+		label: string;
+		key: string;
+	}
+
+	interface Props {
+		items: Array<Item | string>;
 		active?: string;
 		class?: string;
-	} = $props();
+		onselect?: (item: Item | string) => void;
+	}
+	let { items = [], active = $bindable(''), class: classes = '', onselect }: Props = $props();
+
+	const onSelect = (item: Item | string) => {
+		if (typeof item === 'string') active = item;
+		else active = item.key;
+
+		onselect?.(item);
+	};
 </script>
 
-<nav class="tabs-header {className}">
+<nav class="tabs-header {classes}">
 	{#each items as item (item)}
-		<button class="tab-item" class:active={item === active} onclick={() => (active = item)}>
-			{item}
+		{@const isActive = typeof item === 'string' ? item === active : item.key === active}
+
+		<button class="tab-item" class:active={isActive} onclick={() => onSelect(item)}>
+			{#if typeof item !== 'string' && item.icon}
+				<item.icon size={14} />
+			{/if}
+
+			{#if typeof item === 'string'}
+				{item}
+			{:else}
+				{item.label}
+			{/if}
 		</button>
 	{/each}
 </nav>
@@ -26,7 +50,10 @@
 	}
 
 	.tab-item {
-		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 4px;
 		padding: 8px 12px;
 		font-size: var(--font-size-sm, 0.875rem);
 		font-weight: 500;
@@ -46,7 +73,6 @@
 
 	.tab-item:hover {
 		opacity: 1;
-		background: var(--color-base-200);
 	}
 
 	.tab-item.active {
