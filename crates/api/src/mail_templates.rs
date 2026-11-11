@@ -74,17 +74,19 @@ pub struct SaveTemplate {
     pub subject: String,
     /// The HTML body.
     pub html: String,
-    /// The plain-text alternative.
-    pub text: String,
+    /// The plain-text alternative. Left out — or empty — derives one from `html`.
+    pub text: Option<String>,
 }
 
 /// `PUT /api/mail/templates/{name}`
 ///
-/// Saves all three parts, replacing whatever was stored for them.
+/// Saves the template, replacing whatever was stored for it.
 ///
-/// All three rather than one at a time: a template is only allowed to exist once it
-/// is complete, and a part-at-a-time write would let a subject be saved against a
-/// body that fails to parse.
+/// Subject and HTML body are written together rather than one at a time: a template
+/// is only allowed to exist once it is complete, and a part-at-a-time write would let
+/// a subject be saved against a body that fails to parse. The plain-text alternative
+/// is derived from the HTML when the caller does not send one, because two bodies
+/// kept in step by hand drift apart as soon as one of them is edited.
 pub async fn save(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -94,16 +96,29 @@ pub async fn save(
     let name = name.trim();
     validate_name(name)?;
 
+    for (part, value) in [
+        ("subject", body.subject.as_str()),
+        ("html", body.html.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(invalid(format!("`{part}` must not be empty")));
+        }
+    }
+
+    let text = body
+        .text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| lazypock_mail::plain_text_from_html(&body.html));
+
     let parts = [
         ("subject", body.subject.as_str()),
         ("html", body.html.as_str()),
-        ("text", body.text.as_str()),
+        ("text", text.as_str()),
     ];
-    for (part, text) in parts {
-        if text.trim().is_empty() {
-            return Err(invalid(format!("`{part}` must not be empty")));
-        }
-        if text.len() > lazypock_db::mail_templates::MAX_BODY_BYTES {
+    for (part, value) in parts {
+        if value.len() > lazypock_db::mail_templates::MAX_BODY_BYTES {
             return Err(invalid(format!(
                 "`{part}` is limited to {} bytes",
                 lazypock_db::mail_templates::MAX_BODY_BYTES
@@ -203,6 +218,12 @@ pub struct PreviewTemplate {
 /// given is rendered in place of the stored part, which is what makes this useful
 /// while a body is still being written: it never has to be saved to be seen, and
 /// nothing is stored or sent.
+///
+/// Unlike a send, a variable the caller did not supply renders as empty rather than
+/// failing: a body being written is normally one whose variables are not filled in
+/// yet, and a built-in's `token` cannot be supplied at all. The names that were left
+/// empty are returned as `missing`, so the editor can say what the sample values are
+/// not covering instead of showing a body with a hole in it.
 pub async fn preview(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -283,10 +304,10 @@ pub async fn preview(
     )
     .map_err(ApiError::new)?;
 
-    let rendered = templates.render_all(name, &context).map_err(|err| {
-        // An undefined variable is a missing `assigns` key, which is the caller's
-        // input rather than a server fault — and the message is what the editor shows
-        // to say which one is missing.
+    let (rendered, missing) = templates.preview_all(name, &context).map_err(|err| {
+        // A missing variable renders empty here, so what can still fail is an
+        // expression over the sample values the caller supplied — their input, and the
+        // message is what says which value it choked on.
         invalid(err.to_string())
     })?;
 
@@ -295,6 +316,10 @@ pub async fn preview(
         "subject": rendered.subject,
         "html": rendered.html,
         "text": rendered.text,
+        // The variables the sample values did not supply. They render empty — which is
+        // what makes a built-in previewable at all — so the editor says which ones
+        // they are rather than showing a body with a hole in it.
+        "missing": missing,
     })))
 }
 

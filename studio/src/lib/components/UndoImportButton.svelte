@@ -71,9 +71,7 @@
 			The last import/restore ran on {formatTs(snapshot.created_at)}.
 		</p>
 		<div class="mt-3">
-			<Button class="btn-warning btn-sm" onclick={() => (confirmOpen = true)}
-				>Undo last import</Button
-			>
+			<Button class="btn-warning" onclick={() => (confirmOpen = true)}>Undo last import</Button>
 		</div>
 	</div>
 
@@ -99,8 +97,8 @@
 			/>
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
-			<Button class="btn-ghost btn-sm" onclick={() => (confirmOpen = false)}>Cancel</Button>
-			<Button class="btn-warning btn-sm" disabled={!password} loading={busy} onclick={undo}
+			<Button class="btn-ghost" onclick={() => (confirmOpen = false)}>Cancel</Button>
+			<Button class="btn-warning" disabled={!password} loading={busy} onclick={undo}
 				>Undo import</Button
 			>
 		</div>

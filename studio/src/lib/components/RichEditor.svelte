@@ -34,7 +34,13 @@
 	import type { MediaItem } from '$lib/components/MediaLibrary.svelte';
 	import MediaPicker from '$lib/components/MediaPicker.svelte';
 
-	let { value = $bindable(), disabled = false }: { value?: unknown; disabled?: boolean } = $props();
+	let {
+		value = $bindable(),
+		disabled = false,
+		// Email bodies are HTML, so a caller that needs the markup rather than
+		// Markdown says so here; the value in and out is the same string either way.
+		format = 'markdown'
+	}: { value?: unknown; disabled?: boolean; format?: 'markdown' | 'html' } = $props();
 
 	let editor = $state<Editor | null>(null);
 	let pickerOpen = $state(false);
@@ -48,6 +54,11 @@
 
 	/** Last Markdown we emitted, so a `$effect` can tell our own update apart. */
 	let lastEmitted = '';
+
+	/** Insert plain text (a template variable, say) at the cursor. */
+	export function insertText(text: string) {
+		editor?.chain().focus().insertContent(text).run();
+	}
 
 	/** Embedded images always use the `content` preset, never the original. */
 	function contentUrl(item: MediaItem): string {
@@ -125,15 +136,18 @@
 					markedOptions: { gfm: true }
 				})
 			],
-			contentType: 'markdown',
+			contentType: format,
 			content: String(value ?? ''),
 			editable: !disabled,
 			onUpdate: ({ editor: ed }) => {
 				// Serialise once and remember it, so the value-sync effect does not
 				// re-serialise the whole document on every keystroke.
-				const md = (ed as unknown as { getMarkdown: () => string }).getMarkdown();
-				lastEmitted = md;
-				value = md;
+				const emitted =
+					format === 'html'
+						? ed.getHTML()
+						: (ed as unknown as { getMarkdown: () => string }).getMarkdown();
+				lastEmitted = emitted;
+				value = emitted;
 			},
 			// The store re-emits the *same* Editor reference on every transaction,
 			// so `editor` alone is not reactive. Bump a revision so the toolbar's
@@ -243,7 +257,7 @@
 					setContent: (c: string, o?: { contentType?: string; emitUpdate?: boolean }) => void;
 				};
 			}
-		).commands.setContent(incoming, { contentType: 'markdown', emitUpdate: false });
+		).commands.setContent(incoming, { contentType: format, emitUpdate: false });
 	});
 </script>
 

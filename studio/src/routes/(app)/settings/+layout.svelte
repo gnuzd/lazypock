@@ -13,7 +13,6 @@
 		Images,
 		KeyRound,
 		Mail,
-		MailPlus,
 		Upload
 	} from '@lucide/svelte';
 
@@ -29,12 +28,6 @@
 	const systemItems: NavItem[] = [
 		{ id: 'application', label: 'Application', icon: Cog, href: '/settings/application' },
 		{ id: 'mail', label: 'Mail', icon: Mail, href: '/settings/mail' },
-		{
-			id: 'mail-templates',
-			label: 'Mail Templates',
-			icon: MailPlus,
-			href: '/settings/mail-templates'
-		},
 		{ id: 'files', label: 'Files Storage', icon: HardDrive, href: '/settings/files' },
 		{ id: 'media', label: 'Media Library', icon: Images, href: '/settings/media' },
 		{ id: 'api-keys', label: 'API Keys', icon: KeyRound, href: '/settings/api-keys' },
@@ -97,7 +90,8 @@
 <div class="flex flex-1 overflow-hidden">
 	<Sidebar body={bodyContent} />
 	<main class="flex-1 overflow-auto p-6">
-		<div class="mx-auto w-full">
+		<!-- Capped so a form does not stretch to the full width of a wide monitor. -->
+		<div class="mx-auto w-full max-w-7xl">
 			{@render children()}
 		</div>
 	</main>

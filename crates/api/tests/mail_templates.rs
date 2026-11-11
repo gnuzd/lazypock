@@ -186,12 +186,13 @@ async fn a_body_is_parsed_before_it_is_stored() {
     .await;
     assert_eq!(empty.status, StatusCode::BAD_REQUEST, "{:?}", empty.body);
 
-    // A template arrives complete or not at all.
+    // A template arrives complete or not at all: the subject and the HTML body can
+    // never be left out.
     let incomplete = call_authed(
         &api,
         Method::PUT,
         "/api/mail/templates/otp",
-        Some(json!({ "subject": "{{ code }}", "html": "<p>{{ code }}</p>" })),
+        Some(json!({ "html": "<p>{{ code }}</p>", "text": "{{ code }}" })),
         &token,
     )
     .await;
@@ -200,6 +201,23 @@ async fn a_body_is_parsed_before_it_is_stored() {
         StatusCode::UNPROCESSABLE_ENTITY,
         "{:?}",
         incomplete.body
+    );
+
+    // The plain-text alternative is derived from the HTML when it is not sent, so the
+    // two bodies cannot drift apart. The editor writes an empty one for exactly this.
+    let derived = call_authed(
+        &api,
+        Method::PUT,
+        "/api/mail/templates/otp",
+        Some(json!({ "subject": "Your code", "html": "<p>Hi {{ name }}</p>", "text": "" })),
+        &token,
+    )
+    .await;
+    assert_eq!(derived.status, StatusCode::OK, "{:?}", derived.body);
+    assert_eq!(
+        derived.body.expect("a template")["text"],
+        json!("Hi {{ name }}"),
+        "the text part is the HTML without its tags"
     );
 
     app.cleanup().await;
@@ -236,9 +254,10 @@ async fn a_preview_renders_a_draft_without_saving_it() {
     let stored = call_authed(&api, Method::GET, "/api/mail/templates/otp", None, &token).await;
     assert_eq!(stored.body.expect("a template")["source"], json!("builtin"));
 
-    // An undefined variable is the caller's missing `assigns`, reported as such
-    // rather than as a server fault: strict rendering is what makes an OTP email with
-    // an empty code impossible, and the message is what says which key is missing.
+    // A variable the sample values do not cover renders empty rather than failing,
+    // which is what makes a built-in — whose `token` or `code` nobody can supply —
+    // previewable at all. The empty names come back so the editor can say what is
+    // missing instead of showing a body with a hole in it.
     let missing = call_authed(
         &api,
         Method::POST,
@@ -247,11 +266,28 @@ async fn a_preview_renders_a_draft_without_saving_it() {
         &token,
     )
     .await;
+    assert_eq!(missing.status, StatusCode::OK, "{:?}", missing.body);
+    let rendered = missing.body.expect("a rendered message");
+    assert_eq!(rendered["missing"], json!(["code", "expires_minutes"]));
+    // Both holes are visibly empty rather than reported as a failure.
+    let text = rendered["text"].as_str().expect("text");
+    assert!(text.contains("code is: \n"), "{text}");
+    assert!(text.contains("expires in  minutes"), "{text}");
+
+    // Supplying them leaves nothing missing, and a send still refuses a blank code:
+    // leniency is the preview's job, not the mailer's.
+    let complete = call_authed(
+        &api,
+        Method::POST,
+        "/api/mail/templates/otp/preview",
+        Some(json!({ "assigns": { "name": "Ada", "code": "1234", "expires_minutes": 5 } })),
+        &token,
+    )
+    .await;
+    assert_eq!(complete.status, StatusCode::OK, "{:?}", complete.body);
     assert_eq!(
-        missing.status,
-        StatusCode::BAD_REQUEST,
-        "{:?}",
-        missing.body
+        complete.body.expect("a rendered message")["missing"],
+        json!([])
     );
 
     app.cleanup().await;

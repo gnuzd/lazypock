@@ -20,6 +20,8 @@
 		uploadArchive
 	} from '$lib/importRestore';
 	import Input from '$lib/components/Input.svelte';
+	import SettingsCard from '$lib/components/SettingsCard.svelte';
+	import { Download, Upload } from '@lucide/svelte';
 
 	let backingUp = $state(false);
 	let restoring = $state(false);
@@ -212,188 +214,201 @@
 	}
 </script>
 
-<h2 class="mb-4 text-lg font-semibold">Backups</h2>
+<div class="flex flex-col gap-4">
+	<header class="border-b border-base-300 pb-4">
+		<h1 class="text-xl font-semibold">Backups</h1>
+		<p class="mt-1 text-sm text-base-content/50">
+			Download a full copy of every collection, or restore one into this instance.
+		</p>
+	</header>
 
-<div class="rounded-box border border-base-300 bg-base-100 p-6">
-	<p class="mb-4 text-sm text-base-content/70">
-		Download a full backup of all collections and their data. The
-		<strong>NDJSON archive</strong> is streamed to disk, so it works no matter how large the database
-		is (records over 100 MB included).
-	</p>
-	<div class="flex flex-wrap items-center gap-2">
-		<Button class="btn-primary" loading={backingUp} onclick={downloadZipBackup}>
-			Download Backup (.zip)
-		</Button>
-		<Button class="btn-outline btn-sm" loading={backingUp} onclick={downloadJsonBackup}>
-			Download JSON
-		</Button>
-	</div>
-	{#if exportProgress !== null}
-		<div class="mt-4">
-			<div class="mb-1 flex justify-between text-xs text-base-content/60">
-				<span>Exporting…</span>
-				<span>{exportProgress}%</span>
+	<SettingsCard title="Export" badge="Read only" icon={Download}>
+		<div>
+			<p class="mb-4 text-sm text-base-content/70">
+				Download a full backup of all collections and their data. The
+				<strong>NDJSON archive</strong> is streamed to disk, so it works no matter how large the database
+				is (records over 100 MB included).
+			</p>
+			<div class="flex flex-wrap items-center gap-2">
+				<Button class="btn-primary" loading={backingUp} onclick={downloadZipBackup}>
+					Download Backup (.zip)
+				</Button>
+				<Button class="btn-outline" loading={backingUp} onclick={downloadJsonBackup}>
+					Download JSON
+				</Button>
 			</div>
-			<progress class="progress progress-primary w-full" value={exportProgress} max="100"
-			></progress>
+			{#if exportProgress !== null}
+				<div class="mt-4">
+					<div class="mb-1 flex justify-between text-xs text-base-content/60">
+						<span>Exporting…</span>
+						<span>{exportProgress}%</span>
+					</div>
+					<progress class="progress progress-primary w-full" value={exportProgress} max="100"
+					></progress>
+				</div>
+			{/if}
+			<p class="mt-3 text-xs text-base-content/50">
+				The JSON download holds the whole database in the browser's memory — prefer the archive for
+				large databases.
+			</p>
 		</div>
-	{/if}
-	<p class="mt-3 text-xs text-base-content/50">
-		The JSON download holds the whole database in the browser's memory — prefer the archive for
-		large databases.
-	</p>
+	</SettingsCard>
+
+	<SettingsCard title="Restore" badge="Destructive" badgeVariant="warning" icon={Upload}>
+		<div>
+			<p class="mb-1 text-sm text-base-content/70">
+				Restore a backup file (an NDJSON <code class="font-mono">.zip</code> archive or the JSON you downloaded
+				above). Collections are created or updated and records are upserted by id, so relations stay intact
+				and re-restoring never duplicates data.
+			</p>
+			<p class="mb-4 text-xs text-base-content/50">
+				Also available from the CLI:
+				<code class="font-mono">lazypock restore &lt;backup.zip|backup.json&gt;</code>.
+			</p>
+
+			<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+				<div class="flex flex-wrap items-center gap-2">
+					<Button class="btn-outline" onclick={() => restoreFileInput?.click()}>
+						Choose backup file
+					</Button>
+					<input
+						bind:this={restoreFileInput}
+						type="file"
+						accept={ACCEPTED_FILES}
+						class="hidden"
+						onchange={() => {
+							if (restoreFileInput?.files?.length) loadBackupFile(restoreFileInput.files[0]);
+						}}
+					/>
+					{#if restoreFileName}
+						<span class="text-sm text-base-content/70">{restoreFileName}</span>
+					{/if}
+				</div>
+
+				<div class="flex flex-wrap items-center gap-2 text-sm text-base-content/70">
+					Or generate a file with an AI assistant:
+					<AiPromptButton class="btn-outline" />
+				</div>
+			</div>
+
+			{#if parseError}
+				<div class="mb-4 rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
+					{parseError}
+				</div>
+			{/if}
+
+			{#if archiveFile}
+				<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
+					Archive selected: <span class="font-mono">{archiveFile.name}</span>
+					<span class="text-info/70">({(archiveFile.size / 1_048_576).toFixed(1)} MB)</span> — its manifest
+					was read in the browser, so nothing has been uploaded yet.
+				</div>
+			{/if}
+
+			{#if uploadProgress !== null}
+				<div class="mb-4">
+					<div class="mb-1 flex justify-between text-xs text-base-content/60">
+						<span>Uploading archive…</span>
+						<span>{uploadProgress}%</span>
+					</div>
+					<progress class="progress progress-primary w-full" value={uploadProgress} max="100"
+					></progress>
+				</div>
+			{/if}
+
+			{#if parsedCollections.length > 0}
+				<div class="mb-4 rounded-box border border-base-300 bg-base-200/40 p-3">
+					<div class="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">
+						{parsedCollections.length} collections in backup
+					</div>
+					<ul class="max-h-40 space-y-1 overflow-y-auto">
+						{#each parsedCollections as c (c.name)}
+							<li class="flex items-center justify-between text-sm">
+								<span class="font-mono text-xs">{c.name}</span>
+								<span class="text-xs text-base-content/50">
+									{c.type}{c.recordCount > 0 ? ` · ${c.recordCount} records` : ''}
+								</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+
+			{#if archiveFile || parsedCollections.length > 0}
+				<Switch
+					variant="inline"
+					class="mb-4"
+					bind:checked={deleteMissing}
+					description="Makes the database match the backup exactly. System collections are always kept. Leave off for a safe merge."
+				>
+					Delete collections not present in the backup
+				</Switch>
+
+				<Switch
+					variant="inline"
+					class="mb-4"
+					bind:checked={atomic}
+					description="All-or-nothing (recommended). Turn off to apply what can be applied and report the rest."
+				>
+					Roll the whole restore back if any collection fails
+				</Switch>
+			{/if}
+
+			{#if restoreResult}
+				<div class="mb-4 rounded-box border border-base-300 bg-base-200/40 p-3">
+					<div class="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">
+						Restore results
+					</div>
+					<ul class="space-y-1">
+						{#each restoreResult.imported as item (item.name)}
+							<li class="flex items-center justify-between text-sm">
+								<span class="font-mono text-xs">{item.name}</span>
+								<span class="text-xs text-base-content/50">
+									{item.records_imported ? `${item.records_imported} records` : 'schema only'}
+								</span>
+							</li>
+						{/each}
+						{#each restoreResult.errors as item (item.name)}
+							<li class="text-xs text-error">✗ {item.name}: {item.error}</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+
+			<Input
+				label="Confirm your password"
+				id="restore-password"
+				type="password"
+				class="mb-4"
+				autocomplete="current-password"
+				bind:value={password}
+				help="Restoring rewrites your collections and records — confirm your superuser password."
+			/>
+
+			<div class="flex items-center gap-3">
+				<Button
+					class="btn-warning"
+					disabled={(!archiveFile && parsedCollections.length === 0) || !password}
+					loading={restoring}
+					onclick={() => doRestore()}
+				>
+					Restore
+				</Button>
+				{#if restoreFileName}
+					<button
+						type="button"
+						class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
+						onclick={clearRestore}
+					>
+						Clear
+					</button>
+				{/if}
+			</div>
+		</div>
+	</SettingsCard>
 </div>
 
-<div class="mt-6 rounded-box border border-base-300 bg-base-100 p-6">
-	<p class="mb-1 text-sm text-base-content/70">
-		Restore a backup file (an NDJSON <code class="font-mono">.zip</code> archive or the JSON you downloaded
-		above). Collections are created or updated and records are upserted by id, so relations stay intact
-		and re-restoring never duplicates data.
-	</p>
-	<p class="mb-4 text-xs text-base-content/50">
-		Also available from the CLI:
-		<code class="font-mono">lazypock restore &lt;backup.zip|backup.json&gt;</code>.
-	</p>
-
-	<div class="mb-4 flex flex-wrap items-center gap-2">
-		<Button class="btn-outline btn-sm" onclick={() => restoreFileInput?.click()}>
-			Choose backup file
-		</Button>
-		<input
-			bind:this={restoreFileInput}
-			type="file"
-			accept={ACCEPTED_FILES}
-			class="hidden"
-			onchange={() => {
-				if (restoreFileInput?.files?.length) loadBackupFile(restoreFileInput.files[0]);
-			}}
-		/>
-		{#if restoreFileName}
-			<span class="text-sm text-base-content/70">{restoreFileName}</span>
-		{/if}
-	</div>
-
-	<p class="mb-4 flex flex-wrap items-center gap-2 text-sm text-base-content/70">
-		Or generate a file with an AI assistant:
-		<AiPromptButton />
-	</p>
-
-	{#if parseError}
-		<div class="mb-4 rounded-box border border-error/30 bg-error/10 p-3 text-xs text-error">
-			{parseError}
-		</div>
-	{/if}
-
-	{#if archiveFile}
-		<div class="mb-4 rounded-box border border-info/30 bg-info/20 p-3 text-sm text-info">
-			Archive selected: <span class="font-mono">{archiveFile.name}</span>
-			<span class="text-info/70">({(archiveFile.size / 1_048_576).toFixed(1)} MB)</span> — its manifest
-			was read in the browser, so nothing has been uploaded yet.
-		</div>
-	{/if}
-
-	{#if uploadProgress !== null}
-		<div class="mb-4">
-			<div class="mb-1 flex justify-between text-xs text-base-content/60">
-				<span>Uploading archive…</span>
-				<span>{uploadProgress}%</span>
-			</div>
-			<progress class="progress progress-primary w-full" value={uploadProgress} max="100"
-			></progress>
-		</div>
-	{/if}
-
-	{#if parsedCollections.length > 0}
-		<div class="mb-4 rounded-box border border-base-300 bg-base-200/40 p-3">
-			<div class="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">
-				{parsedCollections.length} collections in backup
-			</div>
-			<ul class="max-h-40 space-y-1 overflow-y-auto">
-				{#each parsedCollections as c (c.name)}
-					<li class="flex items-center justify-between text-sm">
-						<span class="font-mono text-xs">{c.name}</span>
-						<span class="text-xs text-base-content/50">
-							{c.type}{c.recordCount > 0 ? ` · ${c.recordCount} records` : ''}
-						</span>
-					</li>
-				{/each}
-			</ul>
-		</div>
-	{/if}
-
-	{#if archiveFile || parsedCollections.length > 0}
-		<Switch
-			variant="inline"
-			class="mb-4"
-			bind:checked={deleteMissing}
-			description="Makes the database match the backup exactly. System collections are always kept. Leave off for a safe merge."
-		>
-			Delete collections not present in the backup
-		</Switch>
-
-		<Switch
-			variant="inline"
-			class="mb-4"
-			bind:checked={atomic}
-			description="All-or-nothing (recommended). Turn off to apply what can be applied and report the rest."
-		>
-			Roll the whole restore back if any collection fails
-		</Switch>
-	{/if}
-
-	{#if restoreResult}
-		<div class="mb-4 rounded-box border border-base-300 bg-base-200/40 p-3">
-			<div class="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">
-				Restore results
-			</div>
-			<ul class="space-y-1">
-				{#each restoreResult.imported as item (item.name)}
-					<li class="flex items-center justify-between text-sm">
-						<span class="font-mono text-xs">{item.name}</span>
-						<span class="text-xs text-base-content/50">
-							{item.records_imported ? `${item.records_imported} records` : 'schema only'}
-						</span>
-					</li>
-				{/each}
-				{#each restoreResult.errors as item (item.name)}
-					<li class="text-xs text-error">✗ {item.name}: {item.error}</li>
-				{/each}
-			</ul>
-		</div>
-	{/if}
-
-	<Input
-		label="Confirm your password"
-		id="restore-password"
-		type="password"
-		class="mb-4"
-		autocomplete="current-password"
-		bind:value={password}
-		help="Restoring rewrites your collections and records — confirm your superuser password."
-	/>
-
-	<div class="flex items-center gap-3">
-		<Button
-			class="btn-warning"
-			disabled={(!archiveFile && parsedCollections.length === 0) || !password}
-			loading={restoring}
-			onclick={() => doRestore()}
-		>
-			Restore
-		</Button>
-		{#if restoreFileName}
-			<button
-				type="button"
-				class="cursor-pointer border-none bg-transparent text-sm text-base-content/50 hover:text-base-content"
-				onclick={clearRestore}
-			>
-				Clear
-			</button>
-		{/if}
-	</div>
-</div>
-
-<UndoImportButton class="mt-6" reloadToken={undoToken} />
+<UndoImportButton class="mt-4" reloadToken={undoToken} />
 
 <Modal bind:show={confirmOpen} title="This restore is large">
 	<p class="text-sm">{confirmMessage}</p>
