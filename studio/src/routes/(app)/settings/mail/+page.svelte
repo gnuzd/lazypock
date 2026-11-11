@@ -39,9 +39,11 @@
 	//   against a body that does not parse.
 	// * The plain-text alternative is not edited here: the server derives it from the
 	//   HTML every time the template is saved, so the two bodies cannot drift apart.
-	// * The preview is a real render by the server, in a **sandboxed** iframe
-	//   (`sandbox=""`, so no scripts and no access to the Studio's origin) — an
-	//   email body is untrusted input, never `{@html}` in this document.
+	// * The preview is a real render by the server, in a **sandboxed** iframe — an
+	//   email body is untrusted input, never `{@html}` in this document. Scripts stay
+	//   blocked; the origin is shared only so the page can measure the frame's height
+	//   (`sandbox` without it gives the frame an opaque origin, whose document the
+	//   page cannot read at all).
 	// * Reset deletes the stored bodies, which is destructive enough to ask first;
 	//   it falls back to a file in the template directory, then to the built-in.
 
@@ -264,10 +266,35 @@
 		return typeof text === 'string' && text ? text : fallback;
 	}
 
-	/** Size the preview frame to the document it rendered, so a long body is not cut off. */
+	/**
+	 * The preview is its own document, so nothing in the Studio's stylesheet reaches
+	 * it: without this the email is the browser's default black on white in every
+	 * theme. The frame is sandboxed and cannot read the parent's CSS itself, so the
+	 * theme's colours are copied in as the values they resolve to.
+	 */
+	function themedPreview(html: string): string {
+		const theme = getComputedStyle(document.documentElement);
+		const colour = theme.getPropertyValue('--color-base-content').trim();
+		const background = theme.getPropertyValue('--color-base-200').trim();
+		const font = theme.getPropertyValue('--font-sans').trim();
+		return `<style>
+			html { background: ${background}; color: ${colour}; }
+			body { margin: 0; padding: 16px; font: 14px/1.6 ${font}; }
+			img { max-width: 100% }
+			a { color: inherit }
+		</style>${html}`;
+	}
+
+	/**
+	 * Size the frame to the document it rendered, so a long email is not a scroll box.
+	 * Zeroed first: a taller frame gives the document a taller viewport, and its
+	 * scrollHeight would then never shrink below the height it already has.
+	 */
 	function fitFrame(frame: HTMLIFrameElement) {
 		const doc = frame.contentDocument;
-		if (doc) frame.style.height = `${doc.documentElement.scrollHeight}px`;
+		if (!doc) return;
+		frame.style.height = '0px';
+		frame.style.height = `${doc.documentElement.scrollHeight}px`;
 	}
 
 	async function loadTemplates() {
@@ -292,6 +319,27 @@
 			? parsedSample.value.email
 			: meEmail
 	);
+
+	/**
+	 * The theme is an attribute the header sets on `<html>`, so watch it: the preview
+	 * carries a copy of the theme's colours and only re-reads them when re-rendered.
+	 */
+	let themeTick = $state(0);
+	onMount(() => {
+		const observer = new MutationObserver(() => themeTick++);
+		observer.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ['data-theme']
+		});
+		return () => observer.disconnect();
+	});
+
+	/** The preview document, in the theme as it is now. */
+	const previewSrc = $derived.by(() => {
+		// Reading the tick is what makes a theme switch re-render the frame.
+		void themeTick;
+		return rendered ? themedPreview(rendered.html) : '';
+	});
 
 	onMount(async () => {
 		// `requestKey: null` on both: the SDK auto-cancels a request with the same
@@ -934,11 +982,11 @@
 					</div>
 
 					<div
-						class="mx-auto w-full overflow-hidden rounded-field border border-base-300 bg-white"
+						class="mx-auto w-full overflow-hidden rounded-field border border-base-300 bg-base-200"
 						class:max-w-90={device === 'mobile'}
 					>
 						{#if rendered}
-							<div class="border-b border-base-300 px-4 pt-3 pb-2 text-xs text-black">
+							<div class="border-b border-base-300 px-4 pt-3 pb-2 text-xs">
 								{#each [{ label: 'From', value: sender }, { label: 'To', value: toAddress }, { label: 'Subject', value: rendered.subject }] as row (row.label)}
 									<div class="flex justify-between gap-3">
 										<span class="shrink-0 text-base-content/40">{row.label}:</span>
@@ -947,15 +995,15 @@
 								{/each}
 							</div>
 							<!--
-								`sandbox=""`: an email body is untrusted input, so this frame gets
-								no scripts and no access to the Studio's origin — never `{@html}`.
+								An email body is untrusted input: no scripts, and never
+								`{@html}` in this document.
 							-->
 							<iframe
 								title="Rendered email"
-								sandbox=""
-								srcdoc={rendered.html}
+								sandbox="allow-same-origin"
+								srcdoc={previewSrc}
 								onload={(e) => fitFrame(e.currentTarget as HTMLIFrameElement)}
-								class="w-full border-0 bg-white"
+								class="block w-full border-0 bg-base-200"
 							></iframe>
 						{:else if renderError}
 							<p class="p-4 text-sm text-error">{renderError}</p>
