@@ -11,6 +11,33 @@
 * **studio:** one card design for the settings pages ([205c1e1](https://github.com/gnuzd/lazypock/commit/205c1e140e1b270e049de43d7b6b66e2a77e5eec))
 * **studio:** pick test recipients like a select2 and frame the preview as a mail ([b21450a](https://github.com/gnuzd/lazypock/commit/b21450ab3dd545dcf474b8ed2863ffbcb8731c08))
 * **studio:** preview mail templates as HTML only and pick test recipients from a collection ([006ce8a](https://github.com/gnuzd/lazypock/commit/006ce8aa2c1013e744053dd31d93761a653066af))
+* **studio:** update ui ([0e935a5](https://github.com/gnuzd/lazypock/commit/0e935a5821359b33b50b0de603fd23e095dfb9c7))
+
+
+### Bug Fixes
+
+* **build:** re-embed the Studio when its bundle is rebuilt ([32205d7](https://github.com/gnuzd/lazypock/commit/32205d7f609d622198792ef1c5f4a5836b334c89))
+* **ci:** wrong version ([38f05eb](https://github.com/gnuzd/lazypock/commit/38f05eb7dab520f5201cf360b24e8618824561e3))
+* **mail:** preview a template leniently and report what it left empty ([b19a980](https://github.com/gnuzd/lazypock/commit/b19a98001d96fd393120dd5c8fd260d7d1d463af))
+* **studio:** load collection fields when the page is not a secure context ([99329cf](https://github.com/gnuzd/lazypock/commit/99329cf36a565076c9a4debb1503e2553750da0f))
+* **studio:** render the mail preview in the theme ([4a77db7](https://github.com/gnuzd/lazypock/commit/4a77db7ea88144ed9eff840166e0eba1c1fa6f31))
+
+
+### Miscellaneous Chores
+
+* release ([1d2b4a8](https://github.com/gnuzd/lazypock/commit/1d2b4a84f25fe578ab71e7fe4732a9b168d30071))
+
+## [0.3.0](https://github.com/gnuzd/lazypock/compare/v0.29.0...v0.3.0) (2026-11-11)
+
+
+### Features
+
+* **mail:** derive the plain-text part from the HTML body ([c14e4c0](https://github.com/gnuzd/lazypock/commit/c14e4c0ccddffa5adc143c5bc0840d86cc0edec6))
+* **studio:** edit a mail body as rich text and test-send to many ([312eba4](https://github.com/gnuzd/lazypock/commit/312eba479b5e27f985ec9ad0154ce2b1de56f214))
+* **studio:** merge the mail templates editor into one Mail Management page ([a9f6b4a](https://github.com/gnuzd/lazypock/commit/a9f6b4a2407478c17534b936fa000abe82f8e6e2))
+* **studio:** one card design for the settings pages ([205c1e1](https://github.com/gnuzd/lazypock/commit/205c1e140e1b270e049de43d7b6b66e2a77e5eec))
+* **studio:** pick test recipients like a select2 and frame the preview as a mail ([b21450a](https://github.com/gnuzd/lazypock/commit/b21450ab3dd545dcf474b8ed2863ffbcb8731c08))
+* **studio:** preview mail templates as HTML only and pick test recipients from a collection ([006ce8a](https://github.com/gnuzd/lazypock/commit/006ce8aa2c1013e744053dd31d93761a653066af))
 
 
 ### Bug Fixes
