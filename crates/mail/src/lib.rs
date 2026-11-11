@@ -422,10 +422,48 @@ impl Templates {
     /// Render all three parts with `context`.
     pub fn render_all(&self, name: &str, context: &Value) -> Result<Rendered> {
         Ok(Rendered {
-            subject: self.render(name, Part::Subject, context)?,
-            html: self.render(name, Part::Html, context)?,
-            text: self.render(name, Part::Text, context)?,
+            subject: self.render_in(&self.env, name, Part::Subject, context)?,
+            html: self.render_in(&self.env, name, Part::Html, context)?,
+            text: self.render_in(&self.env, name, Part::Text, context)?,
         })
+    }
+
+    /// Render all three parts the way an editor's preview shows them, with the
+    /// names `context` did not supply.
+    ///
+    /// [`Templates::render_all`] is strict, which is what a send wants: a template
+    /// that names a variable nobody supplied must fail loudly rather than mail a
+    /// blank. A preview has the opposite job — the body on screen is normally one
+    /// whose variables are not filled in yet, and no editor can supply a token it is
+    /// about to have generated — so an undefined name renders as empty here and the
+    /// caller is told which names those were, to show what is missing instead of an
+    /// error.
+    pub fn preview_all(&self, name: &str, context: &Value) -> Result<(Rendered, Vec<String>)> {
+        let mut env = self.env.clone();
+        env.set_undefined_behavior(UndefinedBehavior::Lenient);
+        let rendered = Rendered {
+            subject: self.render_in(&env, name, Part::Subject, context)?,
+            html: self.render_in(&env, name, Part::Html, context)?,
+            text: self.render_in(&env, name, Part::Text, context)?,
+        };
+
+        let supplied = context
+            .as_object()
+            .map(|assigns| assigns.keys().cloned().collect::<BTreeSet<String>>())
+            .unwrap_or_default();
+        let mut used = BTreeSet::new();
+        for part in Part::ALL {
+            let key = format!("{name}.{}", part.suffix());
+            if let Ok(template) = self.env.get_template(&key) {
+                used.extend(template.undeclared_variables(false));
+            }
+        }
+        Ok((
+            rendered,
+            used.into_iter()
+                .filter(|key| !supplied.contains(key))
+                .collect(),
+        ))
     }
 
     /// The template names that can be sent, built-in and custom.
@@ -433,10 +471,25 @@ impl Templates {
         self.names.iter().map(String::as_str).collect()
     }
 
-    /// Render one part of a template with `context`.
+    /// Render one part with the strict environment, as a send does.
+    #[cfg(test)]
     fn render(&self, name: &str, part: Part, context: &Value) -> Result<String> {
+        self.render_in(&self.env, name, part, context)
+    }
+
+    /// Render one part through `env`.
+    ///
+    /// The environment is a parameter so a preview can render the same bodies with
+    /// lenient undefined behaviour; a send always uses the strict one.
+    fn render_in(
+        &self,
+        env: &Environment<'static>,
+        name: &str,
+        part: Part,
+        context: &Value,
+    ) -> Result<String> {
         let key = format!("{name}.{}", part.suffix());
-        let template = self.env.get_template(&key).map_err(|_| {
+        let template = env.get_template(&key).map_err(|_| {
             Error::invalid(format!(
                 "no mail template named {name:?} (known: {})",
                 self.names().join(", ")
@@ -1026,6 +1079,56 @@ mod tests {
             .render("nope", Part::Html, &json!({}))
             .expect_err("unknown template");
         assert!(err.to_string().contains("otp"), "{err}");
+    }
+
+    #[test]
+    fn a_preview_renders_what_a_send_refuses() {
+        // A send must refuse an undefined variable rather than mail a blank; a preview
+        // must show the body, which is the only way a built-in whose `token` nobody can
+        // supply is previewable at all — naming what it left empty so the editor can say
+        // the sample values do not cover it.
+        let templates = templates();
+        let context = context_for("", "lazypock", &json!({})).expect("context");
+        let strict = templates
+            .render_all("verification", &context)
+            .expect_err("a send refuses an undefined token");
+        assert!(
+            strict.to_string().contains("cannot render mail template"),
+            "{strict}"
+        );
+
+        let (rendered, missing) = templates
+            .preview_all("verification", &context)
+            .expect("a preview renders");
+        assert_eq!(missing, vec!["token".to_string()]);
+        assert_eq!(rendered.subject, "Confirm your email for lazypock");
+        assert!(
+            rendered.html.contains("Use this code: <code></code>"),
+            "{}",
+            rendered.html
+        );
+
+        // A supplied variable is not reported, and renders.
+        let context = context_for("Ada", "lazypock", &json!({ "token": "1234" })).expect("context");
+        let (rendered, missing) = templates
+            .preview_all("verification", &context)
+            .expect("a preview renders");
+        assert!(missing.is_empty(), "{missing:?}");
+        assert!(rendered.html.contains("Hi Ada"), "{}", rendered.html);
+
+        // Every built-in is previewable with nothing supplied: `email_change` names
+        // both a value a send would have to be given and the token it generates itself.
+        for name in BUILTIN_NAMES {
+            let context = context_for("", "lazypock", &json!({})).expect("context");
+            let (rendered, missing) = templates
+                .preview_all(name, &context)
+                .unwrap_or_else(|err| panic!("{name} must preview: {err}"));
+            assert!(rendered.html.contains("</p>"), "{name}: {}", rendered.html);
+            assert!(
+                !missing.is_empty(),
+                "{name} names a variable nothing supplies"
+            );
+        }
     }
 
     /// An override as the API builds one from a `_mail_templates` row.

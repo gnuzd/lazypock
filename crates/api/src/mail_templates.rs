@@ -203,6 +203,12 @@ pub struct PreviewTemplate {
 /// given is rendered in place of the stored part, which is what makes this useful
 /// while a body is still being written: it never has to be saved to be seen, and
 /// nothing is stored or sent.
+///
+/// Unlike a send, a variable the caller did not supply renders as empty rather than
+/// failing: a body being written is normally one whose variables are not filled in
+/// yet, and a built-in's `token` cannot be supplied at all. The names that were left
+/// empty are returned as `missing`, so the editor can say what the sample values are
+/// not covering instead of showing a body with a hole in it.
 pub async fn preview(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -283,10 +289,10 @@ pub async fn preview(
     )
     .map_err(ApiError::new)?;
 
-    let rendered = templates.render_all(name, &context).map_err(|err| {
-        // An undefined variable is a missing `assigns` key, which is the caller's
-        // input rather than a server fault — and the message is what the editor shows
-        // to say which one is missing.
+    let (rendered, missing) = templates.preview_all(name, &context).map_err(|err| {
+        // A missing variable renders empty here, so what can still fail is an
+        // expression over the sample values the caller supplied — their input, and the
+        // message is what says which value it choked on.
         invalid(err.to_string())
     })?;
 
@@ -295,6 +301,10 @@ pub async fn preview(
         "subject": rendered.subject,
         "html": rendered.html,
         "text": rendered.text,
+        // The variables the sample values did not supply. They render empty — which is
+        // what makes a built-in previewable at all — so the editor says which ones
+        // they are rather than showing a body with a hole in it.
+        "missing": missing,
     })))
 }
 
