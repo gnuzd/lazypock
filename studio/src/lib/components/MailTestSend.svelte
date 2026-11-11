@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
 	import { toast } from 'svelte-sonner';
-	import { ChevronDown, X } from '@lucide/svelte';
+	import { Check, ChevronDown, X } from '@lucide/svelte';
 	import type { FilterString } from 'lazypock';
 
 	// The one "send a test email" control, shared by Mail Settings and the
@@ -55,6 +55,13 @@
 	let picked = $state<string[]>([]);
 	let totalItems = $state(0); // totalItems of the last candidate query
 	let loadingList = $state(false);
+	/** The list follows the filter box instead of waiting for a Load click. */
+	let filterTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function scheduleFilter() {
+		clearTimeout(filterTimer);
+		filterTimer = setTimeout(() => void loadCandidates(), 350);
+	}
 
 	const copy = $derived(
 		description ||
@@ -89,7 +96,9 @@
 
 	onMount(async () => {
 		try {
-			const me = (await client.me()) as Record<string, unknown> | null;
+			// `requestKey: null`: the page's layout asks for `/me` on the same load and
+			// whichever request starts later would abort the other one.
+			const me = (await client.me({ requestKey: null })) as Record<string, unknown> | null;
 			if (typeof me?.email === 'string') recipients = [me.email];
 		} catch {
 			// no identity to prefill; the field stays empty
@@ -293,20 +302,26 @@
 									{/each}
 								</select>
 							</div>
-							<div class="min-w-44 flex-1">
-								<span class="mb-1 block text-xs text-base-content/50">Filter (optional)</span>
-								<input
-									class="input input-sm w-full font-mono text-xs"
-									aria-label="Filter"
-									placeholder="verified = true"
-									bind:value={filter}
-									onkeydown={(e) => e.key === 'Enter' && loadCandidates()}
-								/>
-							</div>
-							<Button class="btn-outline btn-sm" loading={loadingList} onclick={loadCandidates}>
-								Load
-							</Button>
 						</div>
+
+						<!--
+							The filter sits with the options it filters, the way a select2 search
+							box does, and the list reloads as it is typed in — 350ms of quiet
+							between keystrokes, since each one is a server query.
+						-->
+						<input
+							class="input input-sm mt-3 w-full font-mono text-xs"
+							aria-label="Filter"
+							placeholder="Filter records... e.g. verified = true"
+							bind:value={filter}
+							oninput={scheduleFilter}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									clearTimeout(filterTimer);
+									loadCandidates();
+								}
+							}}
+						/>
 
 						{#if loadingList}
 							<p class="mt-3 text-xs text-base-content/40">Loading…</p>
@@ -319,17 +334,25 @@
 								No record has an address in <code class="font-mono">{field}</code>.
 							</p>
 						{:else}
-							<div class="mt-3 max-h-48 overflow-auto rounded-field bg-base-100 p-2">
+							<div class="mt-1 max-h-48 overflow-auto rounded-field bg-base-100 py-1">
 								{#each candidates as address (address)}
-									<label class="flex items-center gap-2 px-1 py-0.5">
-										<input
-											type="checkbox"
-											class="checkbox checkbox-xs"
-											checked={picked.includes(address)}
-											onchange={() => togglePicked(address)}
-										/>
-										<span class="font-mono text-xs">{address}</span>
-									</label>
+									<!-- No checkbox: the row is the control, and the tick on the right
+									     is the only mark a selected option needs. -->
+									<button
+										type="button"
+										class="flex w-full items-center justify-between gap-2 rounded-field px-2 py-1 text-left font-mono text-xs hover:bg-base-200 {picked.includes(
+											address
+										)
+											? 'bg-primary/10'
+											: ''}"
+										aria-pressed={picked.includes(address)}
+										onclick={() => togglePicked(address)}
+									>
+										<span class="truncate">{address}</span>
+										{#if picked.includes(address)}
+											<Check size={12} class="shrink-0" />
+										{/if}
+									</button>
 								{/each}
 							</div>
 							<p class="mt-1 text-xs text-base-content/40">

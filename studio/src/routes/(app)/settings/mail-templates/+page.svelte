@@ -66,6 +66,9 @@
 	let htmlArea = $state<HTMLTextAreaElement | null>(null);
 	/** The variables the last preview left empty, because the sample does not supply them. */
 	let missing = $state<string[]>([]);
+	/** Who a test send would reach, and who the server sends as. */
+	let meEmail = $state('');
+	let sender = $state('');
 
 	/** The stored template behind the editor, when there is one. */
 	const current = $derived(templates.find((t) => t.name === selected) ?? null);
@@ -150,10 +153,43 @@
 		}
 	}
 
+	/**
+	 * What the frame shows above the body: the sample's own address when it names
+	 * one (email_change is the template that does), otherwise the signed-in
+	 * superuser — the address a test send starts from.
+	 */
+	const toAddress = $derived(
+		typeof parsedSample.value.email === 'string' && parsedSample.value.email
+			? parsedSample.value.email
+			: meEmail
+	);
+
 	onMount(async () => {
 		await load();
 		const first = templates[0];
 		if (first && !selected) select(first.name);
+		// Only for the frame around the preview; a failure leaves one row blank.
+		//
+		// `requestKey: null` on both: the SDK auto-cancels a request with the same
+		// method and path, and the layout (plus MailTestSend) asks for `/me` on the
+		// very same page load — one of the three would abort with no visible cause.
+		try {
+			const me = (await client.me({ requestKey: null })) as Record<string, unknown> | null;
+			meEmail = (me?.email as string) ?? '';
+		} catch {
+			// the frame shows a dash
+		}
+		try {
+			const settings = (await client.http.get('/settings', {
+				requestKey: null
+			})) as Record<string, unknown> | null;
+			const mail = (settings?.mail ?? {}) as Record<string, unknown>;
+			const name = (mail.sender_name as string) ?? '';
+			const address = (mail.sender_address as string) ?? '';
+			sender = address ? (name ? `${name} <${address}>` : address) : '';
+		} catch {
+			// the frame shows a dash
+		}
 	});
 
 	function select(name: string) {
@@ -578,16 +614,6 @@
 						bind:value={sample}></textarea>
 					{#if parsedSample.error}
 						<p class="mt-1 text-xs text-error">{parsedSample.error}</p>
-					{:else if missing.length}
-						<!--
-							A preview renders a variable the sample does not supply as empty
-							rather than failing, which is what makes a built-in's `token`
-							previewable at all — so what was empty is named here instead.
-						-->
-						<p class="mt-1 rounded-field bg-warning/10 px-2 py-1 text-xs text-warning">
-							Rendered with an empty <code class="font-mono">{missing.join(', ')}</code> — the sample
-							values do not supply {missing.length === 1 ? 'it' : 'them'}.
-						</p>
 					{/if}
 					<p class="mt-1 text-xs text-base-content/40">
 						<code>name</code> and <code>app_name</code> are filled in by the server.
@@ -598,11 +624,10 @@
 
 		<div class="flex flex-col gap-4">
 			<div class="rounded-box border border-base-300 bg-base-100 p-6">
-				<div class="mb-2 flex items-center justify-between">
-					<span class="text-xs text-base-content/50">Preview</span>
-					{#if previewing}
-						<span class="text-xs text-base-content/40">rendering…</span>
-					{/if}
+				<div class="mb-2 flex items-center justify-between gap-2">
+					<span class="text-xs text-base-content/50">
+						Preview{previewing ? ' — rendering...' : ''}
+					</span>
 				</div>
 
 				{#if renderError}
@@ -610,29 +635,47 @@
 						{renderError}
 					</p>
 				{:else if rendered}
-					<div class="mb-3">
-						<span class="text-xs text-base-content/50">Subject</span>
-						<p class="truncate text-sm font-medium">{rendered.subject || '—'}</p>
-					</div>
-					<Tabs bind:active={previewTab} items={['HTML', 'Plain text']} />
-					<div class="mt-2">
-						{#if previewTab === 'HTML'}
-							<!--
-								Sandboxed with no permissions at all: an email body is untrusted
-								input, so it renders in an opaque origin with no scripts, no forms
-								and no access to this page — never `{@html}` here.
-							-->
-							<iframe
-								title="Rendered email"
-								sandbox=""
-								referrerpolicy="no-referrer"
-								class="h-96 w-full rounded-field border border-base-300 bg-white"
-								srcdoc={rendered.html}
-							></iframe>
-						{:else}
-							<pre
-								class="h-96 w-full overflow-auto rounded-field bg-base-200 p-3 font-mono text-xs whitespace-pre-wrap">{rendered.text}</pre>
+					<!--
+						A message as an inbox shows it: the three headers a recipient reads
+						before the body, then what the render left empty, then the body. The
+						sandboxed body stays exactly as it was — this is a frame around it.
+					-->
+					<div class="rounded-field border border-base-300">
+						<div class="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-1 p-3">
+							<span class="text-xs text-base-content/50">To</span>
+							<span class="truncate font-mono text-xs">{toAddress || '—'}</span>
+							<span class="text-xs text-base-content/50">Subject</span>
+							<span class="truncate text-sm font-medium">{rendered.subject || '—'}</span>
+							<span class="text-xs text-base-content/50">From</span>
+							<span class="truncate font-mono text-xs">{sender || '—'}</span>
+						</div>
+						{#if missing.length}
+							<p class="border-t border-base-300 bg-warning/10 px-3 py-1.5 text-xs text-warning">
+								Rendered with an empty <code class="font-mono">{missing.join(', ')}</code> — the
+								sample values do not supply {missing.length === 1 ? 'it' : 'them'}.
+							</p>
 						{/if}
+						<div class="border-t border-base-300 p-3">
+							<!-- The one control inside the frame: which of the two bodies to show. -->
+							<Tabs bind:active={previewTab} items={['HTML', 'Plain text']} />
+							{#if previewTab === 'HTML'}
+								<!--
+									Sandboxed with no permissions at all: an email body is untrusted
+									input, so it renders in an opaque origin with no scripts, no forms
+									and no access to this page — never `{@html}` here.
+								-->
+								<iframe
+									title="Rendered email"
+									sandbox=""
+									referrerpolicy="no-referrer"
+									class="h-96 w-full rounded-field border border-base-300 bg-white"
+									srcdoc={rendered.html}
+								></iframe>
+							{:else}
+								<pre
+									class="h-96 w-full overflow-auto rounded-field bg-base-200 p-3 font-mono text-xs whitespace-pre-wrap">{rendered.text}</pre>
+							{/if}
+						</div>
 					</div>
 				{:else}
 					<p class="text-sm text-base-content/50">
