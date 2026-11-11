@@ -1,7 +1,7 @@
 @layer components {
 	/* ── Button base ── */
 	.btn {
-		@apply m-0 inline-flex min-h-[38px] shrink-0 cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-field)] border-0 px-4 text-center text-[0.9375rem] leading-none font-bold no-underline transition-[color,background] duration-200 outline-none select-none;
+		@apply m-0 inline-flex min-h-[38px] shrink-0 cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-field)] border-0 px-4 text-center text-[0.875rem] leading-none font-medium no-underline transition-[color,background] duration-200 outline-none select-none;
 	}
 	.btn:disabled,
 	.btn.disabled {
@@ -137,7 +137,7 @@
 		@apply min-h-7 px-3 text-sm;
 	}
 	.btn-md {
-		@apply min-h-[38px] px-6 text-[0.9375rem];
+		@apply min-h-[38px] px-6 text-[0.875rem];
 	}
 	.btn-lg {
 		@apply min-h-[46px] text-lg;
