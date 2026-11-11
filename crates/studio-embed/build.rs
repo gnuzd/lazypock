@@ -36,6 +36,13 @@ fn main() {
     let explicit = std::env::var_os("LAZYPOCK_STUDIO_DIR").map(PathBuf::from);
     let from_repository = repository.map(|root| root.join("studio/build/studio"));
 
+    // Watch the repository bundle even when it is absent or unused, so that
+    // `bun run build` followed by a rebuild re-embeds the new Studio. Without
+    // this the script runs once, finds nothing, and never looks again.
+    if let Some(bundle) = from_repository.as_ref() {
+        println!("cargo:rerun-if-changed={}", bundle.display());
+    }
+
     let source = explicit
         .as_ref()
         .filter(|dir| is_bundle(dir))
