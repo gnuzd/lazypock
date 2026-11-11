@@ -2,10 +2,11 @@
 	import { client } from '$lib/client';
 	import { confirmDialog, promptDialog } from '$lib/dialog.svelte';
 	import type { MailTemplate, MailTemplateLayer } from 'lazypock';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { Plus, Undo2 } from '@lucide/svelte';
 	import Button from '$lib/components/Button.svelte';
 	import MailTestSend from '$lib/components/MailTestSend.svelte';
+	import RichEditor from '$lib/components/RichEditor.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
 	import { toast } from 'svelte-sonner';
 	import '../settings.css';
@@ -57,6 +58,14 @@
 	let rendered = $state<{ subject: string; html: string; text: string } | null>(null);
 	let renderError = $state('');
 	let previewing = $state(false);
+	/** How the HTML body is being edited: the rendered document, or its source. */
+	let htmlMode = $state<'rich' | 'html'>('rich');
+	/** The rich editor, so `{x}` can insert a variable at its cursor. */
+	let richBody = $state<{ insertText: (text: string) => void } | null>(null);
+	/** The source textarea, for the same reason while the raw body is being edited. */
+	let htmlArea = $state<HTMLTextAreaElement | null>(null);
+	/** The variables the last preview left empty, because the sample does not supply them. */
+	let missing = $state<string[]>([]);
 
 	/** The stored template behind the editor, when there is one. */
 	const current = $derived(templates.find((t) => t.name === selected) ?? null);
@@ -88,6 +97,42 @@
 			: `Comes from ${current?.source ?? '—'}.`
 	);
 
+	/** The `{{ ... }}` names the draft uses, for the variable menu. */
+	const variables = $derived.by(() => {
+		const names = new Set<string>();
+		for (const part of PARTS) {
+			for (const [, name] of draft[part].matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)/g)) {
+				names.add(name);
+			}
+		}
+		// `name` is filled in by the server whatever the sample says, so the menu always
+		// has something to offer a body that uses no variables yet.
+		return [...(names.size ? names : new Set(['name']))].sort();
+	});
+
+	/** Insert a variable into the HTML body, wherever it is being edited. */
+	function insertVariable(name: string) {
+		const token = `{{ ${name} }}`;
+		if (htmlMode === 'rich') {
+			richBody?.insertText(token);
+			return;
+		}
+		insertIntoArea(htmlArea, 'html', token);
+	}
+
+	/** Insert `text` at the cursor of a textarea and put the caret after it. */
+	function insertIntoArea(area: HTMLTextAreaElement | null, part: Part, text: string) {
+		if (!area) return;
+		const { selectionStart: start, selectionEnd: end } = area;
+		draft[part] = draft[part].slice(0, start) + text + draft[part].slice(end);
+		const caret = start + text.length;
+		// The value update above re-renders the textarea, so the caret goes on after it.
+		void tick().then(() => {
+			area.focus();
+			area.setSelectionRange(caret, caret);
+		});
+	}
+
 	function message(err: unknown, fallback: string): string {
 		const text = (err as { message?: unknown }).message;
 		return typeof text === 'string' && text ? text : fallback;
@@ -118,6 +163,7 @@
 		creating = false;
 		rendered = null;
 		renderError = '';
+		missing = [];
 		draft = { subject: template.subject, html: template.html, text: template.text };
 	}
 
@@ -169,6 +215,7 @@
 		creating = true;
 		rendered = null;
 		renderError = '';
+		missing = [];
 		draft = { subject: '', html: '', text: '' };
 	}
 
@@ -233,6 +280,7 @@
 					creating = false;
 					rendered = null;
 					renderError = '';
+					missing = [];
 					draft = { subject: '', html: '', text: '' };
 				}
 			}
@@ -254,6 +302,7 @@
 		if (!selected) return;
 		if (parsedSample.error) {
 			rendered = null;
+			missing = [];
 			renderError = parsedSample.error;
 			return;
 		}
@@ -262,6 +311,7 @@
 		// avoids a request per keystroke.
 		if (creating && !complete) {
 			rendered = null;
+			missing = [];
 			renderError = '';
 			return;
 		}
@@ -278,10 +328,14 @@
 			);
 			if (seq !== previewSeq) return;
 			rendered = previewed;
+			// The installed SDK's `MailPreviewResult` predates this field, hence the cast;
+			// it is the render's own report of what it left empty.
+			missing = (previewed as { missing?: string[] }).missing ?? [];
 			renderError = '';
 		} catch (err) {
 			if (seq !== previewSeq) return;
 			rendered = null;
+			missing = [];
 			// An undefined variable is the most common answer here: the template
 			// names something the sample does not supply.
 			renderError = message(err, 'Could not render the preview');
@@ -317,6 +371,27 @@
 			{layer}
 		</span>
 	{/if}
+{/snippet}
+
+{#snippet variableMenu(insert: (name: string) => void)}
+	<!--
+		`{x}` inserts at the cursor, so a variable can be dropped into a body that is
+		already half written rather than retyped at the right place by hand.
+	-->
+	<details class="dropdown dropdown-end">
+		<summary class="btn btn-ghost btn-xs" title="Insert a variable">{'{x}'}</summary>
+		<ul
+			class="dropdown-content menu z-20 w-44 rounded-box border border-base-300 bg-base-100 p-1 shadow"
+		>
+			{#each variables as name (name)}
+				<li>
+					<button type="button" class="font-mono text-xs" onclick={() => insert(name)}>
+						{`{{ ${name} }}`}
+					</button>
+				</li>
+			{/each}
+		</ul>
+	</details>
 {/snippet}
 
 <h2 class="mb-4 text-lg font-semibold">Mail Templates</h2>
@@ -412,10 +487,11 @@
 				</div>
 			</div>
 
-			<div class="grid gap-4">
+			<div class="grid gap-5">
+				<!-- Subject -->
 				<div>
-					<div class="mb-1 flex items-center justify-between">
-						<span class="text-xs text-base-content/50">Subject</span>
+					<div class="mb-1.5 flex items-center justify-between gap-2">
+						<span class="text-xs font-medium text-base-content/60">Subject</span>
 						{#if !creating}{@render layerBadge(current?.parts.subject)}{/if}
 					</div>
 					<input
@@ -424,21 +500,58 @@
 						bind:value={draft.subject}
 					/>
 				</div>
+
+				<!-- HTML body: the document, or the markup it is built from. -->
 				<div>
-					<div class="mb-1 flex items-center justify-between">
-						<span class="text-xs text-base-content/50">HTML body</span>
-						{#if !creating}{@render layerBadge(current?.parts.html)}{/if}
+					<div class="mb-1.5 flex items-center justify-between gap-2">
+						<span class="text-xs font-medium text-base-content/60">HTML body</span>
+						<div class="flex items-center gap-1.5">
+							{@render variableMenu(insertVariable)}
+							<div class="join">
+								<Button
+									class="join-item btn-xs {htmlMode === 'rich' ? 'btn-active' : ''}"
+									onclick={() => (htmlMode = 'rich')}
+								>
+									Rich
+								</Button>
+								<Button
+									class="join-item btn-xs {htmlMode === 'html' ? 'btn-active' : ''}"
+									onclick={() => (htmlMode = 'html')}
+								>
+									HTML
+								</Button>
+							</div>
+							{#if !creating}{@render layerBadge(current?.parts.html)}{/if}
+						</div>
 					</div>
-					<textarea
-						id="mail-template-html"
-						class="input w-full font-mono text-xs outline-none focus:outline-none"
-						rows="12"
-						placeholder={PLACEHOLDER_HTML}
-						bind:value={draft.html}></textarea>
+					<!--
+						One value, two views: the rich editor writes the same markup the source
+						shows, so switching never loses an edit. Markup that the rich editor
+						cannot represent (an inline style, say) is only preserved in `HTML`.
+					-->
+					{#if htmlMode === 'rich'}
+						<div class="h-96 overflow-auto rounded-field border border-base-300 bg-base-100">
+							<RichEditor bind:value={draft.html} bind:this={richBody} format="html" />
+						</div>
+					{:else}
+						<textarea
+							id="mail-template-html"
+							class="input h-96 w-full resize-y font-mono text-xs outline-none focus:outline-none"
+							bind:this={htmlArea}
+							placeholder={PLACEHOLDER_HTML}
+							bind:value={draft.html}></textarea>
+					{/if}
+					<p class="mt-1 text-xs text-base-content/40">
+						{htmlMode === 'rich'
+							? 'Editing the document. Switch to HTML for the markup exactly as it will be sent.'
+							: 'The markup as it will be sent, variables included.'}
+					</p>
 				</div>
+
+				<!-- Plain-text body -->
 				<div>
-					<div class="mb-1 flex items-center justify-between">
-						<span class="text-xs text-base-content/50">Plain-text body</span>
+					<div class="mb-1.5 flex items-center justify-between gap-2">
+						<span class="text-xs font-medium text-base-content/60">Plain-text body</span>
 						{#if !creating}{@render layerBadge(current?.parts.text)}{/if}
 					</div>
 					<textarea
@@ -447,9 +560,14 @@
 						rows="6"
 						placeholder={PLACEHOLDER_TEXT}
 						bind:value={draft.text}></textarea>
+					<p class="mt-1 text-xs text-base-content/40">
+						Sent as the alternative for mail clients that show no HTML.
+					</p>
 				</div>
+
+				<!-- Sample values -->
 				<div>
-					<span class="mb-1 block text-xs text-base-content/50">
+					<span class="mb-1.5 block text-xs font-medium text-base-content/60">
 						Sample values (JSON) — used by the preview and the test send
 					</span>
 					<textarea
@@ -460,6 +578,16 @@
 						bind:value={sample}></textarea>
 					{#if parsedSample.error}
 						<p class="mt-1 text-xs text-error">{parsedSample.error}</p>
+					{:else if missing.length}
+						<!--
+							A preview renders a variable the sample does not supply as empty
+							rather than failing, which is what makes a built-in's `token`
+							previewable at all — so what was empty is named here instead.
+						-->
+						<p class="mt-1 rounded-field bg-warning/10 px-2 py-1 text-xs text-warning">
+							Rendered with an empty <code class="font-mono">{missing.join(', ')}</code> — the sample
+							values do not supply {missing.length === 1 ? 'it' : 'them'}.
+						</p>
 					{/if}
 					<p class="mt-1 text-xs text-base-content/40">
 						<code>name</code> and <code>app_name</code> are filled in by the server.
