@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Dropdown from '$lib/components/Dropdown.svelte';
+	import Input from '$lib/components/Input.svelte';
 	import { toast } from 'svelte-sonner';
 	import { Check, Plus, X } from '@lucide/svelte';
 	import type { FilterString } from 'lazypock';
@@ -19,6 +20,8 @@
 		template = '',
 		/** The template context. Ignored when `template` is empty. */
 		assigns = {},
+		/** Panel heading. */
+		title = 'Send a test email.',
 		/** Panel copy; defaults to a description of whichever mode is in use. */
 		description = '',
 		/** The input id, so two instances on one page stay labelled separately. */
@@ -26,6 +29,7 @@
 	}: {
 		template?: string;
 		assigns?: Record<string, unknown>;
+		title?: string;
 		description?: string;
 		id?: string;
 	} = $props();
@@ -242,18 +246,151 @@
 <div class="rounded-box border border-base-300 bg-base-100 p-6">
 	<div class="mb-4 text-sm text-base-content/60">
 		<p>
-			<strong class="text-base-content">Send a test email.</strong>
-			{copy}
+			<strong class="text-base-content">{title}</strong>
 		</p>
+		<p>{copy}</p>
 	</div>
 	<div class="flex flex-col gap-3">
-		<div>
-			<label for={id} class="mb-1 block text-xs text-base-content/50">Send to</label>
-			<div
-				class="flex flex-wrap items-center gap-1 rounded-field border border-base-300 bg-base-100 px-2 py-1 focus-within:border-base-content/40"
-			>
+		<div class="flex items-end gap-2">
+			<div class="flex-1">
+				<Input
+					{id}
+					label="Send to"
+					placeholder="you@example.com"
+					bind:value={draft}
+					onkeydown={(e) => {
+						if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
+							e.preventDefault();
+							commitDraft();
+						}
+					}}
+				/>
+			</div>
+			<Button class="btn-outline" disabled={!draft.trim()} onclick={commitDraft}>
+				<Plus size={14} />
+				Add
+			</Button>
+		</div>
+		<div class="mt-2 flex flex-wrap items-center gap-3">
+			<!--
+					The picker is the house `Dropdown`: it positions itself, closes on an
+					outside click and scrolls its own menu, so the recipients field above can stay
+					a plain text field with removable tags.
+				-->
+			<Dropdown bind:show={pickerOpen} align="left">
+				{#snippet trigger()}
+					<button type="button" class="btn btn-outline btn-sm gap-1.5">
+						<Plus size={14} />
+						Add collection
+					</button>
+				{/snippet}
+				<div class="w-80 p-3">
+					<div class="flex flex-wrap items-end gap-2">
+						<div>
+							<span class="mb-1 block text-xs text-base-content/50">Collection</span>
+							<select
+								class="h-8 rounded-field border-2 border-base-300 bg-base-100 px-2 text-sm outline-none focus:border-primary"
+								aria-label="Collection"
+								bind:value={collection}
+								onchange={changeCollection}
+							>
+								{#each collections as name (name)}
+									<option value={name}>{name}</option>
+								{/each}
+							</select>
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-base-content/50">Address field</span>
+							<select
+								class="h-8 rounded-field border-2 border-base-300 bg-base-100 px-2 text-sm outline-none focus:border-primary"
+								aria-label="Address field"
+								bind:value={field}
+							>
+								{#each fieldNames as name (name)}
+									<option value={name}>{name}</option>
+								{/each}
+							</select>
+						</div>
+					</div>
+
+					<!--
+							The filter sits with the options it filters, the way a select2 search
+							box does, and the list reloads as it is typed in — 350ms of quiet
+							between keystrokes, since each one is a server query.
+						-->
+					<input
+						class="mt-3 h-8 w-full rounded-field border-2 border-base-300 bg-base-100 px-2 font-mono text-xs outline-none placeholder:text-base-content/40 focus:border-primary"
+						aria-label="Filter"
+						placeholder="Filter records... e.g. verified = true"
+						bind:value={filter}
+						oninput={scheduleFilter}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') {
+								clearTimeout(filterTimer);
+								loadCandidates();
+							}
+						}}
+					/>
+
+					{#if loadingList}
+						<p class="mt-3 text-xs text-base-content/40">Loading...</p>
+					{:else if fieldNames.length === 0}
+						<p class="mt-3 text-xs text-base-content/40">
+							That collection has no email or text field to read an address from.
+						</p>
+					{:else if candidates.length === 0}
+						<p class="mt-3 text-xs text-base-content/40">
+							No record has an address in <code class="font-mono">{field}</code>.
+						</p>
+					{:else}
+						<div class="flex flex-col py-1">
+							{#each candidates as address (address)}
+								<!-- No checkbox: the row is the control, and the tick on the right
+									     is the only mark a selected option needs. -->
+								<button
+									type="button"
+									class="flex w-full items-center justify-between gap-2 rounded-field px-2 py-1 text-left font-mono text-xs hover:bg-base-200 {picked.includes(
+										address
+									)
+										? 'bg-primary/10'
+										: ''}"
+									aria-pressed={picked.includes(address)}
+									onclick={() => togglePicked(address)}
+								>
+									<span class="truncate">{address}</span>
+									{#if picked.includes(address)}
+										<Check size={12} class="shrink-0" />
+									{/if}
+								</button>
+							{/each}
+						</div>
+						<p class="mt-1 text-xs text-base-content/40">
+							Showing {candidates.length}{#if totalItems > candidates.length}, of {totalItems} records{/if}.
+						</p>
+						{#if picked.length > 0}
+							<Button class="btn-sm mt-2" onclick={addPicked}>
+								Add {picked.length} address{picked.length === 1 ? '' : 'es'}
+							</Button>
+						{/if}
+					{/if}
+				</div>
+			</Dropdown>
+			<p class="text-xs text-base-content/40">
+				{#if addresses.length > 0}
+					<strong>{addresses.length}</strong> address{addresses.length === 1 ? '' : 'es'} — one queued
+					email each.
+				{:else}
+					Type an address, or pick records from a collection.
+				{/if}
+			</p>
+		</div>
+		<!-- The addresses land here, under the button that produced them. -->
+		{#if addresses.length > 0}
+			<div class="mt-2 flex flex-wrap items-center gap-1">
 				{#each addresses as address (address)}
-					<span class="badge badge-sm gap-1 font-mono">
+					<span
+						class="inline-flex items-center gap-1 rounded-full border border-base-300 px-2 py-0.5 font-mono text-xs"
+					>
 						{address}
 						<button
 							type="button"
@@ -265,131 +402,8 @@
 						</button>
 					</span>
 				{/each}
-				<input
-					{id}
-					class="min-w-24 flex-1 bg-transparent py-1 text-sm outline-none"
-					placeholder="you@example.com"
-					aria-label="Send to"
-					bind:value={draft}
-					onkeydown={(e) => {
-						if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
-							e.preventDefault();
-							commitDraft();
-						}
-					}}
-					onblur={commitDraft}
-				/>
 			</div>
-			<div class="mt-2 flex flex-wrap items-center gap-3">
-				<!--
-					The picker is the house `Dropdown`: it positions itself, closes on an
-					outside click and scrolls its own menu, so the recipients field above can stay
-					a plain text field with removable tags.
-				-->
-				<Dropdown bind:show={pickerOpen} align="left">
-					{#snippet trigger()}
-						<button type="button" class="btn btn-outline btn-sm gap-1.5">
-							<Plus size={14} />
-							Add collection
-						</button>
-					{/snippet}
-					<div class="w-80 p-3">
-						<div class="flex flex-wrap items-end gap-2">
-							<div>
-								<span class="mb-1 block text-xs text-base-content/50">Collection</span>
-								<select
-									class="select select-sm"
-									aria-label="Collection"
-									bind:value={collection}
-									onchange={changeCollection}
-								>
-									{#each collections as name (name)}
-										<option value={name}>{name}</option>
-									{/each}
-								</select>
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-base-content/50">Address field</span>
-								<select class="select select-sm" aria-label="Address field" bind:value={field}>
-									{#each fieldNames as name (name)}
-										<option value={name}>{name}</option>
-									{/each}
-								</select>
-							</div>
-						</div>
-
-						<!--
-							The filter sits with the options it filters, the way a select2 search
-							box does, and the list reloads as it is typed in — 350ms of quiet
-							between keystrokes, since each one is a server query.
-						-->
-						<input
-							class="input input-sm mt-3 w-full font-mono text-xs"
-							aria-label="Filter"
-							placeholder="Filter records... e.g. verified = true"
-							bind:value={filter}
-							oninput={scheduleFilter}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') {
-									clearTimeout(filterTimer);
-									loadCandidates();
-								}
-							}}
-						/>
-
-						{#if loadingList}
-							<p class="mt-3 text-xs text-base-content/40">Loading...</p>
-						{:else if fieldNames.length === 0}
-							<p class="mt-3 text-xs text-base-content/40">
-								That collection has no email or text field to read an address from.
-							</p>
-						{:else if candidates.length === 0}
-							<p class="mt-3 text-xs text-base-content/40">
-								No record has an address in <code class="font-mono">{field}</code>.
-							</p>
-						{:else}
-							<div class="flex flex-col py-1">
-								{#each candidates as address (address)}
-									<!-- No checkbox: the row is the control, and the tick on the right
-									     is the only mark a selected option needs. -->
-									<button
-										type="button"
-										class="flex w-full items-center justify-between gap-2 rounded-field px-2 py-1 text-left font-mono text-xs hover:bg-base-200 {picked.includes(
-											address
-										)
-											? 'bg-primary/10'
-											: ''}"
-										aria-pressed={picked.includes(address)}
-										onclick={() => togglePicked(address)}
-									>
-										<span class="truncate">{address}</span>
-										{#if picked.includes(address)}
-											<Check size={12} class="shrink-0" />
-										{/if}
-									</button>
-								{/each}
-							</div>
-							<p class="mt-1 text-xs text-base-content/40">
-								Showing {candidates.length}{#if totalItems > candidates.length}, of {totalItems} records{/if}.
-							</p>
-							{#if picked.length > 0}
-								<Button class="btn-sm mt-2" onclick={addPicked}>
-									Add {picked.length} address{picked.length === 1 ? '' : 'es'}
-								</Button>
-							{/if}
-						{/if}
-					</div>
-				</Dropdown>
-				<p class="text-xs text-base-content/40">
-					{#if addresses.length > 0}
-						<strong>{addresses.length}</strong> address{addresses.length === 1 ? '' : 'es'} — one queued
-						email each.
-					{:else}
-						Type an address, or pick records from a collection.
-					{/if}
-				</p>
-			</div>
-		</div>
+		{/if}
 
 		<div>
 			<Button
