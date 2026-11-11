@@ -90,7 +90,8 @@
 <div class="flex flex-1 overflow-hidden">
 	<Sidebar body={bodyContent} />
 	<main class="flex-1 overflow-auto p-6">
-		<div class="mx-auto w-full">
+		<!-- Capped so a form does not stretch to the full width of a wide monitor. -->
+		<div class="mx-auto w-full max-w-7xl">
 			{@render children()}
 		</div>
 	</main>
