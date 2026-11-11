@@ -7,19 +7,20 @@
 	import Button from '$lib/components/Button.svelte';
 	import MailTestSend from '$lib/components/MailTestSend.svelte';
 	import RichEditor from '$lib/components/RichEditor.svelte';
-	import Tabs from '$lib/components/Tabs.svelte';
 	import { toast } from 'svelte-sonner';
 	import '../settings.css';
 
-	// The template editor: the three parts of every email the server can send,
-	// with the layer each one currently resolves from and a renderer to see the
-	// result before anyone receives it.
+	// The template editor: the parts of every email the server can send, with the layer
+	// each one currently resolves from and a renderer to see the result before anyone
+	// receives it.
 	//
-	// Three deliberate choices:
+	// Four deliberate choices:
 	//
 	// * A template is saved as a whole (`PUT`), because a template only exists
 	//   once it is complete — a part-at-a-time write could leave a subject saved
 	//   against a body that does not parse.
+	// * The plain-text alternative is not edited here: the server derives it from the
+	//   HTML every time the template is saved, so the two bodies cannot drift apart.
 	// * The preview is a real render by the server, in a **sandboxed** iframe
 	//   (`sandbox=""`, so no scripts and no access to the Studio's origin) — an
 	//   email body is untrusted input, never `{@html}` in this document.
@@ -28,8 +29,12 @@
 
 	type Layer = MailTemplateLayer;
 
-	const PARTS = ['subject', 'html', 'text'] as const;
+	/** The parts the editor writes; the plain-text alternative follows from `html`. */
+	const PARTS = ['subject', 'html'] as const;
 	type Part = (typeof PARTS)[number];
+
+	/** Every part a stored template can carry — reported when one is reset. */
+	const STORED_PARTS = ['subject', 'html', 'text'] as const;
 
 	const LAYER_HELP: Record<Layer, string> = {
 		database: 'Saved here, and the one in effect.',
@@ -41,7 +46,6 @@
 	// an object expression rather than as text.
 	const PLACEHOLDER_SUBJECT = 'Your receipt from {{ app_name }}';
 	const PLACEHOLDER_HTML = '<p>Hello {{ name }},</p>';
-	const PLACEHOLDER_TEXT = 'Hello {{ name }},';
 
 	let templates = $state<MailTemplate[]>([]);
 	let loading = $state(true);
@@ -49,12 +53,11 @@
 	let selected = $state('');
 	/** True while the selection is a name nothing has stored yet. */
 	let creating = $state(false);
-	let draft = $state<Record<Part, string>>({ subject: '', html: '', text: '' });
-	/** The sample values handed to `{{ … }}`, as JSON. */
+	let draft = $state<Record<Part, string>>({ subject: '', html: '' });
+	/** The sample values handed to `{{ ... }}`, as JSON. */
 	let sample = $state('{}');
 	let saving = $state(false);
 	let resetting = $state(false);
-	let previewTab = $state('HTML');
 	let rendered = $state<{ subject: string; html: string; text: string } | null>(null);
 	let renderError = $state('');
 	let previewing = $state(false);
@@ -69,6 +72,11 @@
 	/** Who a test send would reach, and who the server sends as. */
 	let meEmail = $state('');
 	let sender = $state('');
+	//
+	// The two panes are as tall as what the settings shell leaves under the
+	// heading, so the heading is measured instead of guessed at — it wraps to a
+	// different height from one window width to the next.
+	let headHeight = $state(0);
 
 	/** The stored template behind the editor, when there is one. */
 	const current = $derived(templates.find((t) => t.name === selected) ?? null);
@@ -96,7 +104,7 @@
 	const resettable = $derived(!creating && current !== null && current.source === 'database');
 	const sourceNotice = $derived(
 		creating
-			? 'A new template — all three parts are needed before it can be saved.'
+			? 'A new template — a subject and an HTML body are needed before it can be saved.'
 			: `Comes from ${current?.source ?? '—'}.`
 	);
 
@@ -120,14 +128,14 @@
 			richBody?.insertText(token);
 			return;
 		}
-		insertIntoArea(htmlArea, 'html', token);
+		insertIntoArea(htmlArea, token);
 	}
 
 	/** Insert `text` at the cursor of a textarea and put the caret after it. */
-	function insertIntoArea(area: HTMLTextAreaElement | null, part: Part, text: string) {
+	function insertIntoArea(area: HTMLTextAreaElement | null, text: string) {
 		if (!area) return;
 		const { selectionStart: start, selectionEnd: end } = area;
-		draft[part] = draft[part].slice(0, start) + text + draft[part].slice(end);
+		draft.html = draft.html.slice(0, start) + text + draft.html.slice(end);
 		const caret = start + text.length;
 		// The value update above re-renders the textarea, so the caret goes on after it.
 		void tick().then(() => {
@@ -200,7 +208,7 @@
 		rendered = null;
 		renderError = '';
 		missing = [];
-		draft = { subject: template.subject, html: template.html, text: template.text };
+		draft = { subject: template.subject, html: template.html };
 	}
 
 	/** Switch templates, refusing to throw away edits without a word. */
@@ -231,7 +239,7 @@
 		const name = await promptDialog({
 			title: 'New template',
 			message:
-				'A name for the template — no spaces. It is stored once all three parts are filled in.',
+				'A name for the template — no spaces. It is stored once a subject and an HTML body are filled in.',
 			placeholder: 'e.g. receipt',
 			confirmLabel: 'Start'
 		});
@@ -252,14 +260,20 @@
 		rendered = null;
 		renderError = '';
 		missing = [];
-		draft = { subject: '', html: '', text: '' };
+		draft = { subject: '', html: '' };
 	}
 
 	async function save() {
 		if (!selected || saving || !complete) return;
 		saving = true;
 		try {
-			await client.mail.saveTemplate(selected, { ...draft });
+			// An empty `text`: the server derives the plain-text alternative from the HTML,
+			// which is the only way the two bodies stay in step with each other.
+			await client.mail.saveTemplate(selected, {
+				subject: draft.subject,
+				html: draft.html,
+				text: ''
+			});
 			toast.success(`Saved the ${selected} template.`);
 			creating = false;
 			// Reload rather than patching the list from the response: a new name is not in
@@ -278,7 +292,7 @@
 
 	async function reset() {
 		if (!selected || resetting || !resettable) return;
-		const stored = PARTS.filter((part) => current?.parts[part] === 'database');
+		const stored = STORED_PARTS.filter((part) => current?.parts[part] === 'database');
 		const confirmed = await confirmDialog({
 			title: 'Reset template',
 			message: `Reset "${selected}" to the file or built-in copy?`,
@@ -317,7 +331,7 @@
 					rendered = null;
 					renderError = '';
 					missing = [];
-					draft = { subject: '', html: '', text: '' };
+					draft = { subject: '', html: '' };
 				}
 			}
 		} catch (err) {
@@ -356,7 +370,9 @@
 		try {
 			const previewed = await client.mail.preview(
 				selected,
-				{ assigns: parsedSample.value, subject: draft.subject, html: draft.html, text: draft.text },
+				// No `text` draft: the editor no longer edits that part, and the frame below
+				// only shows the HTML one.
+				{ assigns: parsedSample.value, subject: draft.subject, html: draft.html },
 				// Auto-cancellation would abort this render on the next keystroke and
 				// reject a promise nobody waits on; the sequence guard does the same
 				// job without the noise.
@@ -430,23 +446,37 @@
 	</details>
 {/snippet}
 
-<h2 class="mb-4 text-lg font-semibold">Mail Templates</h2>
-<div class="mb-4 text-sm text-base-content/60">
-	<p>
-		Every email the server can send. A template resolves three layers — <strong>database</strong>
-		(saved here), then <strong>file</strong> (your template directory), then
-		<strong>builtin</strong> — and each part reports the one it came from, so an edit that is in effect
-		is distinguishable from one that is not.
-	</p>
-	<p class="mt-1">
-		Saving replaces all three parts; resetting deletes the stored ones and falls back to the file or
-		the built-in.
-	</p>
+<div class="mb-4" bind:clientHeight={headHeight}>
+	<h2 class="mb-4 text-lg font-semibold">Mail Templates</h2>
+	<div class="text-sm text-base-content/60">
+		<p>
+			Every email the server can send. A template resolves three layers — <strong>database</strong>
+			(saved here), then <strong>file</strong> (your template directory), then
+			<strong>builtin</strong> — and each part reports the one it came from, so an edit that is in effect
+			is distinguishable from one that is not.
+		</p>
+		<p class="mt-1">
+			Saving replaces the whole template — the plain-text alternative is derived from the HTML, so
+			the two bodies cannot drift apart. Resetting deletes the stored parts and falls back to the
+			file or the built-in.
+		</p>
+	</div>
 </div>
 
-<div class="flex flex-col gap-4 xl:flex-row xl:items-start">
+<!--
+	The panes take the height the viewport has left (`--row-h`, measured off the heading
+	above: 48px of app header, 24px of page padding top and bottom, 16px of heading margin),
+	rather than growing with their content: the form and the template list scroll inside
+	themselves and the preview gets what is left, so the page itself never scrolls.
+-->
+<div
+	class="flex flex-col gap-4 xl:h-[var(--row-h,calc(100dvh-240px))] xl:max-h-[var(--row-h,calc(100dvh-240px))] xl:min-h-[28rem] xl:flex-row xl:items-stretch"
+	style="--row-h: calc(100dvh - {headHeight + 112}px)"
+>
 	<!-- Template list -->
-	<aside class="w-full rounded-box border border-base-300 bg-base-100 p-2 xl:w-64 xl:shrink-0">
+	<aside
+		class="w-full rounded-box border border-base-300 bg-base-100 p-2 xl:flex xl:min-h-0 xl:w-64 xl:shrink-0 xl:flex-col"
+	>
 		<div class="flex items-center justify-between px-2 py-1">
 			<span class="text-[10px] font-semibold tracking-wider text-base-content/40 uppercase">
 				Templates
@@ -465,7 +495,9 @@
 		{:else if templates.length === 0}
 			<p class="px-3 py-2 text-sm text-base-content/50">No templates.</p>
 		{:else}
-			<ul class="flex max-h-[26rem] flex-col gap-0.5 overflow-y-auto">
+			<ul
+				class="flex max-h-[26rem] flex-col gap-0.5 overflow-y-auto xl:max-h-none xl:min-h-0 xl:flex-1"
+			>
 				{#each templates as template (template.name)}
 					<li>
 						<button
@@ -492,9 +524,9 @@
 	</aside>
 
 	<!-- Editor + preview -->
-	<div class="grid min-w-0 flex-1 gap-4 lg:grid-cols-2">
+	<div class="grid min-w-0 flex-1 gap-4 lg:grid-cols-2 xl:min-h-0">
 		<form
-			class="rounded-box border border-base-300 bg-base-100 p-6"
+			class="rounded-box border border-base-300 bg-base-100 p-6 xl:min-h-0 xl:overflow-y-auto"
 			onsubmit={(e) => {
 				e.preventDefault();
 				void save();
@@ -584,22 +616,8 @@
 					</p>
 				</div>
 
-				<!-- Plain-text body -->
-				<div>
-					<div class="mb-1.5 flex items-center justify-between gap-2">
-						<span class="text-xs font-medium text-base-content/60">Plain-text body</span>
-						{#if !creating}{@render layerBadge(current?.parts.text)}{/if}
-					</div>
-					<textarea
-						id="mail-template-text"
-						class="input w-full font-mono text-xs outline-none focus:outline-none"
-						rows="6"
-						placeholder={PLACEHOLDER_TEXT}
-						bind:value={draft.text}></textarea>
-					<p class="mt-1 text-xs text-base-content/40">
-						Sent as the alternative for mail clients that show no HTML.
-					</p>
-				</div>
+				<!-- Plain-text alternative: not edited here — the server derives it from the
+				     HTML on every save, and the note says so where a reader looks for it. -->
 
 				<!-- Sample values -->
 				<div>
@@ -622,8 +640,10 @@
 			</div>
 		</form>
 
-		<div class="flex flex-col gap-4">
-			<div class="rounded-box border border-base-300 bg-base-100 p-6">
+		<div class="flex flex-col gap-4 xl:min-h-0">
+			<div
+				class="flex flex-col rounded-box border border-base-300 bg-base-100 p-6 xl:min-h-0 xl:flex-1"
+			>
 				<div class="mb-2 flex items-center justify-between gap-2">
 					<span class="text-xs text-base-content/50">
 						Preview{previewing ? ' — rendering...' : ''}
@@ -637,10 +657,9 @@
 				{:else if rendered}
 					<!--
 						A message as an inbox shows it: the three headers a recipient reads
-						before the body, then what the render left empty, then the body. The
-						sandboxed body stays exactly as it was — this is a frame around it.
+						before the body, then what the render left empty, then the body.
 					-->
-					<div class="rounded-field border border-base-300">
+					<div class="flex flex-1 flex-col rounded-field border border-base-300">
 						<div class="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-1 p-3">
 							<span class="text-xs text-base-content/50">To</span>
 							<span class="truncate font-mono text-xs">{toAddress || '—'}</span>
@@ -655,32 +674,25 @@
 								sample values do not supply {missing.length === 1 ? 'it' : 'them'}.
 							</p>
 						{/if}
-						<div class="border-t border-base-300 p-3">
-							<!-- The one control inside the frame: which of the two bodies to show. -->
-							<Tabs bind:active={previewTab} items={['HTML', 'Plain text']} />
-							{#if previewTab === 'HTML'}
-								<!--
-									Sandboxed with no permissions at all: an email body is untrusted
-									input, so it renders in an opaque origin with no scripts, no forms
-									and no access to this page — never `{@html}` here.
-								-->
-								<iframe
-									title="Rendered email"
-									sandbox=""
-									referrerpolicy="no-referrer"
-									class="h-96 w-full rounded-field border border-base-300 bg-white"
-									srcdoc={rendered.html}
-								></iframe>
-							{:else}
-								<pre
-									class="h-96 w-full overflow-auto rounded-field bg-base-200 p-3 font-mono text-xs whitespace-pre-wrap">{rendered.text}</pre>
-							{/if}
+						<div class="flex flex-1 flex-col border-t border-base-300 p-3">
+							<!--
+								Sandboxed with no permissions at all: an email body is untrusted
+								input, so it renders in an opaque origin with no scripts, no forms
+								and no access to this page — never `{@html}` here.
+							-->
+							<iframe
+								title="Rendered email"
+								sandbox=""
+								referrerpolicy="no-referrer"
+								class="min-h-72 w-full flex-1 rounded-field border border-base-300 bg-white xl:min-h-0"
+								srcdoc={rendered.html}
+							></iframe>
 						</div>
 					</div>
 				{:else}
 					<p class="text-sm text-base-content/50">
 						{creating && !complete
-							? 'Fill in all three parts to preview the new template.'
+							? 'Fill in the subject and the HTML body to preview the new template.'
 							: 'Nothing to render yet.'}
 					</p>
 				{/if}

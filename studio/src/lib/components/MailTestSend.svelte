@@ -2,8 +2,9 @@
 	import { client } from '$lib/client';
 	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
+	import Dropdown from '$lib/components/Dropdown.svelte';
 	import { toast } from 'svelte-sonner';
-	import { Check, ChevronDown, X } from '@lucide/svelte';
+	import { Check, Plus, X } from '@lucide/svelte';
 	import type { FilterString } from 'lazypock';
 
 	// The one "send a test email" control, shared by Mail Settings and the
@@ -55,8 +56,15 @@
 	let picked = $state<string[]>([]);
 	let totalItems = $state(0); // totalItems of the last candidate query
 	let loadingList = $state(false);
+	let pickerOpen = $state(false);
 	/** The list follows the filter box instead of waiting for a Load click. */
 	let filterTimer: ReturnType<typeof setTimeout> | undefined;
+
+	// Loading on open rather than on mount: the picker reads a whole collection, and
+	// most visits to this page never open it.
+	$effect(() => {
+		if (pickerOpen) void loadCollections();
+	});
 
 	function scheduleFilter() {
 		clearTimeout(filterTimer);
@@ -152,16 +160,17 @@
 		}
 	}
 
-	async function openPicker(isOpen: boolean) {
-		if (isOpen) await loadCollections();
-	}
-
-	/** The collections someone could be in; loaded once, when the picker opens. */
+	/**
+	 * The collections someone can be in. Only `auth` ones: an address lives on the
+	 * user record, so anything else would list rows with nothing to send to.
+	 */
 	async function loadCollections() {
 		if (collections.length === 0) {
 			try {
 				const res = await client.collections.getList({ page: 1, perPage: 200 });
-				collections = ((res?.items ?? []) as unknown as { name: string }[]).map((c) => c.name);
+				collections = ((res?.items ?? []) as unknown as { name: string; type: string }[])
+					.filter((c) => c.type === 'auth')
+					.map((c) => c.name);
 			} catch (err) {
 				collections = [];
 				toast.error(message(err, 'Could not read the collections'));
@@ -270,16 +279,21 @@
 					}}
 					onblur={commitDraft}
 				/>
-				<details
-					class="dropdown dropdown-end"
-					ontoggle={(e) => openPicker((e.currentTarget as HTMLDetailsElement).open)}
-				>
-					<summary class="btn btn-ghost btn-xs" title="Pick addresses from a collection">
-						<ChevronDown size={14} />
-					</summary>
-					<div
-						class="dropdown-content z-30 mt-2 w-80 rounded-field border border-base-300 bg-base-100 p-3 shadow-lg"
-					>
+			</div>
+			<div class="mt-2 flex flex-wrap items-center gap-3">
+				<!--
+					The picker is the house `Dropdown`: it positions itself, closes on an
+					outside click and scrolls its own menu, so the recipients field above can stay
+					a plain text field with removable tags.
+				-->
+				<Dropdown bind:show={pickerOpen} align="left">
+					{#snippet trigger()}
+						<button type="button" class="btn btn-outline btn-sm gap-1.5">
+							<Plus size={14} />
+							Add collection
+						</button>
+					{/snippet}
+					<div class="w-80 p-3">
 						<div class="flex flex-wrap items-end gap-2">
 							<div>
 								<span class="mb-1 block text-xs text-base-content/50">Collection</span>
@@ -324,7 +338,7 @@
 						/>
 
 						{#if loadingList}
-							<p class="mt-3 text-xs text-base-content/40">Loading…</p>
+							<p class="mt-3 text-xs text-base-content/40">Loading...</p>
 						{:else if fieldNames.length === 0}
 							<p class="mt-3 text-xs text-base-content/40">
 								That collection has no email or text field to read an address from.
@@ -334,7 +348,7 @@
 								No record has an address in <code class="font-mono">{field}</code>.
 							</p>
 						{:else}
-							<div class="mt-1 max-h-48 overflow-auto rounded-field bg-base-100 py-1">
+							<div class="flex flex-col py-1">
 								{#each candidates as address (address)}
 									<!-- No checkbox: the row is the control, and the tick on the right
 									     is the only mark a selected option needs. -->
@@ -365,16 +379,16 @@
 							{/if}
 						{/if}
 					</div>
-				</details>
+				</Dropdown>
+				<p class="text-xs text-base-content/40">
+					{#if addresses.length > 0}
+						<strong>{addresses.length}</strong> address{addresses.length === 1 ? '' : 'es'} — one queued
+						email each.
+					{:else}
+						Type an address, or pick records from a collection.
+					{/if}
+				</p>
 			</div>
-			<p class="mt-1 text-xs text-base-content/40">
-				{#if addresses.length > 0}
-					<strong>{addresses.length}</strong> address{addresses.length === 1 ? '' : 'es'} — one queued
-					email each.
-				{:else}
-					Type an address, or pick records from a collection.
-				{/if}
-			</p>
 		</div>
 
 		<div>
