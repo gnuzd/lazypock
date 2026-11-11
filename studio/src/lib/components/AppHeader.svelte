@@ -19,7 +19,7 @@
 		{ value: 'vscode-light', label: 'VS Light' },
 		{ value: 'vscode-dark', label: 'VS Dark' }
 	];
-	let currentTheme = $state('vscode-light');
+	let currentTheme = $state('wabisabi-light');
 
 	function applyTheme(name: string) {
 		currentTheme = name;
