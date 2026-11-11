@@ -552,7 +552,7 @@ fn custom_names(directory: Option<&Path>) -> Result<BTreeSet<String>> {
 /// Deliberately crude: strip tags, collapse blank lines, decode the entities a
 /// sentence actually contains. It is a fallback for a caller who did not supply a
 /// text part, not an HTML-to-text converter.
-fn plain_text_from_html(html: &str) -> String {
+pub fn plain_text_from_html(html: &str) -> String {
     let mut stripped = String::with_capacity(html.len());
     let mut in_tag = false;
     for character in html.chars() {

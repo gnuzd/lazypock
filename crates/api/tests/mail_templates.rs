@@ -186,12 +186,13 @@ async fn a_body_is_parsed_before_it_is_stored() {
     .await;
     assert_eq!(empty.status, StatusCode::BAD_REQUEST, "{:?}", empty.body);
 
-    // A template arrives complete or not at all.
+    // A template arrives complete or not at all: the subject and the HTML body can
+    // never be left out.
     let incomplete = call_authed(
         &api,
         Method::PUT,
         "/api/mail/templates/otp",
-        Some(json!({ "subject": "{{ code }}", "html": "<p>{{ code }}</p>" })),
+        Some(json!({ "html": "<p>{{ code }}</p>", "text": "{{ code }}" })),
         &token,
     )
     .await;
@@ -200,6 +201,23 @@ async fn a_body_is_parsed_before_it_is_stored() {
         StatusCode::UNPROCESSABLE_ENTITY,
         "{:?}",
         incomplete.body
+    );
+
+    // The plain-text alternative is derived from the HTML when it is not sent, so the
+    // two bodies cannot drift apart. The editor writes an empty one for exactly this.
+    let derived = call_authed(
+        &api,
+        Method::PUT,
+        "/api/mail/templates/otp",
+        Some(json!({ "subject": "Your code", "html": "<p>Hi {{ name }}</p>", "text": "" })),
+        &token,
+    )
+    .await;
+    assert_eq!(derived.status, StatusCode::OK, "{:?}", derived.body);
+    assert_eq!(
+        derived.body.expect("a template")["text"],
+        json!("Hi {{ name }}"),
+        "the text part is the HTML without its tags"
     );
 
     app.cleanup().await;
