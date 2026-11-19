@@ -1,19 +1,12 @@
 [package]
 name = "lazypock-core"
-description = "lazypock core: configuration, errors, identifiers, telemetry"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+description.workspace = true
 
 [dependencies]
-getrandom = "0.3"
-# The AEAD for a credential stored in the database (see `secret`). Already in the
-# build: the token layer and the file layer use the same crate, so this adds no
-# artifact.
-ring = "0.17.14"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+thiserror = { workspace = true }
