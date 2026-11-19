@@ -19,10 +19,3 @@ nsh-platform-macos = { version = "0.5.1", default-features = false, features = [
 
 [target.'cfg(target_os = "windows")'.dependencies]
 nsh-platform-windows = { version = "0.5.1", default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
-
-[profile.release]
-opt-level = "z"        # Tối ưu kích thước tối đa (hoặc dùng "s" nếu "z" làm chậm UI)
-lto = true             # Link-Time Optimization toàn cục
-codegen-units = 1      # Giảm đơn vị biên dịch để tối ưu sâu hơn
-panic = "abort"        # Bỏ cơ chế stack unwinding khi crash, giảm đáng kể dung lượng
-strip = true
