@@ -10,6 +10,7 @@ description.workspace = true
 
 [dependencies]
 lazypock-core = { workspace = true }
+lazypock-db = { workspace = true }
 axum = { workspace = true } 
 serde_json = { workspace = true }
 

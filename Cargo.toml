@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/api","crates/app","crates/core"]
+members = ["crates/api","crates/app","crates/core", "crates/db"]
 [workspace.package]
 version = "0.30.0"
 edition = "2024"
@@ -18,13 +18,14 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 
 # Error handling & utilities
+anyhow = "1.0"
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-dotenvy = "0.15"
 
 lazypock-core = { path = "crates/core" }
 lazypock-api = { path = "crates/api" }
+lazypock-db = { path = "crates/db" }
 
 [profile.release]
 opt-level = 3

@@ -28,7 +28,7 @@ async fn run() -> Result<()> {
             telemetry::init(config.log_level, config.log_format)?;
 
             tracing::info!(
-                // database = %config.redacted_database_url(),
+                database = %config.redacted_database_url(),
                 "lazypock starting"
             );
 

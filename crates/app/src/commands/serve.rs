@@ -1,11 +1,14 @@
 use crate::shutdown;
 use lazypock_api::{AppState, router};
 use lazypock_core::{Config, Error, Result};
+use lazypock_db::pool::{Db, DbOptions};
 
 pub async fn run(config: Config) -> Result<()> {
     let addr = config.client_addr();
 
-    let state = AppState::new();
+    let db = Db::connect(&config.database_url, &DbOptions::from_config(&config)).await?;
+
+    let state = AppState::new(config, db);
     let app = router().with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr)
