@@ -1,0 +1,26 @@
+[package]
+name = "lazypock-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description.workspace = true
+
+[dependencies]
+lazypock-core = { workspace = true }
+lazypock-db = { workspace = true }
+arc-swap = { workspace = true }
+argon2 = { workspace = true }
+base64 = { workspace = true }
+ring = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

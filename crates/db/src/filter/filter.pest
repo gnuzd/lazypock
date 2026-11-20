@@ -1,0 +1,28 @@
+// Filter grammar (PocketBase-flavoured subset).
+//   title ~ 'rust' && (views > 10 || featured = true) && owner = @request.auth.id
+// `&&` binds tighter than `||`; that precedence is applied in mod.rs.
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+filter     = { SOI ~ expr ~ EOI }
+expr       = { term ~ (logic_op ~ term)* }
+logic_op   = _{ and_op | or_op }
+and_op     = { "&&" }
+or_op      = { "||" }
+term       = _{ group | comparison }
+group      = { "(" ~ expr ~ ")" }
+comparison = { operand ~ cmp_op ~ operand }
+cmp_op     = { "!=" | "!~" | ">=" | "<=" | "=" | ">" | "<" | "~" }
+
+operand    = _{ string | number | boolean | null | macro_ | field }
+
+string     = ${ "'" ~ sq ~ "'" | "\"" ~ dq ~ "\"" }
+sq         = @{ ( "\\" ~ ANY | !("'" | "\\") ~ ANY )* }
+dq         = @{ ( "\\" ~ ANY | !("\"" | "\\") ~ ANY )* }
+number     = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ !ident_char }
+boolean    = @{ ("true" | "false") ~ !ident_char }
+null       = @{ "null" ~ !ident_char }
+macro_     = @{ "@" ~ ident ~ ("." ~ ident)* }
+field      = @{ ident }
+ident      = @{ ( ASCII_ALPHA | "_" ) ~ ident_char* }
+ident_char = _{ ASCII_ALPHANUMERIC | "_" }

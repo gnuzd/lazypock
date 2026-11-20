@@ -11,6 +11,17 @@ description.workspace = true
 [dependencies]
 lazypock-core = { workspace = true }
 lazypock-db = { workspace = true }
+lazypock-auth = { workspace = true }
 axum = { workspace = true } 
+tokio = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
+arc-swap = { workspace = true }
 
+rust-embed = "8"
+mime_guess = "2"
+
+[dev-dependencies]
+http-body-util = "0.1"

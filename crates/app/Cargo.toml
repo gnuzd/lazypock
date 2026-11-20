@@ -16,6 +16,7 @@ path = "src/main.rs"
 lazypock-core = { workspace = true }
 lazypock-api = { workspace = true }
 lazypock-db = { workspace = true }
+lazypock-auth = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

@@ -10,22 +10,49 @@ homepage = "https://lazypock.gnuzd.dev"
 description = "lazypock — a backend-as-a-service in Rust + Postgres"
 
 [workspace.dependencies]
+# Async runtime & HTTP
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+
+# PostgreSQL
+tokio-postgres = { version = "0.7", default-features = false, features = ["runtime", "with-serde_json-1"] }
+deadpool = "0.13.1"
+deadpool-postgres = { version = "0.14", default-features = false, features = ["rt_tokio_1"] }
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+sea-query = { version = "0.32", default-features = false, features = ["backend-postgres", "with-json", "thread-safe"] }
+
+# Filter parser
+pest = "2"
+pest_derive = "2"
+
+# Auth
+argon2 = "0.6.0"
+base64 = "0.22"
+ring = "0.17"
+getrandom = "0.3"
+sha2 = "0.11"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 
 # Error handling & utilities
-anyhow = "1.0"
 thiserror = "1.0"
+anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+dotenvy = "0.15"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+arc-swap = "1"
 
 lazypock-core = { path = "crates/core" }
 lazypock-api = { path = "crates/api" }
 lazypock-db = { path = "crates/db" }
+lazypock-auth = { path = "crates/auth" }
 
 [profile.release]
 opt-level = 3
