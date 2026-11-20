@@ -14,15 +14,11 @@ pub const DEFAULT_RECYCLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct DbOptions {
-    // <- changed: was private (`struct`) but used in a pub fn
     pub pool_size: u32,
     /// Extra libpq connection options, e.g. `-c search_path=tenant`.
     pub options: Option<String>,
     /// How long to wait for a free connection.
     pub acquire_timeout: Duration,
-    /// Direct (non-pooled) URL for `LISTEN`; defaults to the main URL. Set this when
-    /// the main URL goes through a transaction-mode pooler.
-    pub direct_url: Option<String>,
 }
 
 impl Default for DbOptions {
@@ -31,7 +27,6 @@ impl Default for DbOptions {
             pool_size: 5,
             options: None,
             acquire_timeout: DEFAULT_ACQUIRE_TIMEOUT,
-            direct_url: None,
         }
     }
 }
@@ -42,16 +37,20 @@ impl DbOptions {
             pool_size: config.pool_size,
             options: None,
             acquire_timeout: DEFAULT_ACQUIRE_TIMEOUT,
-            direct_url: None,
         }
     }
 }
 
 /// A pooled handle to a lazypock Postgres database.
+///
+/// With PgDog in front of Postgres, `LISTEN/NOTIFY` is handled natively by
+/// PgDog in transaction mode, so no separate direct URL or dedicated TLS
+/// connector is required.
 #[derive(Clone)]
 pub struct Db {
     pool: deadpool_postgres::Pool,
-    direct_url: String,
+    /// The URL the pool connects to (the PgDog endpoint).
+    url: String,
 }
 
 impl std::fmt::Debug for Db {
@@ -81,7 +80,8 @@ impl Db {
             tls_connector()?,
             ManagerConfig {
                 // `Fast` only checks the socket is open. `Clean` would DISCARD ALL,
-                // which a transaction pooler does not need and some forbid.
+                // which PgDog manages itself (it restores session state on checkout),
+                // so `Fast` is the right choice here.
                 recycling_method: RecyclingMethod::Fast,
             },
         );
@@ -99,13 +99,13 @@ impl Db {
 
         let db = Self {
             pool,
-            direct_url: options
-                .direct_url
-                .clone()
-                .unwrap_or_else(|| url.to_string()),
+            url: url.to_string(),
         };
 
-        db.health().await?;
+        // Building the pool never touches the network, so a dead database would
+        // still "succeed" here. Probe once to prove the URL, credentials and
+        // network path actually work before handing the handle to callers.
+        db.ping().await?;
 
         Ok(db)
     }
@@ -113,16 +113,6 @@ impl Db {
     /// Connect using the process configuration.
     pub async fn from_config(config: &Config) -> Result<Self> {
         Self::connect(&config.database_url, &DbOptions::from_config(config)).await
-    }
-
-    pub async fn health(&self) -> Result<()> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| Error::Internal(format!("failed to connect to database")))?;
-
-        Ok(())
     }
 }
 
@@ -140,29 +130,34 @@ fn tls_connector() -> Result<MakeRustlsConnect> {
     Ok(MakeRustlsConnect::new(cfg))
 }
 
-// impl Db {
-//     /// URL for session-scoped features (`LISTEN`); not used for request traffic.
-//     pub fn direct_url(&self) -> &str {
-//         &self.direct_url
-//     }
-//
-//     /// Check out a connection.
-//     pub async fn conn(&self) -> Result<deadpool_postgres::Object> {
-//         use crate::error::PgExt;
-//         self.pool.get().await.pg()
-//     }
-//
-//     /// Cheap round trip with a hard 2 s ceiling (for readiness probes).
-//     pub async fn ping(&self) -> Result<()> {
-//         use crate::error::PgExt;
-//         let probe = async {
-//             let conn = self.conn().await?;
-//             conn.simple_query("SELECT 1").await.pg()?;
-//             Ok::<(), Error>(())
-//         };
-//         match tokio::time::timeout(Duration::from_secs(2), probe).await {
-//             Ok(r) => r,
-//             Err(_) => Err(Error::Database("ping timed out".into())),
-//         }
-//     }
-// }
+impl Db {
+    /// URL the pool connects to (the PgDog endpoint).
+    ///
+    /// `LISTEN` should use this same endpoint: PgDog implements `LISTEN/NOTIFY`
+    /// natively in transaction mode, so no separate direct PostgreSQL URL is
+    /// required.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Check out a connection.
+    pub async fn conn(&self) -> Result<deadpool_postgres::Object> {
+        use crate::error::PgExt;
+        self.pool.get().await.pg()
+    }
+
+    /// Cheap round trip with a hard 2 s ceiling (for readiness probes and
+    /// for validating connectivity at startup).
+    pub async fn ping(&self) -> Result<()> {
+        use crate::error::PgExt;
+        let probe = async {
+            let conn = self.conn().await?;
+            conn.simple_query("SELECT 1").await.pg()?;
+            Ok::<(), Error>(())
+        };
+        match tokio::time::timeout(Duration::from_secs(2), probe).await {
+            Ok(r) => r,
+            Err(_) => Err(Error::Database("ping timed out".into())),
+        }
+    }
+}

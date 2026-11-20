@@ -64,7 +64,7 @@ pub fn pg_error(e: tokio_postgres::Error) -> Error {
 }
 
 fn pool_error(e: deadpool_postgres::PoolError) -> Error {
-    tracing::warn!(error = ?e, "connection pool error");
+    tracing::error!("connection pool error: {e}");
     Error::Database("connection pool unavailable".into())
 }
 
