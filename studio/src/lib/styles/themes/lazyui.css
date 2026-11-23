@@ -1,0 +1,29 @@
+/* Default theme. It also declares the non-color tokens (radius, size, border)
+   that every other theme falls back to. `:where(:root)` has zero specificity,
+   so any theme the user picks always wins. */
+:where(:root),
+[data-theme="lazyui"],
+:root:has(input.theme-controller[value="lazyui"]:checked) {
+  color-scheme: light;
+  --color-primary: oklch(55% 0.2 260);
+  --color-primary-content: oklch(98% 0 0);
+  --color-secondary: oklch(60% 0.18 300);
+  --color-secondary-content: oklch(98% 0 0);
+  --color-accent: oklch(72% 0.14 190);
+  --color-accent-content: oklch(20% 0.04 190);
+  --color-neutral: oklch(30% 0.02 260);
+  --color-neutral-content: oklch(95% 0 0);
+  --color-base-100: oklch(100% 0 0);
+  --color-base-200: oklch(96% 0 0);
+  --color-base-300: oklch(90% 0 0);
+  --color-base-content: oklch(22% 0 0);
+  --color-info: oklch(70% 0.15 230);
+  --color-success: oklch(70% 0.17 150);
+  --color-warning: oklch(80% 0.16 85);
+  --color-error: oklch(62% 0.22 25);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+}

@@ -1,4 +1,8 @@
 {
-  "extends": "./.nsh/tsconfig.json",
-  "include": ["**/*.ts", "**/*.tsx"]
+	"extends": "$app/tsconfig",
+	"compilerOptions": {
+		"strict": true,
+		"types": ["$app/types", "node"]
+	},
+	"include": ["src", "vite.config.ts", "prettier.config.js", "eslint.config.js"]
 }
