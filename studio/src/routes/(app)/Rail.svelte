@@ -1,8 +1,7 @@
 <script lang="ts">
-	import Box from '@lucide/svelte/icons/box';
-	import Database from '@lucide/svelte/icons/database';
-	import Activity from '@lucide/svelte/icons/activity';
-	import Cog from '@lucide/svelte/icons/cog';
+	import { page } from '$app/state';
+	import { Box, Database, Activity, Cog } from '@lucide/svelte';
+
 	import Button from '#lib/components/ui/Button.svelte';
 
 	const links = [
@@ -20,9 +19,14 @@
 
 		<div class="h-px w-6 bg-base-300"></div>
 
-		<nav class="flex flex-col">
+		<nav class="flex flex-col gap-1">
 			{#each links as item}
-				<Button shape="square" buttonStyle="ghost" variant="neutral">
+				<Button
+					shape="square"
+					buttonStyle={page.url.pathname === item.path ? 'solid' : 'ghost'}
+					variant="neutral"
+					href={item.path}
+				>
 					<item.icon size={20} />
 				</Button>
 			{/each}

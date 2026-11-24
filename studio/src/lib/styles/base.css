@@ -23,6 +23,10 @@
   --color-warning-content: var(--color-warning--content);
   --color-error: var(--color-error);
   --color-error-content: var(--color-error-content);
+
+  --color-muted: color-mix(in oklch, var(--color-base-content) 60%, transparent);
+
+  --font-sans: "JetBrains Mono Variable", monospace;
 }
 
 /* Radius utilities driven by the active theme. */

@@ -1,10 +1,5 @@
-import { Http } from "./http";
+import {LazyPock}  from 'lazypock-ts'
 
-export default class LazypockClient {
-  http: Http
+const baseUrl = 'http://localhost:8000/api'
+export const client = new LazyPock({baseUrl})
 
-  constructor(baseURL: string, defaultHeaders: Record<string, string> = {}) {
-    this.http = new Http(baseURL, defaultHeaders)
-  }
-
-}

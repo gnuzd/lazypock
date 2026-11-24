@@ -174,7 +174,7 @@
 			<span class="dot bg-warning"></span>
 			<span class="dot bg-success"></span>
 		</div>
-		<span class="text-xs text-base-content/70">lazypock · typescript sdk</span>
+		<span class="text-xs text-muted">lazypock · typescript sdk</span>
 	</div>
 
 	<div class="flex w-full flex-col p-4">

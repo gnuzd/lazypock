@@ -18,7 +18,7 @@ use tokio_postgres::GenericClient;
 
 use lazypock_core::Result;
 
-pub const MAX_PER_PAGE: u32 = 200;
+pub const MAX_PER_PAGE: u32 = 500;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ListParams<'a> {

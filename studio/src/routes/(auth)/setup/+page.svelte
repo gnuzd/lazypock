@@ -39,7 +39,7 @@
 	<!-- Header -->
 	<div class="flex flex-col gap-2">
 		<h1 class="text-2xl font-semibold">Create a superuser</h1>
-		<p class="text-sm text-base-content/70">
+		<p class="text-sm text-muted">
 			The first account owns this instance. You can add more accounts later.
 		</p>
 	</div>

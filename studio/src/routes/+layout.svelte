@@ -8,12 +8,18 @@
 	import store from '#lib/store.svelte.ts';
 	import type { LayoutProps } from './$types';
 	import { browser } from '$app/env';
+	import { client } from '#lib/api/client.ts';
+	import DrawerContainer from '#lib/components/ui/DrawerContainer.svelte';
 
 	let { children }: LayoutProps = $props();
 
-	onMount(() => {
-		if (!store.auth) {
+	onMount(async () => {
+		if (await client.setup.required()) {
 			goto('/setup');
+		} else {
+			if (!client.auth.record) {
+				goto('/login');
+			}
 		}
 	});
 </script>
@@ -23,6 +29,6 @@
 </svelte:head>
 
 {@render children()}
-{#if browser}
-	<Toaster position="bottom-right" richColors />
-{/if}
+
+<Toaster position="bottom-right" richColors />
+<DrawerContainer />

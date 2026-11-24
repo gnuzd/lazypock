@@ -22,17 +22,15 @@
 
 		<div class="flex flex-col gap-5 p-8">
 			<div class="flex flex-col gap-1">
-				<h2 class="font-medium text-base-content/70">
-					Everything your backend does, in one studio.
-				</h2>
-				<p class="text-sm text-base-content/70">
+				<h2 class="font-medium text-muted">Everything your backend does, in one studio.</h2>
+				<p class="text-sm text-muted">
 					Collections, records, logs and settings — and the same API from your own code.
 				</p>
 			</div>
 			<Terminal />
 		</div>
 
-		<div class="p-8 text-sm text-base-content/70">lazypock studio · {version}</div>
+		<div class="p-8 text-sm text-muted">lazypock studio · {version}</div>
 	</div>
 	<div class="flex flex-1 flex-col items-center justify-center gap-10">
 		<div class="hidden items-center max-sm:flex">
